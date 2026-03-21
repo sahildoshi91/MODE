@@ -4,12 +4,12 @@ from app.ai.workout_generator import generate_workout_with_ai
 
 
 class WorkoutService:
-    def __init__(self):
-        self.repository = WorkoutRepository()
+    def __init__(self, repository: WorkoutRepository):
+        self.repository = repository
 
-    def generate_workout(self, request: WorkoutRequest) -> WorkoutResponse:
+    def generate_workout(self, user_id: str, request: WorkoutRequest) -> WorkoutResponse:
         # Get user profile
-        profile = self.repository.get_user_profile(request.user_id)
+        profile = self.repository.get_user_profile(user_id)
         if not profile:
             raise ValueError("Profile not found")
 
@@ -21,24 +21,22 @@ class WorkoutService:
             profile['equipment'],
             profile['goals'],
             profile['injuries'],
-            request.user_id
+            user_id
         )
 
         # Save to DB
         plan = {
-            "user_id": request.user_id,
             "plan_data": workout_data
         }
-        plan_id = self.repository.save_workout_plan(plan)
+        plan_id = self.repository.save_workout_plan(user_id, plan)
 
         # Save workout session
         workout_session = {
-            "user_id": request.user_id,
             "title": f"{request.workout_type} Workout",
             "duration": request.duration,
             "plan_type": request.workout_type,
             "plan_id": plan_id
         }
-        self.repository.save_workout_session(workout_session)
+        self.repository.save_workout_session(user_id, workout_session)
 
         return WorkoutResponse(plan_id=plan_id, workout=WorkoutData(**workout_data))

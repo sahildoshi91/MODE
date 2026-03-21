@@ -16,7 +16,6 @@ class WorkoutData(BaseModel):
 
 
 class WorkoutRequest(BaseModel):
-    user_id: str
     duration: int
     workout_type: str
 

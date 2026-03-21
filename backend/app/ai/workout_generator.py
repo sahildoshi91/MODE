@@ -1,14 +1,16 @@
-import openai
-import json
 import logging
 from typing import Dict, Any
-from app.core.config import settings
+
+from app.ai.client import OpenAIClient
 from app.ai.prompt_builder import build_workout_prompt
 from app.ai.response_parser import parse_workout_response
+from app.ai.router import AIRequestRouter
 from app.ai.cache import workout_cache
 
 
 logger = logging.getLogger(__name__)
+router = AIRequestRouter()
+llm_client = OpenAIClient()
 
 
 def generate_workout_with_ai(duration: int, workout_type: str, fitness_level: str, equipment: list, goals: list, injuries: list, user_id: str) -> Dict[str, Any]:
@@ -19,15 +21,15 @@ def generate_workout_with_ai(duration: int, workout_type: str, fitness_level: st
         return cached
 
     prompt = build_workout_prompt(duration, workout_type, fitness_level, equipment, goals, injuries)
+    _, model_tier = router.route_workout_generation(duration, goals, injuries)
+    model_name = router.resolve_model_name(model_tier)
     
     try:
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
+        content = llm_client.create_chat_completion(
+            model=model_name,
             messages=[{"role": "user", "content": prompt}],
-            api_key=settings.openai_api_key
         )
-        content = response.choices[0].message.content
-        logger.info(f"AI response: {content}")
+        logger.info("AI response generated with model=%s", model_name)
         data = parse_workout_response(content)
         
         # Cache the result
