@@ -46,4 +46,14 @@ You are a certified personal trainer. Create a {request.duration}-minute {reques
     }
     result = supabase.table('workout_plans').insert(plan).execute()
     
+    # Save to workouts
+    workout_session = {
+        "user_id": request.user_id,
+        "title": f"{request.workout_type} Workout",
+        "duration": request.duration,
+        "plan_type": request.workout_type,
+        "plan_id": result.data[0]['id']
+    }
+    supabase.table('workouts').insert(workout_session).execute()
+    
     return {"plan_id": result.data[0]['id'], "workout": workout_data}

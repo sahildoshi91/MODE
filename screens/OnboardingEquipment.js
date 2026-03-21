@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList } from 'react-native';
+import { View, Text, StyleSheet, FlatList } from 'react-native';
+import { ModeButton, HeaderBar } from '../lib/components';
+import { theme } from '../lib/theme';
 
 const equipmentOptions = ['Dumbbells', 'Barbell', 'Resistance bands', 'Kettlebell', 'Bodyweight only', 'Bench', 'Pull-up bar'];
 
@@ -8,11 +10,7 @@ export default function OnboardingEquipment({ navigation, route }) {
   const [selectedEquipment, setSelectedEquipment] = useState([]);
 
   const toggleEquipment = (eq) => {
-    if (selectedEquipment.includes(eq)) {
-      setSelectedEquipment(selectedEquipment.filter(e => e !== eq));
-    } else {
-      setSelectedEquipment([...selectedEquipment, eq]);
-    }
+    setSelectedEquipment((prev) => (prev.includes(eq) ? prev.filter((e) => e !== eq) : [...prev, eq]));
   };
 
   const next = () => {
@@ -20,31 +18,56 @@ export default function OnboardingEquipment({ navigation, route }) {
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>What equipment do you have access to? (Select all that apply)</Text>
+    <View style={styles.screenContainer}>
+      <HeaderBar title="Onboarding 4 of 5" subtitle="What equipment do you have?" />
+
+      <Text style={styles.title}>Ready to work with your gear.</Text>
+      <Text style={styles.subtitle}>Choose what’s available so your plan is realistic.</Text>
+
       <FlatList
         data={equipmentOptions}
         keyExtractor={(item) => item}
         renderItem={({ item }) => (
-          <TouchableOpacity
-            style={[styles.option, selectedEquipment.includes(item) && styles.selected]}
+          <ModeButton
+            variant={selectedEquipment.includes(item) ? 'primary' : 'secondary'}
+            title={item}
             onPress={() => toggleEquipment(item)}
-          >
-            <Text>{item}</Text>
-          </TouchableOpacity>
+            style={styles.optionButton}
+          />
         )}
       />
-      <TouchableOpacity style={styles.nextButton} onPress={next} disabled={selectedEquipment.length === 0}>
-        <Text>Next</Text>
-      </TouchableOpacity>
+
+      <ModeButton
+        title={selectedEquipment.length === 0 ? 'Choose one to continue' : 'Perfect, keep going'}
+        onPress={next}
+        disabled={selectedEquipment.length === 0}
+        style={styles.nextButton}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20 },
-  title: { fontSize: 24, marginBottom: 20, textAlign: 'center' },
-  option: { padding: 15, borderWidth: 1, marginVertical: 5, borderRadius: 5 },
-  selected: { backgroundColor: 'lightblue' },
-  nextButton: { backgroundColor: 'blue', padding: 15, alignItems: 'center', marginTop: 20, borderRadius: 5 },
+  screenContainer: {
+    flex: 1,
+    backgroundColor: theme.colors.bg.primary,
+    padding: theme.spacing[3],
+  },
+  title: {
+    color: theme.colors.textHigh,
+    ...theme.typography.h3,
+    marginBottom: theme.spacing[1],
+    marginTop: theme.spacing[3],
+  },
+  subtitle: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body2,
+    marginBottom: theme.spacing[3],
+  },
+  optionButton: {
+    marginBottom: theme.spacing[1],
+  },
+  nextButton: {
+    marginTop: theme.spacing[3],
+  },
 });

@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { View, Text, StyleSheet, Alert } from 'react-native';
 import { supabase } from '../lib/supabase';
+import { ModeInput, ModeButton, HeaderBar } from '../lib/components';
+import { theme } from '../lib/theme';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -16,7 +18,6 @@ export default function Login() {
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        // Auth state change will handle navigation
       }
     } catch (error) {
       Alert.alert('Error', error.message);
@@ -24,40 +25,59 @@ export default function Login() {
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>{isSignup ? 'Sign Up' : 'Login'}</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="Email"
-        value={email}
-        onChangeText={setEmail}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Password"
-        value={password}
-        onChangeText={setPassword}
-        secureTextEntry
-      />
-      <TouchableOpacity style={styles.button} onPress={handleAuth}>
-        <Text style={styles.buttonText}>{isSignup ? 'Sign Up' : 'Login'}</Text>
-      </TouchableOpacity>
-      <TouchableOpacity onPress={() => setIsSignup(!isSignup)}>
-        <Text style={styles.switchText}>
-          {isSignup ? 'Already have an account? Login' : 'Need an account? Sign Up'}
-        </Text>
-      </TouchableOpacity>
+    <View style={styles.screenContainer}>
+      <HeaderBar title="MODE Workout" subtitle="Secure AI workouts, no fluff" />
+      <View style={styles.stack}>
+        <Text style={styles.title}>{isSignup ? 'Create your account' : 'Welcome back'}</Text>
+        <ModeInput
+          testID="email-input"
+          placeholder="Email"
+          value={email}
+          onChangeText={setEmail}
+          keyboardType="email-address"
+        />
+        <ModeInput
+          testID="password-input"
+          placeholder="Password"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+        />
+        <ModeButton
+          testID="action-button"
+          title={isSignup ? 'Sign Up' : 'Login'}
+          onPress={handleAuth}
+        />
+        <ModeButton
+          testID="switch-auth"
+          variant="secondary"
+          title={isSignup ? 'Have an account? Login' : 'New? Sign Up'}
+          onPress={() => setIsSignup(!isSignup)}
+          style={styles.switchButton}
+        />
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: 20 },
-  title: { fontSize: 24, textAlign: 'center', marginBottom: 20 },
-  input: { borderWidth: 1, padding: 10, marginVertical: 10, borderRadius: 5 },
-  button: { backgroundColor: 'blue', padding: 15, alignItems: 'center', marginVertical: 10, borderRadius: 5 },
-  buttonText: { color: 'white', fontSize: 16 },
-  switchText: { textAlign: 'center', color: 'blue', marginTop: 10 },
+  screenContainer: {
+    flex: 1,
+    backgroundColor: theme.colors.bg.primary,
+    padding: theme.spacing[3],
+  },
+  stack: {
+    marginTop: theme.spacing[4],
+    gap: theme.spacing[2],
+  },
+  title: {
+    color: theme.colors.textHigh,
+    ...theme.typography.h2,
+    marginBottom: theme.spacing[2],
+  },
+  switchButton: {
+    marginTop: theme.spacing[1],
+    shadowColor: 'transparent',
+    elevation: 0,
+  },
 });

@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { View, Text, StyleSheet, Alert } from 'react-native';
+import { ModeButton, HeaderBar } from '../lib/components';
+import { theme } from '../lib/theme';
 import { supabase } from '../lib/supabase';
 
 const durationOptions = [30, 45, 60];
@@ -23,8 +25,10 @@ export default function OnboardingPreferences({ navigation, route }) {
         goals,
         injuries,
         equipment,
+        duration,
+        workout_type: workoutType,
       };
-      await supabase.from('profiles').insert(profile);
+      await supabase.from('profiles').upsert(profile);
       navigation.navigate('Home');
     } catch (error) {
       Alert.alert('Error', error.message);
@@ -32,31 +36,58 @@ export default function OnboardingPreferences({ navigation, route }) {
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Preferred workout duration (minutes):</Text>
-      {durationOptions.map(d => (
-        <TouchableOpacity key={d} style={[styles.option, duration === d && styles.selected]} onPress={() => setDuration(d)}>
-          <Text>{d}</Text>
-        </TouchableOpacity>
+    <View style={styles.screenContainer}>
+      <HeaderBar title="Onboarding 5 of 5" subtitle="Choose your session parameters" />
+
+      <Text style={styles.title}>Almost there—your first plan is ready.</Text>
+
+      <Text style={styles.sectionLabel}>Preferred workout duration (minutes):</Text>
+      {durationOptions.map((d) => (
+        <ModeButton
+          key={d}
+          title={`${d} min`}
+          variant={duration === d ? 'primary' : 'secondary'}
+          onPress={() => setDuration(d)}
+          style={styles.optionButton}
+        />
       ))}
-      <Text style={styles.title}>Preferred workout type:</Text>
-      {typeOptions.map(t => (
-        <TouchableOpacity key={t} style={[styles.option, workoutType === t && styles.selected]} onPress={() => setWorkoutType(t)}>
-          <Text>{t}</Text>
-        </TouchableOpacity>
+
+      <Text style={[styles.sectionLabel, { marginTop: theme.spacing[3] }]}>Preferred workout type:</Text>
+      {typeOptions.map((t) => (
+        <ModeButton
+          key={t}
+          title={t}
+          variant={workoutType === t ? 'primary' : 'secondary'}
+          onPress={() => setWorkoutType(t)}
+          style={styles.optionButton}
+        />
       ))}
-      <TouchableOpacity style={styles.nextButton} onPress={finish}>
-        <Text style={styles.buttonText}>Finish Onboarding</Text>
-      </TouchableOpacity>
+
+      <ModeButton title="Finish and get my plan" onPress={finish} style={styles.finishButton} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20 },
-  title: { fontSize: 20, marginBottom: 10, marginTop: 20 },
-  option: { padding: 15, borderWidth: 1, marginVertical: 5, borderRadius: 5 },
-  selected: { backgroundColor: 'lightblue' },
-  nextButton: { backgroundColor: 'blue', padding: 15, alignItems: 'center', marginTop: 20, borderRadius: 5 },
-  buttonText: { color: 'white', fontSize: 16 },
+  screenContainer: {
+    flex: 1,
+    backgroundColor: theme.colors.bg.primary,
+    padding: theme.spacing[3],
+  },
+  title: {
+    color: theme.colors.textHigh,
+    ...theme.typography.h3,
+    marginBottom: theme.spacing[2],
+  },
+  sectionLabel: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body2,
+    marginBottom: theme.spacing[1],
+  },
+  optionButton: {
+    marginBottom: theme.spacing[1],
+  },
+  finishButton: {
+    marginTop: theme.spacing[4],
+  },
 });
