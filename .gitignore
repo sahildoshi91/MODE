@@ -1,2 +1,19 @@
 backend/venv/
+
+# Local environment files
+.env
+backend/.env
+
+# Dependency directories
+node_modules/
+
+# Expo / React Native build artifacts
 .expo/
+dist/
+
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+
+# macOS / editor noise
+.DS_Store
