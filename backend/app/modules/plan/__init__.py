@@ -1,0 +1,1 @@
+"""Trainer-aligned plan domain."""

@@ -1,5 +1,5 @@
 from supabase import create_client, Client
-from supabase.lib.client_options import ClientOptions
+from supabase.lib.client_options import SyncClientOptions
 
 from app.core.config import settings
 
@@ -12,7 +12,7 @@ def get_supabase_user_client(access_token: str) -> Client:
     return create_client(
         settings.supabase_url,
         settings.supabase_anon_key,
-        options=ClientOptions(
+        options=SyncClientOptions(
             auto_refresh_token=False,
             persist_session=False,
             headers={

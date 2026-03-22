@@ -2,7 +2,20 @@ from fastapi import Depends
 from supabase import Client
 
 from app.core.auth import AuthenticatedUser, require_user
+from app.core.tenancy import TrainerContext, resolve_trainer_context
 from app.db.client import get_supabase_user_client
+from app.modules.conversation.repository import ConversationRepository
+from app.modules.conversation.service import ConversationService
+from app.modules.plan.repository import PlanRepository
+from app.modules.plan.service import PlanService
+from app.modules.profile.repository import ProfileRepository
+from app.modules.profile.service import ProfileService
+from app.modules.trainer_knowledge.repository import TrainerKnowledgeRepository
+from app.modules.trainer_knowledge.service import TrainerKnowledgeService
+from app.modules.trainer_persona.repository import TrainerPersonaRepository
+from app.modules.trainer_persona.service import TrainerPersonaService
+from app.modules.trainer_review.repository import TrainerReviewRepository
+from app.modules.trainer_review.service import TrainerReviewService
 from app.modules.workout.repository import WorkoutRepository
 from app.modules.workout.service import WorkoutService
 
@@ -25,3 +38,85 @@ def get_workout_service(
     repository: WorkoutRepository = Depends(get_workout_repository),
 ) -> WorkoutService:
     return WorkoutService(repository)
+
+
+def get_trainer_context(
+    user: AuthenticatedUser = Depends(require_user),
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> TrainerContext:
+    return resolve_trainer_context(supabase, user.id)
+
+
+def get_profile_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> ProfileRepository:
+    return ProfileRepository(supabase)
+
+
+def get_profile_service(
+    repository: ProfileRepository = Depends(get_profile_repository),
+) -> ProfileService:
+    return ProfileService(repository)
+
+
+def get_plan_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> PlanRepository:
+    return PlanRepository(supabase)
+
+
+def get_plan_service(
+    repository: PlanRepository = Depends(get_plan_repository),
+    profile_service: ProfileService = Depends(get_profile_service),
+) -> PlanService:
+    return PlanService(repository, profile_service)
+
+
+def get_trainer_persona_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> TrainerPersonaRepository:
+    return TrainerPersonaRepository(supabase)
+
+
+def get_trainer_persona_service(
+    repository: TrainerPersonaRepository = Depends(get_trainer_persona_repository),
+) -> TrainerPersonaService:
+    return TrainerPersonaService(repository)
+
+
+def get_trainer_knowledge_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> TrainerKnowledgeRepository:
+    return TrainerKnowledgeRepository(supabase)
+
+
+def get_trainer_knowledge_service(
+    repository: TrainerKnowledgeRepository = Depends(get_trainer_knowledge_repository),
+) -> TrainerKnowledgeService:
+    return TrainerKnowledgeService(repository)
+
+
+def get_trainer_review_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> TrainerReviewRepository:
+    return TrainerReviewRepository(supabase)
+
+
+def get_trainer_review_service(
+    repository: TrainerReviewRepository = Depends(get_trainer_review_repository),
+) -> TrainerReviewService:
+    return TrainerReviewService(repository)
+
+
+def get_conversation_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> ConversationRepository:
+    return ConversationRepository(supabase)
+
+
+def get_conversation_service(
+    repository: ConversationRepository = Depends(get_conversation_repository),
+    profile_service: ProfileService = Depends(get_profile_service),
+    trainer_review_service: TrainerReviewService = Depends(get_trainer_review_service),
+) -> ConversationService:
+    return ConversationService(repository, profile_service, trainer_review_service)

@@ -1,0 +1,1 @@
+"""Client fitness profile domain."""
