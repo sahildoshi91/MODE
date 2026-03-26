@@ -71,6 +71,69 @@ class ConversationRepository:
         )
         return result.data[0]
 
+    def record_usage_event(
+        self,
+        conversation_id: str,
+        message_id: str,
+        provider: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        thoughts_tokens: int,
+        route_flow: str,
+        route_reason: str,
+        task_type: str,
+        response_mode: str,
+        fallback_triggered: bool,
+    ) -> dict[str, Any]:
+        result = (
+            self.supabase
+            .table("conversation_usage_events")
+            .insert(
+                {
+                    "conversation_id": conversation_id,
+                    "message_id": message_id,
+                    "provider": provider,
+                    "model": model,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                    "thoughts_tokens": thoughts_tokens,
+                    "route_flow": route_flow,
+                    "route_reason": route_reason,
+                    "task_type": task_type,
+                    "response_mode": response_mode,
+                    "fallback_triggered": fallback_triggered,
+                }
+            )
+            .execute()
+        )
+        return result.data[0]
+
+    def get_conversation_usage_summary(self, conversation_id: str) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("conversation_usage_summary")
+            .select("*")
+            .eq("conversation_id", conversation_id)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def list_messages(self, conversation_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        response = (
+            self.supabase
+            .table("conversation_messages")
+            .select("id, role, message_text, created_at")
+            .eq("conversation_id", conversation_id)
+            .order("created_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        return response.data or []
+
     def update_conversation_state(self, conversation_id: str, stage: str, onboarding_complete: bool) -> None:
         (
             self.supabase

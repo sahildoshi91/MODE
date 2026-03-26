@@ -55,6 +55,9 @@ export function useChatConversation(accessToken) {
           role: 'assistant',
           text: payload.assistant_message,
           fallbackTriggered: payload.fallback_triggered,
+          tokenUsage: payload.token_usage || null,
+          routeDebug: payload.route_debug || null,
+          conversationUsage: payload.conversation_usage || null,
         },
       ]);
     } catch (requestError) {

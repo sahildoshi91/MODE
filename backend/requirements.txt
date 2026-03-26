@@ -2,5 +2,7 @@ fastapi
 uvicorn[standard]
 supabase
 openai
+anthropic
+google-genai
 pydantic
 pydantic-settings

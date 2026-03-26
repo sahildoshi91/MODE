@@ -1,16 +1,22 @@
-import os
-from pydantic_settings import BaseSettings
+from pydantic import AliasChoices, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    openai_api_key: str = os.getenv("OPENAI_API_KEY")
-    supabase_url: str = os.getenv("SUPABASE_URL")
-    supabase_anon_key: str = os.getenv("SUPABASE_ANON_KEY") or os.getenv("EXPO_PUBLIC_SUPABASE_ANON_KEY")
-    supabase_service_role_key: str = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+    openai_api_key: str | None = None
+    gemini_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    supabase_url: str | None = None
+    supabase_anon_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("SUPABASE_ANON_KEY", "EXPO_PUBLIC_SUPABASE_ANON_KEY"),
+    )
+    supabase_service_role_key: str | None = None
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    model_config = SettingsConfigDict(
+        env_file=(".env", "../.env", "backend/.env"),
+        extra="ignore",
+    )
 
 
 settings = Settings()

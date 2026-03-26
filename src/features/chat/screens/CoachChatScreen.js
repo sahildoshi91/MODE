@@ -62,6 +62,9 @@ export default function CoachChatScreen({ accessToken, onSignOut }) {
               text={item.text}
               isError={item.isError}
               fallbackTriggered={item.fallbackTriggered}
+              tokenUsage={item.tokenUsage}
+              routeDebug={item.routeDebug}
+              conversationUsage={item.conversationUsage}
             />
           )}
           contentContainerStyle={styles.messages}

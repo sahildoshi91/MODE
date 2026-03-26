@@ -3,8 +3,51 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { theme } from '../../../../lib/theme';
 
-export default function ChatBubble({ role, text, isError = false, fallbackTriggered = false }) {
+function formatTokenUsage(tokenUsage) {
+  if (!tokenUsage) {
+    return null;
+  }
+
+  const promptTokens = tokenUsage.prompt_tokens ?? 0;
+  const completionTokens = tokenUsage.completion_tokens ?? 0;
+  const totalTokens = tokenUsage.total_tokens ?? 0;
+  return `Tokens in ${promptTokens} • out ${completionTokens} • total ${totalTokens}`;
+}
+
+function formatConversationUsage(conversationUsage) {
+  if (!conversationUsage) {
+    return null;
+  }
+
+  const totalTokens = conversationUsage.total_tokens ?? 0;
+  const totalPromptTokens = conversationUsage.total_prompt_tokens ?? 0;
+  const totalCompletionTokens = conversationUsage.total_completion_tokens ?? 0;
+  return `Conversation tokens ${totalTokens} • in ${totalPromptTokens} • out ${totalCompletionTokens}`;
+}
+
+function formatModel(routeDebug, conversationUsage) {
+  const provider = routeDebug?.execution_provider || conversationUsage?.last_execution_provider;
+  const model = routeDebug?.execution_model || conversationUsage?.last_execution_model;
+  if (!provider || !model) {
+    return null;
+  }
+
+  return `Model ${provider}/${model}`;
+}
+
+export default function ChatBubble({
+  role,
+  text,
+  isError = false,
+  fallbackTriggered = false,
+  tokenUsage = null,
+  routeDebug = null,
+  conversationUsage = null,
+}) {
   const isUser = role === 'user';
+  const tokenUsageLabel = !isUser && !isError ? formatTokenUsage(tokenUsage) : null;
+  const conversationUsageLabel = !isUser && !isError ? formatConversationUsage(conversationUsage) : null;
+  const modelLabel = !isUser && !isError ? formatModel(routeDebug, conversationUsage) : null;
 
   return (
     <View style={[styles.row, isUser ? styles.userRow : styles.assistantRow]}>
@@ -18,6 +61,15 @@ export default function ChatBubble({ role, text, isError = false, fallbackTrigge
         <Text style={[styles.text, isUser && styles.userText]}>{text}</Text>
         {fallbackTriggered ? (
           <Text style={styles.metaText}>Flagged for trainer review</Text>
+        ) : null}
+        {tokenUsageLabel ? (
+          <Text style={styles.metaText}>{tokenUsageLabel}</Text>
+        ) : null}
+        {conversationUsageLabel ? (
+          <Text style={styles.metaText}>{conversationUsageLabel}</Text>
+        ) : null}
+        {modelLabel ? (
+          <Text style={styles.metaText}>{modelLabel}</Text>
         ) : null}
       </View>
     </View>
