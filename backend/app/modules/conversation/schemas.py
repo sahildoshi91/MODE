@@ -1,6 +1,9 @@
+import json
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, Field
+from pydantic import field_validator
 
 
 class ConversationState(BaseModel):
@@ -9,9 +12,26 @@ class ConversationState(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    conversation_id: str | None = None
-    message: str
+    conversation_id: UUID | None = None
+    message: str = Field(min_length=1, max_length=4000)
     client_context: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("message must not be empty")
+        return normalized
+
+    @field_validator("client_context")
+    @classmethod
+    def validate_client_context(cls, value: dict[str, Any]) -> dict[str, Any]:
+        if len(value) > 32:
+            raise ValueError("client_context has too many keys")
+        if len(json.dumps(value, default=str)) > 8000:
+            raise ValueError("client_context payload is too large")
+        return value
 
 
 class TokenUsage(BaseModel):

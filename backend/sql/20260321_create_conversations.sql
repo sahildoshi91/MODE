@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS public.conversations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   trainer_id UUID NOT NULL REFERENCES public.trainers(id) ON DELETE CASCADE,
   client_id UUID NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
-  type TEXT NOT NULL CHECK (type IN ('onboarding', 'coach', 'workout_feedback')),
+  type TEXT NOT NULL CHECK (type IN ('onboarding', 'coach', 'chat', 'workout_feedback')),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'archived')),
   current_stage TEXT NOT NULL DEFAULT 'welcome',
   onboarding_complete BOOLEAN NOT NULL DEFAULT FALSE,

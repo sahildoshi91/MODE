@@ -1,9 +1,12 @@
 BEGIN;
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_messages_conversation_id_id
+  ON public.conversation_messages (conversation_id, id);
+
 CREATE TABLE IF NOT EXISTS public.conversation_usage_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   conversation_id UUID NOT NULL REFERENCES public.conversations(id) ON DELETE CASCADE,
-  message_id UUID NOT NULL REFERENCES public.conversation_messages(id) ON DELETE CASCADE,
+  message_id UUID NOT NULL UNIQUE,
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
   prompt_tokens INTEGER NOT NULL DEFAULT 0 CHECK (prompt_tokens >= 0),
@@ -15,6 +18,10 @@ CREATE TABLE IF NOT EXISTS public.conversation_usage_events (
   task_type TEXT,
   response_mode TEXT,
   fallback_triggered BOOLEAN NOT NULL DEFAULT FALSE,
+  CONSTRAINT conversation_usage_events_message_belongs_to_conversation
+    FOREIGN KEY (conversation_id, message_id)
+    REFERENCES public.conversation_messages(conversation_id, id)
+    ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

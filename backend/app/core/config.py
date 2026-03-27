@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
     anthropic_api_key: str | None = None
+    expose_route_debug: bool = False
     supabase_url: str | None = None
     supabase_anon_key: str | None = Field(
         default=None,

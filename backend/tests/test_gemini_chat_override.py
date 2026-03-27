@@ -3,6 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -245,6 +246,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertEqual(response.route_debug.execution_model, "gemini-2.5-flash")
         self.assertEqual(response.conversation_usage.total_tokens, 144)
         self.assertEqual(response.conversation_usage.last_execution_model, "gemini-2.5-flash")
+        self.assertEqual(self.repository.created_conversation["type"], "chat")
         prompt = service.gemini_client.prompts[0]
         self.assertIn("Coach Alex", prompt)
         self.assertIn("Strength Coach", prompt)
@@ -317,6 +319,35 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertEqual(response.route_debug.execution_model, "claude-sonnet-4-20250514")
         self.assertEqual(response.conversation_usage.total_tokens, 88)
         self.assertEqual(service.anthropic_client.calls[0]["model"], "claude-sonnet-4-20250514")
+
+    def test_handle_chat_rejects_unknown_conversation_id(self):
+        service = self._build_service()
+        request = ChatRequest(
+            conversation_id=uuid4(),
+            message="I can train four days a week.",
+            client_context={"platform": "ios"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "Conversation not found"):
+            service.handle_chat("user-123", self.trainer_context, request)
+
+    def test_handle_chat_rejects_conversation_outside_active_trainer_context(self):
+        service = self._build_service()
+        self.repository.created_conversation.update(
+            {
+                "id": "00000000-0000-0000-0000-000000000123",
+                "trainer_id": "trainer-other",
+                "client_id": "client-123",
+            }
+        )
+        request = ChatRequest(
+            conversation_id="00000000-0000-0000-0000-000000000123",
+            message="I can train four days a week.",
+            client_context={"platform": "ios"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "Conversation does not belong to the active trainer context"):
+            service.handle_chat("user-123", self.trainer_context, request)
 
 
 if __name__ == "__main__":

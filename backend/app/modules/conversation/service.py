@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -29,6 +31,9 @@ from app.modules.profile.service import ProfileService
 from app.modules.trainer_review.service import TrainerReviewService
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass
 class PromptPackage:
     system_prompt: str
@@ -41,7 +46,14 @@ class StreamResultState:
     token_usage: TokenUsage = field(default_factory=TokenUsage)
 
 
+class ConversationProcessingError(RuntimeError):
+    pass
+
+
 class ConversationService:
+    DEFAULT_CONVERSATION_TYPE = "chat"
+    FAILED_CONVERSATION_STAGE = "response_failed"
+
     def __init__(
         self,
         repository: ConversationRepository,
@@ -64,7 +76,14 @@ class ConversationService:
     def _get_or_create_conversation(self, trainer_context: TrainerContext, request: ChatRequest) -> dict:
         conversation = None
         if request.conversation_id:
-            conversation = self.repository.get_conversation(request.conversation_id)
+            conversation = self.repository.get_conversation(str(request.conversation_id))
+            if not conversation:
+                raise ValueError("Conversation not found")
+            if (
+                conversation.get("client_id") != trainer_context.client_id
+                or conversation.get("trainer_id") != trainer_context.trainer_id
+            ):
+                raise ValueError("Conversation does not belong to the active trainer context")
         if not conversation:
             conversation = self.repository.find_active_conversation(
                 trainer_context.client_id,
@@ -74,7 +93,7 @@ class ConversationService:
             conversation = self.repository.create_conversation(
                 trainer_context.trainer_id,
                 trainer_context.client_id,
-                "chat",
+                self.DEFAULT_CONVERSATION_TYPE,
                 "router_initialized",
             )
         return conversation
@@ -257,6 +276,35 @@ class ConversationService:
             confidence_score=route.retrieval_confidence,
         )
 
+    def _queue_trainer_review_safely(
+        self,
+        trainer_context: TrainerContext,
+        conversation_id: str,
+        user_message_id: str | None,
+        route: RoutingDecision,
+        request: ChatRequest,
+        assistant_message: str,
+    ) -> None:
+        try:
+            self._queue_trainer_review_if_needed(
+                trainer_context,
+                conversation_id,
+                user_message_id,
+                route,
+                request,
+                assistant_message,
+            )
+        except Exception:
+            logger.exception("Failed to queue trainer review for conversation_id=%s", conversation_id)
+
+    def _mark_conversation_failed(self, conversation_id: str) -> None:
+        with suppress(Exception):
+            self.repository.update_conversation_state(
+                conversation_id,
+                self.FAILED_CONVERSATION_STAGE,
+                False,
+            )
+
     def _persist_assistant_message(
         self,
         conversation_id: str,
@@ -364,55 +412,63 @@ class ConversationService:
         conversation = self._get_or_create_conversation(trainer_context, request)
         prompt = self._build_prompt(trainer_context, conversation, request, route, profile)
         route_metadata = route.as_dict()
-        user_message = self.repository.save_message(
-            conversation["id"],
-            "user",
-            request.message,
-            {
-                "client_context": request.client_context,
-                "route": route_metadata,
-            },
-        )
+        try:
+            user_message = self.repository.save_message(
+                conversation["id"],
+                "user",
+                request.message,
+                {
+                    "client_context": request.client_context,
+                    "route": route_metadata,
+                },
+            )
+        except Exception as exc:
+            self._mark_conversation_failed(conversation["id"])
+            raise ConversationProcessingError("Chat response could not be completed") from exc
 
         if route.provider == "anthropic" and self.anthropic_client:
             route_debug = self._build_route_debug(route, "anthropic", ANTHROPIC_SONNET_MODEL)
             result_state = StreamResultState()
 
             def anthropic_iterator() -> Iterator[str]:
-                full_response: list[str] = []
-                for text in self.anthropic_client.stream_chat_completion(
-                    model=ANTHROPIC_SONNET_MODEL,
-                    system_prompt=prompt.system_prompt,
-                    user_prompt=prompt.user_prompt,
-                ):
-                    full_response.append(text)
-                    yield text
+                try:
+                    full_response: list[str] = []
+                    for text in self.anthropic_client.stream_chat_completion(
+                        model=ANTHROPIC_SONNET_MODEL,
+                        system_prompt=prompt.system_prompt,
+                        user_prompt=prompt.user_prompt,
+                    ):
+                        full_response.append(text)
+                        yield text
 
-                assistant_message = "".join(full_response).strip()
-                if not assistant_message:
-                    assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
+                    assistant_message = "".join(full_response).strip()
+                    if not assistant_message:
+                        assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
 
-                completion = TextCompletion(
-                    text=assistant_message,
-                    token_usage=AIClientTokenUsage(),
-                )
-                _, conversation_usage = self._persist_assistant_message(
-                    conversation["id"],
-                    assistant_message,
-                    route,
-                    "anthropic",
-                    ANTHROPIC_SONNET_MODEL,
-                    completion,
-                )
-                result_state.conversation_usage = conversation_usage
-                self._queue_trainer_review_if_needed(
-                    trainer_context,
-                    conversation["id"],
-                    user_message.get("id"),
-                    route,
-                    request,
-                    assistant_message,
-                )
+                    completion = TextCompletion(
+                        text=assistant_message,
+                        token_usage=AIClientTokenUsage(),
+                    )
+                    _, conversation_usage = self._persist_assistant_message(
+                        conversation["id"],
+                        assistant_message,
+                        route,
+                        "anthropic",
+                        ANTHROPIC_SONNET_MODEL,
+                        completion,
+                    )
+                    result_state.conversation_usage = conversation_usage
+                    self._queue_trainer_review_safely(
+                        trainer_context,
+                        conversation["id"],
+                        user_message.get("id"),
+                        route,
+                        request,
+                        assistant_message,
+                    )
+                except Exception as exc:
+                    self._mark_conversation_failed(conversation["id"])
+                    raise ConversationProcessingError("Chat response could not be completed") from exc
 
             return conversation["id"], anthropic_iterator(), route_debug, result_state
 
@@ -429,28 +485,32 @@ class ConversationService:
             )
 
             def fallback_iterator() -> Iterator[str]:
-                assistant_message = (completion.text or "").strip()
-                if not assistant_message:
-                    assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
-                yield assistant_message
-                _, conversation_usage = self._persist_assistant_message(
-                    conversation["id"],
-                    assistant_message,
-                    route,
-                    execution_provider,
-                    execution_model,
-                    completion,
-                    fallback_reason,
-                )
-                result_state.conversation_usage = conversation_usage
-                self._queue_trainer_review_if_needed(
-                    trainer_context,
-                    conversation["id"],
-                    user_message.get("id"),
-                    route,
-                    request,
-                    assistant_message,
-                )
+                try:
+                    assistant_message = (completion.text or "").strip()
+                    if not assistant_message:
+                        assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
+                    yield assistant_message
+                    _, conversation_usage = self._persist_assistant_message(
+                        conversation["id"],
+                        assistant_message,
+                        route,
+                        execution_provider,
+                        execution_model,
+                        completion,
+                        fallback_reason,
+                    )
+                    result_state.conversation_usage = conversation_usage
+                    self._queue_trainer_review_safely(
+                        trainer_context,
+                        conversation["id"],
+                        user_message.get("id"),
+                        route,
+                        request,
+                        assistant_message,
+                    )
+                except Exception as exc:
+                    self._mark_conversation_failed(conversation["id"])
+                    raise ConversationProcessingError("Chat response could not be completed") from exc
 
             return conversation["id"], fallback_iterator(), route_debug, result_state
 
@@ -459,36 +519,40 @@ class ConversationService:
         result_state = StreamResultState()
 
         def chunk_iterator() -> Iterator[str]:
-            full_response: list[str] = []
-            for text in self.gemini_client.stream_chat_completion(combined_prompt):
-                full_response.append(text)
-                yield text
+            try:
+                full_response: list[str] = []
+                for text in self.gemini_client.stream_chat_completion(combined_prompt):
+                    full_response.append(text)
+                    yield text
 
-            assistant_message = "".join(full_response).strip()
-            if not assistant_message:
-                assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
+                assistant_message = "".join(full_response).strip()
+                if not assistant_message:
+                    assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
 
-            completion = TextCompletion(
-                text=assistant_message,
-                token_usage=AIClientTokenUsage(),
-            )
-            _, conversation_usage = self._persist_assistant_message(
-                conversation["id"],
-                assistant_message,
-                route,
-                "gemini",
-                GEMINI_MODEL,
-                completion,
-            )
-            result_state.conversation_usage = conversation_usage
-            self._queue_trainer_review_if_needed(
-                trainer_context,
-                conversation["id"],
-                user_message.get("id"),
-                route,
-                request,
+                completion = TextCompletion(
+                    text=assistant_message,
+                    token_usage=AIClientTokenUsage(),
+                )
+                _, conversation_usage = self._persist_assistant_message(
+                    conversation["id"],
                     assistant_message,
-            )
+                    route,
+                    "gemini",
+                    GEMINI_MODEL,
+                    completion,
+                )
+                result_state.conversation_usage = conversation_usage
+                self._queue_trainer_review_safely(
+                    trainer_context,
+                    conversation["id"],
+                    user_message.get("id"),
+                    route,
+                    request,
+                    assistant_message,
+                )
+            except Exception as exc:
+                self._mark_conversation_failed(conversation["id"])
+                raise ConversationProcessingError("Chat response could not be completed") from exc
 
         return conversation["id"], chunk_iterator(), route_debug, result_state
 
@@ -500,31 +564,36 @@ class ConversationService:
         route, profile = self._route_request(trainer_context, request)
         conversation = self._get_or_create_conversation(trainer_context, request)
         prompt = self._build_prompt(trainer_context, conversation, request, route, profile)
-        user_message = self.repository.save_message(
-            conversation["id"],
-            "user",
-            request.message,
-            {
-                "client_context": request.client_context,
-                "route": route.as_dict(),
-            },
-        )
+        try:
+            user_message = self.repository.save_message(
+                conversation["id"],
+                "user",
+                request.message,
+                {
+                    "client_context": request.client_context,
+                    "route": route.as_dict(),
+                },
+            )
 
-        completion, execution_provider, execution_model, fallback_reason = self._execute_route(route, prompt)
-        assistant_message = (completion.text or "").strip()
-        if not assistant_message:
-            assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
+            completion, execution_provider, execution_model, fallback_reason = self._execute_route(route, prompt)
+            assistant_message = (completion.text or "").strip()
+            if not assistant_message:
+                assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
 
-        route_debug, conversation_usage = self._persist_assistant_message(
-            conversation["id"],
-            assistant_message,
-            route,
-            execution_provider,
-            execution_model,
-            completion,
-            fallback_reason,
-        )
-        self._queue_trainer_review_if_needed(
+            route_debug, conversation_usage = self._persist_assistant_message(
+                conversation["id"],
+                assistant_message,
+                route,
+                execution_provider,
+                execution_model,
+                completion,
+                fallback_reason,
+            )
+        except Exception as exc:
+            self._mark_conversation_failed(conversation["id"])
+            raise ConversationProcessingError("Chat response could not be completed") from exc
+
+        self._queue_trainer_review_safely(
             trainer_context,
             conversation["id"],
             user_message.get("id"),
