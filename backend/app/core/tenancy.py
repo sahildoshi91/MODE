@@ -13,6 +13,7 @@ class TrainerContext:
     client_id: str | None
     persona_id: str | None = None
     persona_name: str | None = None
+    trainer_onboarding_completed: bool = False
 
 
 def resolve_trainer_context(supabase: Client, user_id: str) -> TrainerContext:
@@ -36,20 +37,21 @@ def resolve_trainer_context(supabase: Client, user_id: str) -> TrainerContext:
     )
     trainer_record = trainer_response.data[0] if trainer_response.data else None
 
-    if not client_record and not trainer_record:
+    if not trainer_record and not client_record:
         return TrainerContext(None, None, None, None, None)
 
-    if not client_record and trainer_record:
+    if trainer_record:
         persona_response = (
             supabase
             .table("trainer_personas")
-            .select("id, persona_name")
+            .select("id, persona_name, onboarding_preferences")
             .eq("trainer_id", trainer_record["id"])
             .eq("is_default", True)
             .limit(1)
             .execute()
         )
         persona_record = persona_response.data[0] if persona_response.data else None
+        onboarding_preferences = persona_record.get("onboarding_preferences") if persona_record else None
         return TrainerContext(
             tenant_id=trainer_record.get("tenant_id"),
             trainer_id=trainer_record.get("id"),
@@ -58,6 +60,10 @@ def resolve_trainer_context(supabase: Client, user_id: str) -> TrainerContext:
             client_id=None,
             persona_id=persona_record.get("id") if persona_record else None,
             persona_name=persona_record.get("persona_name") if persona_record else None,
+            trainer_onboarding_completed=bool(
+                isinstance(onboarding_preferences, dict)
+                and onboarding_preferences.get("trainer_onboarding_completed")
+            ),
         )
 
     trainer_id = client_record.get("assigned_trainer_id")
@@ -78,13 +84,14 @@ def resolve_trainer_context(supabase: Client, user_id: str) -> TrainerContext:
         persona_response = (
             supabase
             .table("trainer_personas")
-            .select("id, persona_name")
+            .select("id, persona_name, onboarding_preferences")
             .eq("trainer_id", trainer_id)
             .eq("is_default", True)
             .limit(1)
             .execute()
         )
         persona_record = persona_response.data[0] if persona_response.data else None
+        onboarding_preferences = persona_record.get("onboarding_preferences") if persona_record else None
 
     return TrainerContext(
         tenant_id=client_record.get("tenant_id"),
@@ -94,4 +101,8 @@ def resolve_trainer_context(supabase: Client, user_id: str) -> TrainerContext:
         client_id=client_record.get("id"),
         persona_id=persona_record.get("id") if persona_record else None,
         persona_name=persona_record.get("persona_name") if persona_record else None,
+        trainer_onboarding_completed=bool(
+            isinstance(onboarding_preferences, dict)
+            and onboarding_preferences.get("trainer_onboarding_completed")
+        ) if trainer_id else False,
     )

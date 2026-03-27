@@ -3,7 +3,7 @@ from supabase import Client
 
 from app.core.auth import AuthenticatedUser, require_user
 from app.core.tenancy import TrainerContext, resolve_trainer_context
-from app.db.client import get_supabase_user_client
+from app.db.client import get_supabase_admin_client, get_supabase_user_client
 from app.modules.conversation.repository import ConversationRepository
 from app.modules.conversation.service import ConversationService
 from app.modules.plan.repository import PlanRepository
@@ -42,9 +42,8 @@ def get_workout_service(
 
 def get_trainer_context(
     user: AuthenticatedUser = Depends(require_user),
-    supabase: Client = Depends(get_request_scoped_supabase_client),
 ) -> TrainerContext:
-    return resolve_trainer_context(supabase, user.id)
+    return resolve_trainer_context(get_supabase_admin_client(), user.id)
 
 
 def get_profile_repository(
@@ -118,5 +117,6 @@ def get_conversation_service(
     repository: ConversationRepository = Depends(get_conversation_repository),
     profile_service: ProfileService = Depends(get_profile_service),
     trainer_review_service: TrainerReviewService = Depends(get_trainer_review_service),
+    trainer_persona_repository: TrainerPersonaRepository = Depends(get_trainer_persona_repository),
 ) -> ConversationService:
-    return ConversationService(repository, profile_service, trainer_review_service)
+    return ConversationService(repository, profile_service, trainer_review_service, trainer_persona_repository)

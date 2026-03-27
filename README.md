@@ -93,7 +93,10 @@ python main.py
 ```env
 EXPO_PUBLIC_SUPABASE_URL=...
 EXPO_PUBLIC_SUPABASE_ANON_KEY=...
+EXPO_PUBLIC_API_BASE_URL=http://192.168.1.10:8000
 ```
+
+When testing in Expo Go on a physical device, `localhost` points to the phone, not your computer. If auto-detection does not work in your setup, set `EXPO_PUBLIC_API_BASE_URL` to your computer's LAN IP so the phone can reach the FastAPI server.
 
 ### `backend/.env`
 ```env

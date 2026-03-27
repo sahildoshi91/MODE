@@ -15,6 +15,7 @@ from app.ai.client import GeminiCompletion, TokenUsage
 from app.core.tenancy import TrainerContext
 from app.modules.conversation.schemas import ChatRequest
 from app.modules.conversation.service import ConversationService
+from app.modules.trainer_persona.repository import TrainerPersonaRepository
 
 
 class FakeConversationRepository:
@@ -65,7 +66,14 @@ class FakeConversationRepository:
 
     def list_messages(self, conversation_id, limit=20):
         del conversation_id, limit
-        return list(self.history)
+        return list(self.history) + [
+            {
+                "id": message["id"],
+                "role": message["role"],
+                "message_text": message["message_text"],
+            }
+            for message in self.saved_messages
+        ]
 
     def update_conversation_state(self, conversation_id, stage, onboarding_complete):
         self.updated_states.append(
@@ -100,6 +108,16 @@ class FakeConversationRepository:
         }
 
 
+class BrokenUsageConversationRepository(FakeConversationRepository):
+    def record_usage_event(self, **kwargs):
+        del kwargs
+        raise RuntimeError("relation \"conversation_usage_events\" does not exist")
+
+    def get_conversation_usage_summary(self, conversation_id):
+        del conversation_id
+        raise RuntimeError("relation \"conversation_usage_summary\" does not exist")
+
+
 class FakeProfileService:
     def get_or_create_profile(self, client_id):
         return {
@@ -120,6 +138,36 @@ class FakeTrainerReviewService:
 
     def queue_unanswered_question(self, **kwargs):
         self.queued.append(kwargs)
+
+
+class FakeTrainerPersonaRepository:
+    def __init__(self):
+        self.default_persona = {
+            "id": "persona-123",
+            "trainer_id": "trainer-123",
+            "persona_name": "Strength Coach",
+            "tone_description": "Warm and direct",
+            "coaching_philosophy": "Consistency first",
+            "communication_rules": {},
+            "onboarding_preferences": {},
+            "fallback_behavior": {},
+            "is_default": True,
+        }
+
+    def get_default_by_trainer(self, trainer_id):
+        if self.default_persona and self.default_persona["trainer_id"] == trainer_id:
+            return dict(self.default_persona)
+        return None
+
+    def create(self, payload):
+        self.default_persona = {"id": "persona-created", **payload}
+        return dict(self.default_persona)
+
+    def update(self, persona_id, payload):
+        if not self.default_persona or self.default_persona["id"] != persona_id:
+            raise AssertionError("Unexpected persona id")
+        self.default_persona.update(payload)
+        return dict(self.default_persona)
 
 
 class FakeGeminiClient:
@@ -201,6 +249,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.repository = FakeConversationRepository()
         self.profile_service = FakeProfileService()
         self.trainer_review_service = FakeTrainerReviewService()
+        self.trainer_persona_repository = FakeTrainerPersonaRepository()
         self.trainer_context = TrainerContext(
             tenant_id="tenant-123",
             trainer_id="trainer-123",
@@ -225,6 +274,19 @@ class ConversationServiceRoutingTests(unittest.TestCase):
                             self.repository,
                             self.profile_service,
                             self.trainer_review_service,
+                            self.trainer_persona_repository,
+                        )
+
+    def _build_service_with_repository(self, repository, anthropic_enabled=False):
+        with patch("app.modules.conversation.service.GeminiClient", return_value=FakeGeminiClient()):
+            with patch("app.modules.conversation.service.OpenAIClient", return_value=FakeOpenAIClient()):
+                with patch.object(sys.modules["app.modules.conversation.service"].settings, "anthropic_api_key", "test-anthropic-key" if anthropic_enabled else None):
+                    with patch("app.modules.conversation.service.AnthropicClient", return_value=FakeAnthropicClient()):
+                        return ConversationService(
+                            repository,
+                            self.profile_service,
+                            self.trainer_review_service,
+                            self.trainer_persona_repository,
                         )
 
     def test_handle_chat_uses_default_fast_route_with_gemini(self):
@@ -264,6 +326,19 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertEqual(result_state.conversation_usage.total_tokens, 0)
         self.assertEqual(self.repository.saved_messages[-1]["message_text"], "Gemini stream")
         self.assertEqual(self.repository.updated_states[-1]["stage"], "default_fast")
+
+    def test_handle_chat_succeeds_when_usage_analytics_are_unavailable(self):
+        repository = BrokenUsageConversationRepository()
+        service = self._build_service_with_repository(repository)
+
+        response = service.handle_chat("user-123", self.trainer_context, self.request)
+
+        self.assertEqual(response.assistant_message, "Gemini says hello")
+        self.assertEqual(response.conversation_id, "convo-123")
+        self.assertEqual(response.conversation_usage.total_tokens, 0)
+        self.assertEqual(response.conversation_usage.usage_event_count, 0)
+        self.assertEqual(repository.saved_messages[-1]["message_text"], "Gemini says hello")
+        self.assertEqual(repository.updated_states[-1]["stage"], "default_fast")
 
     def test_risk_route_uses_openai_when_available(self):
         service = self._build_service()
@@ -348,6 +423,43 @@ class ConversationServiceRoutingTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Conversation does not belong to the active trainer context"):
             service.handle_chat("user-123", self.trainer_context, request)
+
+    def test_trainer_chat_runs_onboarding_without_client_id(self):
+        service = self._build_service()
+        trainer_context = TrainerContext(
+            tenant_id="tenant-123",
+            trainer_id="trainer-123",
+            trainer_user_id="trainer-user-123",
+            trainer_display_name="Coach Alex",
+            client_id=None,
+            persona_id="persona-123",
+            persona_name="Strength Coach",
+            trainer_onboarding_completed=False,
+        )
+        self.repository.history = []
+
+        prompts = [
+            "Supportive but direct. I want clients to feel capable.",
+            "They overcomplicate consistency and chase intensity too early.",
+            "Movement quality, sustainable volume, and recovery.",
+            "Time, injuries, equipment, energy, and how stressed they are.",
+            "Let's lower the bar, keep momentum, and win the day with something small.",
+        ]
+
+        responses = [service.handle_chat("trainer-user-123", trainer_context, ChatRequest(message=prompt)) for prompt in prompts]
+
+        self.assertEqual(responses[0].conversation_state.current_stage, "trainer_onboarding_q2")
+        self.assertIn("What do you believe most people get wrong", responses[0].assistant_message)
+        self.assertEqual(responses[-1].conversation_state.current_stage, "trainer_onboarding_complete")
+        self.assertTrue(responses[-1].conversation_state.onboarding_complete)
+        self.assertIn("Got it - here's how I'll coach like you", responses[-1].assistant_message)
+        self.assertEqual(self.repository.created_conversation["type"], "onboarding")
+        onboarding_preferences = self.trainer_persona_repository.default_persona["onboarding_preferences"]
+        self.assertTrue(onboarding_preferences["trainer_onboarding_completed"])
+        self.assertEqual(
+            onboarding_preferences["trainer_onboarding_answers"]["motivation_response"],
+            prompts[-1],
+        )
 
 
 if __name__ == "__main__":

@@ -6,13 +6,13 @@ import { sendChatMessage } from '../services/chatApi';
 const INITIAL_MESSAGE = {
   id: 'welcome',
   role: 'assistant',
-  text: 'Tell me what you are training for, what equipment you have, or how many days per week feels realistic. I will turn that into a coaching conversation.',
+  text: 'Send a message to start coaching. If you are a trainer, I will help set up your assistant first. If you are a client, we can jump straight into your plan.',
 };
 
 export function useChatConversation(accessToken) {
   const [messages, setMessages] = useState([INITIAL_MESSAGE]);
   const [conversationId, setConversationId] = useState(null);
-  const [quickReplies, setQuickReplies] = useState(['Build muscle', 'Lose fat', 'General fitness']);
+  const [quickReplies, setQuickReplies] = useState(['Set up my coaching assistant', 'Build muscle', 'General fitness']);
   const [conversationState, setConversationState] = useState({
     current_stage: 'welcome',
     onboarding_complete: false,

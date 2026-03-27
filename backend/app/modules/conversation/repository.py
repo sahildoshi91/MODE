@@ -18,22 +18,30 @@ class ConversationRepository:
         )
         return response.data[0] if response.data else None
 
-    def find_active_conversation(self, client_id: str, trainer_id: str | None) -> dict[str, Any] | None:
-        if not client_id:
+    def find_active_conversation(self, client_id: str | None, trainer_id: str | None) -> dict[str, Any] | None:
+        if not trainer_id:
             return None
         query = (
             self.supabase
             .table("conversations")
             .select("*")
-            .eq("client_id", client_id)
             .eq("status", "active")
+            .eq("trainer_id", trainer_id)
         )
-        if trainer_id:
-            query = query.eq("trainer_id", trainer_id)
+        if client_id:
+            query = query.eq("client_id", client_id)
+        else:
+            query = query.is_("client_id", "null")
         response = query.limit(1).execute()
         return response.data[0] if response.data else None
 
-    def create_conversation(self, trainer_id: str, client_id: str, conversation_type: str, stage: str) -> dict[str, Any]:
+    def create_conversation(
+        self,
+        trainer_id: str,
+        client_id: str | None,
+        conversation_type: str,
+        stage: str,
+    ) -> dict[str, Any]:
         result = (
             self.supabase
             .table("conversations")

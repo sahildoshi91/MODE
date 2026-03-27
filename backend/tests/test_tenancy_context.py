@@ -87,6 +87,45 @@ class TrainerContextResolutionTests(unittest.TestCase):
         self.assertEqual(trainer_context.persona_id, "persona-123")
         self.assertEqual(trainer_context.persona_name, "Strength Coach")
 
+    def test_resolve_trainer_context_prioritizes_trainer_role_when_user_has_both_records(self):
+        supabase = FakeSupabase(
+            {
+                "clients": [
+                    {
+                        "id": "client-123",
+                        "tenant_id": "tenant-123",
+                        "user_id": "trainer-user-123",
+                        "assigned_trainer_id": None,
+                    }
+                ],
+                "trainers": [
+                    {
+                        "id": "trainer-123",
+                        "tenant_id": "tenant-123",
+                        "user_id": "trainer-user-123",
+                        "display_name": "Coach Alex",
+                    }
+                ],
+                "trainer_personas": [
+                    {
+                        "id": "persona-123",
+                        "trainer_id": "trainer-123",
+                        "persona_name": "Strength Coach",
+                        "is_default": True,
+                    }
+                ],
+            }
+        )
+
+        trainer_context = resolve_trainer_context(supabase, "trainer-user-123")
+
+        self.assertEqual(trainer_context.trainer_id, "trainer-123")
+        self.assertEqual(trainer_context.trainer_user_id, "trainer-user-123")
+        self.assertEqual(trainer_context.trainer_display_name, "Coach Alex")
+        self.assertIsNone(trainer_context.client_id)
+        self.assertEqual(trainer_context.persona_id, "persona-123")
+        self.assertEqual(trainer_context.persona_name, "Strength Coach")
+
 
 class ChatRequestValidationTests(unittest.TestCase):
     def test_chat_request_strips_whitespace(self):

@@ -28,6 +28,7 @@ from app.modules.conversation.routing import (
 )
 from app.modules.conversation.schemas import ChatRequest, ChatResponse, ConversationState, ConversationUsage, RouteDebug, TokenUsage
 from app.modules.profile.service import ProfileService
+from app.modules.trainer_persona.repository import TrainerPersonaRepository
 from app.modules.trainer_review.service import TrainerReviewService
 
 
@@ -53,16 +54,30 @@ class ConversationProcessingError(RuntimeError):
 class ConversationService:
     DEFAULT_CONVERSATION_TYPE = "chat"
     FAILED_CONVERSATION_STAGE = "response_failed"
+    TRAINER_ONBOARDING_STAGE_PREFIX = "trainer_onboarding_q"
+    TRAINER_ONBOARDING_COMPLETE_STAGE = "trainer_onboarding_complete"
+    TRAINER_ONBOARDING_QUESTIONS = (
+        "Hey - let's quickly set up your AI coaching assistant.\n"
+        "This helps it sound like you and coach like you.\n\n"
+        "Just a few quick questions.\n\n"
+        "In one or two sentences, how would you describe your coaching style?",
+        "What do you believe most people get wrong about fitness or training?",
+        "When you build a program, what are the 2-3 things you focus on most?",
+        "What do you always consider when adjusting a workout for a client? For example: time, injuries, equipment, energy, or schedule.",
+        "A client says: \"I don't feel motivated today and might skip my workout.\"\n\nWhat would you say to them?",
+    )
 
     def __init__(
         self,
         repository: ConversationRepository,
         profile_service: ProfileService,
         trainer_review_service: TrainerReviewService,
+        trainer_persona_repository: TrainerPersonaRepository,
     ):
         self.repository = repository
         self.profile_service = profile_service
         self.trainer_review_service = trainer_review_service
+        self.trainer_persona_repository = trainer_persona_repository
         self.router = ConversationRouter()
         self.gemini_client = GeminiClient()
         self.openai_client = OpenAIClient()
@@ -93,10 +108,21 @@ class ConversationService:
             conversation = self.repository.create_conversation(
                 trainer_context.trainer_id,
                 trainer_context.client_id,
-                self.DEFAULT_CONVERSATION_TYPE,
-                "router_initialized",
+                "onboarding" if self._should_run_trainer_onboarding(trainer_context) else self.DEFAULT_CONVERSATION_TYPE,
+                self._initial_conversation_stage(trainer_context),
             )
         return conversation
+
+    def _initial_conversation_stage(self, trainer_context: TrainerContext) -> str:
+        if self._should_run_trainer_onboarding(trainer_context):
+            return f"{self.TRAINER_ONBOARDING_STAGE_PREFIX}1"
+        return "router_initialized"
+
+    def _is_trainer_only_context(self, trainer_context: TrainerContext) -> bool:
+        return bool(trainer_context.trainer_id and not trainer_context.client_id)
+
+    def _should_run_trainer_onboarding(self, trainer_context: TrainerContext) -> bool:
+        return self._is_trainer_only_context(trainer_context) and not trainer_context.trainer_onboarding_completed
 
     def _build_prompt(
         self,
@@ -127,8 +153,9 @@ class ConversationService:
             "Differentiate between what is known from context and what you are inferring.\n"
             f"{route_instructions}"
         )
+        actor_label = "Trainer admin context" if self._is_trainer_only_context(trainer_context) else "Client profile"
         user_prompt = (
-            f"Client profile: {profile}\n"
+            f"{actor_label}: {profile}\n"
             f"Client context: {client_context}\n"
             "Conversation history:\n"
             f"{history_text}\n\n"
@@ -162,7 +189,7 @@ class ConversationService:
         trainer_context: TrainerContext,
         request: ChatRequest,
     ) -> tuple[RoutingDecision, dict[str, Any]]:
-        profile = self.profile_service.get_or_create_profile(trainer_context.client_id)
+        profile = self._get_routing_profile(trainer_context)
         route = self.router.route(
             RoutingContext(
                 message_text=request.message,
@@ -172,6 +199,183 @@ class ConversationService:
             )
         )
         return route, profile
+
+    def _get_routing_profile(self, trainer_context: TrainerContext) -> dict[str, Any]:
+        if trainer_context.client_id:
+            return self.profile_service.get_or_create_profile(trainer_context.client_id)
+        return {
+            "context_type": "trainer_admin",
+            "trainer_display_name": trainer_context.trainer_display_name,
+            "persona_name": trainer_context.persona_name,
+        }
+
+    def _list_user_messages(self, conversation_id: str) -> list[dict[str, Any]]:
+        return [message for message in self.repository.list_messages(conversation_id, limit=50) if message.get("role") == "user"]
+
+    def _trainer_onboarding_state(self, conversation_id: str) -> tuple[int, bool, list[dict[str, Any]]]:
+        answers = self._list_user_messages(conversation_id)
+        question_count = len(self.TRAINER_ONBOARDING_QUESTIONS)
+        completed = len(answers) >= question_count
+        next_index = min(len(answers), question_count - 1)
+        return next_index, completed, answers
+
+    def _build_trainer_onboarding_summary(
+        self,
+        trainer_context: TrainerContext,
+        answers: list[dict[str, Any]],
+    ) -> str:
+        answer_text = [answer.get("message_text", "").strip() for answer in answers[: len(self.TRAINER_ONBOARDING_QUESTIONS)]]
+        while len(answer_text) < len(self.TRAINER_ONBOARDING_QUESTIONS):
+            answer_text.append("")
+        return (
+            "Got it - here's how I'll coach like you:\n\n"
+            f"Style: {answer_text[0] or 'Still taking shape.'}\n"
+            f"Belief: {answer_text[1] or 'Still taking shape.'}\n"
+            f"Programming focus: {answer_text[2] or 'Still taking shape.'}\n"
+            f"Adjustment logic: {answer_text[3] or 'Still taking shape.'}\n"
+            f"Motivation style: {answer_text[4] or 'Still taking shape.'}\n\n"
+            "You can tweak this anytime. I'll use this as the starting point for your MODE coaching assistant."
+        )
+
+    def _upsert_trainer_onboarding_persona(
+        self,
+        trainer_context: TrainerContext,
+        answers: list[dict[str, Any]],
+    ) -> None:
+        if not trainer_context.trainer_id:
+            return
+        answer_text = [answer.get("message_text", "").strip() for answer in answers[: len(self.TRAINER_ONBOARDING_QUESTIONS)]]
+        while len(answer_text) < len(self.TRAINER_ONBOARDING_QUESTIONS):
+            answer_text.append("")
+
+        existing = self.trainer_persona_repository.get_default_by_trainer(trainer_context.trainer_id)
+        payload = {
+            "persona_name": (existing or {}).get("persona_name") or trainer_context.persona_name or "Default Coach",
+            "tone_description": answer_text[0] or (existing or {}).get("tone_description"),
+            "coaching_philosophy": answer_text[1] or (existing or {}).get("coaching_philosophy"),
+            "communication_rules": {
+                **(((existing or {}).get("communication_rules")) or {}),
+                "programming_priorities": answer_text[2],
+                "motivation_response_example": answer_text[4],
+            },
+            "onboarding_preferences": {
+                **(((existing or {}).get("onboarding_preferences")) or {}),
+                "trainer_onboarding_completed": True,
+                "trainer_onboarding_version": "v1_lightweight",
+                "trainer_onboarding_answers": {
+                    "coaching_style": answer_text[0],
+                    "fitness_misconception": answer_text[1],
+                    "programming_focus": answer_text[2],
+                    "adjustment_factors": answer_text[3],
+                    "motivation_response": answer_text[4],
+                },
+            },
+            "fallback_behavior": {
+                **(((existing or {}).get("fallback_behavior")) or {}),
+                "adjustment_factors": answer_text[3],
+            },
+            "is_default": True,
+        }
+
+        if existing:
+            self.trainer_persona_repository.update(existing["id"], payload)
+            return
+
+        self.trainer_persona_repository.create(
+            {
+                "trainer_id": trainer_context.trainer_id,
+                **payload,
+            }
+        )
+
+    def _build_onboarding_chat_response(
+        self,
+        conversation_id: str,
+        trainer_context: TrainerContext,
+        assistant_message: str,
+        stage: str,
+        onboarding_complete: bool,
+    ) -> ChatResponse:
+        return ChatResponse(
+            conversation_id=conversation_id,
+            assistant_message=assistant_message,
+            quick_replies=[],
+            conversation_state=ConversationState(
+                current_stage=stage,
+                onboarding_complete=onboarding_complete,
+            ),
+            profile_patch={},
+            trainer_context={
+                "tenant_id": trainer_context.tenant_id,
+                "trainer_id": trainer_context.trainer_id,
+                "trainer_display_name": trainer_context.trainer_display_name,
+                "persona_id": trainer_context.persona_id,
+                "persona_name": trainer_context.persona_name,
+            },
+            fallback_triggered=False,
+            token_usage=TokenUsage(),
+            route_debug=None,
+            conversation_usage=self._get_conversation_usage(conversation_id),
+        )
+
+    def _handle_trainer_onboarding(
+        self,
+        trainer_context: TrainerContext,
+        request: ChatRequest,
+    ) -> ChatResponse:
+        conversation = self._get_or_create_conversation(trainer_context, request)
+        user_message = self.repository.save_message(
+            conversation["id"],
+            "user",
+            request.message,
+            {
+                "client_context": request.client_context,
+                "route": {
+                    "flow": "trainer_onboarding",
+                    "reason": "trainer_setup",
+                    "task_type": "trainer_onboarding",
+                    "response_mode": "guided_question",
+                    "provider": "system",
+                    "model": "trainer-onboarding-v1",
+                },
+            },
+        )
+        del user_message
+        next_index, completed, answers = self._trainer_onboarding_state(conversation["id"])
+        if completed:
+            assistant_message = self._build_trainer_onboarding_summary(trainer_context, answers)
+            self._upsert_trainer_onboarding_persona(trainer_context, answers)
+            stage = self.TRAINER_ONBOARDING_COMPLETE_STAGE
+        else:
+            assistant_message = self.TRAINER_ONBOARDING_QUESTIONS[next_index]
+            stage = f"{self.TRAINER_ONBOARDING_STAGE_PREFIX}{next_index + 1}"
+        self.repository.save_message(
+            conversation["id"],
+            "assistant",
+            assistant_message,
+            {
+                "provider": "system",
+                "model": "trainer-onboarding-v1",
+                "route": {
+                    "flow": "trainer_onboarding",
+                    "reason": "trainer_setup",
+                    "task_type": "trainer_onboarding",
+                    "response_mode": "guided_question" if not completed else "summary",
+                },
+            },
+        )
+        self.repository.update_conversation_state(
+            conversation["id"],
+            stage,
+            completed,
+        )
+        return self._build_onboarding_chat_response(
+            conversation["id"],
+            trainer_context,
+            assistant_message,
+            stage,
+            completed,
+        )
 
     def _serialize_route_metadata(
         self,
@@ -332,21 +536,24 @@ class ConversationService:
                 "route": self._serialize_route_metadata(route, execution_provider, execution_model, fallback_reason),
             },
         )
-        self.repository.record_usage_event(
-            conversation_id=conversation_id,
-            message_id=saved_message["id"],
-            provider=execution_provider,
-            model=execution_model,
-            prompt_tokens=completion.token_usage.prompt_tokens,
-            completion_tokens=completion.token_usage.completion_tokens,
-            total_tokens=completion.token_usage.total_tokens,
-            thoughts_tokens=completion.token_usage.thoughts_tokens,
-            route_flow=route.flow,
-            route_reason=route.reason,
-            task_type=route.task_type,
-            response_mode=route.response_mode,
-            fallback_triggered=bool(fallback_reason),
-        )
+        try:
+            self.repository.record_usage_event(
+                conversation_id=conversation_id,
+                message_id=saved_message["id"],
+                provider=execution_provider,
+                model=execution_model,
+                prompt_tokens=completion.token_usage.prompt_tokens,
+                completion_tokens=completion.token_usage.completion_tokens,
+                total_tokens=completion.token_usage.total_tokens,
+                thoughts_tokens=completion.token_usage.thoughts_tokens,
+                route_flow=route.flow,
+                route_reason=route.reason,
+                task_type=route.task_type,
+                response_mode=route.response_mode,
+                fallback_triggered=bool(fallback_reason),
+            )
+        except Exception:
+            logger.exception("Failed to record conversation usage analytics for conversation_id=%s", conversation_id)
         self.repository.update_conversation_state(
             conversation_id,
             route.flow,
@@ -355,7 +562,11 @@ class ConversationService:
         return route_debug, self._get_conversation_usage(conversation_id)
 
     def _get_conversation_usage(self, conversation_id: str) -> ConversationUsage:
-        summary = self.repository.get_conversation_usage_summary(conversation_id)
+        try:
+            summary = self.repository.get_conversation_usage_summary(conversation_id)
+        except Exception:
+            logger.exception("Failed to load conversation usage analytics for conversation_id=%s", conversation_id)
+            summary = None
         if not summary:
             return ConversationUsage(conversation_id=conversation_id)
         return ConversationUsage(**summary)
@@ -405,8 +616,16 @@ class ConversationService:
         request: ChatRequest,
     ) -> tuple[str, Iterator[str], RouteDebug, StreamResultState]:
         del user_id
-        if not trainer_context.client_id or not trainer_context.trainer_id:
+        if not trainer_context.trainer_id:
             raise ValueError("User is not assigned to an active trainer context")
+        if self._should_run_trainer_onboarding(trainer_context):
+            response = self._handle_trainer_onboarding(trainer_context, request)
+
+            def onboarding_iterator() -> Iterator[str]:
+                yield response.assistant_message
+
+            result_state = StreamResultState(conversation_usage=response.conversation_usage, token_usage=response.token_usage)
+            return response.conversation_id or "", onboarding_iterator(), None, result_state
 
         route, profile = self._route_request(trainer_context, request)
         conversation = self._get_or_create_conversation(trainer_context, request)
@@ -558,8 +777,10 @@ class ConversationService:
 
     def handle_chat(self, user_id: str, trainer_context: TrainerContext, request: ChatRequest) -> ChatResponse:
         del user_id
-        if not trainer_context.client_id or not trainer_context.trainer_id:
+        if not trainer_context.trainer_id:
             raise ValueError("User is not assigned to an active trainer context")
+        if self._should_run_trainer_onboarding(trainer_context):
+            return self._handle_trainer_onboarding(trainer_context, request)
 
         route, profile = self._route_request(trainer_context, request)
         conversation = self._get_or_create_conversation(trainer_context, request)

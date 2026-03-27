@@ -120,7 +120,7 @@ CREATE TABLE IF NOT EXISTS public.trainer_program_templates (
 CREATE TABLE IF NOT EXISTS public.conversations (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   trainer_id UUID NOT NULL REFERENCES public.trainers(id) ON DELETE CASCADE,
-  client_id UUID NOT NULL REFERENCES public.clients(id) ON DELETE CASCADE,
+  client_id UUID REFERENCES public.clients(id) ON DELETE CASCADE,
   type TEXT NOT NULL CHECK (type IN ('onboarding', 'coach', 'chat', 'workout_feedback')),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'completed', 'archived')),
   current_stage TEXT NOT NULL DEFAULT 'welcome',
@@ -1194,7 +1194,7 @@ BEGIN
 
   INSERT INTO public.trainers (tenant_id, user_id, display_name)
   VALUES (new_tenant_id, trainer_user_id, trainer_display_name)
-  ON CONFLICT (tenant_id, user_id) DO UPDATE
+  ON CONFLICT ON CONSTRAINT trainers_tenant_id_user_id_key DO UPDATE
     SET display_name = EXCLUDED.display_name
   RETURNING id INTO new_trainer_id;
 
@@ -1276,7 +1276,7 @@ BEGIN
 
   INSERT INTO public.clients (tenant_id, user_id, assigned_trainer_id)
   VALUES (target_tenant_id, client_user_id, trainer_record_id)
-  ON CONFLICT (tenant_id, user_id) DO UPDATE
+  ON CONFLICT ON CONSTRAINT clients_tenant_id_user_id_key DO UPDATE
     SET assigned_trainer_id = EXCLUDED.assigned_trainer_id
   RETURNING id INTO new_client_id;
 
