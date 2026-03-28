@@ -6,6 +6,8 @@ from app.core.tenancy import TrainerContext, resolve_trainer_context
 from app.db.client import get_supabase_admin_client, get_supabase_user_client
 from app.modules.conversation.repository import ConversationRepository
 from app.modules.conversation.service import ConversationService
+from app.modules.daily_checkins.repository import DailyCheckinRepository
+from app.modules.daily_checkins.service import DailyCheckinService
 from app.modules.plan.repository import PlanRepository
 from app.modules.plan.service import PlanService
 from app.modules.profile.repository import ProfileRepository
@@ -56,6 +58,18 @@ def get_profile_service(
     repository: ProfileRepository = Depends(get_profile_repository),
 ) -> ProfileService:
     return ProfileService(repository)
+
+
+def get_daily_checkin_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> DailyCheckinRepository:
+    return DailyCheckinRepository(supabase)
+
+
+def get_daily_checkin_service(
+    repository: DailyCheckinRepository = Depends(get_daily_checkin_repository),
+) -> DailyCheckinService:
+    return DailyCheckinService(repository)
 
 
 def get_plan_repository(

@@ -1,18 +1,46 @@
 import { getApiBaseUrls, rememberApiBaseUrl, resolveApiBaseUrl } from './apiBaseUrl';
 
+const DEFAULT_API_TIMEOUT_MS = 8000;
+
+function createTimeoutController(timeoutMs) {
+  if (typeof AbortController === 'undefined') {
+    return {
+      controller: null,
+      timeoutId: null,
+    };
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error(`Request timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  return { controller, timeoutId };
+}
+
 export async function fetchWithApiFallback(path, options) {
   const attemptedBaseUrls = [];
   let lastError = null;
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
 
   for (const baseUrl of getApiBaseUrls()) {
     attemptedBaseUrls.push(baseUrl);
+    const { controller, timeoutId } = createTimeoutController(timeoutMs);
 
     try {
-      const response = await fetch(`${baseUrl}${path}`, options);
+      const { timeoutMs: _timeoutMs, ...fetchOptions } = options || {};
+      const response = await fetch(`${baseUrl}${path}`, {
+        ...fetchOptions,
+        ...(controller ? { signal: controller.signal } : {}),
+      });
       rememberApiBaseUrl(baseUrl);
       return { response, baseUrl };
     } catch (error) {
       lastError = error;
+    } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
     }
   }
 

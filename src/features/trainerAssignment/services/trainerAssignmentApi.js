@@ -9,6 +9,21 @@ async function parseError(response) {
   }
 }
 
+function buildNetworkError(error, path) {
+  const rootError = error?.cause || error;
+  const errorMessage = typeof rootError?.message === 'string' ? rootError.message : 'Network request failed';
+  const isTimeout = /timed out|abort/i.test(errorMessage) || rootError?.name === 'AbortError';
+  const attemptedHosts = Array.isArray(error?.attemptedBaseUrls) && error.attemptedBaseUrls.length > 0
+    ? ` Tried: ${error.attemptedBaseUrls.join(', ')}.`
+    : '';
+
+  return new Error(
+    isTimeout
+      ? `Request to ${path} timed out.${attemptedHosts} If you are testing on a phone, make sure the backend is running on your computer and that EXPO_PUBLIC_API_BASE_URL points to your computer's LAN IP, for example http://192.168.6.137:8000.`
+      : `Unable to reach the backend for ${path}.${attemptedHosts} Check that the FastAPI server is running and reachable from your device.`,
+  );
+}
+
 async function requestTrainerAssignment(path, { accessToken, method = 'GET', body } = {}) {
   let response;
 
@@ -20,12 +35,10 @@ async function requestTrainerAssignment(path, { accessToken, method = 'GET', bod
         ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
+      timeoutMs: 8000,
     }));
   } catch (error) {
-    const attemptedHosts = Array.isArray(error?.attemptedBaseUrls) && error.attemptedBaseUrls.length > 0
-      ? ` Tried: ${error.attemptedBaseUrls.join(', ')}.`
-      : '';
-    throw new Error(`Unable to reach the backend.${attemptedHosts}`);
+    throw buildNetworkError(error, path);
   }
 
   if (!response.ok) {

@@ -4,7 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { supabase } from '../services/supabaseClient';
 import Login from '../features/auth/screens/Login';
-import CoachChatScreen from '../features/chat/screens/CoachChatScreen';
+import DailyCheckinScreen from '../features/dailyCheckin/screens/DailyCheckinScreen';
 import TrainerAssignmentScreen from '../features/trainerAssignment/screens/TrainerAssignmentScreen';
 import { assignTrainer, getTrainerAssignmentStatus } from '../features/trainerAssignment/services/trainerAssignmentApi';
 import { theme } from '../../lib/theme';
@@ -141,7 +141,7 @@ function AppShell() {
   }
 
   return (
-    <CoachChatScreen
+    <DailyCheckinScreen
       accessToken={session.access_token}
       onSignOut={handleSignOut}
     />

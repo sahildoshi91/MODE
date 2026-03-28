@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1.chat import router as chat_router
+from app.api.v1.checkin import router as checkin_router
 from app.api.v1.plans import router as plans_router
 from app.api.v1.profiles import router as profiles_router
 from app.api.v1.trainer_assignment import router as trainer_assignment_router
@@ -12,6 +13,7 @@ from app.api.v1.workouts import router as workouts_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(chat_router, prefix="/chat", tags=["chat"])
+api_router.include_router(checkin_router, prefix="/checkin", tags=["checkin"])
 api_router.include_router(profiles_router, prefix="/profiles", tags=["profiles"])
 api_router.include_router(plans_router, prefix="/plans", tags=["plans"])
 api_router.include_router(workouts_router, prefix="/workouts", tags=["workouts"])
