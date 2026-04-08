@@ -116,6 +116,10 @@ class DailyCheckinService:
             checkin=self._build_result(record),
         )
 
+    def get_previous_checkin_summary(self, client_id: str, before_date: date):
+        record = self.repository.get_previous_checkin(client_id, before_date)
+        return self._build_yesterday_summary(record)
+
     def submit_checkin(
         self,
         client_id: str,
@@ -229,6 +233,7 @@ class DailyCheckinService:
                 "plan_type": "guided_training",
                 "completed": request.completed,
                 "plan_id": workout_plan["id"],
+                "feel_rating": request.feel_rating,
             }
         )
         return LogGeneratedWorkoutResponse(workout_id=created["id"], completed=bool(created.get("completed", request.completed)))
@@ -549,6 +554,30 @@ class DailyCheckinService:
         )
 
     def _build_adaptive_note(self, mode: str, last_workout: dict | None) -> str:
+        feel_rating = last_workout.get("feel_rating") if isinstance(last_workout, dict) else None
+        if isinstance(feel_rating, int) and 1 <= feel_rating <= 5:
+            feel_labels = {
+                1: "Very Hard",
+                2: "Hard",
+                3: "Moderate",
+                4: "Manageable",
+                5: "Easy",
+            }
+            feel_label = feel_labels[feel_rating]
+            if feel_rating <= 2:
+                return (
+                    f"Your last session felt {feel_label}, so I've dialed intensity down today to protect recovery while "
+                    "still keeping momentum."
+                )
+            if feel_rating == 3:
+                return (
+                    f"Your last session felt {feel_label}, so today's plan keeps the load balanced and repeatable without "
+                    "spiking fatigue."
+                )
+            return (
+                f"Your last session felt {feel_label}, so today's plan nudges intensity up with controlled progression."
+            )
+
         last_title = last_workout.get("title") if isinstance(last_workout, dict) else None
         if last_title:
             return f"Your last logged session was '{last_title}', so today's {mode.lower()} plan keeps the effort targeted and sustainable."

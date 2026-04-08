@@ -58,6 +58,11 @@ class DailyCheckinStatusResponse(BaseModel):
     checkin: DailyCheckinResult | None = None
 
 
+class PreviousCheckinResponse(BaseModel):
+    before_date: date
+    checkin: YesterdayCheckinSummary | None = None
+
+
 class SubmitDailyCheckinRequest(BaseModel):
     date: date
     inputs: DailyCheckinInputs
@@ -167,6 +172,7 @@ class LogGeneratedWorkoutRequest(BaseModel):
     title: str
     elapsed_seconds: int = Field(ge=0)
     completed: bool = True
+    feel_rating: int | None = Field(default=None, ge=1, le=5)
 
 
 class LogGeneratedWorkoutResponse(BaseModel):

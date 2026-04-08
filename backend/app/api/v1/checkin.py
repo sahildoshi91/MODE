@@ -14,6 +14,7 @@ from app.modules.daily_checkins.schemas import (
     GenerateCheckinPlanResponse,
     LogGeneratedWorkoutRequest,
     LogGeneratedWorkoutResponse,
+    PreviousCheckinResponse,
     SubmitDailyCheckinRequest,
 )
 from app.modules.daily_checkins.service import DailyCheckinService
@@ -57,6 +58,18 @@ async def get_today_checkin(
     client_id = _resolve_client_id(trainer_context)
     today = request_date or datetime.now(timezone.utc).date()
     return service.get_status(client_id, today)
+
+
+@router.get("/previous", response_model=PreviousCheckinResponse)
+async def get_previous_checkin(
+    before_date: date | None = None,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: DailyCheckinService = Depends(get_daily_checkin_service),
+):
+    client_id = _resolve_client_id(trainer_context)
+    target_date = before_date or datetime.now(timezone.utc).date()
+    summary = service.get_previous_checkin_summary(client_id, target_date)
+    return PreviousCheckinResponse(before_date=target_date, checkin=summary)
 
 
 @router.post("", response_model=DailyCheckinResult)

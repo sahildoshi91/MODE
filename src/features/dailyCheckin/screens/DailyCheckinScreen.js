@@ -6,6 +6,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -14,7 +15,13 @@ import * as Clipboard from 'expo-clipboard';
 
 import { ModeButton, SafeScreen } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
-import { getTodayCheckin, submitTodayCheckin } from '../services/checkinApi';
+import {
+  generateCheckinPlan,
+  getPreviousCheckin,
+  getTodayCheckin,
+  logGeneratedWorkout,
+  submitTodayCheckin,
+} from '../services/checkinApi';
 
 const QUESTIONS = [
   {
@@ -175,6 +182,55 @@ const MODE_RECOMMENDATIONS = {
 const SCORE_KEYS = QUESTIONS.map((question) => question.key);
 const GRID_COLUMNS = 18;
 const GRID_ROWS = 10;
+const PLAN_TYPE = {
+  TRAINING: 'training',
+  NUTRITION: 'nutrition',
+};
+const COACH_BY_MODE = {
+  BEAST: 'Rex',
+  BUILD: 'Alex',
+  RECOVER: 'Maya',
+  REST: 'Zen',
+};
+const TIME_OPTIONS = [10, 15, 20, 30, 45, 60];
+const ENVIRONMENT_OPTIONS = [
+  {
+    value: 'full_gym',
+    emoji: '🏋️',
+    label: 'Full Gym',
+    description: 'Barbells, racks, machines',
+  },
+  {
+    value: 'home_gym',
+    emoji: '🏠',
+    label: 'Home Gym',
+    description: 'Your setup at home',
+  },
+  {
+    value: 'hotel_room',
+    emoji: '🏨',
+    label: 'Hotel Room',
+    description: 'Minimal equipment',
+  },
+  {
+    value: 'outdoors',
+    emoji: '🌳',
+    label: 'Outdoors',
+    description: 'Track, trail, park',
+  },
+  {
+    value: 'bodyweight',
+    emoji: '🤸',
+    label: 'Bodyweight',
+    description: 'No equipment needed',
+  },
+  {
+    value: 'limited',
+    emoji: '⏱️',
+    label: 'Limited',
+    description: 'Tight setup today',
+  },
+];
 
 function getLocalDateString() {
   const now = new Date();
@@ -295,6 +351,16 @@ function renderQuestionIcon(icon, color, size = 22) {
 
 function createProgressWidth(index, questionIndex) {
   return index === questionIndex ? 28 : 8;
+}
+
+function formatDuration(totalSeconds) {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+}
+
+function getCoachName(mode) {
+  return COACH_BY_MODE[mode] || 'Coach';
 }
 
 function BackgroundGrid() {
@@ -487,9 +553,217 @@ function QuestionScreen({
   );
 }
 
-export default function DailyCheckinScreen({ accessToken, onSignOut }) {
+function PlanActionCard({
+  icon,
+  title,
+  subtitle,
+  accent,
+  onPress,
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.planActionCard,
+        { borderColor: withAlpha(accent, 0.45) },
+        pressed && { transform: [{ scale: 0.99 }], backgroundColor: withAlpha(accent, 0.1) },
+      ]}
+    >
+      <View style={[styles.planActionIconWrap, { backgroundColor: withAlpha(accent, 0.2) }]}>
+        <MaterialCommunityIcons name={icon} size={22} color={accent} />
+      </View>
+      <View style={styles.planActionCopy}>
+        <Text style={styles.planActionTitle}>{title}</Text>
+        <Text style={styles.planActionSubtitle}>{subtitle}</Text>
+      </View>
+      <Feather name="arrow-right" size={18} color={accent} style={styles.planActionArrow} />
+    </Pressable>
+  );
+}
+
+function PreviousContextToggle({ previousCheckin, isLoadingPreviousCheckin, includeYesterdayContext, onToggle }) {
+  if (isLoadingPreviousCheckin) {
+    return (
+      <View style={styles.previousCard}>
+        <ActivityIndicator size="small" color={theme.colors.accent} />
+        <Text style={styles.previousLoadingText}>Looking up yesterday&apos;s check-in…</Text>
+      </View>
+    );
+  }
+
+  if (!previousCheckin) {
+    return null;
+  }
+
+  return (
+    <Pressable onPress={() => onToggle(!includeYesterdayContext)} style={styles.previousCard}>
+      <View style={styles.previousLeft}>
+        <MaterialCommunityIcons name="calendar-sync" size={18} color={theme.colors.accent} />
+        <View style={styles.previousCopyWrap}>
+          <Text style={styles.previousTitle}>Use Yesterday&apos;s Data</Text>
+          <Text style={styles.previousMeta}>{previousCheckin.mode} • {previousCheckin.score}/25</Text>
+        </View>
+      </View>
+      <View style={[styles.toggleTrack, includeYesterdayContext && styles.toggleTrackOn]}>
+        <View style={[styles.toggleThumb, includeYesterdayContext && styles.toggleThumbOn]} />
+      </View>
+    </Pressable>
+  );
+}
+
+function TrainingPlanView({ plan, expandedExercises, onToggleExercise }) {
+  if (!plan) {
+    return null;
+  }
+
+  return (
+    <ScrollView contentContainerStyle={styles.planScrollContent}>
+      <View style={styles.trainingHeaderCard}>
+        <Text style={styles.trainingTitle}>💪 {plan.title}</Text>
+        <Text style={styles.trainingDescription}>{plan.description}</Text>
+        <View style={styles.metaRow}>
+          <Text style={styles.metaPill}>{plan.difficulty}</Text>
+          <Text style={styles.metaPill}>{plan.durationMinutes} min</Text>
+          <Text style={styles.metaPill}>{(plan.exercises || []).length} exercises</Text>
+        </View>
+      </View>
+
+      <View style={styles.sectionCard}>
+        <Text style={styles.sectionTitle}>🔥 Warm-Up</Text>
+        {(plan.warmup || []).map((item, index) => (
+          <View key={`warmup-${index}`} style={styles.simpleRow}>
+            <View style={[styles.simpleDot, { backgroundColor: '#F97316' }]} />
+            <View style={styles.simpleBody}>
+              <Text style={styles.simpleName}>{item.name}</Text>
+              {item.description ? <Text style={styles.simpleDesc}>{item.description}</Text> : null}
+            </View>
+            <Text style={styles.simpleDuration}>{item.duration}</Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.sectionCard}>
+        <Text style={styles.sectionTitle}>💪 Main Workout</Text>
+        {(plan.exercises || []).map((exercise, index) => {
+          const expanded = Boolean(expandedExercises[index]);
+          return (
+            <View key={`exercise-${index}`} style={styles.exerciseCard}>
+              <View style={styles.exerciseTopRow}>
+                <View style={styles.exerciseNumber}><Text style={styles.exerciseNumberText}>{index + 1}</Text></View>
+                <View style={styles.exerciseBody}>
+                  <Text style={styles.exerciseName}>{exercise.name}</Text>
+                  <View style={styles.exerciseMetaRow}>
+                    <Text style={styles.exerciseChip}>{exercise.muscleGroup}</Text>
+                    <Text style={styles.exerciseChip}>{exercise.sets}x{exercise.reps}</Text>
+                    <Text style={styles.exerciseChip}>{exercise.rest}</Text>
+                  </View>
+                </View>
+                <Pressable onPress={() => onToggleExercise(index)} style={styles.chevronButton}>
+                  <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={theme.colors.textMedium} />
+                </Pressable>
+              </View>
+              {expanded ? (
+                <View style={styles.exerciseExpanded}>
+                  <Text style={styles.exerciseDetail}>ℹ️ {exercise.description}</Text>
+                  <View style={styles.coachTipBox}>
+                    <Text style={styles.coachTipText}>💡 {exercise.coachTip}</Text>
+                  </View>
+                  <View style={styles.videoPlaceholder}>
+                    <Feather name="play-circle" size={24} color={theme.colors.textHigh} />
+                    <Text style={styles.videoPlaceholderText}>Video Placeholder</Text>
+                  </View>
+                </View>
+              ) : null}
+            </View>
+          );
+        })}
+      </View>
+
+      <View style={styles.sectionCard}>
+        <Text style={styles.sectionTitle}>🧊 Cool-Down</Text>
+        {(plan.cooldown || []).map((item, index) => (
+          <View key={`cooldown-${index}`} style={styles.simpleRow}>
+            <View style={[styles.simpleDot, { backgroundColor: '#60A5FA' }]} />
+            <View style={styles.simpleBody}>
+              <Text style={styles.simpleName}>{item.name}</Text>
+              {item.description ? <Text style={styles.simpleDesc}>{item.description}</Text> : null}
+            </View>
+            <Text style={styles.simpleDuration}>{item.duration}</Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.coachNoteCard}>
+        <Text style={styles.coachNoteText}>{plan.coachNote}</Text>
+      </View>
+    </ScrollView>
+  );
+}
+
+function GuidedWorkoutView({ plan, elapsedSeconds, guidedStatus }) {
+  return (
+    <ScrollView contentContainerStyle={styles.planScrollContent}>
+      <View style={styles.guidedHeroCard}>
+        <Text style={styles.guidedEyebrow}>Guided Workout</Text>
+        <Text style={styles.guidedTitle}>{plan?.title}</Text>
+        <Text style={styles.guidedTimer}>{formatDuration(elapsedSeconds)}</Text>
+        <Text style={styles.guidedStatus}>Status: {guidedStatus}</Text>
+      </View>
+      {(plan?.exercises || []).map((exercise, index) => (
+        <View key={`guided-${index}`} style={styles.guidedExerciseRow}>
+          <View style={styles.exerciseNumber}><Text style={styles.exerciseNumberText}>{index + 1}</Text></View>
+          <View style={styles.exerciseBody}>
+            <Text style={styles.exerciseName}>{exercise.name}</Text>
+            <Text style={styles.simpleDesc}>{exercise.sets}x{exercise.reps} • Rest {exercise.rest}</Text>
+          </View>
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
+function NutritionPlanView({ plan }) {
+  if (!plan) {
+    return null;
+  }
+
+  return (
+    <ScrollView contentContainerStyle={styles.planScrollContent}>
+      <View style={styles.nutritionHeaderCard}>
+        <Text style={styles.trainingTitle}>{plan.title}</Text>
+        <Text style={styles.nutritionCoachNote}>{plan.coachNote}</Text>
+        <View style={styles.metaRow}>
+          <Text style={styles.metaPill}>🔥 {plan.totalCalories} kcal</Text>
+          <Text style={styles.metaPill}>💪 {plan.totalProtein}g</Text>
+        </View>
+      </View>
+
+      {(plan.meals || []).map((meal, index) => (
+        <View key={`meal-${index}`} style={styles.mealCard}>
+          <View style={styles.mealTopRow}>
+            <View>
+              <Text style={styles.mealName}>{meal.emoji} {meal.name}</Text>
+              <Text style={styles.simpleDesc}>{meal.timing}</Text>
+            </View>
+            <Text style={styles.simpleDesc}>{meal.totalCalories} / {meal.totalProtein}g</Text>
+          </View>
+          {(meal.foods || []).map((food, foodIndex) => (
+            <View key={`food-${foodIndex}`} style={styles.foodRow}>
+              <Text style={styles.simpleName}>{food.name} • {food.amount}</Text>
+              <Text style={styles.simpleDesc}>{food.calories} kcal • {food.protein}g</Text>
+            </View>
+          ))}
+          {meal.notes ? <Text style={styles.mealNotes}>{meal.notes}</Text> : null}
+        </View>
+      ))}
+    </ScrollView>
+  );
+}
+
+export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat }) {
   const insets = useSafeAreaInsets();
   const sessionStartRef = useRef(Date.now());
+  const nutritionDayNoteRef = useRef(null);
   const today = useMemo(() => getLocalDateString(), []);
   const [status, setStatus] = useState(null);
   const [step, setStep] = useState('loading');
@@ -504,6 +778,28 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
   const [summaryResult, setSummaryResult] = useState(null);
   const [submitState, setSubmitState] = useState('idle');
   const [copyFeedback, setCopyFeedback] = useState(null);
+  const [planType, setPlanType] = useState(null);
+  const [environment, setEnvironment] = useState(null);
+  const [timeAvailable, setTimeAvailable] = useState(30);
+  const [nutritionDayType, setNutritionDayType] = useState(null);
+  const [nutritionDayNote, setNutritionDayNote] = useState('');
+  const [previousCheckin, setPreviousCheckin] = useState(null);
+  const [isLoadingPreviousCheckin, setIsLoadingPreviousCheckin] = useState(false);
+  const [includeYesterdayContext, setIncludeYesterdayContext] = useState(false);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState(null);
+  const [planContent, setPlanContent] = useState(null);
+  const [structuredPlan, setStructuredPlan] = useState(null);
+  const [structuredNutritionPlan, setStructuredNutritionPlan] = useState(null);
+  const [generatedPlanId, setGeneratedPlanId] = useState(null);
+  const [expandedExercises, setExpandedExercises] = useState({});
+  const [guidedMode, setGuidedMode] = useState(false);
+  const [guidedStatus, setGuidedStatus] = useState('idle');
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [isLogOpen, setIsLogOpen] = useState(false);
+  const [feelRating, setFeelRating] = useState(3);
+  const [isLoggingWorkout, setIsLoggingWorkout] = useState(false);
+  const [logFeedback, setLogFeedback] = useState(null);
   const copyFeedbackTimerRef = useRef(null);
   const currentQuestion = QUESTIONS[questionIndex];
   const glowProgress = useRef(new Animated.Value(1)).current;
@@ -577,6 +873,66 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
       clearTimeout(copyFeedbackTimerRef.current);
     }
   }, []);
+
+  useEffect(() => {
+    if (step !== 'environment') {
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadPreviousCheckin = async () => {
+      setIsLoadingPreviousCheckin(true);
+      setPreviousCheckin(null);
+      setIncludeYesterdayContext(false);
+
+      try {
+        const response = await getPreviousCheckin({
+          accessToken,
+          beforeDate: today,
+        });
+        if (cancelled) {
+          return;
+        }
+        setPreviousCheckin(response?.checkin || null);
+      } catch (_error) {
+        if (cancelled) {
+          return;
+        }
+        setPreviousCheckin(null);
+      } finally {
+        if (!cancelled) {
+          setIsLoadingPreviousCheckin(false);
+        }
+      }
+    };
+
+    loadPreviousCheckin();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, step, today]);
+
+  useEffect(() => {
+    if (step === 'environment' && planType === PLAN_TYPE.NUTRITION && nutritionDayType === 'custom') {
+      setTimeout(() => {
+        nutritionDayNoteRef.current?.focus?.();
+      }, 25);
+    }
+  }, [nutritionDayType, planType, step]);
+
+  useEffect(() => {
+    if (step !== 'plan' || !guidedMode || guidedStatus !== 'running') {
+      return undefined;
+    }
+
+    const interval = setInterval(() => {
+      setElapsedSeconds((previous) => previous + 1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [step, guidedMode, guidedStatus]);
 
   const showCopyFeedback = (message) => {
     if (copyFeedbackTimerRef.current) {
@@ -681,6 +1037,144 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
     });
   };
 
+  const resetPlanState = () => {
+    setEnvironment(null);
+    setTimeAvailable(30);
+    setNutritionDayType(null);
+    setNutritionDayNote('');
+    setPreviousCheckin(null);
+    setIncludeYesterdayContext(false);
+    setPlanLoading(false);
+    setPlanError(null);
+    setPlanContent(null);
+    setStructuredPlan(null);
+    setStructuredNutritionPlan(null);
+    setGeneratedPlanId(null);
+    setExpandedExercises({});
+    setGuidedMode(false);
+    setGuidedStatus('idle');
+    setElapsedSeconds(0);
+    setIsLogOpen(false);
+    setFeelRating(3);
+    setIsLoggingWorkout(false);
+    setLogFeedback(null);
+  };
+
+  const handleSelectPlan = (type) => {
+    setPlanType(type);
+    resetPlanState();
+    setStep('environment');
+  };
+
+  const canGeneratePlan = useMemo(() => {
+    if (planType === PLAN_TYPE.TRAINING) {
+      return Boolean(environment);
+    }
+    if (planType === PLAN_TYPE.NUTRITION) {
+      if (!nutritionDayType) {
+        return false;
+      }
+      if (nutritionDayType === 'custom') {
+        return nutritionDayNote.trim().length > 0;
+      }
+      return true;
+    }
+    return false;
+  }, [environment, nutritionDayNote, nutritionDayType, planType]);
+
+  const handleGeneratePlan = async () => {
+    if (!summaryResult?.id || !planType || !canGeneratePlan || planLoading) {
+      return;
+    }
+
+    setPlanLoading(true);
+    setPlanError(null);
+    setStep('plan');
+
+    try {
+      const result = await generateCheckinPlan({
+        accessToken,
+        checkinId: summaryResult.id,
+        planType,
+        environment: planType === PLAN_TYPE.TRAINING ? environment : undefined,
+        timeAvailable: planType === PLAN_TYPE.TRAINING ? timeAvailable : undefined,
+        nutritionDayNote: planType === PLAN_TYPE.NUTRITION && nutritionDayType === 'custom'
+          ? nutritionDayNote.trim()
+          : undefined,
+        includeYesterdayContext,
+      });
+
+      setGeneratedPlanId(result.plan_id || null);
+      setPlanContent(result.content || null);
+      setStructuredPlan(null);
+      setStructuredNutritionPlan(null);
+
+      if (result.structured && planType === PLAN_TYPE.TRAINING) {
+        setStructuredPlan(result.structured);
+      } else if (result.structured && planType === PLAN_TYPE.NUTRITION) {
+        setStructuredNutritionPlan(result.structured);
+      }
+    } catch (error) {
+      setPlanError(error.message || 'Unable to generate your plan right now.');
+    } finally {
+      setPlanLoading(false);
+    }
+  };
+
+  const handleToggleExercise = (index) => {
+    setExpandedExercises((previous) => ({
+      ...previous,
+      [index]: !previous[index],
+    }));
+  };
+
+  const handleBeginGuidedWorkout = () => {
+    setGuidedMode(true);
+    setGuidedStatus('running');
+    setElapsedSeconds(0);
+    setLogFeedback(null);
+  };
+
+  const handlePauseResume = () => {
+    setGuidedStatus((current) => (current === 'running' ? 'paused' : 'running'));
+  };
+
+  const handleOpenLogPanel = () => {
+    setGuidedStatus('paused');
+    setIsLogOpen(true);
+  };
+
+  const handleLogWorkout = async () => {
+    if (!generatedPlanId || !structuredPlan || isLoggingWorkout) {
+      return;
+    }
+
+    setIsLoggingWorkout(true);
+    setLogFeedback(null);
+
+    try {
+      await logGeneratedWorkout({
+        accessToken,
+        generatedPlanId,
+        title: structuredPlan.title || 'Guided Workout',
+        elapsedSeconds,
+        completed: true,
+        feelRating,
+      });
+      setIsLogOpen(false);
+      setGuidedMode(false);
+      setGuidedStatus('idle');
+      setElapsedSeconds(0);
+      setLogFeedback('Workout logged successfully.');
+    } catch (error) {
+      setLogFeedback(error.message || 'Unable to log workout right now.');
+    } finally {
+      setIsLoggingWorkout(false);
+    }
+  };
+
+  const coachName = getCoachName(summaryResult?.mode);
+
   return (
     <SafeScreen style={styles.screen}>
       <Animated.View
@@ -759,6 +1253,28 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
               </View>
             ) : null}
             <ResultCard result={summaryResult} />
+            {submitState === 'saved' && summaryResult?.id ? (
+              <View style={styles.postCheckinActionsWrap}>
+                <Text style={styles.postCheckinHeading}>What should coach build next?</Text>
+                <PlanActionCard
+                  icon="dumbbell"
+                  title="Build me a training routine"
+                  subtitle="Tailored to your BEAST mode today"
+                  accent="#84CC16"
+                  onPress={() => handleSelectPlan(PLAN_TYPE.TRAINING)}
+                />
+                <PlanActionCard
+                  icon="food-apple-outline"
+                  title="Build me a nutrition plan"
+                  subtitle="Meals optimized for your readiness"
+                  accent="#14B8A6"
+                  onPress={() => handleSelectPlan(PLAN_TYPE.NUTRITION)}
+                />
+                <Pressable onPress={onOpenChat} style={styles.talkCoachGhost}>
+                  <Text style={styles.talkCoachGhostText}>Talk to Coach</Text>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
           {submitState === 'pending' ? (
             <ModeButton
@@ -784,6 +1300,200 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
         </ScrollView>
       ) : null}
 
+      {step === 'environment' ? (
+        <ScrollView contentContainerStyle={[styles.resultsContent, { paddingTop: Math.max(insets.top, theme.spacing[3]) }]}>
+          <View style={styles.phoneFrame}>
+            <Text style={styles.resultsEyebrow}>{planType === PLAN_TYPE.TRAINING ? 'Training Setup' : 'Nutrition Setup'}</Text>
+            <Text style={styles.resultsTitle}>
+              {planType === PLAN_TYPE.TRAINING ? 'Dial in your workout context' : 'Dial in today\'s nutrition context'}
+            </Text>
+
+            <PreviousContextToggle
+              previousCheckin={previousCheckin}
+              isLoadingPreviousCheckin={isLoadingPreviousCheckin}
+              includeYesterdayContext={includeYesterdayContext}
+              onToggle={setIncludeYesterdayContext}
+            />
+
+            {planType === PLAN_TYPE.TRAINING ? (
+              <>
+                <Text style={styles.sectionHeading}>Environment</Text>
+                <View style={styles.environmentGrid}>
+                  {ENVIRONMENT_OPTIONS.map((option) => {
+                    const selected = environment === option.value;
+                    return (
+                      <Pressable
+                        key={option.value}
+                        onPress={() => setEnvironment(option.value)}
+                        style={({ pressed }) => [
+                          styles.environmentCard,
+                          selected && styles.environmentCardSelected,
+                          pressed && styles.environmentCardPressed,
+                        ]}
+                      >
+                        <Text style={styles.environmentEmoji}>{option.emoji}</Text>
+                        <Text style={styles.environmentLabel}>{option.label}</Text>
+                        <Text style={styles.environmentDesc}>{option.description}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                <Text style={styles.sectionHeading}>Time available</Text>
+                <View style={styles.timePillRow}>
+                  {TIME_OPTIONS.map((minutes) => {
+                    const selected = timeAvailable === minutes;
+                    return (
+                      <Pressable
+                        key={minutes}
+                        onPress={() => setTimeAvailable(minutes)}
+                        style={[styles.timePill, selected && styles.timePillSelected]}
+                      >
+                        <Text style={[styles.timePillText, selected && styles.timePillTextSelected]}>{minutes}m</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.sectionHeading}>Day Type</Text>
+                <View style={styles.dayTypeList}>
+                  <Pressable
+                    onPress={() => {
+                      setNutritionDayType('normal');
+                      setNutritionDayNote('');
+                    }}
+                    style={[styles.dayTypeCard, nutritionDayType === 'normal' && styles.dayTypeCardSelected]}
+                  >
+                    <Text style={styles.dayTypeTitle}>📅 Normal day</Text>
+                    <Text style={styles.dayTypeBody}>Regular routine, no special context</Text>
+                  </Pressable>
+
+                  <Pressable
+                    onPress={() => setNutritionDayType('custom')}
+                    style={[styles.dayTypeCard, nutritionDayType === 'custom' && styles.dayTypeCardSelected]}
+                  >
+                    <Text style={styles.dayTypeTitle}>✏️ Something different today</Text>
+                    <Text style={styles.dayTypeBody}>Travel, event, dietary change, etc.</Text>
+                  </Pressable>
+                </View>
+
+                {nutritionDayType === 'custom' ? (
+                  <TextInput
+                    ref={nutritionDayNoteRef}
+                    style={styles.nutritionNoteInput}
+                    value={nutritionDayNote}
+                    onChangeText={setNutritionDayNote}
+                    placeholder="I'm at a hotel in Austin, eating out for every meal"
+                    placeholderTextColor={theme.colors.textDisabled}
+                    multiline
+                    textAlignVertical="top"
+                  />
+                ) : null}
+              </>
+            )}
+          </View>
+
+          <ModeButton
+            title={planType === PLAN_TYPE.TRAINING ? 'Generate My Workout' : 'Generate My Nutrition Plan'}
+            onPress={handleGeneratePlan}
+            disabled={!canGeneratePlan || planLoading}
+            style={[styles.footerButton, styles.generateButton]}
+          />
+          <ModeButton
+            title="Back"
+            variant="secondary"
+            onPress={() => setStep('summary')}
+            style={styles.footerButton}
+          />
+        </ScrollView>
+      ) : null}
+
+      {step === 'plan' ? (
+        <View style={styles.planStepWrap}>
+          <View style={[styles.planTopBar, { paddingTop: Math.max(insets.top, theme.spacing[3]) }]}>
+            <ModeButton
+              title="Back to Options"
+              variant="secondary"
+              onPress={() => setStep('environment')}
+              style={styles.planBackButton}
+            />
+          </View>
+
+          {planLoading ? (
+            <View style={styles.planLoadingWrap}>
+              <ActivityIndicator size="large" color={theme.colors.primary} />
+              <Text style={styles.planLoadingText}>
+                Coach {coachName} is building your {planType === PLAN_TYPE.TRAINING ? 'workout' : 'nutrition plan'}...
+              </Text>
+              <View style={styles.typingDotsRow}>
+                <View style={styles.typingDot} />
+                <View style={styles.typingDot} />
+                <View style={styles.typingDot} />
+              </View>
+            </View>
+          ) : null}
+
+          {!planLoading && planError ? (
+            <View style={styles.planErrorCard}>
+              <Text style={styles.errorTitle}>Couldn&apos;t generate your plan</Text>
+              <Text style={styles.errorText}>{planError}</Text>
+              <ModeButton title="Try again" onPress={handleGeneratePlan} style={styles.errorButton} />
+            </View>
+          ) : null}
+
+          {!planLoading && !planError && planType === PLAN_TYPE.TRAINING && structuredPlan ? (
+            <>
+              {guidedMode ? (
+                <GuidedWorkoutView
+                  plan={structuredPlan}
+                  elapsedSeconds={elapsedSeconds}
+                  guidedStatus={guidedStatus}
+                />
+              ) : (
+                <TrainingPlanView
+                  plan={structuredPlan}
+                  expandedExercises={expandedExercises}
+                  onToggleExercise={handleToggleExercise}
+                />
+              )}
+              <View style={styles.bottomCtaBar}>
+                {!guidedMode ? (
+                  <ModeButton
+                    title="Begin Guided Workout"
+                    onPress={handleBeginGuidedWorkout}
+                    style={[styles.guidedButton, styles.guidedButtonPrimary]}
+                  />
+                ) : (
+                  <View style={styles.splitRow}>
+                    <Pressable onPress={handlePauseResume} style={[styles.splitButton, styles.pauseButton]}>
+                      <Text style={styles.splitButtonText}>{guidedStatus === 'paused' ? 'Resume' : 'Pause'}</Text>
+                    </Pressable>
+                    <Pressable onPress={handleOpenLogPanel} style={[styles.splitButton, styles.endButton]}>
+                      <Text style={styles.splitButtonText}>End & Log</Text>
+                    </Pressable>
+                  </View>
+                )}
+                {logFeedback ? <Text style={styles.logFeedback}>{logFeedback}</Text> : null}
+              </View>
+            </>
+          ) : null}
+
+          {!planLoading && !planError && planType === PLAN_TYPE.NUTRITION && structuredNutritionPlan ? (
+            <NutritionPlanView plan={structuredNutritionPlan} />
+          ) : null}
+
+          {!planLoading && !planError && !structuredPlan && !structuredNutritionPlan && planContent ? (
+            <ScrollView contentContainerStyle={styles.planScrollContent}>
+              <View style={styles.sectionCard}>
+                <Text style={styles.sectionTitle}>Generated Content</Text>
+                <Text style={styles.simpleDesc}>{planContent}</Text>
+              </View>
+            </ScrollView>
+          ) : null}
+        </View>
+      ) : null}
+
       {step === 'load-error' ? (
         <View style={styles.loadingScreen}>
           <View style={styles.errorCard}>
@@ -800,6 +1510,39 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
               onPress={onSignOut}
               style={styles.footerButton}
             />
+          </View>
+        </View>
+      ) : null}
+
+      {isLogOpen ? (
+        <View style={styles.logOverlay}>
+          <View style={styles.logSheet}>
+            <Text style={styles.logSheetTitle}>How did this session feel?</Text>
+            <View style={styles.feelRatingRow}>
+              {[1, 2, 3, 4, 5].map((value) => (
+                <Pressable
+                  key={value}
+                  onPress={() => setFeelRating(value)}
+                  style={[styles.ratingPill, feelRating === value && styles.ratingPillSelected]}
+                >
+                  <Text style={[styles.ratingPillText, feelRating === value && styles.ratingPillTextSelected]}>{value}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.logActionRow}>
+              <ModeButton
+                title="Cancel"
+                variant="secondary"
+                onPress={() => setIsLogOpen(false)}
+                style={styles.logActionButton}
+              />
+              <ModeButton
+                title={isLoggingWorkout ? 'Logging…' : 'End & Log'}
+                onPress={handleLogWorkout}
+                disabled={isLoggingWorkout}
+                style={styles.logActionButton}
+              />
+            </View>
           </View>
         </View>
       ) : null}
@@ -1165,5 +1908,674 @@ const styles = StyleSheet.create({
     height: 2,
     borderRadius: 1,
     backgroundColor: '#C9D2EA',
+  },
+  postCheckinActionsWrap: {
+    marginTop: theme.spacing[4],
+    gap: theme.spacing[2],
+  },
+  postCheckinHeading: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body1,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+  },
+  planActionCard: {
+    minHeight: 92,
+    borderRadius: 18,
+    borderWidth: 1,
+    backgroundColor: '#111926',
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[2],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing[2],
+  },
+  planActionIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  planActionCopy: {
+    flex: 1,
+  },
+  planActionTitle: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+  },
+  planActionSubtitle: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    marginTop: 2,
+  },
+  planActionArrow: {
+    transform: [{ rotate: '-12deg' }],
+  },
+  talkCoachGhost: {
+    borderWidth: 1,
+    borderColor: withAlpha('#FFFFFF', 0.18),
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 46,
+    marginTop: theme.spacing[1],
+  },
+  talkCoachGhostText: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '600',
+  },
+  previousCard: {
+    marginTop: theme.spacing[3],
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: withAlpha(theme.colors.accent, 0.35),
+    backgroundColor: withAlpha(theme.colors.accent, 0.1),
+    padding: theme.spacing[2],
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    minHeight: 60,
+  },
+  previousLoadingText: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    marginLeft: theme.spacing[2],
+  },
+  previousLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing[2],
+    flex: 1,
+  },
+  previousCopyWrap: {
+    flex: 1,
+  },
+  previousTitle: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+  },
+  previousMeta: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    marginTop: 2,
+  },
+  toggleTrack: {
+    width: 42,
+    height: 24,
+    borderRadius: 999,
+    backgroundColor: withAlpha('#FFFFFF', 0.16),
+    padding: 2,
+    justifyContent: 'center',
+  },
+  toggleTrackOn: {
+    backgroundColor: withAlpha(theme.colors.accent, 0.4),
+  },
+  toggleThumb: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#EEF3FF',
+  },
+  toggleThumbOn: {
+    alignSelf: 'flex-end',
+  },
+  sectionHeading: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body1,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+    marginTop: theme.spacing[3],
+    marginBottom: theme.spacing[2],
+  },
+  environmentGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginHorizontal: -6,
+  },
+  environmentCard: {
+    width: '50%',
+    paddingHorizontal: 6,
+    marginBottom: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: withAlpha('#FFFFFF', 0.1),
+    backgroundColor: '#161D2A',
+    minHeight: 106,
+    paddingTop: 12,
+    paddingBottom: 10,
+    paddingLeft: 10,
+    paddingRight: 10,
+  },
+  environmentCardSelected: {
+    borderColor: withAlpha(theme.colors.primary, 0.5),
+    backgroundColor: withAlpha(theme.colors.primary, 0.12),
+  },
+  environmentCardPressed: {
+    transform: [{ scale: 0.99 }],
+  },
+  environmentEmoji: {
+    fontSize: 20,
+    marginBottom: 6,
+  },
+  environmentLabel: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+  },
+  environmentDesc: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    marginTop: 4,
+  },
+  timePillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  timePill: {
+    borderWidth: 1,
+    borderColor: withAlpha('#FFFFFF', 0.16),
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: '#151C27',
+  },
+  timePillSelected: {
+    backgroundColor: withAlpha(theme.colors.primary, 0.1),
+    borderColor: withAlpha(theme.colors.primary, 0.4),
+  },
+  timePillText: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '600',
+  },
+  timePillTextSelected: {
+    color: theme.colors.primary,
+  },
+  dayTypeList: {
+    gap: 10,
+  },
+  dayTypeCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: withAlpha('#FFFFFF', 0.1),
+    backgroundColor: '#161D2A',
+    padding: theme.spacing[2],
+  },
+  dayTypeCardSelected: {
+    borderColor: withAlpha(theme.colors.primary, 0.5),
+    backgroundColor: withAlpha(theme.colors.primary, 0.12),
+  },
+  dayTypeTitle: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+    marginBottom: 4,
+  },
+  dayTypeBody: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+  },
+  nutritionNoteInput: {
+    marginTop: theme.spacing[2],
+    minHeight: 112,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: withAlpha('#FFFFFF', 0.14),
+    backgroundColor: '#141B27',
+    color: theme.colors.textHigh,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    padding: 12,
+  },
+  generateButton: {
+    backgroundColor: '#84CC16',
+  },
+  planStepWrap: {
+    flex: 1,
+  },
+  planTopBar: {
+    paddingHorizontal: theme.spacing[3],
+  },
+  planBackButton: {
+    marginTop: theme.spacing[1],
+    maxWidth: 220,
+  },
+  planLoadingWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    paddingHorizontal: theme.spacing[3],
+  },
+  planLoadingText: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    textAlign: 'center',
+  },
+  typingDotsRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  typingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: withAlpha(theme.colors.primary, 0.4),
+  },
+  planErrorCard: {
+    marginHorizontal: theme.spacing[3],
+    marginTop: theme.spacing[4],
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: withAlpha(theme.colors.error, 0.35),
+    backgroundColor: withAlpha(theme.colors.error, 0.08),
+    padding: theme.spacing[3],
+  },
+  planScrollContent: {
+    paddingHorizontal: theme.spacing[3],
+    paddingTop: theme.spacing[2],
+    paddingBottom: 120,
+    gap: 12,
+  },
+  trainingHeaderCard: {
+    borderRadius: 20,
+    backgroundColor: withAlpha('#84CC16', 0.12),
+    borderWidth: 1,
+    borderColor: withAlpha('#84CC16', 0.4),
+    padding: theme.spacing[3],
+  },
+  trainingTitle: {
+    color: theme.colors.textHigh,
+    ...theme.typography.h3,
+    fontFamily: theme.typography.fontFamily,
+  },
+  trainingDescription: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    marginTop: 8,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+  },
+  metaPill: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    backgroundColor: withAlpha('#84CC16', 0.16),
+    borderWidth: 1,
+    borderColor: withAlpha('#84CC16', 0.35),
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    textTransform: 'capitalize',
+  },
+  sectionCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: withAlpha('#FFFFFF', 0.1),
+    backgroundColor: '#121A26',
+    padding: theme.spacing[2],
+  },
+  sectionTitle: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body1,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+    marginBottom: theme.spacing[2],
+  },
+  simpleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  simpleDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 10,
+  },
+  simpleBody: {
+    flex: 1,
+  },
+  simpleName: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '600',
+  },
+  simpleDesc: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    marginTop: 2,
+  },
+  simpleDuration: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+  },
+  exerciseCard: {
+    borderWidth: 1,
+    borderColor: withAlpha('#FFFFFF', 0.1),
+    borderRadius: 14,
+    backgroundColor: '#171F2C',
+    marginBottom: 10,
+  },
+  exerciseTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  exerciseNumber: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: withAlpha(theme.colors.primary, 0.3),
+    marginRight: 8,
+  },
+  exerciseNumberText: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+  },
+  exerciseBody: {
+    flex: 1,
+  },
+  exerciseName: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+  },
+  exerciseMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 4,
+  },
+  exerciseChip: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    backgroundColor: withAlpha('#FFFFFF', 0.06),
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  chevronButton: {
+    width: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  exerciseExpanded: {
+    borderTopWidth: 1,
+    borderTopColor: withAlpha('#FFFFFF', 0.08),
+    padding: 10,
+    gap: 8,
+  },
+  exerciseDetail: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+  },
+  coachTipBox: {
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: withAlpha('#84CC16', 0.45),
+    backgroundColor: withAlpha('#84CC16', 0.15),
+    padding: 8,
+  },
+  coachTipText: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+  },
+  videoPlaceholder: {
+    borderRadius: 10,
+    backgroundColor: '#0C1119',
+    borderWidth: 1,
+    borderColor: withAlpha('#FFFFFF', 0.1),
+    minHeight: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  videoPlaceholderText: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+  },
+  coachNoteCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: withAlpha(theme.colors.accent, 0.35),
+    backgroundColor: withAlpha(theme.colors.accent, 0.12),
+    padding: theme.spacing[2],
+  },
+  coachNoteText: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontStyle: 'italic',
+  },
+  guidedHeroCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: withAlpha('#84CC16', 0.4),
+    backgroundColor: withAlpha('#84CC16', 0.14),
+    padding: theme.spacing[3],
+    alignItems: 'center',
+  },
+  guidedEyebrow: {
+    color: theme.colors.textMedium,
+    ...theme.typography.label,
+    fontFamily: theme.typography.fontFamily,
+    textTransform: 'uppercase',
+  },
+  guidedTitle: {
+    color: theme.colors.textHigh,
+    ...theme.typography.h3,
+    fontFamily: theme.typography.fontFamily,
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  guidedTimer: {
+    color: '#84CC16',
+    fontSize: 42,
+    fontWeight: '700',
+    marginTop: 10,
+  },
+  guidedStatus: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    marginTop: 4,
+  },
+  guidedExerciseRow: {
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: withAlpha('#FFFFFF', 0.08),
+    backgroundColor: '#141D2A',
+    padding: theme.spacing[2],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bottomCtaBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingHorizontal: theme.spacing[3],
+    paddingTop: 10,
+    paddingBottom: 16,
+    backgroundColor: withAlpha('#0D131E', 0.96),
+    borderTopWidth: 1,
+    borderTopColor: withAlpha('#FFFFFF', 0.08),
+  },
+  guidedButton: {
+    width: '100%',
+  },
+  guidedButtonPrimary: {
+    backgroundColor: '#84CC16',
+  },
+  splitRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  splitButton: {
+    flex: 1,
+    borderRadius: 12,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pauseButton: {
+    backgroundColor: '#D97706',
+  },
+  endButton: {
+    backgroundColor: '#84CC16',
+  },
+  splitButtonText: {
+    color: '#0C121B',
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+  },
+  logFeedback: {
+    color: theme.colors.accent,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  nutritionHeaderCard: {
+    borderRadius: 20,
+    backgroundColor: withAlpha('#14B8A6', 0.16),
+    borderWidth: 1,
+    borderColor: withAlpha('#14B8A6', 0.38),
+    padding: theme.spacing[3],
+  },
+  nutritionCoachNote: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontStyle: 'italic',
+    marginTop: 8,
+  },
+  mealCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: withAlpha('#FFFFFF', 0.1),
+    backgroundColor: '#141D2A',
+    padding: theme.spacing[2],
+    gap: 8,
+  },
+  mealTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  mealName: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body1,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+  },
+  foodRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  mealNotes: {
+    color: theme.colors.textDisabled,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    marginTop: 4,
+  },
+  logOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(6, 10, 18, 0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing[3],
+  },
+  logSheet: {
+    width: '100%',
+    maxWidth: 380,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: withAlpha('#FFFFFF', 0.12),
+    backgroundColor: '#111926',
+    padding: theme.spacing[3],
+  },
+  logSheetTitle: {
+    color: theme.colors.textHigh,
+    ...theme.typography.h3,
+    fontFamily: theme.typography.fontFamily,
+    textAlign: 'center',
+  },
+  feelRatingRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 8,
+    marginTop: theme.spacing[3],
+  },
+  ratingPill: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    borderWidth: 1,
+    borderColor: withAlpha('#FFFFFF', 0.2),
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: withAlpha('#FFFFFF', 0.05),
+  },
+  ratingPillSelected: {
+    borderColor: withAlpha('#84CC16', 0.65),
+    backgroundColor: withAlpha('#84CC16', 0.2),
+  },
+  ratingPillText: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+  },
+  ratingPillTextSelected: {
+    color: '#D9F99D',
+  },
+  logActionRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: theme.spacing[3],
+  },
+  logActionButton: {
+    flex: 1,
+    marginTop: 0,
   },
 });

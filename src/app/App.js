@@ -4,6 +4,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { supabase } from '../services/supabaseClient';
 import Login from '../features/auth/screens/Login';
+import CoachChatScreen from '../features/chat/screens/CoachChatScreen';
 import DailyCheckinScreen from '../features/dailyCheckin/screens/DailyCheckinScreen';
 import TrainerAssignmentScreen from '../features/trainerAssignment/screens/TrainerAssignmentScreen';
 import { assignTrainer, getTrainerAssignmentStatus } from '../features/trainerAssignment/services/trainerAssignmentApi';
@@ -15,6 +16,7 @@ function AppShell() {
   const [assignmentStatus, setAssignmentStatus] = useState(null);
   const [assignmentError, setAssignmentError] = useState(null);
   const [isAssigningTrainer, setIsAssigningTrainer] = useState(false);
+  const [activeScreen, setActiveScreen] = useState('checkin');
 
   useEffect(() => {
     let isMounted = true;
@@ -37,6 +39,7 @@ function AppShell() {
         return;
       }
       setSession(nextSession || null);
+      setActiveScreen('checkin');
       setIsLoading(false);
     });
 
@@ -94,6 +97,7 @@ function AppShell() {
     setAssignmentStatus(null);
     setAssignmentError(null);
     setIsAssigningTrainer(false);
+    setActiveScreen('checkin');
   };
 
   const handleAssignTrainer = async (trainerId) => {
@@ -109,6 +113,7 @@ function AppShell() {
         trainerId,
       });
       setAssignmentStatus(updatedStatus);
+      setActiveScreen('checkin');
     } catch (error) {
       setAssignmentError(error.message || 'Unable to assign trainer.');
     } finally {
@@ -140,10 +145,21 @@ function AppShell() {
     );
   }
 
+  if (activeScreen === 'chat') {
+    return (
+      <CoachChatScreen
+        accessToken={session.access_token}
+        onSignOut={handleSignOut}
+        onBackToCheckin={() => setActiveScreen('checkin')}
+      />
+    );
+  }
+
   return (
     <DailyCheckinScreen
       accessToken={session.access_token}
       onSignOut={handleSignOut}
+      onOpenChat={() => setActiveScreen('chat')}
     />
   );
 }

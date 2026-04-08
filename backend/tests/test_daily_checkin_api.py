@@ -17,7 +17,12 @@ from app.core.dependencies import get_daily_checkin_service, get_trainer_context
 from app.core.tenancy import TrainerContext
 from app.main import app
 from app.modules.daily_checkins.repository import DailyCheckinRepository, DailyCheckinRepositoryError
-from app.modules.daily_checkins.schemas import DailyCheckinInputs, DailyCheckinResult, DailyCheckinStatusResponse
+from app.modules.daily_checkins.schemas import (
+    DailyCheckinInputs,
+    DailyCheckinResult,
+    DailyCheckinStatusResponse,
+    YesterdayCheckinSummary,
+)
 from app.modules.daily_checkins.service import DailyCheckinService
 
 
@@ -56,6 +61,22 @@ class FakeDailyCheckinService:
                 ),
             )
         return DailyCheckinStatusResponse(date=checkin_date, completed=False)
+
+    def get_previous_checkin_summary(self, client_id: str, before_date: date):
+        if client_id == "client-generate":
+            return YesterdayCheckinSummary(
+                date=date(2026, 3, 26),
+                score=19,
+                mode="BUILD",
+                inputs=DailyCheckinInputs(
+                    sleep=4,
+                    stress=4,
+                    soreness=3,
+                    nutrition=4,
+                    motivation=4,
+                ),
+            )
+        return None
 
     def submit_checkin(self, client_id: str, checkin_date: date, inputs: DailyCheckinInputs, time_to_complete=None):
         self.last_submit = {
@@ -346,6 +367,18 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertEqual(result.primary_goal, None)
         self.assertEqual(result.yesterday_checkin_summary, None)
 
+    def test_adaptive_note_reduces_intensity_when_last_workout_felt_hard(self):
+        service = DailyCheckinService(repository=None)
+        note = service._build_adaptive_note("BUILD", {"feel_rating": 2})
+        self.assertIn("felt Hard", note)
+        self.assertIn("dialed intensity down", note)
+
+    def test_adaptive_note_increases_intensity_when_last_workout_felt_easy(self):
+        service = DailyCheckinService(repository=None)
+        note = service._build_adaptive_note("BEAST", {"feel_rating": 5})
+        self.assertIn("felt Easy", note)
+        self.assertIn("nudges intensity up", note)
+
 
 class DailyCheckinRepositoryTests(unittest.TestCase):
     def test_upsert_checkin_surfaces_supabase_error_details(self):
@@ -630,6 +663,27 @@ class DailyCheckinApiTests(unittest.TestCase):
         self.assertEqual(self.fake_service.last_generate["client_id"], "client-generate")
         self.assertEqual(self.fake_service.last_generate["user_id"], "user-123")
 
+    def test_previous_checkin_is_loaded_from_dedicated_endpoint(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id="client-generate",
+            client_user_id="user-123",
+        )
+
+        response = self.client.get(
+            "/api/v1/checkin/previous?before_date=2026-03-27",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["before_date"], "2026-03-27")
+        self.assertEqual(payload["checkin"]["date"], "2026-03-26")
+        self.assertEqual(payload["checkin"]["mode"], "BUILD")
+
     def test_log_generated_workout_uses_authenticated_user_scope(self):
         response = self.client.post(
             "/api/v1/checkin/log-workout",
@@ -638,6 +692,7 @@ class DailyCheckinApiTests(unittest.TestCase):
                 "title": "Builder",
                 "elapsed_seconds": 930,
                 "completed": True,
+                "feel_rating": 4,
             },
             headers={"Authorization": "Bearer ignored-by-override"},
         )
@@ -645,6 +700,7 @@ class DailyCheckinApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["workout_id"], "workout-1")
         self.assertEqual(self.fake_service.last_log["user_id"], "user-123")
+        self.assertEqual(self.fake_service.last_log["request"]["feel_rating"], 4)
 
 
 if __name__ == "__main__":

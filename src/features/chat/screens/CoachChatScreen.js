@@ -9,7 +9,7 @@ import QuickReplies from '../components/QuickReplies';
 import TypingIndicator from '../components/TypingIndicator';
 import { useChatConversation } from '../hooks/useChatConversation';
 
-export default function CoachChatScreen({ accessToken, onSignOut }) {
+export default function CoachChatScreen({ accessToken, onSignOut, onBackToCheckin }) {
   const [draft, setDraft] = useState('');
   const {
     messages,
@@ -84,6 +84,15 @@ export default function CoachChatScreen({ accessToken, onSignOut }) {
           disabled={isSending}
         />
 
+        {typeof onBackToCheckin === 'function' ? (
+          <ModeButton
+            title="Back to Check-in"
+            variant="secondary"
+            onPress={onBackToCheckin}
+            style={styles.backButton}
+          />
+        ) : null}
+
         <ModeButton
           title="Sign Out"
           variant="secondary"
@@ -123,6 +132,9 @@ const styles = StyleSheet.create({
   messages: {
     paddingTop: theme.spacing[2],
     paddingBottom: theme.spacing[2],
+  },
+  backButton: {
+    marginTop: theme.spacing[2],
   },
   signOutButton: {
     marginTop: theme.spacing[2],
