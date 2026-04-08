@@ -1,4 +1,5 @@
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -12,6 +13,8 @@ from app.modules.conversation.service import ConversationProcessingError, Conver
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+CONTROLLED_CHAT_ERROR_DETAIL = "Chat response could not be completed"
 
 
 def _public_route_debug(route_debug: object | None) -> dict | None:
@@ -24,6 +27,26 @@ def _public_chat_response(response: ChatResponse) -> ChatResponse:
     if settings.expose_route_debug:
         return response
     return response.model_copy(update={"route_debug": None})
+
+
+def _raise_controlled_chat_error(
+    *,
+    endpoint: str,
+    exc: Exception,
+    user: AuthenticatedUser,
+    trainer_context: TrainerContext,
+    request: ChatRequest,
+) -> None:
+    logger.exception(
+        "Unexpected chat failure endpoint=%s user_id=%s trainer_id=%s client_id=%s conversation_id=%s",
+        endpoint,
+        user.id,
+        trainer_context.trainer_id,
+        trainer_context.client_id,
+        request.conversation_id,
+        exc_info=exc,
+    )
+    raise HTTPException(status_code=502, detail=CONTROLLED_CHAT_ERROR_DETAIL)
 
 
 @router.post("", response_model=ChatResponse)
@@ -39,6 +62,14 @@ async def chat(
         raise HTTPException(status_code=400, detail=str(exc))
     except ConversationProcessingError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+    except Exception as exc:
+        _raise_controlled_chat_error(
+            endpoint="/api/v1/chat",
+            exc=exc,
+            user=user,
+            trainer_context=trainer_context,
+            request=request,
+        )
 
 
 @router.post("/stream")
@@ -54,6 +85,14 @@ async def chat_stream(
         raise HTTPException(status_code=400, detail=str(exc))
     except ConversationProcessingError as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+    except Exception as exc:
+        _raise_controlled_chat_error(
+            endpoint="/api/v1/chat/stream",
+            exc=exc,
+            user=user,
+            trainer_context=trainer_context,
+            request=request,
+        )
 
     def event_stream():
         start_payload = {
@@ -79,5 +118,14 @@ async def chat_stream(
             yield f"data: {json.dumps(done_payload)}\n\n"
         except ConversationProcessingError as exc:
             yield f"data: {json.dumps({'type': 'error', 'detail': str(exc), 'conversation_id': conversation_id})}\n\n"
+        except Exception as exc:
+            logger.exception(
+                "Unexpected stream generator failure conversation_id=%s trainer_id=%s client_id=%s",
+                conversation_id,
+                trainer_context.trainer_id,
+                trainer_context.client_id,
+                exc_info=exc,
+            )
+            yield f"data: {json.dumps({'type': 'error', 'detail': CONTROLLED_CHAT_ERROR_DETAIL, 'conversation_id': conversation_id})}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

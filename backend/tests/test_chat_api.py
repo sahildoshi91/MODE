@@ -112,6 +112,16 @@ class ExplodingConversationService(FakeConversationService):
         )
 
 
+class UnexpectedExplodingConversationService(FakeConversationService):
+    def handle_chat(self, user_id, trainer_context, request):
+        del user_id, trainer_context, request
+        raise RuntimeError("Unexpected backend failure")
+
+    def stream_chat(self, user_id, trainer_context, request):
+        del user_id, trainer_context, request
+        raise RuntimeError("Unexpected stream backend failure")
+
+
 class ChatApiTests(unittest.TestCase):
     def setUp(self):
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
@@ -183,6 +193,30 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn('"type": "start"', response.text)
         self.assertNotIn('"route_debug"', response.text)
         self.assertIn('"type": "error"', response.text)
+
+    def test_chat_maps_unexpected_failure_to_controlled_502(self):
+        app.dependency_overrides[get_conversation_service] = lambda: UnexpectedExplodingConversationService()
+
+        response = self.client.post(
+            "/api/v1/chat",
+            json={"message": "Hello"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"], "Chat response could not be completed")
+
+    def test_stream_maps_unexpected_failure_to_controlled_502(self):
+        app.dependency_overrides[get_conversation_service] = lambda: UnexpectedExplodingConversationService()
+
+        response = self.client.post(
+            "/api/v1/chat/stream",
+            json={"message": "Hello"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"], "Chat response could not be completed")
 
 
 if __name__ == "__main__":

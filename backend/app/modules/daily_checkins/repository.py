@@ -119,13 +119,26 @@ class DailyCheckinRepository:
         )
 
     def upsert_generated_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
-        response = (
-            self.supabase
-            .table("generated_checkin_plans")
-            .upsert(payload, on_conflict="client_id,checkin_id,plan_type")
-            .execute()
+        try:
+            response = (
+                self.supabase
+                .table("generated_checkin_plans")
+                .upsert(payload, on_conflict="client_id,checkin_id,plan_type")
+                .execute()
+            )
+        except Exception as exc:
+            raise DailyCheckinRepositoryError.from_exception("Failed to save generated check-in plan", exc) from exc
+
+        if response.data:
+            return response.data[0]
+
+        raise DailyCheckinRepositoryError(
+            "Generated plan save completed without a readable row",
+            details=(
+                "The write returned no row for generated_checkin_plans. "
+                "This can happen when table policies reject visibility after insert/update."
+            ),
         )
-        return response.data[0]
 
     def get_generated_plan_by_id(self, generated_plan_id: str) -> dict[str, Any] | None:
         response = (

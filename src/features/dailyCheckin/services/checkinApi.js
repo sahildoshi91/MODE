@@ -11,15 +11,56 @@ function buildRequestOptions(accessToken, method = 'GET', body) {
   };
 }
 
-async function parseJsonResponse(response) {
-  const payload = await response.json().catch(() => ({}));
+async function parseJsonResponse(response, path) {
+  const responseText = await response.text().catch(() => '');
+  let payload = {};
+  if (typeof responseText === 'string' && responseText.trim()) {
+    try {
+      const parsed = JSON.parse(responseText);
+      if (parsed && typeof parsed === 'object') {
+        payload = parsed;
+      }
+    } catch (_error) {
+      payload = {};
+    }
+  }
+
+  if (response.ok) {
+    return payload;
+  }
+
+  const detailContainer = payload?.detail && typeof payload.detail === 'object'
+    ? payload.detail
+    : payload;
+  const message = (
+    (typeof detailContainer?.detail === 'string' && detailContainer.detail)
+    || (typeof payload?.detail === 'string' && payload.detail)
+    || (typeof payload?.message === 'string' && payload.message)
+    || null
+  );
+
+  const code = detailContainer?.code || payload?.code || null;
+  const hint = detailContainer?.hint || payload?.hint || null;
+  const stage = detailContainer?.stage || payload?.stage || null;
+  const requestId = detailContainer?.request_id || payload?.request_id || null;
+
   if (!response.ok) {
-    const error = new Error(payload.detail || 'Unable to complete daily check-in.');
+    const fallbackMessage = typeof responseText === 'string' && responseText.trim()
+      ? responseText.trim()
+      : 'Unable to complete daily check-in.';
+    const error = new Error(message || fallbackMessage);
     error.status = response.status;
-    error.detail = payload.detail || null;
+    error.detail = (typeof detailContainer?.detail === 'string' && detailContainer.detail)
+      || (typeof payload?.detail === 'string' && payload.detail)
+      || fallbackMessage
+      || null;
+    error.code = code;
+    error.hint = hint;
+    error.stage = stage;
+    error.request_id = requestId;
+    error.path = path || null;
     throw error;
   }
-  return payload;
 }
 
 function buildNetworkError(error, path) {
@@ -30,11 +71,17 @@ function buildNetworkError(error, path) {
     ? ` Tried: ${error.attemptedBaseUrls.join(', ')}.`
     : '';
 
-  return new Error(
+  const networkError = new Error(
     isTimeout
       ? `Request to ${path} timed out.${attemptedHosts} If you are testing on a phone, make sure the backend is running on your computer and that EXPO_PUBLIC_API_BASE_URL points to your computer's LAN IP, for example http://192.168.6.137:8000.`
       : `Unable to reach the backend for ${path}.${attemptedHosts} Check that the FastAPI server is running and reachable from your device.`,
   );
+  networkError.stage = 'network';
+  networkError.path = path;
+  networkError.code = null;
+  networkError.hint = null;
+  networkError.request_id = null;
+  return networkError;
 }
 
 export async function getTodayCheckin({ accessToken }) {
@@ -55,7 +102,7 @@ export async function getTodayCheckin({ accessToken }) {
     throw buildNetworkError(error, '/api/v1/checkin/today');
   }
 
-  return parseJsonResponse(response);
+  return parseJsonResponse(response, '/api/v1/checkin/today');
 }
 
 export async function submitTodayCheckin({ accessToken, date, inputs, timeToComplete }) {
@@ -77,7 +124,7 @@ export async function submitTodayCheckin({ accessToken, date, inputs, timeToComp
     throw buildNetworkError(error, '/api/v1/checkin');
   }
 
-  return parseJsonResponse(response);
+  return parseJsonResponse(response, '/api/v1/checkin');
 }
 
 export async function getPreviousCheckin({ accessToken, beforeDate }) {
@@ -98,7 +145,7 @@ export async function getPreviousCheckin({ accessToken, beforeDate }) {
     throw buildNetworkError(error, '/api/v1/checkin/previous');
   }
 
-  return parseJsonResponse(response);
+  return parseJsonResponse(response, '/api/v1/checkin/previous');
 }
 
 export async function generateCheckinPlan({
@@ -131,7 +178,7 @@ export async function generateCheckinPlan({
     throw buildNetworkError(error, '/api/v1/checkin/generate-plan');
   }
 
-  return parseJsonResponse(response);
+  return parseJsonResponse(response, '/api/v1/checkin/generate-plan');
 }
 
 export async function logGeneratedWorkout({
@@ -162,5 +209,5 @@ export async function logGeneratedWorkout({
     throw buildNetworkError(error, '/api/v1/checkin/log-workout');
   }
 
-  return parseJsonResponse(response);
+  return parseJsonResponse(response, '/api/v1/checkin/log-workout');
 }

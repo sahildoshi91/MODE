@@ -328,6 +328,57 @@ function buildSupportBundle({ date, result, submitError }) {
   ].join('\n');
 }
 
+function buildPlanDiagnosticsLine(planError) {
+  if (!planError) {
+    return null;
+  }
+
+  const chips = [];
+  if (planError?.status) {
+    chips.push(`HTTP ${planError.status}`);
+  }
+  if (planError?.code) {
+    chips.push(`code ${planError.code}`);
+  }
+  if (planError?.request_id) {
+    chips.push(`request ${planError.request_id}`);
+  }
+
+  return chips.length > 0 ? chips.join(' • ') : null;
+}
+
+function buildPlanSupportBundle({
+  date,
+  planType,
+  checkinId,
+  environment,
+  timeAvailable,
+  nutritionDayType,
+  nutritionDayNote,
+  includeYesterdayContext,
+  planError,
+}) {
+  return [
+    'MODE Plan Generation Diagnostics',
+    `Date: ${withFallback(date)}`,
+    `Plan type: ${withFallback(planType)}`,
+    `Check-in ID: ${withFallback(checkinId)}`,
+    `Environment: ${withFallback(environment)}`,
+    `Time available: ${withFallback(timeAvailable)}`,
+    `Nutrition day type: ${withFallback(nutritionDayType)}`,
+    `Nutrition day note: ${withFallback(nutritionDayNote)}`,
+    `Use yesterday context: ${withFallback(includeYesterdayContext)}`,
+    `Path: ${withFallback(planError?.path)}`,
+    `Stage: ${withFallback(planError?.stage)}`,
+    `HTTP status: ${withFallback(planError?.status)}`,
+    `Code: ${withFallback(planError?.code)}`,
+    `Request ID: ${withFallback(planError?.request_id)}`,
+    `Detail: ${withFallback(planError?.detail)}`,
+    `Hint: ${withFallback(planError?.hint)}`,
+    `Message: ${withFallback(planError?.message)}`,
+  ].join('\n');
+}
+
 function withAlpha(hexColor, alpha) {
   const normalized = hexColor.replace('#', '');
   const value = normalized.length === 3
@@ -806,6 +857,7 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
   const glowTargetRef = useRef(QUESTIONS[0].color);
   const [glowFromColor, setGlowFromColor] = useState(QUESTIONS[0].color);
   const [glowToColor, setGlowToColor] = useState(QUESTIONS[0].color);
+  const planDiagnosticsLine = useMemo(() => buildPlanDiagnosticsLine(planError), [planError]);
 
   useEffect(() => {
     if (currentQuestion.color === glowTargetRef.current) {
@@ -1066,6 +1118,21 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
     setStep('environment');
   };
 
+  const handleOpenCoachChat = () => {
+    if (typeof onOpenChat !== 'function') {
+      return;
+    }
+    onOpenChat({
+      entrypoint: 'post_checkin',
+      checkin_context: {
+        checkin_id: summaryResult?.id || null,
+        checkin_date: summaryResult?.date || today,
+        assigned_mode: summaryResult?.mode || null,
+        checkin_score: summaryResult?.score ?? null,
+      },
+    });
+  };
+
   const canGeneratePlan = useMemo(() => {
     if (planType === PLAN_TYPE.TRAINING) {
       return Boolean(environment);
@@ -1089,6 +1156,7 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
 
     setPlanLoading(true);
     setPlanError(null);
+    setCopyFeedback(null);
     setStep('plan');
 
     try {
@@ -1115,9 +1183,36 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
         setStructuredNutritionPlan(result.structured);
       }
     } catch (error) {
-      setPlanError(error.message || 'Unable to generate your plan right now.');
+      const nextError = error instanceof Error
+        ? error
+        : new Error(error?.message || 'Unable to generate your plan right now.');
+      setPlanError(nextError);
     } finally {
       setPlanLoading(false);
+    }
+  };
+
+  const handleCopyPlanDiagnostics = async () => {
+    if (!planError) {
+      return;
+    }
+
+    try {
+      const supportBundle = buildPlanSupportBundle({
+        date: today,
+        planType,
+        checkinId: summaryResult?.id,
+        environment,
+        timeAvailable,
+        nutritionDayType,
+        nutritionDayNote: nutritionDayType === 'custom' ? nutritionDayNote.trim() : null,
+        includeYesterdayContext,
+        planError,
+      });
+      await Clipboard.setStringAsync(supportBundle);
+      showCopyFeedback('Copied diagnostics');
+    } catch (_error) {
+      showCopyFeedback('Unable to copy diagnostics');
     }
   };
 
@@ -1270,7 +1365,7 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
                   accent="#14B8A6"
                   onPress={() => handleSelectPlan(PLAN_TYPE.NUTRITION)}
                 />
-                <Pressable onPress={onOpenChat} style={styles.talkCoachGhost}>
+                <Pressable onPress={handleOpenCoachChat} style={styles.talkCoachGhost}>
                   <Text style={styles.talkCoachGhostText}>Talk to Coach</Text>
                 </Pressable>
               </View>
@@ -1437,8 +1532,26 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
           {!planLoading && planError ? (
             <View style={styles.planErrorCard}>
               <Text style={styles.errorTitle}>Couldn&apos;t generate your plan</Text>
-              <Text style={styles.errorText}>{planError}</Text>
+              <Text style={styles.errorText}>{planError?.message || 'Unable to generate your plan right now.'}</Text>
+              {planDiagnosticsLine ? <Text style={styles.planDiagnosticsText}>{planDiagnosticsLine}</Text> : null}
+              {planError?.hint ? <Text style={styles.planHintText}>Hint: {planError.hint}</Text> : null}
               <ModeButton title="Try again" onPress={handleGeneratePlan} style={styles.errorButton} />
+              <ModeButton
+                title="Copy diagnostics"
+                variant="secondary"
+                onPress={handleCopyPlanDiagnostics}
+                style={styles.errorButton}
+              />
+              {copyFeedback ? (
+                <Text
+                  style={[
+                    styles.copyFeedback,
+                    copyFeedback === 'Copied diagnostics' ? styles.copyFeedbackSuccess : styles.copyFeedbackError,
+                  ]}
+                >
+                  {copyFeedback}
+                </Text>
+              ) : null}
             </View>
           ) : null}
 
@@ -2187,6 +2300,20 @@ const styles = StyleSheet.create({
     borderColor: withAlpha(theme.colors.error, 0.35),
     backgroundColor: withAlpha(theme.colors.error, 0.08),
     padding: theme.spacing[3],
+  },
+  planDiagnosticsText: {
+    marginTop: theme.spacing[2],
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    textAlign: 'center',
+  },
+  planHintText: {
+    marginTop: theme.spacing[1],
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    textAlign: 'center',
   },
   planScrollContent: {
     paddingHorizontal: theme.spacing[3],

@@ -1,5 +1,6 @@
 import logging
 from datetime import date, datetime, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -47,6 +48,26 @@ def _format_unexpected_submit_error(exc: Exception) -> str:
     if message:
         return f"Unexpected check-in save failure ({exc.__class__.__name__}): {message}"
     return f"Unexpected check-in save failure ({exc.__class__.__name__})"
+
+
+def _build_generate_plan_error_payload(
+    *,
+    detail: str,
+    stage: str,
+    request_id: str,
+    code: str | None = None,
+    hint: str | None = None,
+) -> dict:
+    payload = {
+        "detail": detail,
+        "stage": stage,
+        "request_id": request_id,
+    }
+    if code:
+        payload["code"] = code
+    if hint:
+        payload["hint"] = hint
+    return payload
 
 
 @router.get("/today", response_model=DailyCheckinStatusResponse)
@@ -159,10 +180,76 @@ async def generate_checkin_plan(
     service: DailyCheckinService = Depends(get_daily_checkin_service),
 ):
     client_id = _resolve_client_id(trainer_context)
+    request_id = uuid4().hex[:12]
     try:
         return service.generate_plan(client_id=client_id, user_id=user.id, request=request)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_build_generate_plan_error_payload(
+                detail=str(exc),
+                stage="validation",
+                request_id=request_id,
+            ),
+        ) from exc
+    except DailyCheckinRepositoryError as exc:
+        detail_parts = [str(exc)]
+        if exc.details:
+            detail_parts.append(f"details={exc.details}")
+        detail = " | ".join(detail_parts)
+
+        logger.exception(
+            "Generate-plan persistence failed for client_id=%s checkin_id=%s request_id=%s status=%s code=%s hint=%s details=%s",
+            client_id,
+            request.checkin_id,
+            request_id,
+            exc.status_code,
+            exc.code,
+            exc.hint,
+            exc.details,
+            extra={
+                "client_id": client_id,
+                "checkin_id": request.checkin_id,
+                "request_id": request_id,
+                "supabase_status_code": exc.status_code,
+                "supabase_code": exc.code,
+                "supabase_hint": exc.hint,
+                "supabase_details": exc.details,
+            },
+        )
+        raise HTTPException(
+            status_code=502 if exc.status_code and exc.status_code >= 500 else 500,
+            detail=_build_generate_plan_error_payload(
+                detail=detail,
+                stage="persist_generated_plan",
+                request_id=request_id,
+                code=exc.code,
+                hint=exc.hint,
+            ),
+        ) from exc
+    except Exception as exc:
+        detail = f"Unexpected generate-plan failure ({exc.__class__.__name__})"
+        logger.exception(
+            "Generate-plan failed unexpectedly for client_id=%s checkin_id=%s request_id=%s exception_type=%s",
+            client_id,
+            request.checkin_id,
+            request_id,
+            exc.__class__.__name__,
+            extra={
+                "client_id": client_id,
+                "checkin_id": request.checkin_id,
+                "request_id": request_id,
+                "exception_type": exc.__class__.__name__,
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=_build_generate_plan_error_payload(
+                detail=detail,
+                stage="generate_plan_unexpected",
+                request_id=request_id,
+            ),
+        ) from exc
 
 
 @router.post("/log-workout", response_model=LogGeneratedWorkoutResponse)

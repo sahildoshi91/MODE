@@ -74,6 +74,30 @@ class ConversationRouterTests(unittest.TestCase):
         self.assertEqual(decision.model, "gemini-2.5-flash")
         self.assertEqual(decision.flow, "default_fast")
 
+    def test_routes_generic_post_checkin_prompts_to_followup_task(self):
+        decision = self.router.route(
+            RoutingContext(
+                message_text="What now?",
+                client_context={"entrypoint": "post_checkin"},
+                user_profile=self.profile,
+            )
+        )
+
+        self.assertEqual(decision.task_type, "post_checkin_followup")
+        self.assertTrue(decision.retrieval_required)
+        self.assertEqual(decision.flow, "reasoning_structured")
+
+    def test_post_checkin_context_preserves_specific_intent_tasks(self):
+        decision = self.router.route(
+            RoutingContext(
+                message_text="How much protein should I eat after this check-in?",
+                client_context={"entrypoint": "post_checkin"},
+                user_profile=self.profile,
+            )
+        )
+
+        self.assertEqual(decision.task_type, "nutrition_guidance")
+
 
 if __name__ == "__main__":
     unittest.main()

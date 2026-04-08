@@ -214,6 +214,50 @@ class DailyCheckinStagingIntegrationTests(unittest.TestCase):
         self.assertEqual(completed_payload["checkin"]["score"], 20)
         self.assertEqual(completed_payload["checkin"]["mode"], "BUILD")
 
+        training_response = self.client.post(
+            "/api/v1/checkin/generate-plan",
+            json={
+                "checkin_id": submitted["id"],
+                "plan_type": "training",
+                "environment": "home_gym",
+                "time_available": 30,
+                "include_yesterday_context": True,
+            },
+            headers=headers,
+        )
+        self.assertEqual(training_response.status_code, 200, training_response.text)
+        training_payload = training_response.json()
+        self.assertEqual(training_payload["plan_type"], "training")
+        self.assertTrue(training_payload.get("plan_id"))
+        self.assertIsInstance(training_payload.get("structured"), dict)
+
+        nutrition_response = self.client.post(
+            "/api/v1/checkin/generate-plan",
+            json={
+                "checkin_id": submitted["id"],
+                "plan_type": "nutrition",
+                "include_yesterday_context": True,
+            },
+            headers=headers,
+        )
+        self.assertEqual(nutrition_response.status_code, 200, nutrition_response.text)
+        nutrition_payload = nutrition_response.json()
+        self.assertEqual(nutrition_payload["plan_type"], "nutrition")
+        self.assertTrue(nutrition_payload.get("plan_id"))
+        self.assertIsInstance(nutrition_payload.get("structured"), dict)
+
+        generated_rows = (
+            user_client.table("generated_checkin_plans")
+            .select("id, checkin_id, plan_type, assigned_mode")
+            .eq("checkin_id", submitted["id"])
+            .execute()
+            .data
+        )
+        self.assertGreaterEqual(len(generated_rows), 2)
+        generated_types = {row["plan_type"] for row in generated_rows}
+        self.assertIn("training", generated_types)
+        self.assertIn("nutrition", generated_types)
+
 
 if __name__ == "__main__":
     unittest.main()

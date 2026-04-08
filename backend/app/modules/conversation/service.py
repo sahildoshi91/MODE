@@ -79,19 +79,80 @@ class ConversationService:
         self.trainer_review_service = trainer_review_service
         self.trainer_persona_repository = trainer_persona_repository
         self.router = ConversationRouter()
-        self.gemini_client = GeminiClient()
-        self.openai_client = OpenAIClient()
+        self.gemini_client: GeminiClient | None = self._safe_init_gemini_client()
+        self.openai_client: OpenAIClient | None = self._safe_init_openai_client()
         self.anthropic_client: AnthropicClient | None = None
         if settings.anthropic_api_key:
             try:
                 self.anthropic_client = AnthropicClient()
             except RuntimeError:
                 self.anthropic_client = None
+                logger.warning("Anthropic client unavailable, continuing with fallback providers")
+            except Exception:
+                self.anthropic_client = None
+                logger.exception("Anthropic client failed to initialize, continuing with fallback providers")
+
+    def _safe_init_gemini_client(self) -> GeminiClient | None:
+        try:
+            return GeminiClient()
+        except RuntimeError:
+            logger.warning("Gemini client unavailable, continuing with fallback providers")
+            return None
+        except Exception:
+            logger.exception("Gemini client failed to initialize, continuing with fallback providers")
+            return None
+
+    def _safe_init_openai_client(self) -> OpenAIClient | None:
+        try:
+            return OpenAIClient()
+        except Exception:
+            logger.exception("OpenAI client failed to initialize, continuing with fallback providers")
+            return None
+
+    def _exception_attribute(self, exc: Exception, attribute: str) -> Any:
+        current: BaseException | None = exc
+        while current is not None:
+            value = getattr(current, attribute, None)
+            if value not in (None, ""):
+                return value
+            current = current.__cause__
+        return None
+
+    def _log_preparation_failure(
+        self,
+        *,
+        stage: str,
+        exc: Exception,
+        trainer_context: TrainerContext,
+        request: ChatRequest,
+        conversation_id: str | None = None,
+    ) -> None:
+        logger.exception(
+            "Conversation pre-processing failed stage=%s trainer_id=%s client_id=%s conversation_id=%s code=%s message=%s hint=%s details=%s",
+            stage,
+            trainer_context.trainer_id,
+            trainer_context.client_id,
+            conversation_id or (str(request.conversation_id) if request.conversation_id else None),
+            self._exception_attribute(exc, "code"),
+            self._exception_attribute(exc, "message") or str(exc),
+            self._exception_attribute(exc, "hint"),
+            self._exception_attribute(exc, "details"),
+            exc_info=exc,
+        )
 
     def _get_or_create_conversation(self, trainer_context: TrainerContext, request: ChatRequest) -> dict:
         conversation = None
         if request.conversation_id:
-            conversation = self.repository.get_conversation(str(request.conversation_id))
+            try:
+                conversation = self.repository.get_conversation(str(request.conversation_id))
+            except Exception as exc:
+                self._log_preparation_failure(
+                    stage="conversation_lookup",
+                    exc=exc,
+                    trainer_context=trainer_context,
+                    request=request,
+                )
+                raise
             if not conversation:
                 raise ValueError("Conversation not found")
             if (
@@ -100,17 +161,35 @@ class ConversationService:
             ):
                 raise ValueError("Conversation does not belong to the active trainer context")
         if not conversation:
-            conversation = self.repository.find_active_conversation(
-                trainer_context.client_id,
-                trainer_context.trainer_id,
-            )
+            try:
+                conversation = self.repository.find_active_conversation(
+                    trainer_context.client_id,
+                    trainer_context.trainer_id,
+                )
+            except Exception as exc:
+                self._log_preparation_failure(
+                    stage="conversation_lookup",
+                    exc=exc,
+                    trainer_context=trainer_context,
+                    request=request,
+                )
+                raise
         if not conversation:
-            conversation = self.repository.create_conversation(
-                trainer_context.trainer_id,
-                trainer_context.client_id,
-                "onboarding" if self._should_run_trainer_onboarding(trainer_context) else self.DEFAULT_CONVERSATION_TYPE,
-                self._initial_conversation_stage(trainer_context),
-            )
+            try:
+                conversation = self.repository.create_conversation(
+                    trainer_context.trainer_id,
+                    trainer_context.client_id,
+                    "onboarding" if self._should_run_trainer_onboarding(trainer_context) else self.DEFAULT_CONVERSATION_TYPE,
+                    self._initial_conversation_stage(trainer_context),
+                )
+            except Exception as exc:
+                self._log_preparation_failure(
+                    stage="conversation_create",
+                    exc=exc,
+                    trainer_context=trainer_context,
+                    request=request,
+                )
+                raise
         return conversation
 
     def _initial_conversation_stage(self, trainer_context: TrainerContext) -> str:
@@ -208,6 +287,46 @@ class ConversationService:
             "trainer_display_name": trainer_context.trainer_display_name,
             "persona_name": trainer_context.persona_name,
         }
+
+    def _prepare_route_and_prompt(
+        self,
+        trainer_context: TrainerContext,
+        request: ChatRequest,
+    ) -> tuple[RoutingDecision, dict[str, Any], PromptPackage]:
+        try:
+            route, profile = self._route_request(trainer_context, request)
+        except ValueError:
+            raise
+        except Exception as exc:
+            self._log_preparation_failure(
+                stage="routing_profile",
+                exc=exc,
+                trainer_context=trainer_context,
+                request=request,
+            )
+            raise ConversationProcessingError("Chat response could not be completed") from exc
+
+        try:
+            conversation = self._get_or_create_conversation(trainer_context, request)
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise ConversationProcessingError("Chat response could not be completed") from exc
+
+        try:
+            prompt = self._build_prompt(trainer_context, conversation, request, route, profile)
+            return route, conversation, prompt
+        except ValueError:
+            raise
+        except Exception as exc:
+            self._log_preparation_failure(
+                stage="prompt_build",
+                exc=exc,
+                trainer_context=trainer_context,
+                request=request,
+                conversation_id=conversation.get("id") if isinstance(conversation, dict) else None,
+            )
+            raise ConversationProcessingError("Chat response could not be completed") from exc
 
     def _list_user_messages(self, conversation_id: str) -> list[dict[str, Any]]:
         return [message for message in self.repository.list_messages(conversation_id, limit=50) if message.get("role") == "user"]
@@ -410,54 +529,83 @@ class ConversationService:
             fallback_reason=fallback_reason,
         )
 
-    def _execute_route(self, route: RoutingDecision, prompt: PromptPackage) -> tuple[TextCompletion, str, str, str | None]:
-        if route.provider == "openai" and settings.openai_api_key:
+    def _gemini_text_completion(self, prompt: PromptPackage) -> TextCompletion:
+        if not self.gemini_client:
+            raise ConversationProcessingError("Chat response could not be completed")
+        combined_prompt = f"{prompt.system_prompt}\n\n{prompt.user_prompt}"
+        gemini_completion = self.gemini_client.create_chat_completion(combined_prompt)
+        return TextCompletion(
+            text=gemini_completion.text,
+            token_usage=AIClientTokenUsage(
+                prompt_tokens=gemini_completion.token_usage.prompt_tokens,
+                completion_tokens=gemini_completion.token_usage.completion_tokens,
+                total_tokens=gemini_completion.token_usage.total_tokens,
+                thoughts_tokens=gemini_completion.token_usage.thoughts_tokens,
+            ),
+        )
+
+    def _execute_with_provider(
+        self,
+        provider: str,
+        route: RoutingDecision,
+        prompt: PromptPackage,
+    ) -> tuple[TextCompletion, str]:
+        if provider == "openai":
+            if not settings.openai_api_key or not self.openai_client:
+                raise RuntimeError("openai_client_not_configured")
             completion = self.openai_client.create_chat_completion_with_usage(
-                model=route.model,
+                model=route.model if route.provider == "openai" else GPT_5_4_MINI_MODEL,
                 messages=[
                     {"role": "system", "content": prompt.system_prompt},
                     {"role": "user", "content": prompt.user_prompt},
                 ],
             )
-            return completion, "openai", route.model, None
+            return completion, route.model if route.provider == "openai" else GPT_5_4_MINI_MODEL
 
-        if route.provider == "anthropic" and self.anthropic_client:
+        if provider == "anthropic":
+            if not self.anthropic_client:
+                raise RuntimeError("anthropic_client_not_configured")
             completion = self.anthropic_client.create_chat_completion(
                 model=ANTHROPIC_SONNET_MODEL,
                 system_prompt=prompt.system_prompt,
                 user_prompt=prompt.user_prompt,
             )
-            return completion, "anthropic", ANTHROPIC_SONNET_MODEL, None
+            return completion, ANTHROPIC_SONNET_MODEL
 
-        fallback_reason = None
-        execution_model = route.model
-        execution_provider = route.provider
+        if provider == "gemini":
+            completion = self._gemini_text_completion(prompt)
+            return completion, GEMINI_FLASH_MODEL
 
-        if route.provider == "anthropic":
-            fallback_reason = "anthropic_client_not_configured"
-            execution_provider = "gemini"
-            execution_model = GEMINI_FLASH_MODEL
-        elif route.provider != "gemini":
-            fallback_reason = "provider_unavailable"
-            execution_provider = "gemini"
-            execution_model = GEMINI_FLASH_MODEL
+        raise RuntimeError("provider_unavailable")
 
-        combined_prompt = f"{prompt.system_prompt}\n\n{prompt.user_prompt}"
-        gemini_completion = self.gemini_client.create_chat_completion(combined_prompt)
-        return (
-            TextCompletion(
-                text=gemini_completion.text,
-                token_usage=AIClientTokenUsage(
-                    prompt_tokens=gemini_completion.token_usage.prompt_tokens,
-                    completion_tokens=gemini_completion.token_usage.completion_tokens,
-                    total_tokens=gemini_completion.token_usage.total_tokens,
-                    thoughts_tokens=gemini_completion.token_usage.thoughts_tokens,
-                ),
-            ),
-            execution_provider,
-            execution_model,
-            fallback_reason,
-        )
+    def _provider_fallback_reason(self, provider: str) -> str:
+        if provider == "anthropic":
+            return "anthropic_client_not_configured"
+        if provider == "gemini":
+            return "gemini_client_not_configured"
+        if provider == "openai":
+            return "openai_client_not_configured"
+        return "provider_unavailable"
+
+    def _execute_route(self, route: RoutingDecision, prompt: PromptPackage) -> tuple[TextCompletion, str, str, str | None]:
+        primary_provider = route.provider
+        fallback_reason: str | None = None
+
+        provider_order = [primary_provider]
+        for provider in ("gemini", "openai", "anthropic"):
+            if provider not in provider_order:
+                provider_order.append(provider)
+
+        for index, provider in enumerate(provider_order):
+            try:
+                completion, execution_model = self._execute_with_provider(provider, route, prompt)
+                return completion, provider, execution_model, fallback_reason
+            except Exception:
+                if index == 0:
+                    fallback_reason = self._provider_fallback_reason(provider)
+                logger.exception("Route execution failed provider=%s route_provider=%s", provider, route.provider)
+
+        raise ConversationProcessingError("Chat response could not be completed")
 
     def _queue_trainer_review_if_needed(
         self,
@@ -617,9 +765,16 @@ class ConversationService:
     ) -> tuple[str, Iterator[str], RouteDebug, StreamResultState]:
         del user_id
         if not trainer_context.trainer_id:
+            if request.conversation_id:
+                raise ValueError("Conversation not found")
             raise ValueError("User is not assigned to an active trainer context")
         if self._should_run_trainer_onboarding(trainer_context):
-            response = self._handle_trainer_onboarding(trainer_context, request)
+            try:
+                response = self._handle_trainer_onboarding(trainer_context, request)
+            except ValueError:
+                raise
+            except Exception as exc:
+                raise ConversationProcessingError("Chat response could not be completed") from exc
 
             def onboarding_iterator() -> Iterator[str]:
                 yield response.assistant_message
@@ -627,9 +782,7 @@ class ConversationService:
             result_state = StreamResultState(conversation_usage=response.conversation_usage, token_usage=response.token_usage)
             return response.conversation_id or "", onboarding_iterator(), None, result_state
 
-        route, profile = self._route_request(trainer_context, request)
-        conversation = self._get_or_create_conversation(trainer_context, request)
-        prompt = self._build_prompt(trainer_context, conversation, request, route, profile)
+        route, conversation, prompt = self._prepare_route_and_prompt(trainer_context, request)
         route_metadata = route.as_dict()
         try:
             user_message = self.repository.save_message(
@@ -691,8 +844,16 @@ class ConversationService:
 
             return conversation["id"], anthropic_iterator(), route_debug, result_state
 
-        if route.provider != "gemini":
-            completion, execution_provider, execution_model, fallback_reason = self._execute_route(route, prompt)
+        if route.provider != "gemini" or not self.gemini_client:
+            try:
+                completion, execution_provider, execution_model, fallback_reason = self._execute_route(route, prompt)
+            except ConversationProcessingError:
+                self._mark_conversation_failed(conversation["id"])
+                raise
+            except Exception as exc:
+                self._mark_conversation_failed(conversation["id"])
+                raise ConversationProcessingError("Chat response could not be completed") from exc
+
             route_debug = self._build_route_debug(route, execution_provider, execution_model, fallback_reason)
             result_state = StreamResultState(
                 token_usage=TokenUsage(
@@ -727,6 +888,9 @@ class ConversationService:
                         request,
                         assistant_message,
                     )
+                except ConversationProcessingError:
+                    self._mark_conversation_failed(conversation["id"])
+                    raise
                 except Exception as exc:
                     self._mark_conversation_failed(conversation["id"])
                     raise ConversationProcessingError("Chat response could not be completed") from exc
@@ -769,6 +933,9 @@ class ConversationService:
                     request,
                     assistant_message,
                 )
+            except ConversationProcessingError:
+                self._mark_conversation_failed(conversation["id"])
+                raise
             except Exception as exc:
                 self._mark_conversation_failed(conversation["id"])
                 raise ConversationProcessingError("Chat response could not be completed") from exc
@@ -778,13 +945,18 @@ class ConversationService:
     def handle_chat(self, user_id: str, trainer_context: TrainerContext, request: ChatRequest) -> ChatResponse:
         del user_id
         if not trainer_context.trainer_id:
+            if request.conversation_id:
+                raise ValueError("Conversation not found")
             raise ValueError("User is not assigned to an active trainer context")
         if self._should_run_trainer_onboarding(trainer_context):
-            return self._handle_trainer_onboarding(trainer_context, request)
+            try:
+                return self._handle_trainer_onboarding(trainer_context, request)
+            except ValueError:
+                raise
+            except Exception as exc:
+                raise ConversationProcessingError("Chat response could not be completed") from exc
 
-        route, profile = self._route_request(trainer_context, request)
-        conversation = self._get_or_create_conversation(trainer_context, request)
-        prompt = self._build_prompt(trainer_context, conversation, request, route, profile)
+        route, conversation, prompt = self._prepare_route_and_prompt(trainer_context, request)
         try:
             user_message = self.repository.save_message(
                 conversation["id"],
@@ -810,6 +982,9 @@ class ConversationService:
                 completion,
                 fallback_reason,
             )
+        except ConversationProcessingError:
+            self._mark_conversation_failed(conversation["id"])
+            raise
         except Exception as exc:
             self._mark_conversation_failed(conversation["id"])
             raise ConversationProcessingError("Chat response could not be completed") from exc

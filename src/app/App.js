@@ -17,6 +17,7 @@ function AppShell() {
   const [assignmentError, setAssignmentError] = useState(null);
   const [isAssigningTrainer, setIsAssigningTrainer] = useState(false);
   const [activeScreen, setActiveScreen] = useState('checkin');
+  const [chatLaunchContext, setChatLaunchContext] = useState(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -40,6 +41,7 @@ function AppShell() {
       }
       setSession(nextSession || null);
       setActiveScreen('checkin');
+      setChatLaunchContext(null);
       setIsLoading(false);
     });
 
@@ -98,6 +100,7 @@ function AppShell() {
     setAssignmentError(null);
     setIsAssigningTrainer(false);
     setActiveScreen('checkin');
+    setChatLaunchContext(null);
   };
 
   const handleAssignTrainer = async (trainerId) => {
@@ -114,6 +117,7 @@ function AppShell() {
       });
       setAssignmentStatus(updatedStatus);
       setActiveScreen('checkin');
+      setChatLaunchContext(null);
     } catch (error) {
       setAssignmentError(error.message || 'Unable to assign trainer.');
     } finally {
@@ -149,8 +153,12 @@ function AppShell() {
     return (
       <CoachChatScreen
         accessToken={session.access_token}
+        launchContext={chatLaunchContext}
         onSignOut={handleSignOut}
-        onBackToCheckin={() => setActiveScreen('checkin')}
+        onBackToCheckin={() => {
+          setActiveScreen('checkin');
+          setChatLaunchContext(null);
+        }}
       />
     );
   }
@@ -159,7 +167,10 @@ function AppShell() {
     <DailyCheckinScreen
       accessToken={session.access_token}
       onSignOut={handleSignOut}
-      onOpenChat={() => setActiveScreen('chat')}
+      onOpenChat={(launchContext = null) => {
+        setChatLaunchContext(launchContext);
+        setActiveScreen('chat');
+      }}
     />
   );
 }

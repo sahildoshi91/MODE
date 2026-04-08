@@ -99,6 +99,7 @@ class ChatApiStagingIntegrationTests(unittest.TestCase):
         ).execute()
         assignment_row = assignment_response.data[0]
         cls.client_id = assignment_row["client_id"]
+        cls._assert_chat_conversation_type_supported()
 
         cls.client_access_token = cls._sign_in_and_get_access_token(cls.client_user["email"])
         cls.outsider_access_token = cls._sign_in_and_get_access_token(cls.outsider_user["email"])
@@ -139,6 +140,37 @@ class ChatApiStagingIntegrationTests(unittest.TestCase):
         if not session or not session.access_token:
             raise RuntimeError(f"Failed to sign in staging test user {email}")
         return session.access_token
+
+    @classmethod
+    def _assert_chat_conversation_type_supported(cls):
+        probe_conversation_id = None
+        try:
+            probe_response = (
+                cls.admin
+                .table("conversations")
+                .insert(
+                    {
+                        "trainer_id": cls.trainer_id,
+                        "client_id": cls.client_id,
+                        "type": "chat",
+                        "current_stage": "schema_preflight",
+                    }
+                )
+                .execute()
+            )
+            probe_row = probe_response.data[0] if probe_response.data else None
+            probe_conversation_id = probe_row.get("id") if probe_row else None
+        except Exception as exc:
+            raise RuntimeError(
+                "Staging schema mismatch: conversations.type does not accept 'chat'. "
+                "Run backend/sql/20260408c_repair_conversations_type_check.sql and retry."
+            ) from exc
+        finally:
+            if probe_conversation_id:
+                try:
+                    cls.admin.table("conversations").delete().eq("id", probe_conversation_id).execute()
+                except Exception:
+                    pass
 
     def _chat(self, access_token, payload):
         with patch("app.modules.conversation.service.GeminiClient", return_value=FakeGeminiClient()):

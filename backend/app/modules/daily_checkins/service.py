@@ -168,7 +168,17 @@ class DailyCheckinService:
             raise ValueError("Check-in not found")
         normalized_mode = self._normalize_mode(checkin["assigned_mode"])
 
-        profile = self.profile_service.get_or_create_profile(client_id) if self.profile_service else {}
+        profile = {}
+        if self.profile_service:
+            try:
+                profile = self.profile_service.get_or_create_profile(client_id) or {}
+            except Exception as exc:
+                logger.warning(
+                    "Generate-plan profile lookup failed for client_id=%s checkin_id=%s: %s",
+                    client_id,
+                    request.checkin_id,
+                    exc,
+                )
         yesterday = None
         if request.include_yesterday_context:
             yesterday = self.repository.get_previous_checkin(client_id, self._coerce_date(checkin["date"]))

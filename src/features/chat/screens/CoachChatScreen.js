@@ -9,7 +9,7 @@ import QuickReplies from '../components/QuickReplies';
 import TypingIndicator from '../components/TypingIndicator';
 import { useChatConversation } from '../hooks/useChatConversation';
 
-export default function CoachChatScreen({ accessToken, onSignOut, onBackToCheckin }) {
+export default function CoachChatScreen({ accessToken, launchContext, onSignOut, onBackToCheckin }) {
   const [draft, setDraft] = useState('');
   const {
     messages,
@@ -17,8 +17,11 @@ export default function CoachChatScreen({ accessToken, onSignOut, onBackToChecki
     conversationState,
     trainerContext,
     isSending,
+    error,
+    hasRetryableFailure,
     sendMessage,
-  } = useChatConversation(accessToken);
+    retryLastFailedMessage,
+  } = useChatConversation(accessToken, launchContext);
 
   const headerSubtitle = useMemo(() => {
     if (trainerContext?.trainer_display_name) {
@@ -32,12 +35,24 @@ export default function CoachChatScreen({ accessToken, onSignOut, onBackToChecki
     if (!message) {
       return;
     }
-    setDraft('');
-    await sendMessage(message);
+    const sent = await sendMessage(message);
+    if (sent) {
+      setDraft('');
+    }
   };
 
   const handleQuickReply = async (reply) => {
-    await sendMessage(reply);
+    const sent = await sendMessage(reply);
+    if (sent) {
+      setDraft('');
+    }
+  };
+
+  const handleRetryLastMessage = async () => {
+    const sent = await retryLastFailedMessage();
+    if (sent) {
+      setDraft('');
+    }
   };
 
   return (
@@ -76,6 +91,19 @@ export default function CoachChatScreen({ accessToken, onSignOut, onBackToChecki
           disabled={isSending}
           onSelect={handleQuickReply}
         />
+
+        {hasRetryableFailure ? (
+          <ModeCard style={styles.errorCard}>
+            <Text style={styles.errorTitle}>Message didn&apos;t send</Text>
+            <Text style={styles.errorBody}>{error || 'Coach is temporarily unavailable. Try again.'}</Text>
+            <ModeButton
+              title={isSending ? 'Retrying...' : 'Retry Last Message'}
+              onPress={handleRetryLastMessage}
+              disabled={isSending}
+              style={styles.errorButton}
+            />
+          </ModeCard>
+        ) : null}
 
         <CoachComposer
           value={draft}
@@ -132,6 +160,23 @@ const styles = StyleSheet.create({
   messages: {
     paddingTop: theme.spacing[2],
     paddingBottom: theme.spacing[2],
+  },
+  errorCard: {
+    marginTop: theme.spacing[2],
+    borderColor: theme.colors.error,
+    borderWidth: 1,
+  },
+  errorTitle: {
+    color: theme.colors.error,
+    ...theme.typography.h3,
+  },
+  errorBody: {
+    marginTop: theme.spacing[1],
+    color: theme.colors.textMedium,
+    ...theme.typography.body2,
+  },
+  errorButton: {
+    marginTop: theme.spacing[2],
   },
   backButton: {
     marginTop: theme.spacing[2],

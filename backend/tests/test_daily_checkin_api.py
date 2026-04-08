@@ -21,6 +21,9 @@ from app.modules.daily_checkins.schemas import (
     DailyCheckinInputs,
     DailyCheckinResult,
     DailyCheckinStatusResponse,
+    Environment,
+    GenerateCheckinPlanRequest,
+    PlanType,
     YesterdayCheckinSummary,
 )
 from app.modules.daily_checkins.service import DailyCheckinService
@@ -129,6 +132,16 @@ class FakeDailyCheckinService:
 class FailingDailyCheckinService(FakeDailyCheckinService):
     def submit_checkin(self, client_id: str, checkin_date: date, inputs: DailyCheckinInputs, time_to_complete=None):
         raise RuntimeError("database unavailable")
+
+
+class FailingGenerateDailyCheckinService(FakeDailyCheckinService):
+    def generate_plan(self, client_id: str, user_id: str, request):
+        raise DailyCheckinRepositoryError(
+            "Could not find the table 'public.generated_checkin_plans' in the schema cache",
+            status_code=404,
+            code="PGRST205",
+            hint="Run backend/sql/20260407_create_generated_checkin_plans.sql",
+        )
 
 
 class StubResponse:
@@ -379,6 +392,67 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertIn("felt Easy", note)
         self.assertIn("nudges intensity up", note)
 
+    def test_generate_plan_succeeds_when_profile_lookup_raises(self):
+        class GeneratePlanRepository:
+            def __init__(self):
+                self.saved_payload = None
+
+            def get_by_client_and_id(self, _client_id, checkin_id):
+                return {
+                    "id": checkin_id,
+                    "client_id": "client-1",
+                    "date": "2026-04-08",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 4,
+                        "nutrition": 4,
+                        "motivation": 4,
+                    },
+                    "total_score": 20,
+                    "assigned_mode": "BUILD",
+                }
+
+            def get_previous_checkin(self, _client_id, _before_date):
+                return None
+
+            def get_latest_workout_session(self, _user_id):
+                return None
+
+            def upsert_generated_plan(self, payload):
+                self.saved_payload = payload
+                return {"id": "generated-plan-ok"}
+
+        class FailingProfileService:
+            def get_or_create_profile(self, _client_id):
+                raise RuntimeError("profile lookup failed")
+
+        class FallbackLlm:
+            def create_chat_completion(self, **_kwargs):
+                raise RuntimeError("llm unavailable")
+
+        repository = GeneratePlanRepository()
+        service = DailyCheckinService(
+            repository=repository,
+            profile_service=FailingProfileService(),
+            llm_client=FallbackLlm(),
+        )
+
+        request = GenerateCheckinPlanRequest(
+            checkin_id="checkin-1",
+            plan_type=PlanType.TRAINING,
+            environment=Environment.HOME_GYM,
+            time_available=30,
+            include_yesterday_context=True,
+        )
+
+        result = service.generate_plan(client_id="client-1", user_id="user-1", request=request)
+
+        self.assertEqual(result.plan_id, "generated-plan-ok")
+        self.assertEqual(result.plan_type, PlanType.TRAINING)
+        self.assertEqual(repository.saved_payload["plan_type"], "training")
+        self.assertFalse(repository.saved_payload["used_yesterday_context"])
+
 
 class DailyCheckinRepositoryTests(unittest.TestCase):
     def test_upsert_checkin_surfaces_supabase_error_details(self):
@@ -456,6 +530,34 @@ class DailyCheckinRepositoryTests(unittest.TestCase):
         error = captured.exception
         self.assertEqual(error.code, "23514")
         self.assertIn("daily_checkins_assigned_mode_check", str(error))
+
+    def test_upsert_generated_plan_surfaces_supabase_error_details(self):
+        table = StubTable(
+            execute_error=FakeSupabaseFailure(
+                FailingResponse(
+                    status_code=404,
+                    payload={
+                        "message": "Could not find the table 'public.generated_checkin_plans' in the schema cache",
+                        "code": "PGRST205",
+                        "hint": "Perhaps you meant the table 'public.daily_checkins'",
+                        "details": None,
+                    },
+                )
+            ),
+        )
+        repository = DailyCheckinRepository(StubSupabase(table))
+
+        with self.assertRaises(DailyCheckinRepositoryError) as captured:
+            repository.upsert_generated_plan({
+                "client_id": "client-1",
+                "checkin_id": "checkin-1",
+                "plan_type": "training",
+            })
+
+        error = captured.exception
+        self.assertEqual(error.status_code, 404)
+        self.assertEqual(error.code, "PGRST205")
+        self.assertIn("generated_checkin_plans", str(error))
 
 
 class DailyCheckinApiTests(unittest.TestCase):
@@ -662,6 +764,35 @@ class DailyCheckinApiTests(unittest.TestCase):
         self.assertEqual(response.json()["structured"]["title"], "Builder")
         self.assertEqual(self.fake_service.last_generate["client_id"], "client-generate")
         self.assertEqual(self.fake_service.last_generate["user_id"], "user-123")
+
+    def test_generate_plan_returns_structured_diagnostics_on_repository_failure(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id="client-generate",
+            client_user_id="user-123",
+        )
+        app.dependency_overrides[get_daily_checkin_service] = lambda: FailingGenerateDailyCheckinService()
+
+        response = self.client.post(
+            "/api/v1/checkin/generate-plan",
+            json={
+                "checkin_id": "checkin-1",
+                "plan_type": "training",
+                "environment": "home_gym",
+                "time_available": 30,
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 500)
+        payload = response.json()["detail"]
+        self.assertEqual(payload["stage"], "persist_generated_plan")
+        self.assertEqual(payload["code"], "PGRST205")
+        self.assertIn("generated_checkin_plans", payload["detail"])
+        self.assertTrue(payload["request_id"])
 
     def test_previous_checkin_is_loaded_from_dedicated_endpoint(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
