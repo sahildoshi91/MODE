@@ -45,7 +45,7 @@ export async function sendChatMessage({ accessToken, conversationId, message, cl
 
     throw new Error(
       isTimeout
-        ? `Request to ${baseUrl || 'the backend'}/api/v1/chat timed out.${attemptedHosts} If you are testing on a phone, make sure the backend is running on your computer and that EXPO_PUBLIC_API_BASE_URL points to your computer's LAN IP, for example http://192.168.1.10:8000.`
+        ? `Request to ${baseUrl || 'the backend'}/api/v1/chat timed out.${attemptedHosts} If you are testing on a phone, make sure the backend is running on your computer and that EXPO_PUBLIC_API_BASE_URL points to your computer's LAN IP, for example http://192.168.6.137:8000.`
         : `Unable to reach the backend at /api/v1/chat.${attemptedHosts} Check that the backend is running and that your app can reach your computer on the same network.`,
     );
   }

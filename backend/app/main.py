@@ -10,3 +10,8 @@ app.include_router(api_router)
 @app.get("/")
 async def root():
     return {"message": "MODE API", "version": "multi-tenant foundation"}
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True}

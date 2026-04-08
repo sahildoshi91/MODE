@@ -33,7 +33,7 @@ class FakeDailyCheckinService:
                     id="checkin-1",
                     date=checkin_date,
                     score=18,
-                    mode="YELLOW",
+                    mode="BUILD",
                     inputs=DailyCheckinInputs(
                         sleep=4,
                         stress=2,
@@ -46,8 +46,8 @@ class FakeDailyCheckinService:
                         "duration": "30-45 min",
                         "intensity": "Moderate",
                     },
-                    nutrition={"rule": "Eat balanced meals."},
-                    mindset={"cue": "Stay consistent."},
+                    nutrition={"rule": "Keep meals balanced and steady all day."},
+                    mindset={"cue": "Build momentum with disciplined reps."},
                     time_to_complete=11,
                     completion_timestamp=datetime(2026, 3, 27, 16, 0, tzinfo=timezone.utc),
                 ),
@@ -65,15 +65,15 @@ class FakeDailyCheckinService:
             id="checkin-new",
             date=checkin_date,
             score=22,
-            mode="GREEN",
+            mode="BEAST",
             inputs=inputs,
             training={
                 "type": "Strength or HIIT",
                 "duration": "45-60 min",
                 "intensity": "High",
             },
-            nutrition={"rule": "Prioritize protein + carbs."},
-            mindset={"cue": "Push limits. Build capacity."},
+            nutrition={"rule": "Fuel hard with protein and performance carbs."},
+            mindset={"cue": "Attack the day. You are cleared to push."},
             time_to_complete=time_to_complete,
             completion_timestamp=datetime(2026, 3, 27, 16, 0, tzinfo=timezone.utc),
         )
@@ -85,19 +85,19 @@ class DailyCheckinServiceTests(unittest.TestCase):
 
         self.assertEqual(
             service._assign_mode(service._calculate_total_score(DailyCheckinInputs(sleep=5, stress=5, soreness=5, nutrition=5, motivation=5))),
-            "GREEN",
+            "BEAST",
         )
         self.assertEqual(
             service._assign_mode(service._calculate_total_score(DailyCheckinInputs(sleep=4, stress=4, soreness=3, nutrition=3, motivation=2))),
-            "YELLOW",
+            "BUILD",
         )
         self.assertEqual(
             service._assign_mode(service._calculate_total_score(DailyCheckinInputs(sleep=3, stress=2, soreness=2, nutrition=2, motivation=2))),
-            "BLUE",
+            "RECOVER",
         )
         self.assertEqual(
             service._assign_mode(service._calculate_total_score(DailyCheckinInputs(sleep=1, stress=1, soreness=1, nutrition=1, motivation=1))),
-            "RED",
+            "REST",
         )
 
 
@@ -159,7 +159,7 @@ class DailyCheckinApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["mode"], "GREEN")
+        self.assertEqual(response.json()["mode"], "BEAST")
         self.assertEqual(response.json()["score"], 22)
         self.assertEqual(self.fake_service.last_submit["client_id"], "client-submit")
         self.assertEqual(self.fake_service.last_submit["time_to_complete"], 9)

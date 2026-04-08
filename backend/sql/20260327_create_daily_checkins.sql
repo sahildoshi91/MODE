@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS public.daily_checkins (
   date DATE NOT NULL,
   inputs JSONB NOT NULL,
   total_score INTEGER NOT NULL CHECK (total_score BETWEEN 5 AND 25),
-  assigned_mode TEXT NOT NULL CHECK (assigned_mode IN ('GREEN', 'YELLOW', 'BLUE', 'RED')),
+  assigned_mode TEXT NOT NULL CHECK (assigned_mode IN ('BEAST', 'BUILD', 'RECOVER', 'REST')),
   time_to_complete INTEGER,
   completion_timestamp TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

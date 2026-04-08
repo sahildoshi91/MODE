@@ -12,41 +12,41 @@ from app.modules.daily_checkins.schemas import (
 
 
 MODE_BUNDLES = {
-    "GREEN": {
+    "BEAST": {
         "training": TrainingRecommendation(
             type="Strength or HIIT",
             duration="45-60 min",
             intensity="High",
         ),
-        "nutrition": NutritionRecommendation(rule="Prioritize protein + carbs."),
-        "mindset": MindsetRecommendation(cue="Push limits. Build capacity."),
+        "nutrition": NutritionRecommendation(rule="Fuel hard with protein and performance carbs."),
+        "mindset": MindsetRecommendation(cue="Attack the day. You are cleared to push."),
     },
-    "YELLOW": {
+    "BUILD": {
         "training": TrainingRecommendation(
             type="Moderate cardio or controlled strength",
             duration="30-45 min",
             intensity="Moderate",
         ),
-        "nutrition": NutritionRecommendation(rule="Eat balanced meals."),
-        "mindset": MindsetRecommendation(cue="Stay consistent."),
+        "nutrition": NutritionRecommendation(rule="Keep meals balanced and steady all day."),
+        "mindset": MindsetRecommendation(cue="Build momentum with disciplined reps."),
     },
-    "BLUE": {
+    "RECOVER": {
         "training": TrainingRecommendation(
             type="Light movement or recovery",
             duration="20-30 min",
             intensity="Low",
         ),
-        "nutrition": NutritionRecommendation(rule="Hydrate + whole foods."),
-        "mindset": MindsetRecommendation(cue="Win by showing up."),
+        "nutrition": NutritionRecommendation(rule="Hydrate well and lean on whole foods."),
+        "mindset": MindsetRecommendation(cue="Recovery done well is progress."),
     },
-    "RED": {
+    "REST": {
         "training": TrainingRecommendation(
             type="Mobility, walking, or full restorative movement",
             duration="10-20 min",
             intensity="Very low",
         ),
-        "nutrition": NutritionRecommendation(rule="Focus on micronutrients."),
-        "mindset": MindsetRecommendation(cue="Recovery is progress."),
+        "nutrition": NutritionRecommendation(rule="Keep it simple: fluids, protein, and micronutrients."),
+        "mindset": MindsetRecommendation(cue="Rest with intent so you can return stronger."),
     },
 }
 
@@ -100,12 +100,12 @@ class DailyCheckinService:
 
     def _assign_mode(self, score: int) -> str:
         if score >= 21:
-            return "GREEN"
+            return "BEAST"
         if score >= 16:
-            return "YELLOW"
+            return "BUILD"
         if score >= 11:
-            return "BLUE"
-        return "RED"
+            return "RECOVER"
+        return "REST"
 
     def _build_result(self, record: dict) -> DailyCheckinResult:
         mode = record["assigned_mode"]

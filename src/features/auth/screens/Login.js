@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, Alert } from 'react-native';
 import { supabase } from '../../../services/supabaseClient';
-import { ModeInput, ModeButton, HeaderBar } from '../../../../lib/components';
+import { ModeInput, ModeButton, HeaderBar, SafeScreen } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 
 export default function Login() {
@@ -33,7 +33,7 @@ export default function Login() {
   };
 
   return (
-    <View style={styles.screenContainer}>
+    <SafeScreen style={styles.screenContainer}>
       <HeaderBar title="MODE Workout" subtitle="Secure AI workouts, no fluff" />
       <View style={styles.stack}>
         <Text style={styles.title}>{isSignup ? 'Create your account' : 'Welcome back'}</Text>
@@ -66,15 +66,13 @@ export default function Login() {
           style={styles.switchButton}
         />
       </View>
-    </View>
+    </SafeScreen>
   );
 }
 
 const styles = StyleSheet.create({
   screenContainer: {
-    flex: 1,
-    backgroundColor: theme.colors.bg.primary,
-    padding: theme.spacing[3],
+    paddingHorizontal: theme.spacing[3],
   },
   stack: {
     marginTop: theme.spacing[4],

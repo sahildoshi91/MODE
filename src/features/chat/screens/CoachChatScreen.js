@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { FlatList, StyleSheet, Text, View } from 'react-native';
 
-import { HeaderBar, ModeButton, ModeCard } from '../../../../lib/components';
+import { HeaderBar, ModeButton, ModeCard, SafeScreen } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import ChatBubble from '../components/ChatBubble';
 import CoachComposer from '../components/CoachComposer';
@@ -41,7 +41,7 @@ export default function CoachChatScreen({ accessToken, onSignOut }) {
   };
 
   return (
-    <View style={styles.screen}>
+    <SafeScreen style={styles.screen}>
       <HeaderBar title="MODE Coach" subtitle={headerSubtitle} />
 
       <View style={styles.content}>
@@ -91,14 +91,12 @@ export default function CoachChatScreen({ accessToken, onSignOut }) {
           style={styles.signOutButton}
         />
       </View>
-    </View>
+    </SafeScreen>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
-    flex: 1,
-    backgroundColor: theme.colors.bg.primary,
   },
   content: {
     flex: 1,

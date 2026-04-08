@@ -1,7 +1,7 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { HeaderBar, ModeButton, ModeCard } from '../../../../lib/components';
+import { HeaderBar, ModeButton, ModeCard, SafeScreen } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 
 export default function TrainerAssignmentScreen({
@@ -11,8 +11,10 @@ export default function TrainerAssignmentScreen({
   onAssignTrainer,
   onSignOut,
 }) {
+  const showEmptyState = trainers.length === 0 && !errorMessage;
+
   return (
-    <View style={styles.screen}>
+    <SafeScreen style={styles.screen}>
       <HeaderBar title="Pick Your Trainer" subtitle="Choose who should coach this account" />
 
       <ScrollView contentContainerStyle={styles.content}>
@@ -35,7 +37,7 @@ export default function TrainerAssignmentScreen({
           </ModeCard>
         ))}
 
-        {trainers.length === 0 ? (
+        {showEmptyState ? (
           <ModeCard>
             <Text style={styles.body}>
               No active trainers are available right now. Sign out and try another account, or add an active trainer in the admin setup first.
@@ -51,18 +53,16 @@ export default function TrainerAssignmentScreen({
           style={styles.signOutButton}
         />
       </ScrollView>
-    </View>
+    </SafeScreen>
   );
 }
 
 const styles = StyleSheet.create({
   screen: {
-    flex: 1,
-    backgroundColor: theme.colors.bg.primary,
   },
   content: {
     padding: theme.spacing[3],
-    paddingBottom: theme.spacing[4],
+    paddingBottom: theme.spacing[5],
   },
   title: {
     color: theme.colors.textHigh,
