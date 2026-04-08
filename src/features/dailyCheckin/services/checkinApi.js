@@ -16,6 +16,7 @@ async function parseJsonResponse(response) {
   if (!response.ok) {
     const error = new Error(payload.detail || 'Unable to complete daily check-in.');
     error.status = response.status;
+    error.detail = payload.detail || null;
     throw error;
   }
   return payload;

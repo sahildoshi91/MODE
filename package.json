@@ -11,6 +11,7 @@
   "dependencies": {
     "@supabase/supabase-js": "^2.99.3",
     "expo": "~54.0.0",
+    "expo-clipboard": "~8.0.8",
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-safe-area-context": "~5.6.0"

@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
+import * as Clipboard from 'expo-clipboard';
 
 import { ModeButton, SafeScreen } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
@@ -112,6 +113,65 @@ const MODE_THEME = {
   },
 };
 
+const MODE_RECOMMENDATIONS = {
+  BEAST: {
+    training: {
+      type: 'Strength or HIIT',
+      duration: '45-60 min',
+      intensity: 'High',
+    },
+    nutrition: {
+      rule: 'Fuel hard with protein and performance carbs.',
+    },
+    mindset: {
+      cue: 'Attack the day. You are cleared to push.',
+    },
+    mode_tagline: 'Full-send readiness with permission to push the pace.',
+  },
+  BUILD: {
+    training: {
+      type: 'Moderate cardio or controlled strength',
+      duration: '30-45 min',
+      intensity: 'Moderate',
+    },
+    nutrition: {
+      rule: 'Keep meals balanced and steady all day.',
+    },
+    mindset: {
+      cue: 'Build momentum with disciplined reps.',
+    },
+    mode_tagline: 'Stable readiness for strong, intentional work.',
+  },
+  RECOVER: {
+    training: {
+      type: 'Light movement or recovery',
+      duration: '20-30 min',
+      intensity: 'Low',
+    },
+    nutrition: {
+      rule: 'Hydrate well and lean on whole foods.',
+    },
+    mindset: {
+      cue: 'Recovery done well is progress.',
+    },
+    mode_tagline: 'A recovery-leaning day that still rewards smart action.',
+  },
+  REST: {
+    training: {
+      type: 'Mobility, walking, or full restorative movement',
+      duration: '10-20 min',
+      intensity: 'Very low',
+    },
+    nutrition: {
+      rule: 'Keep it simple: fluids, protein, and micronutrients.',
+    },
+    mindset: {
+      cue: 'Rest with intent so you can return stronger.',
+    },
+    mode_tagline: 'Restore the system and protect tomorrow\'s ceiling.',
+  },
+};
+
 const SCORE_KEYS = QUESTIONS.map((question) => question.key);
 const GRID_COLUMNS = 18;
 const GRID_ROWS = 10;
@@ -139,6 +199,77 @@ function createEmptyAnswers() {
     nutrition: 0,
     motivation: 0,
   };
+}
+
+function calculateTotalScore(inputs) {
+  return SCORE_KEYS.reduce((total, key) => total + (inputs[key] || 0), 0);
+}
+
+function assignMode(score) {
+  if (score >= 21) {
+    return 'BEAST';
+  }
+  if (score >= 16) {
+    return 'BUILD';
+  }
+  if (score >= 11) {
+    return 'RECOVER';
+  }
+  return 'REST';
+}
+
+function buildFallbackResult({ date, inputs, timeToComplete }) {
+  const score = calculateTotalScore(inputs);
+  const mode = assignMode(score);
+
+  return {
+    id: `local-${date}`,
+    date,
+    score,
+    mode,
+    inputs,
+    ...MODE_RECOMMENDATIONS[mode],
+    time_to_complete: timeToComplete,
+    completion_timestamp: new Date().toISOString(),
+  };
+}
+
+function logSubmitFailure({ date, inputs, error }) {
+  const score = calculateTotalScore(inputs);
+  const mode = assignMode(score);
+
+  console.error('Daily check-in submit failed', {
+    date,
+    score,
+    mode,
+    status: error?.status ?? null,
+    detail: error?.detail ?? error?.message ?? null,
+    message: error?.message ?? 'Unknown error',
+  });
+}
+
+function withFallback(value) {
+  if (value === null || value === undefined || value === '') {
+    return 'unknown';
+  }
+
+  return String(value);
+}
+
+function buildSupportBundle({ date, result, submitError }) {
+  return [
+    'MODE Check-in Support Bundle',
+    `Date: ${withFallback(date)}`,
+    'Save status: pending',
+    `HTTP status: ${withFallback(submitError?.status)}`,
+    `Detail: ${withFallback(submitError?.detail)}`,
+    `Message: ${withFallback(submitError?.message)}`,
+    `Mode: ${withFallback(result?.mode)}`,
+    `Score: ${withFallback(result?.score)}/25`,
+    `Training: ${withFallback(result?.training?.type)} | ${withFallback(result?.training?.duration)} | ${withFallback(result?.training?.intensity)}`,
+    `Nutrition: ${withFallback(result?.nutrition?.rule)}`,
+    `Mindset: ${withFallback(result?.mindset?.cue)}`,
+  ].join('\n');
 }
 
 function withAlpha(hexColor, alpha) {
@@ -195,6 +326,9 @@ function BackgroundGrid() {
 
 function ResultCard({ result }) {
   const modeTheme = MODE_THEME[result.mode] || MODE_THEME.RECOVER;
+  const summaryBody = result.mode_tagline
+    ? `${result.mode_tagline} Score ${result.score}/25.`
+    : `Score ${result.score}/25. Your check-in is translated into a clear call for training, nutrition, and mindset.`;
 
   return (
     <View style={[styles.resultCard, { borderColor: withAlpha(modeTheme.accent, 0.55) }]}>
@@ -206,9 +340,7 @@ function ResultCard({ result }) {
       </View>
 
       <Text style={[styles.resultMode, { color: modeTheme.accent }]}>{result.mode}</Text>
-      <Text style={styles.resultBody}>
-        Score {result.score}/25. Your check-in is translated into a clear call for training, nutrition, and mindset.
-      </Text>
+      <Text style={styles.resultBody}>{summaryBody}</Text>
 
       <View style={styles.bundleBlock}>
         <Text style={styles.bundleLabel}>Training</Text>
@@ -368,6 +500,11 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
+  const [submitError, setSubmitError] = useState(null);
+  const [summaryResult, setSummaryResult] = useState(null);
+  const [submitState, setSubmitState] = useState('idle');
+  const [copyFeedback, setCopyFeedback] = useState(null);
+  const copyFeedbackTimerRef = useRef(null);
   const currentQuestion = QUESTIONS[questionIndex];
   const glowProgress = useRef(new Animated.Value(1)).current;
   const glowTargetRef = useRef(QUESTIONS[0].color);
@@ -390,7 +527,7 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
     }).start();
   }, [currentQuestion.color, glowProgress]);
 
-  const hasResult = Boolean(status?.completed && status?.checkin);
+  const hasSummary = Boolean(summaryResult);
   const glowColor = glowProgress.interpolate({
     inputRange: [0, 1],
     outputRange: [glowFromColor, glowToColor],
@@ -400,23 +537,32 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
     setIsLoading(true);
     setStep('loading');
     setErrorMessage(null);
+    setSubmitError(null);
+    setCopyFeedback(null);
 
     try {
       const nextStatus = await getTodayCheckin({ accessToken });
       setStatus(nextStatus);
       if (nextStatus.completed) {
-        setStep('results');
+        setSummaryResult(nextStatus.checkin);
+        setSubmitState('saved');
+        setStep('summary');
       } else {
         setScores(createEmptyAnswers());
         setQuestionIndex(0);
         setJustSelected(null);
         setAnimating(false);
+        setSummaryResult(null);
+        setSubmitState('idle');
+        setSubmitError(null);
         sessionStartRef.current = Date.now();
         setStep('questionnaire');
       }
     } catch (error) {
       setErrorMessage(error.message || 'Unable to load today\'s check-in.');
-      setStep('error-retry');
+      setSummaryResult(null);
+      setSubmitState('idle');
+      setStep('load-error');
     } finally {
       setIsLoading(false);
     }
@@ -426,11 +572,28 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
     loadToday();
   }, [accessToken]);
 
+  useEffect(() => () => {
+    if (copyFeedbackTimerRef.current) {
+      clearTimeout(copyFeedbackTimerRef.current);
+    }
+  }, []);
+
+  const showCopyFeedback = (message) => {
+    if (copyFeedbackTimerRef.current) {
+      clearTimeout(copyFeedbackTimerRef.current);
+    }
+
+    setCopyFeedback(message);
+    copyFeedbackTimerRef.current = setTimeout(() => {
+      setCopyFeedback(null);
+      copyFeedbackTimerRef.current = null;
+    }, 2200);
+  };
+
   const handleGoBack = () => {
     if (animating || isSubmitting || questionIndex === 0) {
       return;
     }
-
     setQuestionIndex((current) => current - 1);
   };
 
@@ -438,6 +601,8 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
     if (isSubmitting) {
       return;
     }
+
+    const timeToComplete = Math.max(1, Math.round((Date.now() - sessionStartRef.current) / 1000));
 
     setStep('reviewing');
     setIsSubmitting(true);
@@ -448,21 +613,47 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
         accessToken,
         date: today,
         inputs: updatedScores,
-        timeToComplete: Math.max(1, Math.round((Date.now() - sessionStartRef.current) / 1000)),
+        timeToComplete,
       });
       setStatus({
         date: today,
         completed: true,
         checkin: result,
       });
-      setStep('results');
+      setSummaryResult(result);
+      setSubmitState('saved');
+      setSubmitError(null);
+      setCopyFeedback(null);
+      setStep('summary');
     } catch (error) {
       setErrorMessage(error.message || 'Unable to submit today\'s check-in.');
-      setStep('error-retry');
+      setSubmitError(error);
+      setSummaryResult(buildFallbackResult({
+        date: today,
+        inputs: updatedScores,
+        timeToComplete,
+      }));
+      setSubmitState('pending');
+      logSubmitFailure({ date: today, inputs: updatedScores, error });
+      setStep('summary');
     } finally {
       setIsSubmitting(false);
       setAnimating(false);
       setJustSelected(null);
+    }
+  };
+
+  const handleCopyDetails = async () => {
+    try {
+      const supportBundle = buildSupportBundle({
+        date: today,
+        result: summaryResult,
+        submitError,
+      });
+      await Clipboard.setStringAsync(supportBundle);
+      showCopyFeedback('Copied to clipboard');
+    } catch (_error) {
+      showCopyFeedback('Unable to copy details');
     }
   };
 
@@ -488,10 +679,6 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
       }
       handleSubmit(updatedScores);
     });
-  };
-
-  const handleSkip = () => {
-    handleOptionTap(3);
   };
 
   return (
@@ -522,18 +709,12 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
             questionIndex={questionIndex}
             justSelected={justSelected}
             onGoBack={handleGoBack}
-            onSkip={handleSkip}
+            onSkip={() => handleOptionTap(3)}
             onSelect={handleOptionTap}
             isBusy={animating || isSubmitting}
             topInset={insets.top}
           />
-          <ModeButton
-            title="Sign Out"
-            variant="secondary"
-            onPress={onSignOut}
-            disabled={isSubmitting}
-            style={styles.footerButton}
-          />
+          <ModeButton title="Sign Out" variant="secondary" onPress={onSignOut} style={styles.footerButton} />
         </View>
       ) : null}
 
@@ -542,23 +723,58 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
           <View style={styles.reviewCard}>
             <ActivityIndicator size="large" color={currentQuestion.color} />
             <Text style={styles.reviewTitle}>Coach is reviewing your details</Text>
-            <Text style={styles.reviewBody}>
-              Turning five honest answers into today&apos;s call.
-            </Text>
+            <Text style={styles.reviewBody}>Turning five honest answers into today&apos;s call.</Text>
           </View>
         </View>
       ) : null}
 
-      {step === 'results' && hasResult ? (
+      {step === 'summary' && hasSummary ? (
         <ScrollView contentContainerStyle={[styles.resultsContent, { paddingTop: Math.max(insets.top, theme.spacing[3]) }]}>
           <View style={styles.phoneFrame}>
             <Text style={styles.resultsEyebrow}>{formatTodayLabel(today)}</Text>
-            <Text style={styles.resultsTitle}>Today is handled.</Text>
-            <Text style={styles.resultsSubtitle}>
-              Your daily decision bundle is ready. Come back tomorrow for a fresh read.
+            <Text style={styles.resultsTitle}>
+              {submitState === 'saved' ? 'Today\'s mode is ready.' : 'Your mode is ready.'}
             </Text>
-            <ResultCard result={status.checkin} />
+            <Text style={styles.resultsSubtitle}>
+              {submitState === 'saved'
+                ? 'Check-in saved. Your recommendations are ready for today.'
+                : 'We couldn\'t save your check-in yet, but your recommendations are ready now.'}
+            </Text>
+            {submitState === 'pending' ? (
+              <View style={styles.summaryStatusCard}>
+                <Text style={styles.summaryStatusTitle}>Save still pending</Text>
+                <Text style={styles.summaryStatusBody}>
+                  {errorMessage || 'The check-in summary below is based on your completed answers. Retry to save it to your account.'}
+                </Text>
+                {copyFeedback ? (
+                  <Text
+                    style={[
+                      styles.copyFeedback,
+                      copyFeedback === 'Copied to clipboard' ? styles.copyFeedbackSuccess : styles.copyFeedbackError,
+                    ]}
+                  >
+                    {copyFeedback}
+                  </Text>
+                ) : null}
+              </View>
+            ) : null}
+            <ResultCard result={summaryResult} />
           </View>
+          {submitState === 'pending' ? (
+            <ModeButton
+              title="Retry save"
+              onPress={() => handleSubmit(scores)}
+              style={styles.footerButton}
+            />
+          ) : null}
+          {submitState === 'pending' ? (
+            <ModeButton
+              title="Copy details"
+              variant="secondary"
+              onPress={handleCopyDetails}
+              style={styles.footerButton}
+            />
+          ) : null}
           <ModeButton
             title="Sign Out"
             variant="secondary"
@@ -568,14 +784,14 @@ export default function DailyCheckinScreen({ accessToken, onSignOut }) {
         </ScrollView>
       ) : null}
 
-      {step === 'error-retry' ? (
+      {step === 'load-error' ? (
         <View style={styles.loadingScreen}>
           <View style={styles.errorCard}>
-            <Text style={styles.errorTitle}>We couldn&apos;t finish the check-in.</Text>
+            <Text style={styles.errorTitle}>We couldn&apos;t load today&apos;s check-in.</Text>
             <Text style={styles.errorText}>{errorMessage || 'Something went wrong while loading your check-in.'}</Text>
             <ModeButton
-              title={hasResult ? 'Reload results' : 'Try again'}
-              onPress={hasResult ? loadToday : (scores[SCORE_KEYS[SCORE_KEYS.length - 1]] > 0 ? () => handleSubmit(scores) : loadToday)}
+              title="Try again"
+              onPress={loadToday}
               style={styles.errorButton}
             />
             <ModeButton
@@ -828,7 +1044,39 @@ const styles = StyleSheet.create({
     color: theme.colors.textMedium,
     ...theme.typography.body1,
     fontFamily: theme.typography.fontFamily,
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[2],
+  },
+  summaryStatusCard: {
+    marginTop: theme.spacing[3],
+    borderRadius: 22,
+    backgroundColor: withAlpha(theme.colors.error, 0.1),
+    borderWidth: 1,
+    borderColor: withAlpha(theme.colors.error, 0.35),
+    padding: theme.spacing[3],
+  },
+  summaryStatusTitle: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+    marginBottom: theme.spacing[1],
+  },
+  summaryStatusBody: {
+    color: theme.colors.error,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+  },
+  copyFeedback: {
+    marginTop: theme.spacing[2],
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '600',
+  },
+  copyFeedbackSuccess: {
+    color: theme.colors.accent,
+  },
+  copyFeedbackError: {
+    color: '#FDBA74',
   },
   footerButton: {
     width: '100%',
@@ -850,16 +1098,9 @@ const styles = StyleSheet.create({
     ...theme.typography.h3,
     fontFamily: theme.typography.fontFamily,
     marginTop: theme.spacing[3],
-    marginBottom: theme.spacing[1],
   },
   reviewBody: {
     color: theme.colors.textMedium,
-    ...theme.typography.body2,
-    fontFamily: theme.typography.fontFamily,
-    textAlign: 'center',
-  },
-  errorText: {
-    color: theme.colors.error,
     ...theme.typography.body2,
     fontFamily: theme.typography.fontFamily,
     textAlign: 'center',
@@ -878,6 +1119,12 @@ const styles = StyleSheet.create({
     ...theme.typography.h3,
     fontFamily: theme.typography.fontFamily,
     marginBottom: theme.spacing[1],
+    textAlign: 'center',
+  },
+  errorText: {
+    color: theme.colors.error,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
     textAlign: 'center',
   },
   errorButton: {

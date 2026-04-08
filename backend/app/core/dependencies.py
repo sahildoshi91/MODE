@@ -68,8 +68,9 @@ def get_daily_checkin_repository(
 
 def get_daily_checkin_service(
     repository: DailyCheckinRepository = Depends(get_daily_checkin_repository),
+    profile_service: ProfileService = Depends(get_profile_service),
 ) -> DailyCheckinService:
-    return DailyCheckinService(repository)
+    return DailyCheckinService(repository, profile_service=profile_service)
 
 
 def get_plan_repository(
