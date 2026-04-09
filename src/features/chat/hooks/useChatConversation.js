@@ -27,6 +27,11 @@ const POST_CHECKIN_QUICK_REPLIES_BY_MODE = {
     'How should I reset for tomorrow?',
   ],
 };
+const WORKOUT_ADJUSTMENT_QUICK_REPLIES = [
+  'Make this workout easier',
+  'Swap an exercise for me',
+  'Shorten this workout',
+];
 
 function normalizeMode(mode) {
   return typeof mode === 'string' ? mode.trim().toUpperCase() : null;
@@ -44,6 +49,9 @@ function buildLaunchContextPayload(launchContext) {
   const checkinScore = typeof checkinContext.checkin_score === 'number' ? checkinContext.checkin_score : null;
   const checkinDate = typeof checkinContext.checkin_date === 'string' ? checkinContext.checkin_date : null;
   const checkinId = typeof checkinContext.checkin_id === 'string' ? checkinContext.checkin_id : null;
+  const workoutContext = launchContext.workout_context && typeof launchContext.workout_context === 'object'
+    ? launchContext.workout_context
+    : {};
 
   return {
     ...(entrypoint ? { entrypoint } : {}),
@@ -57,11 +65,27 @@ function buildLaunchContextPayload(launchContext) {
         },
       }
       : {}),
+    ...(Object.keys(workoutContext).length > 0
+      ? {
+        workout_context: workoutContext,
+      }
+      : {}),
   };
 }
 
 function buildInitialMessage(launchContextPayload) {
   const checkinContext = launchContextPayload?.checkin_context || {};
+  const workoutContext = launchContextPayload?.workout_context || {};
+  if (launchContextPayload?.entrypoint === 'generated_workout') {
+    const title = typeof workoutContext.plan_title === 'string' ? workoutContext.plan_title : null;
+    return {
+      id: 'welcome-generated-workout',
+      role: 'assistant',
+      text: title
+        ? `I’ve got your workout "${title}" in view. Tell me what you want to change and I’ll adjust it around your time, energy, and equipment.`
+        : 'I’ve got your generated workout in view. Tell me what you want to change and I’ll adjust it around your time, energy, and equipment.',
+    };
+  }
   if (launchContextPayload?.entrypoint !== 'post_checkin') {
     return {
       id: 'welcome',
@@ -82,6 +106,9 @@ function buildInitialMessage(launchContextPayload) {
 }
 
 function buildInitialQuickReplies(launchContextPayload) {
+  if (launchContextPayload?.entrypoint === 'generated_workout') {
+    return WORKOUT_ADJUSTMENT_QUICK_REPLIES;
+  }
   if (launchContextPayload?.entrypoint !== 'post_checkin') {
     return DEFAULT_QUICK_REPLIES;
   }

@@ -1,4 +1,5 @@
 import { fetchWithApiFallback } from '../../../services/apiRequest';
+import { buildApiNetworkError } from '../../../services/apiNetworkError';
 
 async function parseError(response) {
   try {
@@ -36,18 +37,10 @@ export async function sendChatMessage({ accessToken, conversationId, message, cl
       }),
     }));
   } catch (error) {
-    const rootError = error?.cause || error;
-    const errorMessage = typeof rootError?.message === 'string' ? rootError.message : 'Network request failed';
-    const isTimeout = /timed out/i.test(errorMessage);
-    const attemptedHosts = Array.isArray(error?.attemptedBaseUrls) && error.attemptedBaseUrls.length > 0
-      ? ` Tried: ${error.attemptedBaseUrls.join(', ')}.`
-      : '';
-
-    throw new Error(
-      isTimeout
-        ? `Request to ${baseUrl || 'the backend'}/api/v1/chat timed out.${attemptedHosts} If you are testing on a phone, make sure the backend is running on your computer and that EXPO_PUBLIC_API_BASE_URL points to your computer's LAN IP, for example http://192.168.6.137:8000.`
-        : `Unable to reach the backend at /api/v1/chat.${attemptedHosts} Check that the backend is running and that your app can reach your computer on the same network.`,
-    );
+    throw buildApiNetworkError(error, '/api/v1/chat', {
+      timeoutMessage: `Request to ${baseUrl || 'the backend'}/api/v1/chat timed out. If you are testing on a phone, make sure the backend is running on your computer and that EXPO_PUBLIC_API_BASE_URL points to your computer's LAN IP, for example http://192.168.6.137:8000.`,
+      unreachableMessage: 'Unable to reach the backend at /api/v1/chat. Check that the backend is running and that your app can reach your computer on the same network.',
+    });
   }
 
   if (!response.ok) {

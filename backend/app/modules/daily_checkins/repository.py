@@ -140,6 +140,70 @@ class DailyCheckinRepository:
             ),
         )
 
+    def insert_generated_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            response = (
+                self.supabase
+                .table("generated_checkin_plans")
+                .insert(payload)
+                .execute()
+            )
+        except Exception as exc:
+            raise DailyCheckinRepositoryError.from_exception("Failed to save generated check-in plan", exc) from exc
+
+        if response.data:
+            return response.data[0]
+
+        raise DailyCheckinRepositoryError(
+            "Generated plan save completed without a readable row",
+            details=(
+                "The insert returned no row for generated_checkin_plans. "
+                "This can happen when table policies reject visibility after insert."
+            ),
+        )
+
+    def get_latest_generated_plan_variant(
+        self,
+        client_id: str,
+        checkin_id: str,
+        plan_type: str,
+        request_fingerprint: str,
+    ) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("generated_checkin_plans")
+            .select("*")
+            .eq("client_id", client_id)
+            .eq("checkin_id", checkin_id)
+            .eq("plan_type", plan_type)
+            .eq("request_fingerprint", request_fingerprint)
+            .order("revision_number", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def get_latest_generated_plan_from_other_fingerprints(
+        self,
+        client_id: str,
+        checkin_id: str,
+        plan_type: str,
+        request_fingerprint: str,
+    ) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("generated_checkin_plans")
+            .select("*")
+            .eq("client_id", client_id)
+            .eq("checkin_id", checkin_id)
+            .eq("plan_type", plan_type)
+            .neq("request_fingerprint", request_fingerprint)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
     def get_generated_plan_by_id(self, generated_plan_id: str) -> dict[str, Any] | None:
         response = (
             self.supabase

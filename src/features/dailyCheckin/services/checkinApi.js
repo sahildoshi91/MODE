@@ -1,4 +1,5 @@
 import { fetchWithApiFallback } from '../../../services/apiRequest';
+import { buildApiNetworkError } from '../../../services/apiNetworkError';
 
 function buildRequestOptions(accessToken, method = 'GET', body) {
   return {
@@ -64,30 +65,13 @@ async function parseJsonResponse(response, path) {
 }
 
 function buildNetworkError(error, path) {
-  const rootError = error?.cause || error;
-  const errorMessage = typeof rootError?.message === 'string' ? rootError.message : 'Network request failed';
-  const isTimeout = /timed out|abort/i.test(errorMessage) || rootError?.name === 'AbortError';
-  const attemptedHosts = Array.isArray(error?.attemptedBaseUrls) && error.attemptedBaseUrls.length > 0
-    ? ` Tried: ${error.attemptedBaseUrls.join(', ')}.`
-    : '';
-
-  const networkError = new Error(
-    isTimeout
-      ? `Request to ${path} timed out.${attemptedHosts} If you are testing on a phone, make sure the backend is running on your computer and that EXPO_PUBLIC_API_BASE_URL points to your computer's LAN IP, for example http://192.168.6.137:8000.`
-      : `Unable to reach the backend for ${path}.${attemptedHosts} Check that the FastAPI server is running and reachable from your device.`,
-  );
-  networkError.stage = 'network';
-  networkError.path = path;
-  networkError.code = null;
-  networkError.hint = null;
-  networkError.request_id = null;
-  return networkError;
+  return buildApiNetworkError(error, path);
 }
 
-export async function getTodayCheckin({ accessToken }) {
+export async function getTodayCheckin({ accessToken, date }) {
   const today = new Date();
   const offset = today.getTimezoneOffset() * 60000;
-  const localDate = new Date(today.getTime() - offset).toISOString().slice(0, 10);
+  const localDate = date || new Date(today.getTime() - offset).toISOString().slice(0, 10);
   let response;
 
   try {
@@ -156,6 +140,7 @@ export async function generateCheckinPlan({
   timeAvailable,
   nutritionDayNote,
   includeYesterdayContext = false,
+  refreshRequested = false,
 }) {
   let response;
 
@@ -170,6 +155,7 @@ export async function generateCheckinPlan({
           time_available: timeAvailable,
           nutrition_day_note: nutritionDayNote,
           include_yesterday_context: includeYesterdayContext,
+          refresh_requested: refreshRequested,
         }),
         timeoutMs: 15000,
       },
@@ -210,4 +196,44 @@ export async function logGeneratedWorkout({
   }
 
   return parseJsonResponse(response, '/api/v1/checkin/log-workout');
+}
+
+export async function probeBackendHealthz() {
+  let response;
+  let baseUrl;
+
+  try {
+    ({ response, baseUrl } = await fetchWithApiFallback('/healthz', {
+      method: 'GET',
+      timeoutMs: 5000,
+    }));
+  } catch (error) {
+    throw buildNetworkError(error, '/healthz');
+  }
+
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const error = new Error(`Healthz probe failed with status ${response.status}`);
+    error.status = response.status;
+    error.base_url = baseUrl;
+    error.payload = payload;
+    throw error;
+  }
+
+  return {
+    ok: true,
+    status: response.status,
+    baseUrl,
+    payload,
+  };
+}
+
+export async function probeTodayCheckin({ accessToken, date }) {
+  const targetDate = date || new Date().toISOString().slice(0, 10);
+  const payload = await getTodayCheckin({ accessToken, date: targetDate });
+  return {
+    ok: true,
+    date: targetDate,
+    payload,
+  };
 }

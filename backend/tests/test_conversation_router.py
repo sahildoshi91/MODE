@@ -98,6 +98,18 @@ class ConversationRouterTests(unittest.TestCase):
 
         self.assertEqual(decision.task_type, "nutrition_guidance")
 
+    def test_generated_workout_context_routes_generic_adjustment_to_workout_adjustment(self):
+        decision = self.router.route(
+            RoutingContext(
+                message_text="Make this easier",
+                client_context={"entrypoint": "generated_workout"},
+                user_profile=self.profile,
+            )
+        )
+
+        self.assertEqual(decision.task_type, "workout_adjustment")
+        self.assertTrue(decision.retrieval_required)
+
 
 if __name__ == "__main__":
     unittest.main()

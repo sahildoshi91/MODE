@@ -357,6 +357,35 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertEqual(response.conversation_usage.total_tokens, 105)
         self.assertEqual(service.openai_client.calls[0]["model"], "gpt-5.4-mini")
 
+    def test_generated_workout_context_is_included_in_prompt_for_adjustments(self):
+        service = self._build_service()
+        request = ChatRequest(
+            message="Make this easier",
+            client_context={
+                "entrypoint": "generated_workout",
+                "workout_context": {
+                    "generated_plan_id": "generated-plan-1",
+                    "environment": "home_gym",
+                    "time_available": 30,
+                    "plan_title": "BUILD Mode Alex Home Gym Session",
+                    "plan_summary": {
+                        "warmup": [{"name": "Dynamic reset"}],
+                        "exercises": [{"name": "Goblet squat"}],
+                    },
+                },
+            },
+        )
+
+        response = service.handle_chat("user-123", self.trainer_context, request)
+
+        self.assertEqual(response.assistant_message, "GPT says hello")
+        self.assertEqual(response.route_debug.task_type, "workout_adjustment")
+        self.assertEqual(response.route_debug.execution_provider, "openai")
+        prompt = service.openai_client.calls[0]
+        self.assertIn("treat it as the active workout to edit", prompt["messages"][0]["content"])
+        self.assertIn("generated-plan-1", prompt["messages"][1]["content"])
+        self.assertIn("Goblet squat", prompt["messages"][1]["content"])
+
     def test_persona_route_falls_back_when_claude_not_configured(self):
         service = self._build_service()
         request = ChatRequest(

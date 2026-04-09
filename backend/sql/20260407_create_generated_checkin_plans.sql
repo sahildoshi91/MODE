@@ -10,11 +10,13 @@ CREATE TABLE IF NOT EXISTS public.generated_checkin_plans (
   time_available INTEGER,
   nutrition_day_note TEXT,
   used_yesterday_context BOOLEAN NOT NULL DEFAULT FALSE,
+  request_fingerprint TEXT NOT NULL,
+  revision_number INTEGER NOT NULL DEFAULT 1,
   raw_content JSONB NOT NULL,
   structured_content JSONB NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (client_id, checkin_id, plan_type)
+  UNIQUE (client_id, checkin_id, plan_type, request_fingerprint, revision_number)
 );
 
 ALTER TABLE public.generated_checkin_plans ENABLE ROW LEVEL SECURITY;

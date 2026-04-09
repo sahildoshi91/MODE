@@ -1,7 +1,8 @@
 import logging
 import os
+import time
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Any, Iterator
 
 try:
     from google import genai
@@ -15,7 +16,7 @@ try:
 except ImportError:  # pragma: no cover - exercised in runtime environments missing the SDK.
     anthropic = None
 
-import openai
+from openai import OpenAI
 
 from app.core.config import settings
 
@@ -46,18 +47,55 @@ class TextCompletion:
     token_usage: TokenUsage
 
 
+def _run_with_retries(provider: str, model: str, fn):
+    attempts = max(int(settings.ai_max_retries or 1), 1)
+    for attempt in range(1, attempts + 1):
+        started_at = time.perf_counter()
+        try:
+            result = fn()
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            logger.info(
+                "provider.complete provider=%s model=%s attempt=%s duration_ms=%s",
+                provider,
+                model,
+                attempt,
+                duration_ms,
+            )
+            return result
+        except Exception:
+            duration_ms = round((time.perf_counter() - started_at) * 1000, 2)
+            logger.exception(
+                "provider.error provider=%s model=%s attempt=%s duration_ms=%s",
+                provider,
+                model,
+                attempt,
+                duration_ms,
+            )
+            if attempt >= attempts:
+                raise
+
+
 class OpenAIClient:
+    def __init__(self) -> None:
+        self.client = OpenAI(
+            api_key=settings.openai_api_key,
+            timeout=settings.ai_request_timeout_seconds,
+        )
+
     def create_chat_completion(self, model: str, messages: list[dict[str, str]]) -> str:
         return self.create_chat_completion_with_usage(model=model, messages=messages).text
 
     def create_chat_completion_with_usage(self, model: str, messages: list[dict[str, str]]) -> TextCompletion:
-        response = openai.ChatCompletion.create(
-            model=model,
-            messages=messages,
-            api_key=settings.openai_api_key,
+        response = _run_with_retries(
+            "openai",
+            model,
+            lambda: self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                response_format={"type": "json_object"},
+            ),
         )
-        content = response.choices[0].message.content
-        logger.info("OpenAI response received for model=%s", model)
+        content = self._normalize_message_content(response.choices[0].message.content)
         usage = getattr(response, "usage", None)
         return TextCompletion(
             text=content,
@@ -68,6 +106,27 @@ class OpenAIClient:
                 thoughts_tokens=0,
             ),
         )
+
+    def _normalize_message_content(self, content: Any) -> str:
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            text_parts: list[str] = []
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "text" and block.get("text"):
+                        text_parts.append(str(block["text"]))
+                    continue
+                if getattr(block, "type", None) == "text":
+                    text_value = getattr(block, "text", None)
+                    if isinstance(text_value, str):
+                        text_parts.append(text_value)
+                    elif text_value is not None and getattr(text_value, "value", None):
+                        text_parts.append(str(text_value.value))
+            return "".join(text_parts).strip()
+        if content is None:
+            return ""
+        return str(content).strip()
 
 
 class AnthropicClient:

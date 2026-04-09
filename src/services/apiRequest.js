@@ -1,6 +1,13 @@
 import { getApiBaseUrls, rememberApiBaseUrl, resolveApiBaseUrl } from './apiBaseUrl';
 
 const DEFAULT_API_TIMEOUT_MS = 8000;
+const apiRequestDebugState = {
+  lastPath: null,
+  lastResolvedApiBaseUrl: resolveApiBaseUrl(),
+  lastAttemptedBaseUrls: [],
+  lastSuccessfulBaseUrl: null,
+  lastErrorMessage: null,
+};
 
 function createTimeoutController(timeoutMs) {
   if (typeof AbortController === 'undefined') {
@@ -22,6 +29,8 @@ export async function fetchWithApiFallback(path, options) {
   const attemptedBaseUrls = [];
   let lastError = null;
   const timeoutMs = options?.timeoutMs ?? DEFAULT_API_TIMEOUT_MS;
+  apiRequestDebugState.lastPath = path;
+  apiRequestDebugState.lastResolvedApiBaseUrl = resolveApiBaseUrl();
 
   for (const baseUrl of getApiBaseUrls()) {
     attemptedBaseUrls.push(baseUrl);
@@ -34,6 +43,10 @@ export async function fetchWithApiFallback(path, options) {
         ...(controller ? { signal: controller.signal } : {}),
       });
       rememberApiBaseUrl(baseUrl);
+      apiRequestDebugState.lastSuccessfulBaseUrl = baseUrl;
+      apiRequestDebugState.lastAttemptedBaseUrls = attemptedBaseUrls.slice();
+      apiRequestDebugState.lastResolvedApiBaseUrl = resolveApiBaseUrl();
+      apiRequestDebugState.lastErrorMessage = null;
       return { response, baseUrl };
     } catch (error) {
       lastError = error;
@@ -47,5 +60,15 @@ export async function fetchWithApiFallback(path, options) {
   const error = new Error(`Unable to reach ${resolveApiBaseUrl()}${path}`);
   error.cause = lastError;
   error.attemptedBaseUrls = attemptedBaseUrls;
+  apiRequestDebugState.lastAttemptedBaseUrls = attemptedBaseUrls.slice();
+  apiRequestDebugState.lastResolvedApiBaseUrl = resolveApiBaseUrl();
+  apiRequestDebugState.lastErrorMessage = typeof (lastError?.message) === 'string' ? lastError.message : String(lastError || '');
   throw error;
+}
+
+export function getApiRequestDebugState() {
+  return {
+    ...apiRequestDebugState,
+    lastAttemptedBaseUrls: [...apiRequestDebugState.lastAttemptedBaseUrls],
+  };
 }

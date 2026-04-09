@@ -187,17 +187,30 @@ class StubTable:
         self.execute_error = execute_error
         self.lookup_data = lookup_data or []
         self.last_upsert_payload = None
+        self.last_insert_payload = None
         self._pending_upsert = False
+        self._pending_insert = False
 
     def upsert(self, payload, on_conflict=None):
         self.last_upsert_payload = payload
         self._pending_upsert = True
         return self
 
+    def insert(self, payload):
+        self.last_insert_payload = payload
+        self._pending_insert = True
+        return self
+
     def select(self, *_args, **_kwargs):
         return self
 
     def eq(self, *_args, **_kwargs):
+        return self
+
+    def neq(self, *_args, **_kwargs):
+        return self
+
+    def order(self, *_args, **_kwargs):
         return self
 
     def limit(self, *_args, **_kwargs):
@@ -208,6 +221,10 @@ class StubTable:
             raise self.execute_error
         if self._pending_upsert:
             self._pending_upsert = False
+            if self.execute_result is not None:
+                return self.execute_result
+        if self._pending_insert:
+            self._pending_insert = False
             if self.execute_result is not None:
                 return self.execute_result
         if self.lookup_data is not None:
@@ -452,6 +469,491 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertEqual(result.plan_type, PlanType.TRAINING)
         self.assertEqual(repository.saved_payload["plan_type"], "training")
         self.assertFalse(repository.saved_payload["used_yesterday_context"])
+
+    def test_generate_plan_uses_ai_structured_response_when_json_valid(self):
+        class GeneratePlanRepository:
+            def __init__(self):
+                self.saved_payload = None
+
+            def get_by_client_and_id(self, _client_id, checkin_id):
+                return {
+                    "id": checkin_id,
+                    "client_id": "client-1",
+                    "date": "2026-04-08",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 3,
+                        "nutrition": 4,
+                        "motivation": 3,
+                    },
+                    "total_score": 18,
+                    "assigned_mode": "BUILD",
+                }
+
+            def get_previous_checkin(self, _client_id, _before_date):
+                return None
+
+            def get_latest_workout_session(self, _user_id):
+                return {"title": "Tempo Builder", "feel_rating": 4}
+
+            def upsert_generated_plan(self, payload):
+                self.saved_payload = payload
+                return {"id": "generated-plan-ai"}
+
+        class SuccessfulLlm:
+            def create_chat_completion(self, **_kwargs):
+                return (
+                    '{"title":"Fresh Builder","type":"strength","difficulty":"intermediate","durationMinutes":30,'
+                    '"description":"A varied home gym strength session.","warmup":[{"name":"Prep","duration":"4 min",'
+                    '"description":"Prime shoulders and hips."}],"exercises":[{"name":"Split squat","sets":3,'
+                    '"reps":"8 / side","rest":"45 sec","muscleGroup":"legs","description":"Controlled unilateral work.",'
+                    '"coachTip":"Stay tall and smooth."}],"cooldown":[{"name":"Reset","duration":"2 min",'
+                    '"description":"Bring breathing down."}],"coachNote":"Today builds on your last manageable effort."}'
+                )
+
+        repository = GeneratePlanRepository()
+        service = DailyCheckinService(repository=repository, llm_client=SuccessfulLlm())
+
+        result = service.generate_plan(
+            client_id="client-1",
+            user_id="user-1",
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.TRAINING,
+                environment=Environment.HOME_GYM,
+                time_available=30,
+            ),
+        )
+
+        self.assertEqual(result.plan_id, "generated-plan-ai")
+        self.assertEqual(result.structured["title"], "Fresh Builder")
+        self.assertEqual(result.structured["exercises"][0]["name"], "Split squat")
+        self.assertEqual(repository.saved_payload["structured_content"]["title"], "Fresh Builder")
+
+    def test_generate_plan_logs_provider_failure_before_falling_back(self):
+        class GeneratePlanRepository:
+            def __init__(self):
+                self.saved_payload = None
+
+            def get_by_client_and_id(self, _client_id, checkin_id):
+                return {
+                    "id": checkin_id,
+                    "client_id": "client-1",
+                    "date": "2026-04-08",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 4,
+                        "nutrition": 4,
+                        "motivation": 4,
+                    },
+                    "total_score": 20,
+                    "assigned_mode": "BUILD",
+                }
+
+            def get_previous_checkin(self, _client_id, _before_date):
+                return None
+
+            def get_latest_workout_session(self, _user_id):
+                return None
+
+            def upsert_generated_plan(self, payload):
+                self.saved_payload = payload
+                return {"id": "generated-plan-fallback"}
+
+        class FailingLlm:
+            def create_chat_completion(self, **_kwargs):
+                raise RuntimeError("llm unavailable")
+
+        repository = GeneratePlanRepository()
+        service = DailyCheckinService(repository=repository, llm_client=FailingLlm())
+
+        with self.assertLogs("app.modules.daily_checkins.service", level="WARNING") as captured:
+            result = service.generate_plan(
+                client_id="client-1",
+                user_id="user-1",
+                request=GenerateCheckinPlanRequest(
+                    checkin_id="checkin-1",
+                    plan_type=PlanType.TRAINING,
+                    environment=Environment.HOME_GYM,
+                    time_available=30,
+                ),
+            )
+
+        self.assertEqual(result.plan_id, "generated-plan-fallback")
+        self.assertEqual(result.structured["exercises"][0]["name"], "Goblet squat")
+        self.assertTrue(any("fell back to local template" in message for message in captured.output))
+
+    def test_generate_plan_logs_parse_failure_before_falling_back(self):
+        class GeneratePlanRepository:
+            def __init__(self):
+                self.saved_payload = None
+
+            def get_by_client_and_id(self, _client_id, checkin_id):
+                return {
+                    "id": checkin_id,
+                    "client_id": "client-1",
+                    "date": "2026-04-08",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 4,
+                        "nutrition": 4,
+                        "motivation": 4,
+                    },
+                    "total_score": 20,
+                    "assigned_mode": "BUILD",
+                }
+
+            def get_previous_checkin(self, _client_id, _before_date):
+                return None
+
+            def get_latest_workout_session(self, _user_id):
+                return None
+
+            def upsert_generated_plan(self, payload):
+                self.saved_payload = payload
+                return {"id": "generated-plan-parse-fallback"}
+
+        class InvalidJsonLlm:
+            def create_chat_completion(self, **_kwargs):
+                return '{"title":"Almost there","type":"strength"}'
+
+        repository = GeneratePlanRepository()
+        service = DailyCheckinService(repository=repository, llm_client=InvalidJsonLlm())
+
+        with self.assertLogs("app.modules.daily_checkins.service", level="WARNING") as captured:
+            result = service.generate_plan(
+                client_id="client-1",
+                user_id="user-1",
+                request=GenerateCheckinPlanRequest(
+                    checkin_id="checkin-1",
+                    plan_type=PlanType.TRAINING,
+                    environment=Environment.HOME_GYM,
+                    time_available=30,
+                ),
+            )
+
+        self.assertEqual(result.plan_id, "generated-plan-parse-fallback")
+        self.assertEqual(result.structured["exercises"][0]["name"], "Goblet squat")
+        self.assertTrue(any("invalid structured JSON" in message for message in captured.output))
+
+    def test_fallback_training_plan_changes_with_environment_and_duration(self):
+        service = DailyCheckinService(repository=None)
+        inputs = DailyCheckinInputs(sleep=4, stress=3, soreness=3, nutrition=4, motivation=4)
+
+        home_plan = service._build_fallback_plan(
+            plan_type=PlanType.TRAINING,
+            mode="BUILD",
+            inputs=inputs,
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.TRAINING,
+                environment=Environment.HOME_GYM,
+                time_available=30,
+            ),
+            profile={},
+            last_workout=None,
+        )
+        outdoor_plan = service._build_fallback_plan(
+            plan_type=PlanType.TRAINING,
+            mode="BUILD",
+            inputs=inputs,
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.TRAINING,
+                environment=Environment.OUTDOORS,
+                time_available=10,
+            ),
+            profile={},
+            last_workout=None,
+        )
+
+        self.assertNotEqual(home_plan.title, outdoor_plan.title)
+        self.assertNotEqual(home_plan.type, outdoor_plan.type)
+        self.assertNotEqual(home_plan.exercises[0].name, outdoor_plan.exercises[0].name)
+        self.assertIn("key positions", home_plan.warmup[1].description.lower())
+        self.assertIn("stride", outdoor_plan.warmup[1].description.lower())
+
+    def test_training_generation_prompt_demands_specific_warmup_descriptions(self):
+        service = DailyCheckinService(repository=None)
+        prompt = service._build_generation_prompt(
+            checkin={
+                "date": "2026-04-08",
+                "assigned_mode": "BUILD",
+                "total_score": 18,
+            },
+            profile={"primary_goal": "strength", "experience_level": "intermediate", "equipment_access": "gym"},
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.TRAINING,
+                environment=Environment.HOME_GYM,
+                time_available=30,
+            ),
+            yesterday=None,
+            last_workout=None,
+            inputs=DailyCheckinInputs(sleep=4, stress=4, soreness=3, nutrition=4, motivation=3),
+        )
+
+        self.assertIn("warmup descriptions", prompt[0]["content"].lower())
+        self.assertIn("selected environment and exact time available", prompt[0]["content"].lower())
+        self.assertIn("make the warmup specific and descriptive", prompt[1]["content"].lower())
+
+    def test_generate_plan_requires_time_available_for_training(self):
+        class GeneratePlanRepository:
+            def get_by_client_and_id(self, _client_id, checkin_id):
+                return {
+                    "id": checkin_id,
+                    "client_id": "client-1",
+                    "date": "2026-04-08",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 4,
+                        "nutrition": 4,
+                        "motivation": 4,
+                    },
+                    "total_score": 20,
+                    "assigned_mode": "BUILD",
+                }
+
+            def get_previous_checkin(self, _client_id, _before_date):
+                return None
+
+            def get_latest_workout_session(self, _user_id):
+                return None
+
+        service = DailyCheckinService(repository=GeneratePlanRepository())
+
+        with self.assertRaises(ValueError) as captured:
+            service.generate_plan(
+                client_id="client-1",
+                user_id="user-1",
+                request=GenerateCheckinPlanRequest(
+                    checkin_id="checkin-1",
+                    plan_type=PlanType.TRAINING,
+                    environment=Environment.HOME_GYM,
+                ),
+            )
+
+        self.assertIn("time available", str(captured.exception))
+
+    def test_generate_plan_reuses_latest_variant_when_request_fingerprint_matches(self):
+        request = GenerateCheckinPlanRequest(
+            checkin_id="checkin-1",
+            plan_type=PlanType.TRAINING,
+            environment=Environment.HOME_GYM,
+            time_available=30,
+        )
+        fingerprint = DailyCheckinService(repository=None)._build_request_fingerprint(request)
+
+        class GeneratePlanRepository:
+            def get_by_client_and_id(self, _client_id, checkin_id):
+                return {
+                    "id": checkin_id,
+                    "client_id": "client-1",
+                    "date": "2026-04-08",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 4,
+                        "nutrition": 4,
+                        "motivation": 4,
+                    },
+                    "total_score": 20,
+                    "assigned_mode": "BUILD",
+                }
+
+            def get_previous_checkin(self, _client_id, _before_date):
+                return None
+
+            def get_latest_workout_session(self, _user_id):
+                return None
+
+            def get_latest_generated_plan_variant(self, **_kwargs):
+                return {
+                    "id": "generated-plan-existing",
+                    "request_fingerprint": fingerprint,
+                    "revision_number": 2,
+                    "raw_content": '{"title":"Existing Builder"}',
+                    "structured_content": {
+                        "title": "Existing Builder",
+                        "type": "strength",
+                        "difficulty": "intermediate",
+                        "durationMinutes": 30,
+                        "description": "Cached plan",
+                        "warmup": [],
+                        "exercises": [],
+                        "cooldown": [],
+                        "coachNote": "Cached note",
+                    },
+                }
+
+            def get_latest_generated_plan_from_other_fingerprints(self, **_kwargs):
+                return None
+
+        class ExplodingLlm:
+            def create_chat_completion(self, **_kwargs):
+                raise AssertionError("LLM should not be called when matching fingerprint already exists")
+
+        service = DailyCheckinService(repository=GeneratePlanRepository(), llm_client=ExplodingLlm())
+        result = service.generate_plan(client_id="client-1", user_id="user-1", request=request)
+
+        self.assertEqual(result.plan_id, "generated-plan-existing")
+        self.assertEqual(result.revision_number, 2)
+        self.assertEqual(result.request_fingerprint, fingerprint)
+        self.assertEqual(result.workout_context["generated_plan_id"], "generated-plan-existing")
+
+    def test_generate_plan_refresh_requested_creates_new_revision(self):
+        class GeneratePlanRepository:
+            def __init__(self):
+                self.insert_payload = None
+
+            def get_by_client_and_id(self, _client_id, checkin_id):
+                return {
+                    "id": checkin_id,
+                    "client_id": "client-1",
+                    "date": "2026-04-08",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 4,
+                        "nutrition": 4,
+                        "motivation": 4,
+                    },
+                    "total_score": 20,
+                    "assigned_mode": "BUILD",
+                }
+
+            def get_previous_checkin(self, _client_id, _before_date):
+                return None
+
+            def get_latest_workout_session(self, _user_id):
+                return None
+
+            def get_latest_generated_plan_variant(self, **_kwargs):
+                return {
+                    "id": "generated-plan-existing",
+                    "request_fingerprint": "abc123",
+                    "revision_number": 2,
+                    "structured_content": {"title": "Older"},
+                }
+
+            def get_latest_generated_plan_from_other_fingerprints(self, **_kwargs):
+                return None
+
+            def insert_generated_plan(self, payload):
+                self.insert_payload = payload
+                return {"id": "generated-plan-new", **payload}
+
+        class SuccessfulLlm:
+            def create_chat_completion(self, **_kwargs):
+                return (
+                    '{"title":"Fresh Builder","type":"strength","difficulty":"intermediate","durationMinutes":30,'
+                    '"description":"A varied home gym strength session.","warmup":[{"name":"Prep","duration":"4 min",'
+                    '"description":"Prime shoulders and hips."}],"exercises":[{"name":"Split squat","sets":3,'
+                    '"reps":"8 / side","rest":"45 sec","muscleGroup":"legs","description":"Controlled unilateral work.",'
+                    '"coachTip":"Stay tall and smooth."}],"cooldown":[{"name":"Reset","duration":"2 min",'
+                    '"description":"Bring breathing down."}],"coachNote":"Today builds on your last manageable effort."}'
+                )
+
+        repository = GeneratePlanRepository()
+        service = DailyCheckinService(repository=repository, llm_client=SuccessfulLlm())
+        result = service.generate_plan(
+            client_id="client-1",
+            user_id="user-1",
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.TRAINING,
+                environment=Environment.HOME_GYM,
+                time_available=30,
+                refresh_requested=True,
+            ),
+        )
+
+        self.assertEqual(result.plan_id, "generated-plan-new")
+        self.assertEqual(result.revision_number, 3)
+        self.assertEqual(repository.insert_payload["revision_number"], 3)
+
+    def test_generate_plan_forces_divergence_when_prior_variant_is_identical(self):
+        class GeneratePlanRepository:
+            def __init__(self):
+                self.insert_payload = None
+
+            def get_by_client_and_id(self, _client_id, checkin_id):
+                return {
+                    "id": checkin_id,
+                    "client_id": "client-1",
+                    "date": "2026-04-08",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 4,
+                        "nutrition": 4,
+                        "motivation": 4,
+                    },
+                    "total_score": 20,
+                    "assigned_mode": "BUILD",
+                }
+
+            def get_previous_checkin(self, _client_id, _before_date):
+                return None
+
+            def get_latest_workout_session(self, _user_id):
+                return None
+
+            def get_latest_generated_plan_variant(self, **_kwargs):
+                return None
+
+            def get_latest_generated_plan_from_other_fingerprints(self, **_kwargs):
+                return {
+                    "id": "generated-plan-prior",
+                    "request_fingerprint": "prior",
+                    "environment": "outdoors",
+                    "time_available": 30,
+                    "structured_content": {
+                        "title": "Outside Builder",
+                        "type": "strength",
+                        "difficulty": "intermediate",
+                        "durationMinutes": 30,
+                        "description": "Same plan",
+                        "warmup": [{"name": "Prep", "duration": "4 min", "description": "Prime shoulders and hips."}],
+                        "exercises": [{"name": "Split squat", "sets": 3, "reps": "8 / side", "rest": "45 sec", "muscleGroup": "legs", "description": "Controlled unilateral work.", "coachTip": "Stay tall and smooth."}],
+                        "cooldown": [{"name": "Reset", "duration": "2 min", "description": "Bring breathing down."}],
+                        "coachNote": "Same note",
+                    },
+                }
+
+            def insert_generated_plan(self, payload):
+                self.insert_payload = payload
+                return {"id": "generated-plan-diverged", **payload}
+
+        class StubbornLlm:
+            def create_chat_completion(self, **_kwargs):
+                return (
+                    '{"title":"Outside Builder","type":"strength","difficulty":"intermediate","durationMinutes":30,'
+                    '"description":"Same plan","warmup":[{"name":"Prep","duration":"4 min","description":"Prime shoulders and hips."}],'
+                    '"exercises":[{"name":"Split squat","sets":3,"reps":"8 / side","rest":"45 sec","muscleGroup":"legs","description":"Controlled unilateral work.","coachTip":"Stay tall and smooth."}],'
+                    '"cooldown":[{"name":"Reset","duration":"2 min","description":"Bring breathing down."}],"coachNote":"Same note"}'
+                )
+
+        repository = GeneratePlanRepository()
+        service = DailyCheckinService(repository=repository, llm_client=StubbornLlm())
+        result = service.generate_plan(
+            client_id="client-1",
+            user_id="user-1",
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.TRAINING,
+                environment=Environment.HOME_GYM,
+                time_available=30,
+            ),
+        )
+
+        self.assertEqual(result.plan_id, "generated-plan-diverged")
+        self.assertNotEqual(result.structured["exercises"][0]["name"], "Split squat")
+        self.assertEqual(repository.insert_payload["environment"], "home_gym")
 
 
 class DailyCheckinRepositoryTests(unittest.TestCase):
@@ -764,6 +1266,32 @@ class DailyCheckinApiTests(unittest.TestCase):
         self.assertEqual(response.json()["structured"]["title"], "Builder")
         self.assertEqual(self.fake_service.last_generate["client_id"], "client-generate")
         self.assertEqual(self.fake_service.last_generate["user_id"], "user-123")
+        self.assertFalse(self.fake_service.last_generate["request"]["refresh_requested"])
+
+    def test_generate_plan_passes_refresh_requested_flag(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id="client-generate",
+            client_user_id="user-123",
+        )
+
+        response = self.client.post(
+            "/api/v1/checkin/generate-plan",
+            json={
+                "checkin_id": "checkin-1",
+                "plan_type": "training",
+                "environment": "home_gym",
+                "time_available": 30,
+                "refresh_requested": True,
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(self.fake_service.last_generate["request"]["refresh_requested"])
 
     def test_generate_plan_returns_structured_diagnostics_on_repository_failure(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(

@@ -1,6 +1,8 @@
 import json
+import hashlib
 import logging
 from datetime import date, datetime, timezone
+from typing import Any
 
 from app.modules.daily_checkins.repository import DailyCheckinRepository, DailyCheckinRepositoryError
 from app.modules.daily_checkins.schemas import (
@@ -186,8 +188,34 @@ class DailyCheckinService:
 
         if request.plan_type == PlanType.TRAINING and request.environment is None:
             raise ValueError("Training plan generation requires an environment")
+        if request.plan_type == PlanType.TRAINING and request.time_available is None:
+            raise ValueError("Training plan generation requires time available")
         if request.plan_type == PlanType.NUTRITION and request.nutrition_day_note is not None and not request.nutrition_day_note.strip():
             raise ValueError("Nutrition day note must not be empty")
+
+        request_fingerprint = self._build_request_fingerprint(request)
+        latest_variant = None
+        if hasattr(self.repository, "get_latest_generated_plan_variant"):
+            latest_variant = self.repository.get_latest_generated_plan_variant(
+                client_id=client_id,
+                checkin_id=request.checkin_id,
+                plan_type=request.plan_type.value,
+                request_fingerprint=request_fingerprint,
+            )
+        if latest_variant and not request.refresh_requested:
+            return self._build_generate_plan_response(
+                request=request,
+                saved_record=latest_variant,
+            )
+
+        prior_variant = None
+        if hasattr(self.repository, "get_latest_generated_plan_from_other_fingerprints"):
+            prior_variant = self.repository.get_latest_generated_plan_from_other_fingerprints(
+                client_id=client_id,
+                checkin_id=request.checkin_id,
+                plan_type=request.plan_type.value,
+                request_fingerprint=request_fingerprint,
+            )
 
         generated = self._generate_structured_plan(
             checkin=checkin,
@@ -195,30 +223,54 @@ class DailyCheckinService:
             request=request,
             yesterday=yesterday,
             last_workout=last_workout,
+            prior_variant=prior_variant,
         )
         structured_model = generated["structured_model"]
+        if (
+            request.plan_type == PlanType.TRAINING
+            and prior_variant
+            and self._plans_effectively_identical(structured_model.model_dump(), prior_variant.get("structured_content"))
+        ):
+            logger.warning(
+                "Generated workout matched prior variant for client_id=%s checkin_id=%s; forcing fallback divergence",
+                client_id,
+                request.checkin_id,
+            )
+            structured_model = self._build_fallback_plan(
+                plan_type=request.plan_type,
+                mode=normalized_mode,
+                inputs=DailyCheckinInputs(**checkin["inputs"]),
+                request=request,
+                profile=profile or {},
+                last_workout=last_workout,
+            )
         structured_payload = structured_model.model_dump()
         raw_content = json.dumps(structured_payload)
-        saved = self.repository.upsert_generated_plan(
-            {
-                "client_id": client_id,
-                "checkin_id": request.checkin_id,
-                "plan_type": request.plan_type.value,
-                "assigned_mode": normalized_mode,
-                "environment": request.environment.value if request.environment else None,
-                "time_available": request.time_available,
-                "nutrition_day_note": request.nutrition_day_note.strip() if request.nutrition_day_note else None,
-                "used_yesterday_context": bool(request.include_yesterday_context and yesterday),
-                "raw_content": raw_content,
-                "structured_content": structured_payload,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
-        return GenerateCheckinPlanResponse(
-            plan_id=saved["id"],
-            plan_type=request.plan_type,
-            content=raw_content,
-            structured=structured_payload,
+        revision_number = 1
+        if latest_variant:
+            revision_number = int(latest_variant.get("revision_number") or 0) + 1
+        payload = {
+            "client_id": client_id,
+            "checkin_id": request.checkin_id,
+            "plan_type": request.plan_type.value,
+            "assigned_mode": normalized_mode,
+            "environment": request.environment.value if request.environment else None,
+            "time_available": request.time_available,
+            "nutrition_day_note": request.nutrition_day_note.strip() if request.nutrition_day_note else None,
+            "used_yesterday_context": bool(request.include_yesterday_context and yesterday),
+            "request_fingerprint": request_fingerprint,
+            "revision_number": revision_number,
+            "raw_content": raw_content,
+            "structured_content": structured_payload,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if hasattr(self.repository, "insert_generated_plan"):
+            saved = self.repository.insert_generated_plan(payload)
+        else:
+            saved = self.repository.upsert_generated_plan(payload)
+        return self._build_generate_plan_response(
+            request=request,
+            saved_record={**saved, "structured_content": structured_payload, "raw_content": raw_content},
         )
 
     def log_generated_workout(
@@ -371,7 +423,15 @@ class DailyCheckinService:
             return f"{quote} Every smart choice still moves {goal_text} forward."
         return quote
 
-    def _generate_structured_plan(self, checkin: dict, profile: dict, request: GenerateCheckinPlanRequest, yesterday: dict | None, last_workout: dict | None):
+    def _generate_structured_plan(
+        self,
+        checkin: dict,
+        profile: dict,
+        request: GenerateCheckinPlanRequest,
+        yesterday: dict | None,
+        last_workout: dict | None,
+        prior_variant: dict | None = None,
+    ):
         mode = self._normalize_mode(checkin["assigned_mode"])
         inputs = DailyCheckinInputs(**checkin["inputs"])
         prompt = self._build_generation_prompt(
@@ -381,6 +441,7 @@ class DailyCheckinService:
             yesterday=yesterday,
             last_workout=last_workout,
             inputs=inputs,
+            prior_variant=prior_variant,
         )
         raw_text = ""
         try:
@@ -393,6 +454,32 @@ class DailyCheckinService:
 
         parser = StructuredTrainingPlan if request.plan_type == PlanType.TRAINING else StructuredNutritionPlan
         parsed = self._parse_structured_json(raw_text, parser)
+        if (
+            parsed is not None
+            and request.plan_type == PlanType.TRAINING
+            and prior_variant
+            and self._plans_effectively_identical(parsed.model_dump(), prior_variant.get("structured_content"))
+        ):
+            retry_prompt = self._build_generation_prompt(
+                checkin=checkin,
+                profile=profile,
+                request=request,
+                yesterday=yesterday,
+                last_workout=last_workout,
+                inputs=inputs,
+                prior_variant=prior_variant,
+                require_delta=True,
+            )
+            try:
+                retry_raw_text = self.llm_client.create_chat_completion(
+                    model=GPT_5_4_MINI_MODEL,
+                    messages=retry_prompt,
+                )
+                retried = self._parse_structured_json(retry_raw_text, parser)
+                if retried is not None:
+                    parsed = retried
+            except Exception as exc:
+                logger.warning("Post-check-in regeneration retry fell back to local template: %s", exc)
         if parsed is None:
             parsed = self._build_fallback_plan(
                 plan_type=request.plan_type,
@@ -408,11 +495,34 @@ class DailyCheckinService:
 
         return {"structured_model": parsed}
 
-    def _build_generation_prompt(self, checkin: dict, profile: dict, request: GenerateCheckinPlanRequest, yesterday: dict | None, last_workout: dict | None, inputs: DailyCheckinInputs):
+    def _build_generation_prompt(
+        self,
+        checkin: dict,
+        profile: dict,
+        request: GenerateCheckinPlanRequest,
+        yesterday: dict | None,
+        last_workout: dict | None,
+        inputs: DailyCheckinInputs,
+        prior_variant: dict | None = None,
+        require_delta: bool = False,
+    ):
         mode = self._normalize_mode(checkin["assigned_mode"])
         why = profile.get("primary_goal") or "general fitness"
         adaptive_note = self._build_adaptive_note(mode, last_workout)
         schema_text = TRAINING_SCHEMA_TEXT if request.plan_type == PlanType.TRAINING else NUTRITION_SCHEMA_TEXT
+        training_prompt_rules = ""
+        if request.plan_type == PlanType.TRAINING:
+            training_prompt_rules = (
+                " Build a workout that treats the selected environment and exact time available as hard constraints. "
+                "Use warmup descriptions that explain the movement focus and why that block prepares the athlete for the main work. "
+                "Make the exercise selection feel specific to the day's readiness, not like a generic template. "
+                "Change block structure, exercise selection, and pacing when environment or time changes."
+            )
+        workout_context = self._build_workout_context(
+            generated_plan_id=None,
+            request=request,
+            structured_plan=None,
+        ) if request.plan_type == PlanType.TRAINING else None
         request_details = {
             "checkin_date": str(checkin["date"]),
             "mode": mode,
@@ -433,13 +543,28 @@ class DailyCheckinService:
             "last_workout": last_workout or None,
             "adaptive_note": adaptive_note,
             "coach_name": MODE_BUNDLES[mode]["coach"],
+            "workout_context": workout_context,
         }
+        if prior_variant:
+            request_details["prior_variant"] = {
+                "request_fingerprint": prior_variant.get("request_fingerprint"),
+                "environment": prior_variant.get("environment"),
+                "time_available": prior_variant.get("time_available"),
+                "structured_content": prior_variant.get("structured_content"),
+            }
+        delta_instruction = ""
+        if require_delta and prior_variant and request.plan_type == PlanType.TRAINING:
+            delta_instruction = (
+                " The prior variant is too similar. You must produce a meaningfully different workout for this environment/time pair. "
+                "Change at least the warmup focus, the first exercise, and the overall duration structure."
+            )
         return [
             {
                 "role": "system",
                 "content": (
                     f"You are Coach {MODE_BUNDLES[mode]['coach']} writing a {request.plan_type.value} plan for MODE. "
                     "Respond with strict JSON only, no markdown fences, and ensure coachNote is personalized."
+                    f"{training_prompt_rules}{delta_instruction}"
                 ),
             },
             {
@@ -447,6 +572,7 @@ class DailyCheckinService:
                 "content": (
                     f"Build a {request.plan_type.value} plan using this context:\n"
                     f"{json.dumps(request_details)}\n"
+                    "If this is a training plan, make the warmup specific and descriptive, and make the main work match the selected environment and time cap.\n"
                     f"Return JSON matching exactly this schema:\n{schema_text}"
                 ),
             },
@@ -463,57 +589,145 @@ class DailyCheckinService:
         try:
             payload = json.loads(cleaned.strip())
             return parser(**payload)
-        except Exception:
+        except Exception as exc:
+            preview = cleaned.strip().replace("\n", " ")[:240]
+            logger.warning(
+                "Post-check-in generation returned invalid structured JSON parser=%s error=%s preview=%r",
+                getattr(parser, "__name__", str(parser)),
+                exc,
+                preview,
+            )
             return None
+
+    def _build_request_fingerprint(self, request: GenerateCheckinPlanRequest) -> str:
+        payload = {
+            "checkin_id": request.checkin_id,
+            "plan_type": request.plan_type.value,
+            "environment": request.environment.value if request.environment else None,
+            "time_available": request.time_available,
+            "nutrition_day_note": request.nutrition_day_note.strip() if request.nutrition_day_note else None,
+            "include_yesterday_context": bool(request.include_yesterday_context),
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+    def _build_generate_plan_response(
+        self,
+        request: GenerateCheckinPlanRequest,
+        saved_record: dict[str, Any],
+    ) -> GenerateCheckinPlanResponse:
+        structured = saved_record.get("structured_content") or {}
+        raw_content = saved_record.get("raw_content")
+        if not isinstance(raw_content, str):
+            raw_content = json.dumps(structured)
+        workout_context = None
+        if request.plan_type == PlanType.TRAINING:
+            workout_context = self._build_workout_context(
+                generated_plan_id=saved_record.get("id"),
+                request=request,
+                structured_plan=structured,
+                request_fingerprint=saved_record.get("request_fingerprint"),
+                revision_number=saved_record.get("revision_number"),
+            )
+        return GenerateCheckinPlanResponse(
+            plan_id=saved_record["id"],
+            plan_type=request.plan_type,
+            content=raw_content,
+            structured=structured,
+            request_fingerprint=saved_record.get("request_fingerprint"),
+            revision_number=saved_record.get("revision_number"),
+            workout_context=workout_context,
+        )
+
+    def _build_workout_context(
+        self,
+        generated_plan_id: str | None,
+        request: GenerateCheckinPlanRequest,
+        structured_plan: dict[str, Any] | None,
+        request_fingerprint: str | None = None,
+        revision_number: int | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "generated_plan_id": generated_plan_id,
+            "request_fingerprint": request_fingerprint,
+            "revision_number": revision_number,
+            "environment": request.environment.value if request.environment else None,
+            "time_available": request.time_available,
+            "plan_title": structured_plan.get("title") if isinstance(structured_plan, dict) else None,
+            "plan_summary": self._build_workout_summary(structured_plan),
+        }
+
+    def _build_workout_summary(self, structured_plan: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(structured_plan, dict):
+            return {}
+        return {
+            "title": structured_plan.get("title"),
+            "type": structured_plan.get("type"),
+            "difficulty": structured_plan.get("difficulty"),
+            "duration_minutes": structured_plan.get("durationMinutes"),
+            "warmup": [
+                {
+                    "name": item.get("name"),
+                    "duration": item.get("duration"),
+                    "description": item.get("description"),
+                }
+                for item in structured_plan.get("warmup", []) if isinstance(item, dict)
+            ],
+            "exercises": [
+                {
+                    "name": item.get("name"),
+                    "sets": item.get("sets"),
+                    "reps": item.get("reps"),
+                    "rest": item.get("rest"),
+                    "muscle_group": item.get("muscleGroup"),
+                    "description": item.get("description"),
+                    "coach_tip": item.get("coachTip"),
+                }
+                for item in structured_plan.get("exercises", []) if isinstance(item, dict)
+            ],
+            "cooldown": [
+                {
+                    "name": item.get("name"),
+                    "duration": item.get("duration"),
+                    "description": item.get("description"),
+                }
+                for item in structured_plan.get("cooldown", []) if isinstance(item, dict)
+            ],
+            "coach_note": structured_plan.get("coachNote"),
+        }
+
+    def _plans_effectively_identical(self, current: dict[str, Any] | None, previous: dict[str, Any] | None) -> bool:
+        return self._normalize_plan_signature(current) == self._normalize_plan_signature(previous)
+
+    def _normalize_plan_signature(self, plan: dict[str, Any] | None) -> dict[str, Any]:
+        if not isinstance(plan, dict):
+            return {}
+        return {
+            "type": plan.get("type"),
+            "durationMinutes": plan.get("durationMinutes"),
+            "warmup_names": [item.get("name") for item in plan.get("warmup", []) if isinstance(item, dict)],
+            "exercise_names": [item.get("name") for item in plan.get("exercises", []) if isinstance(item, dict)],
+            "exercise_reps": [item.get("reps") for item in plan.get("exercises", []) if isinstance(item, dict)],
+            "exercise_sets": [item.get("sets") for item in plan.get("exercises", []) if isinstance(item, dict)],
+        }
 
     def _build_fallback_plan(self, plan_type: PlanType, mode: str, inputs: DailyCheckinInputs, request: GenerateCheckinPlanRequest, profile: dict, last_workout: dict | None):
         if plan_type == PlanType.TRAINING:
             duration = request.time_available or profile.get("preferred_session_length") or 30
             difficulty = "advanced" if inputs.motivation >= 4 and inputs.sleep >= 4 else "intermediate"
-            workout_type = "strength" if mode == "BEAST" else "general"
+            workout_type = self._fallback_workout_type(mode, request.environment)
+            title, description = self._fallback_training_framing(mode, request.environment, duration)
+            warmup = self._fallback_warmup(request.environment, workout_type)
+            exercises = self._fallback_training_exercises(request.environment, duration, mode)
+            cooldown = self._fallback_cooldown(request.environment)
             return StructuredTrainingPlan(
-                title=f"{mode.title()} Mode {MODE_BUNDLES[mode]['coach']} Session",
+                title=title,
                 type=workout_type,
                 difficulty=difficulty,
                 durationMinutes=duration,
-                description=f"A {duration}-minute session tailored for {request.environment.value.replace('_', ' ')} on your {mode} day.",
-                warmup=[
-                    {"name": "Dynamic reset", "duration": "3 min", "description": "Open up joints and raise body temperature."},
-                    {"name": "Prep circuit", "duration": "4 min", "description": "Prime the movement patterns you will use."},
-                ],
-                exercises=[
-                    {
-                        "name": "Goblet squat",
-                        "sets": 3,
-                        "reps": "10",
-                        "rest": "60 sec",
-                        "muscleGroup": "legs",
-                        "description": "Control the lowering phase and stay tall through the chest.",
-                        "coachTip": "Leave one clean rep in reserve and own the tempo.",
-                    },
-                    {
-                        "name": "Push-up variation",
-                        "sets": 3,
-                        "reps": "8-12",
-                        "rest": "45 sec",
-                        "muscleGroup": "chest",
-                        "description": "Use an incline if needed to keep reps crisp.",
-                        "coachTip": "Smooth reps beat sloppy reps today.",
-                    },
-                    {
-                        "name": "Split squat",
-                        "sets": 2,
-                        "reps": "8 / side",
-                        "rest": "45 sec",
-                        "muscleGroup": "legs",
-                        "description": "Stay balanced and drive through the front foot.",
-                        "coachTip": "Move with control, especially if soreness is lingering.",
-                    },
-                ],
-                cooldown=[
-                    {"name": "Easy walk", "duration": "2 min", "description": "Bring your heart rate down gradually."},
-                    {"name": "Breathing reset", "duration": "2 min", "description": "Finish with long exhales and relaxed shoulders."},
-                ],
+                description=description,
+                warmup=warmup,
+                exercises=exercises,
+                cooldown=cooldown,
                 coachNote=self._build_adaptive_note(mode, last_workout),
             )
 
@@ -562,6 +776,125 @@ class DailyCheckinService:
             meals=meals,
             coachNote=self._build_adaptive_note(mode, last_workout),
         )
+
+    def _fallback_workout_type(self, mode: str, environment: Environment | None) -> str:
+        if environment == Environment.OUTDOORS:
+            return "cardio"
+        if environment == Environment.HOTEL_ROOM:
+            return "mobility" if mode == "REST" else "general"
+        if environment == Environment.BODYWEIGHT:
+            return "hiit" if mode == "BEAST" else "general"
+        if environment == Environment.LIMITED:
+            return "mobility" if mode in {"REST", "RECOVER"} else "general"
+        if mode == "REST":
+            return "mobility"
+        if environment in {Environment.HOME_GYM, Environment.FULL_GYM}:
+            return "strength" if mode in {"BEAST", "BUILD"} else "general"
+        return "general"
+
+    def _fallback_training_framing(self, mode: str, environment: Environment | None, duration: int) -> tuple[str, str]:
+        environment_label = environment.value.replace("_", " ") if environment else "your setup"
+        if duration <= 10:
+            focus = "a true sprint session that trims the plan down to the highest-value work only"
+        elif duration <= 30:
+            focus = "a balanced session with a quick warmup, focused work, and no filler volume"
+        else:
+            focus = "a fuller session with room for layered prep, focused work, and a cleaner finish"
+        return (
+            f"{mode.title()} Mode {MODE_BUNDLES[mode]['coach']} {environment_label.title()} Session",
+            f"A {duration}-minute {focus}, tailored for {environment_label} on your {mode} day.",
+        )
+
+    def _fallback_warmup(self, environment: Environment | None, workout_type: str) -> list[dict]:
+        if environment == Environment.OUTDOORS:
+            return [
+                {"name": "Brisk ramp-up walk", "duration": "3 min", "description": "Build body heat gradually and loosen ankles, hips, and shoulders before faster outdoor movement."},
+                {"name": "Dynamic stride prep", "duration": "4 min", "description": "Use skips, leg swings, and marching drills to open your stride and prepare for repeat efforts."},
+            ]
+        if environment == Environment.HOTEL_ROOM:
+            return [
+                {"name": "Travel reset flow", "duration": "3 min", "description": "Undo stiffness from sitting with ankle, hip, and thoracic mobility before you ask for output."},
+                {"name": "Room-ready activation", "duration": "3 min", "description": "Use low-impact squats, wall presses, and core bracing to prep a compact hotel-room session."},
+            ]
+        if environment == Environment.BODYWEIGHT:
+            return [
+                {"name": "Joint prep flow", "duration": "3 min", "description": "Move through wrists, shoulders, hips, and ankles so your bodyweight reps feel smooth instead of sticky."},
+                {"name": "Pattern primer", "duration": "4 min", "description": "Use squats, hinges, and plank-based activation to wake up the exact patterns used in the main circuit."},
+            ]
+        if environment == Environment.LIMITED:
+            return [
+                {"name": "Constraint scan", "duration": "2 min", "description": "Check the space, tools, and footing so the session matches what you actually have available."},
+                {"name": "Minimal-kit rehearsal", "duration": "4 min", "description": "Practice the exact hinge, squat, and press patterns you can train safely with limited gear."},
+            ]
+        if environment == Environment.HOME_GYM:
+            return [
+                {"name": "Garage reset", "duration": "3 min", "description": "Raise body temperature and loosen the hips and shoulders so home-gym loading feels crisp fast."},
+                {"name": "Load path rehearsal", "duration": "4 min", "description": "Rehearse the key positions for the squat, push, and hinge paths you will use with dumbbells or a bar at home."},
+            ]
+        if workout_type == "strength":
+            return [
+                {"name": "Dynamic reset", "duration": "3 min", "description": "Raise body temperature while opening hips, t-spine, and shoulders so loaded reps feel crisp from set one."},
+                {"name": "Lift pattern prep", "duration": "4 min", "description": "Prime the squat, push, and hinge patterns with controlled reps before you load them under fatigue."},
+            ]
+        return [
+            {"name": "Mobility reset", "duration": "3 min", "description": "Ease stiffness out of the joints and get your breathing under control before the main work starts."},
+            {"name": "Movement rehearsal", "duration": "4 min", "description": "Rehearse the key positions you will use so the session starts smooth instead of rushed."},
+        ]
+
+    def _fallback_training_exercises(self, environment: Environment | None, duration: int, mode: str) -> list[dict]:
+        short_session = duration <= 10
+        medium_session = 10 < duration <= 30
+        if environment == Environment.OUTDOORS:
+            return [
+                {"name": "Power walk or light jog intervals", "sets": 3 if short_session else 4 if medium_session else 5, "reps": "90 sec" if short_session else "2 min", "rest": "30 sec" if short_session else "45 sec", "muscleGroup": "conditioning", "description": "Stay tall, keep the pace honest, and use the recoveries to reset your breathing.", "coachTip": "Work at a pace you can repeat cleanly, not one that burns you out in round one."},
+                {"name": "Bench or curb step-up", "sets": 2 if short_session else 3, "reps": "8 / side" if short_session else "10 / side", "rest": "45 sec", "muscleGroup": "legs", "description": "Drive through the whole foot and control the lowering so each rep builds stability.", "coachTip": "Choose a height that lets you stay balanced instead of muscling through sloppy reps."},
+                {"name": "Incline push-up", "sets": 1 if short_session else 2 if medium_session else 3, "reps": "8-12", "rest": "45 sec", "muscleGroup": "chest", "description": "Use a park bench or sturdy surface and keep your body in one straight line.", "coachTip": "Elevate your hands more if you want smoother reps and better tempo control."},
+            ]
+        if environment == Environment.HOTEL_ROOM:
+            return [
+                {"name": "Suitcase squat", "sets": 2 if short_session else 3, "reps": "10-12", "rest": "30 sec", "muscleGroup": "legs", "description": "Use a backpack or suitcase if you have one, and keep the squat compact and clean.", "coachTip": "If you have no load, slow the lowering and pause at the bottom."},
+                {"name": "Bed-edge incline push-up", "sets": 2 if short_session else 3, "reps": "8-12", "rest": "30 sec", "muscleGroup": "chest", "description": "Use a stable elevated surface so hotel-room constraints still let you get quality pressing work.", "coachTip": "Choose the edge height that keeps every rep smooth and controlled."},
+                {"name": "Split squat iso hold", "sets": 1 if short_session else 2 if medium_session else 3, "reps": "20 sec / side", "rest": "30 sec", "muscleGroup": "legs", "description": "Hold the hardest position you can own to create leg tension without extra equipment.", "coachTip": "Stay tall and keep your front foot flat instead of rushing the hold."},
+            ]
+        if environment == Environment.BODYWEIGHT:
+            return [
+                {"name": "Tempo squat", "sets": 2 if short_session else 3, "reps": "10-12", "rest": "30 sec", "muscleGroup": "legs", "description": "Use a slow lowering phase and a clean stand to make bodyweight reps feel productive.", "coachTip": "If today feels heavy, shorten the range slightly and keep the tempo controlled."},
+                {"name": "Push-up variation", "sets": 2 if short_session else 3, "reps": "6-12", "rest": "30 sec", "muscleGroup": "chest", "description": "Choose floor, incline, or hands-elevated reps that let you move with clean form.", "coachTip": "Quality beats pride here. Pick the version you can repeat without grinding."},
+                {"name": "Reverse lunge to knee drive", "sets": 1 if short_session else 2 if medium_session else 3, "reps": "8 / side", "rest": "30 sec", "muscleGroup": "legs", "description": "Stay balanced as you drive back to standing so the set trains coordination as well as legs.", "coachTip": "Own the landing and balance before you speed anything up."},
+            ]
+        if environment == Environment.LIMITED:
+            return [
+                {"name": "Loaded hinge with available gear", "sets": 2 if short_session else 3, "reps": "8-10", "rest": "45 sec", "muscleGroup": "posterior chain", "description": "Use the heaviest safe item you have and keep the hinge pattern crisp and repeatable.", "coachTip": "If the implement is awkward, cut the range a touch and keep your back position locked in."},
+                {"name": "Single-arm floor press", "sets": 2 if short_session else 3, "reps": "8 / side", "rest": "45 sec", "muscleGroup": "chest", "description": "Press one side at a time with whatever implement you have available and keep your ribcage down.", "coachTip": "Use the off arm on the floor to stay stable instead of twisting through the rep."},
+                {"name": "Front-foot elevated split squat", "sets": 1 if short_session else 2 if medium_session else 3, "reps": "8 / side", "rest": "45 sec", "muscleGroup": "legs", "description": "Use a book, plate, or low step to make limited loading feel more demanding.", "coachTip": "Drive straight up through the front leg and avoid bouncing out of the bottom."},
+            ]
+        if environment == Environment.HOME_GYM:
+            return [
+                {"name": "Goblet squat", "sets": 2 if short_session else 3 if medium_session else 4, "reps": "8-10", "rest": "60 sec", "muscleGroup": "legs", "description": "Brace before each rep and own the lowering phase so your legs do the work instead of your back.", "coachTip": "Leave a rep in reserve unless today truly feels like a green-light session."},
+                {"name": "Dumbbell floor or bench press", "sets": 2 if short_session else 3, "reps": "8-10", "rest": "60 sec", "muscleGroup": "chest", "description": "Press with control and keep your shoulders packed so each set stays smooth.", "coachTip": "If the last workout felt hard, hold the same load and clean up the reps instead of forcing more."},
+                {"name": "Romanian deadlift", "sets": 1 if short_session else 2 if medium_session else 3, "reps": "8-10", "rest": "60 sec", "muscleGroup": "posterior chain", "description": "Push the hips back, keep the lats tight, and stop where your hamstrings stay loaded.", "coachTip": "Think long spine and soft knees rather than chasing extra depth."},
+            ]
+        return [
+            {"name": "Front squat or leg press", "sets": 2 if short_session else 3 if medium_session else 4, "reps": "6-8", "rest": "75 sec", "muscleGroup": "legs", "description": "Use a controlled descent and drive up with intent while keeping tension through the trunk.", "coachTip": "Strong reps matter more than load jumps unless today feels exceptionally sharp."},
+            {"name": "Machine or dumbbell press", "sets": 2 if short_session else 3, "reps": "8-10", "rest": "60 sec", "muscleGroup": "chest", "description": "Keep the path smooth and avoid bouncing between reps so the set stays muscular instead of chaotic.", "coachTip": "Use the machine path to stay precise if energy is good but recovery is mixed."},
+            {"name": "Cable or chest-supported row", "sets": 1 if short_session else 2 if medium_session else 3, "reps": "10-12", "rest": "60 sec", "muscleGroup": "back", "description": "Pull through the elbows and pause briefly at the finish to own the upper-back work.", "coachTip": "Let the shoulder blades move naturally, then finish each rep by squeezing the mid-back."},
+        ]
+
+    def _fallback_cooldown(self, environment: Environment | None) -> list[dict]:
+        if environment == Environment.OUTDOORS:
+            return [
+                {"name": "Easy walk", "duration": "2 min", "description": "Bring your breathing down gradually before you fully stop moving."},
+                {"name": "Standing reset breathing", "duration": "2 min", "description": "Use long exhales to settle heart rate and leave the session feeling more recovered than rushed."},
+            ]
+        if environment == Environment.HOTEL_ROOM:
+            return [
+                {"name": "Wall-supported breathing", "duration": "2 min", "description": "Settle your ribs and breathing so you leave the room feeling reset rather than wired."},
+                {"name": "Hip flexor release", "duration": "2 min", "description": "Offset travel stiffness with a quick front-of-hip downshift."},
+            ]
+        return [
+            {"name": "Easy downshift", "duration": "2 min", "description": "Use light movement to bring your heart rate down instead of stopping cold."},
+            {"name": "Breathing reset", "duration": "2 min", "description": "Finish with slow exhales and relaxed shoulders so your body shifts out of go-mode cleanly."},
+        ]
 
     def _build_adaptive_note(self, mode: str, last_workout: dict | None) -> str:
         feel_rating = last_workout.get("feel_rating") if isinstance(last_workout, dict) else None

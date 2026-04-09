@@ -220,6 +220,7 @@ class ConversationService:
         history_text = "\n".join(history_lines[-12:])
         client_context = request.client_context or {}
         route_instructions = self._route_system_instructions(route)
+        workout_prompt = self._workout_context_prompt(client_context)
 
         system_prompt = (
             "You are an expert fitness coach in the MODE app.\n"
@@ -230,18 +231,38 @@ class ConversationService:
             f"Response mode: {route.response_mode}\n"
             "Do not mention internal routing, model selection, score thresholds, or hidden system state.\n"
             "Differentiate between what is known from context and what you are inferring.\n"
+            f"{workout_prompt['system']}"
             f"{route_instructions}"
         )
         actor_label = "Trainer admin context" if self._is_trainer_only_context(trainer_context) else "Client profile"
         user_prompt = (
             f"{actor_label}: {profile}\n"
             f"Client context: {client_context}\n"
+            f"{workout_prompt['user']}"
             "Conversation history:\n"
             f"{history_text}\n\n"
             f"USER: {request.message}\n"
             "ASSISTANT:"
         )
         return PromptPackage(system_prompt=system_prompt, user_prompt=user_prompt)
+
+    def _workout_context_prompt(self, client_context: dict[str, Any]) -> dict[str, str]:
+        entrypoint = str(client_context.get("entrypoint") or "").strip().lower()
+        if entrypoint not in {"generated_workout", "generated-workout", "workout_feedback", "workout-feedback"}:
+            return {"system": "", "user": ""}
+
+        workout_context = client_context.get("workout_context")
+        if not isinstance(workout_context, dict):
+            workout_context = {}
+
+        return {
+            "system": (
+                "If workout_context is present, treat it as the active workout to edit instead of inventing a new plan. "
+                "When the user wants something easier, shorter, lower impact, or wants to skip an exercise, give a concrete adjusted version "
+                "of the current workout with substitutions, set/rep/rest changes, and a brief rationale.\n"
+            ),
+            "user": f"Active workout context: {workout_context}\n",
+        }
 
     def _route_system_instructions(self, route: RoutingDecision) -> str:
         if route.model == GPT_5_4_MINI_MODEL:

@@ -158,6 +158,7 @@ class GenerateCheckinPlanRequest(BaseModel):
     time_available: int | None = Field(default=None, ge=10, le=60)
     nutrition_day_note: str | None = None
     include_yesterday_context: bool = False
+    refresh_requested: bool = False
 
 
 class GenerateCheckinPlanResponse(BaseModel):
@@ -165,6 +166,9 @@ class GenerateCheckinPlanResponse(BaseModel):
     plan_type: PlanType
     content: str
     structured: dict[str, Any]
+    request_fingerprint: str | None = None
+    revision_number: int | None = None
+    workout_context: dict[str, Any] | None = None
 
 
 class LogGeneratedWorkoutRequest(BaseModel):

@@ -37,7 +37,23 @@ PROGRESS_ANALYSIS_KEYWORDS = ["plateau", "analyze", "analysis", "trend", "trends
 EXERCISE_EXPLANATION_KEYWORDS = ["what muscles", "how do i", "explain", "what does", "brace", "form", "technique"]
 NUTRITION_KEYWORDS = ["protein", "calories", "macro", "macros", "meal", "vegetarian", "nutrition", "fat loss"]
 LOGGING_KEYWORDS = ["log ", "save this", "save as my pr", "i ate", "3x10", "3 x 10", "sets", "reps"]
-WORKOUT_ADJUSTMENT_KEYWORDS = ["swap", "substitute", "adjust", "sore", "only have", "missed", "what should i do today"]
+WORKOUT_ADJUSTMENT_KEYWORDS = [
+    "swap",
+    "substitute",
+    "adjust",
+    "sore",
+    "only have",
+    "missed",
+    "what should i do today",
+    "make this easier",
+    "take it easier",
+    "easier",
+    "lighter",
+    "too hard",
+    "lower intensity",
+    "shorten this workout",
+    "don't want to do",
+]
 PERSONA_KEYWORDS = ["coach", "trainer", "tough-love", "what would", "answer like"]
 MULTIMODAL_TASK_KEYWORDS = ["check my squat form", "analyze this meal photo", "video", "image", "photo", "form check"]
 RETRIEVAL_KEYWORDS = ["today's workout", "my split", "what coach assigned", "my macros", "my plan", "my program"]
@@ -242,7 +258,7 @@ class ConversationRouter:
             score += 2
         if history_needed:
             score += 2
-        if self._is_post_checkin_entrypoint(client_context):
+        if self._is_contextual_entrypoint(client_context):
             score += 1
         if self._profile_incomplete(user_profile):
             score += 1
@@ -300,6 +316,9 @@ class ConversationRouter:
             return "workout_adjustment"
         if client_context.get("output_format") in {"json", "schema", "table", "db_object"} or self._contains_any(text, STRUCTURE_KEYWORDS):
             return "admin_structured_output"
+        if self._is_workout_entrypoint(client_context):
+            if self._is_generic_post_checkin_prompt(text) or self._contains_any(text, WORKOUT_ADJUSTMENT_KEYWORDS):
+                return "workout_adjustment"
         if self._is_post_checkin_entrypoint(client_context) and self._is_generic_post_checkin_prompt(text):
             return "post_checkin_followup"
         return "qa_quick"
@@ -318,14 +337,14 @@ class ConversationRouter:
     def _retrieval_required(self, text: str, client_context: dict[str, Any]) -> bool:
         if client_context.get("history_needed") or client_context.get("retrieval_required"):
             return True
-        if self._is_post_checkin_entrypoint(client_context):
+        if self._is_contextual_entrypoint(client_context):
             return True
         if client_context.get("trainer_persona_requested") or self._contains_any(text, PERSONA_KEYWORDS):
             return True
         return self._contains_any(text, RETRIEVAL_KEYWORDS)
 
     def _history_needed(self, text: str, client_context: dict[str, Any]) -> bool:
-        return bool(client_context.get("history_needed")) or self._is_post_checkin_entrypoint(client_context) or self._contains_any(
+        return bool(client_context.get("history_needed")) or self._is_contextual_entrypoint(client_context) or self._contains_any(
             text,
             ["today's workout", "my split", "my macros", "my program", "last 6 weeks", "last 8 weeks"],
         )
@@ -361,6 +380,13 @@ class ConversationRouter:
     def _is_post_checkin_entrypoint(self, client_context: dict[str, Any]) -> bool:
         entrypoint = str(client_context.get("entrypoint") or "").strip().lower()
         return entrypoint in {"post_checkin", "post-checkin"}
+
+    def _is_workout_entrypoint(self, client_context: dict[str, Any]) -> bool:
+        entrypoint = str(client_context.get("entrypoint") or "").strip().lower()
+        return entrypoint in {"generated_workout", "generated-workout", "workout_feedback", "workout-feedback"}
+
+    def _is_contextual_entrypoint(self, client_context: dict[str, Any]) -> bool:
+        return self._is_post_checkin_entrypoint(client_context) or self._is_workout_entrypoint(client_context)
 
     def _is_generic_post_checkin_prompt(self, text: str) -> bool:
         normalized = text.strip()

@@ -51,6 +51,14 @@ function buildLoopbackBaseUrls() {
   ];
 }
 
+function isLoopbackUrl(url) {
+  if (!url) {
+    return false;
+  }
+
+  return /^https?:\/\/(?:localhost|127(?:\.\d{1,3}){3})(?::\d+)?$/i.test(url);
+}
+
 function isLocalNetworkUrl(url) {
   if (!url) {
     return false;
@@ -59,17 +67,27 @@ function isLocalNetworkUrl(url) {
   return /^https?:\/\/(?:10(?:\.\d{1,3}){3}|127(?:\.\d{1,3}){3}|172\.(?:1[6-9]|2\d|3[0-1])(?:\.\d{1,3}){2}|192\.168(?:\.\d{1,3}){2}|localhost)(?::\d+)?$/i.test(url);
 }
 
+function shouldSuppressLoopbackFallbacks(configuredBaseUrl) {
+  return Boolean(Constants.isDevice) && isLocalNetworkUrl(configuredBaseUrl) && !isLoopbackUrl(configuredBaseUrl);
+}
+
+export function getConfiguredApiBaseUrl() {
+  return normalizeBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL);
+}
+
 export function getApiBaseUrls() {
-  const configuredBaseUrl = normalizeBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL);
+  const configuredBaseUrl = getConfiguredApiBaseUrl();
   const autoDetectedBaseUrls = buildAutoDetectedBaseUrls();
   const loopbackBaseUrls = buildLoopbackBaseUrls();
-  const preferAutoDetectedBaseUrls = isLocalNetworkUrl(configuredBaseUrl);
+  const preferAutoDetectedBaseUrls = isLocalNetworkUrl(configuredBaseUrl) && !shouldSuppressLoopbackFallbacks(configuredBaseUrl);
+  const includeLoopbackBaseUrls = !shouldSuppressLoopbackFallbacks(configuredBaseUrl);
   const candidates = [
     preferredApiBaseUrl,
+    ...(shouldSuppressLoopbackFallbacks(configuredBaseUrl) ? [configuredBaseUrl] : []),
     ...(preferAutoDetectedBaseUrls ? autoDetectedBaseUrls : []),
-    configuredBaseUrl,
+    ...(shouldSuppressLoopbackFallbacks(configuredBaseUrl) ? [] : [configuredBaseUrl]),
     ...(preferAutoDetectedBaseUrls ? [] : autoDetectedBaseUrls),
-    ...loopbackBaseUrls,
+    ...(includeLoopbackBaseUrls ? loopbackBaseUrls : []),
   ].filter(Boolean);
 
   return [...new Set(candidates)];
@@ -79,6 +97,10 @@ export function rememberApiBaseUrl(baseUrl) {
   preferredApiBaseUrl = normalizeBaseUrl(baseUrl);
 }
 
+export function getPreferredApiBaseUrl() {
+  return preferredApiBaseUrl;
+}
+
 export function resolveApiBaseUrl() {
   const [baseUrl] = getApiBaseUrls();
   if (baseUrl) {
@@ -86,6 +108,17 @@ export function resolveApiBaseUrl() {
   }
 
   return `http://localhost:${DEFAULT_LOCAL_API_PORT}`;
+}
+
+export function getApiDebugInfo() {
+  return {
+    configuredApiBaseUrl: getConfiguredApiBaseUrl(),
+    preferredApiBaseUrl: getPreferredApiBaseUrl(),
+    resolvedApiBaseUrl: resolveApiBaseUrl(),
+    candidateApiBaseUrls: getApiBaseUrls(),
+    suppressLoopbackFallbacks: shouldSuppressLoopbackFallbacks(getConfiguredApiBaseUrl()),
+    isPhysicalDevice: Boolean(Constants.isDevice),
+  };
 }
 
 export const API_BASE_URL = resolveApiBaseUrl();

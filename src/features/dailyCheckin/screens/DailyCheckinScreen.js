@@ -15,11 +15,15 @@ import * as Clipboard from 'expo-clipboard';
 
 import { ModeButton, SafeScreen } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { getApiDebugInfo } from '../../../services/apiBaseUrl';
+import { getApiRequestDebugState } from '../../../services/apiRequest';
 import {
   generateCheckinPlan,
   getPreviousCheckin,
   getTodayCheckin,
   logGeneratedWorkout,
+  probeBackendHealthz,
+  probeTodayCheckin,
   submitTodayCheckin,
 } from '../services/checkinApi';
 
@@ -192,7 +196,7 @@ const COACH_BY_MODE = {
   RECOVER: 'Maya',
   REST: 'Zen',
 };
-const TIME_OPTIONS = [10, 15, 20, 30, 45, 60];
+const TIME_OPTIONS = [10, 30, 45, 60];
 const ENVIRONMENT_OPTIONS = [
   {
     value: 'full_gym',
@@ -343,6 +347,9 @@ function buildPlanDiagnosticsLine(planError) {
   if (planError?.request_id) {
     chips.push(`request ${planError.request_id}`);
   }
+  if (planError?.stage === 'network' && planError?.resolved_api_base_url) {
+    chips.push(`api ${planError.resolved_api_base_url}`);
+  }
 
   return chips.length > 0 ? chips.join(' • ') : null;
 }
@@ -373,10 +380,101 @@ function buildPlanSupportBundle({
     `HTTP status: ${withFallback(planError?.status)}`,
     `Code: ${withFallback(planError?.code)}`,
     `Request ID: ${withFallback(planError?.request_id)}`,
+    `Resolved API base URL: ${withFallback(planError?.resolved_api_base_url)}`,
+    `Attempted API hosts: ${withFallback(Array.isArray(planError?.attempted_base_urls) ? planError.attempted_base_urls.join(', ') : null)}`,
+    `Last successful API host: ${withFallback(planError?.last_successful_base_url)}`,
+    `Raw network error: ${withFallback(planError?.raw_error_message)}`,
     `Detail: ${withFallback(planError?.detail)}`,
     `Hint: ${withFallback(planError?.hint)}`,
     `Message: ${withFallback(planError?.message)}`,
   ].join('\n');
+}
+
+function buildConnectionDebugSnapshot(overrides = {}) {
+  const apiDebug = getApiDebugInfo();
+  const requestDebug = getApiRequestDebugState();
+
+  return {
+    configuredApiBaseUrl: apiDebug.configuredApiBaseUrl,
+    preferredApiBaseUrl: apiDebug.preferredApiBaseUrl,
+    resolvedApiBaseUrl: apiDebug.resolvedApiBaseUrl,
+    candidateApiBaseUrls: apiDebug.candidateApiBaseUrls,
+    suppressLoopbackFallbacks: apiDebug.suppressLoopbackFallbacks,
+    isPhysicalDevice: apiDebug.isPhysicalDevice,
+    lastSuccessfulBaseUrl: requestDebug.lastSuccessfulBaseUrl,
+    lastAttemptedBaseUrls: requestDebug.lastAttemptedBaseUrls,
+    lastRequestPath: requestDebug.lastPath,
+    lastRequestErrorMessage: requestDebug.lastErrorMessage,
+    updatedAt: new Date().toISOString(),
+    lastProbe: null,
+    ...overrides,
+  };
+}
+
+function buildProbeSummary(probe) {
+  if (!probe) {
+    return 'No probe run yet.';
+  }
+
+  const parts = [
+    probe.label || probe.type || 'probe',
+    probe.status || 'unknown',
+  ];
+  if (probe.httpStatus) {
+    parts.push(`HTTP ${probe.httpStatus}`);
+  }
+  if (probe.baseUrl) {
+    parts.push(probe.baseUrl);
+  }
+  if (probe.message) {
+    parts.push(probe.message);
+  }
+  return parts.join(' • ');
+}
+
+function ConnectionDebugCard({
+  debugState,
+  isHealthzProbeRunning,
+  isTodayProbeRunning,
+  onProbeHealthz,
+  onProbeToday,
+  visible = true,
+}) {
+  if (!visible) {
+    return null;
+  }
+
+  return (
+    <View style={styles.debugCard}>
+      <Text style={styles.debugCardTitle}>Dev Connection Debug</Text>
+      <Text style={styles.debugCardBody}>Configured API: {withFallback(debugState?.configuredApiBaseUrl)}</Text>
+      <Text style={styles.debugCardBody}>Resolved API: {withFallback(debugState?.resolvedApiBaseUrl)}</Text>
+      <Text style={styles.debugCardBody}>Preferred API: {withFallback(debugState?.preferredApiBaseUrl)}</Text>
+      <Text style={styles.debugCardBody}>Last success: {withFallback(debugState?.lastSuccessfulBaseUrl)}</Text>
+      <Text style={styles.debugCardBody}>Candidates: {withFallback(Array.isArray(debugState?.candidateApiBaseUrls) ? debugState.candidateApiBaseUrls.join(', ') : null)}</Text>
+      <Text style={styles.debugCardBody}>Last request path: {withFallback(debugState?.lastRequestPath)}</Text>
+      <Text style={styles.debugCardBody}>Last request error: {withFallback(debugState?.lastRequestErrorMessage)}</Text>
+      <Text style={styles.debugCardBody}>Loopback suppressed: {String(Boolean(debugState?.suppressLoopbackFallbacks))}</Text>
+      <Text style={styles.debugCardBody}>Physical device: {String(Boolean(debugState?.isPhysicalDevice))}</Text>
+      <Text style={styles.debugCardBody}>Last probe: {buildProbeSummary(debugState?.lastProbe)}</Text>
+      <View style={styles.debugButtonRow}>
+        <ModeButton
+          title={isHealthzProbeRunning ? 'Healthz…' : 'Healthz Probe'}
+          variant="secondary"
+          onPress={onProbeHealthz}
+          disabled={isHealthzProbeRunning || isTodayProbeRunning}
+          style={styles.debugButton}
+        />
+        <ModeButton
+          title={isTodayProbeRunning ? 'Check-in…' : 'Check-in Probe'}
+          variant="secondary"
+          onPress={onProbeToday}
+          disabled={isHealthzProbeRunning || isTodayProbeRunning}
+          style={styles.debugButton}
+        />
+      </View>
+    </View>
+  );
 }
 
 function withAlpha(hexColor, alpha) {
@@ -412,6 +510,63 @@ function formatDuration(totalSeconds) {
 
 function getCoachName(mode) {
   return COACH_BY_MODE[mode] || 'Coach';
+}
+
+function buildWorkoutSummary(plan) {
+  if (!plan || typeof plan !== 'object') {
+    return null;
+  }
+
+  return {
+    title: plan.title || null,
+    description: plan.description || null,
+    duration_minutes: plan.durationMinutes ?? null,
+    difficulty: plan.difficulty || null,
+    type: plan.type || null,
+    warmup: Array.isArray(plan.warmup)
+      ? plan.warmup.map((item) => ({
+        name: item?.name || null,
+        duration: item?.duration || null,
+        description: item?.description || null,
+      }))
+      : [],
+    exercises: Array.isArray(plan.exercises)
+      ? plan.exercises.map((exercise) => ({
+        name: exercise?.name || null,
+        sets: exercise?.sets ?? null,
+        reps: exercise?.reps || null,
+        rest: exercise?.rest || null,
+        muscle_group: exercise?.muscleGroup || null,
+        description: exercise?.description || null,
+        coach_tip: exercise?.coachTip || null,
+      }))
+      : [],
+    cooldown: Array.isArray(plan.cooldown)
+      ? plan.cooldown.map((item) => ({
+        name: item?.name || null,
+        duration: item?.duration || null,
+        description: item?.description || null,
+      }))
+      : [],
+    coach_note: plan.coachNote || null,
+  };
+}
+
+function buildWorkoutLaunchContext({
+  result,
+  date,
+  workoutContext,
+}) {
+  return {
+    entrypoint: 'generated_workout',
+    checkin_context: {
+      checkin_id: result?.id || null,
+      checkin_date: result?.date || date,
+      assigned_mode: result?.mode || null,
+      checkin_score: result?.score ?? null,
+    },
+    workout_context: workoutContext || null,
+  };
 }
 
 function BackgroundGrid() {
@@ -843,6 +998,7 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
   const [structuredPlan, setStructuredPlan] = useState(null);
   const [structuredNutritionPlan, setStructuredNutritionPlan] = useState(null);
   const [generatedPlanId, setGeneratedPlanId] = useState(null);
+  const [generatedWorkoutContext, setGeneratedWorkoutContext] = useState(null);
   const [expandedExercises, setExpandedExercises] = useState({});
   const [guidedMode, setGuidedMode] = useState(false);
   const [guidedStatus, setGuidedStatus] = useState('idle');
@@ -851,6 +1007,9 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
   const [feelRating, setFeelRating] = useState(3);
   const [isLoggingWorkout, setIsLoggingWorkout] = useState(false);
   const [logFeedback, setLogFeedback] = useState(null);
+  const [connectionDebug, setConnectionDebug] = useState(() => buildConnectionDebugSnapshot());
+  const [isHealthzProbeRunning, setIsHealthzProbeRunning] = useState(false);
+  const [isTodayProbeRunning, setIsTodayProbeRunning] = useState(false);
   const copyFeedbackTimerRef = useRef(null);
   const currentQuestion = QUESTIONS[questionIndex];
   const glowProgress = useRef(new Animated.Value(1)).current;
@@ -858,6 +1017,7 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
   const [glowFromColor, setGlowFromColor] = useState(QUESTIONS[0].color);
   const [glowToColor, setGlowToColor] = useState(QUESTIONS[0].color);
   const planDiagnosticsLine = useMemo(() => buildPlanDiagnosticsLine(planError), [planError]);
+  const showConnectionDebug = __DEV__;
 
   useEffect(() => {
     if (currentQuestion.color === glowTargetRef.current) {
@@ -881,6 +1041,96 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
     outputRange: [glowFromColor, glowToColor],
   });
 
+  const refreshConnectionDebug = (overrides = {}) => {
+    setConnectionDebug(buildConnectionDebugSnapshot(overrides));
+  };
+
+  const handleProbeHealthz = async () => {
+    if (isHealthzProbeRunning || isTodayProbeRunning) {
+      return;
+    }
+
+    setIsHealthzProbeRunning(true);
+    refreshConnectionDebug({
+      lastProbe: {
+        type: 'healthz',
+        label: 'Healthz probe',
+        status: 'running',
+      },
+    });
+
+    try {
+      const result = await probeBackendHealthz();
+      refreshConnectionDebug({
+        lastProbe: {
+          type: 'healthz',
+          label: 'Healthz probe',
+          status: 'ok',
+          httpStatus: result.status,
+          baseUrl: result.baseUrl,
+          message: JSON.stringify(result.payload),
+        },
+      });
+    } catch (error) {
+      refreshConnectionDebug({
+        lastProbe: {
+          type: 'healthz',
+          label: 'Healthz probe',
+          status: 'error',
+          httpStatus: error?.status || null,
+          baseUrl: error?.resolved_api_base_url || error?.base_url || null,
+          message: error?.message || 'Probe failed',
+        },
+      });
+    } finally {
+      setIsHealthzProbeRunning(false);
+    }
+  };
+
+  const handleProbeToday = async () => {
+    if (isHealthzProbeRunning || isTodayProbeRunning) {
+      return;
+    }
+
+    setIsTodayProbeRunning(true);
+    refreshConnectionDebug({
+      lastProbe: {
+        type: 'checkin_today',
+        label: 'Check-in probe',
+        status: 'running',
+      },
+    });
+
+    try {
+      const result = await probeTodayCheckin({ accessToken, date: today });
+      refreshConnectionDebug({
+        lastProbe: {
+          type: 'checkin_today',
+          label: 'Check-in probe',
+          status: 'ok',
+          baseUrl: getApiDebugInfo().resolvedApiBaseUrl,
+          message: JSON.stringify({
+            completed: result?.payload?.completed,
+            date: result?.payload?.date,
+          }),
+        },
+      });
+    } catch (error) {
+      refreshConnectionDebug({
+        lastProbe: {
+          type: 'checkin_today',
+          label: 'Check-in probe',
+          status: 'error',
+          httpStatus: error?.status || null,
+          baseUrl: error?.resolved_api_base_url || null,
+          message: error?.message || 'Probe failed',
+        },
+      });
+    } finally {
+      setIsTodayProbeRunning(false);
+    }
+  };
+
   const loadToday = async () => {
     setIsLoading(true);
     setStep('loading');
@@ -890,6 +1140,18 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
 
     try {
       const nextStatus = await getTodayCheckin({ accessToken });
+      refreshConnectionDebug({
+        lastProbe: {
+          type: 'load_today',
+          label: 'Load today',
+          status: 'ok',
+          baseUrl: getApiDebugInfo().resolvedApiBaseUrl,
+          message: JSON.stringify({
+            completed: nextStatus?.completed,
+            date: nextStatus?.date,
+          }),
+        },
+      });
       setStatus(nextStatus);
       if (nextStatus.completed) {
         setSummaryResult(nextStatus.checkin);
@@ -907,6 +1169,16 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
         setStep('questionnaire');
       }
     } catch (error) {
+      refreshConnectionDebug({
+        lastProbe: {
+          type: 'load_today',
+          label: 'Load today',
+          status: 'error',
+          httpStatus: error?.status || null,
+          baseUrl: error?.resolved_api_base_url || null,
+          message: error?.message || 'Unable to load today',
+        },
+      });
       setErrorMessage(error.message || 'Unable to load today\'s check-in.');
       setSummaryResult(null);
       setSubmitState('idle');
@@ -925,6 +1197,10 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
       clearTimeout(copyFeedbackTimerRef.current);
     }
   }, []);
+
+  useEffect(() => {
+    refreshConnectionDebug();
+  }, [accessToken, today]);
 
   useEffect(() => {
     if (step !== 'environment') {
@@ -1034,6 +1310,16 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
       setCopyFeedback(null);
       setStep('summary');
     } catch (error) {
+      refreshConnectionDebug({
+        lastProbe: {
+          type: 'submit_checkin',
+          label: 'Submit check-in',
+          status: 'error',
+          httpStatus: error?.status || null,
+          baseUrl: error?.resolved_api_base_url || null,
+          message: error?.message || 'Unable to submit check-in',
+        },
+      });
       setErrorMessage(error.message || 'Unable to submit today\'s check-in.');
       setSubmitError(error);
       setSummaryResult(buildFallbackResult({
@@ -1102,6 +1388,7 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
     setStructuredPlan(null);
     setStructuredNutritionPlan(null);
     setGeneratedPlanId(null);
+    setGeneratedWorkoutContext(null);
     setExpandedExercises({});
     setGuidedMode(false);
     setGuidedStatus('idle');
@@ -1133,6 +1420,24 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
     });
   };
 
+  const handleOpenWorkoutCoach = () => {
+    if (typeof onOpenChat !== 'function' || !structuredPlan) {
+      return;
+    }
+
+    onOpenChat(buildWorkoutLaunchContext({
+      result: summaryResult,
+      date: today,
+      workoutContext: generatedWorkoutContext || {
+        generated_plan_id: generatedPlanId || null,
+        environment: environment || null,
+        time_available: timeAvailable ?? null,
+        plan_title: structuredPlan?.title || null,
+        plan_summary: buildWorkoutSummary(structuredPlan),
+      },
+    }));
+  };
+
   const canGeneratePlan = useMemo(() => {
     if (planType === PLAN_TYPE.TRAINING) {
       return Boolean(environment);
@@ -1149,7 +1454,8 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
     return false;
   }, [environment, nutritionDayNote, nutritionDayType, planType]);
 
-  const handleGeneratePlan = async () => {
+  const handleGeneratePlan = async (refreshRequestedOrEvent = false) => {
+    const refreshRequested = refreshRequestedOrEvent === true;
     if (!summaryResult?.id || !planType || !canGeneratePlan || planLoading) {
       return;
     }
@@ -1170,12 +1476,28 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
           ? nutritionDayNote.trim()
           : undefined,
         includeYesterdayContext,
+        refreshRequested,
+      });
+
+      refreshConnectionDebug({
+        lastProbe: {
+          type: 'generate_plan',
+          label: 'Generate plan',
+          status: 'ok',
+          baseUrl: getApiDebugInfo().resolvedApiBaseUrl,
+          message: JSON.stringify({
+            planId: result?.plan_id,
+            fingerprint: result?.request_fingerprint,
+            revision: result?.revision_number,
+          }),
+        },
       });
 
       setGeneratedPlanId(result.plan_id || null);
       setPlanContent(result.content || null);
       setStructuredPlan(null);
       setStructuredNutritionPlan(null);
+      setGeneratedWorkoutContext(result.workout_context || null);
 
       if (result.structured && planType === PLAN_TYPE.TRAINING) {
         setStructuredPlan(result.structured);
@@ -1183,6 +1505,16 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
         setStructuredNutritionPlan(result.structured);
       }
     } catch (error) {
+      refreshConnectionDebug({
+        lastProbe: {
+          type: 'generate_plan',
+          label: 'Generate plan',
+          status: 'error',
+          httpStatus: error?.status || null,
+          baseUrl: error?.resolved_api_base_url || null,
+          message: error?.message || 'Unable to generate plan',
+        },
+      });
       const nextError = error instanceof Error
         ? error
         : new Error(error?.message || 'Unable to generate your plan right now.');
@@ -1392,6 +1724,14 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
             onPress={onSignOut}
             style={styles.footerButton}
           />
+          <ConnectionDebugCard
+            debugState={connectionDebug}
+            isHealthzProbeRunning={isHealthzProbeRunning}
+            isTodayProbeRunning={isTodayProbeRunning}
+            onProbeHealthz={handleProbeHealthz}
+            onProbeToday={handleProbeToday}
+            visible={showConnectionDebug}
+          />
         </ScrollView>
       ) : null}
 
@@ -1491,7 +1831,7 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
 
           <ModeButton
             title={planType === PLAN_TYPE.TRAINING ? 'Generate My Workout' : 'Generate My Nutrition Plan'}
-            onPress={handleGeneratePlan}
+            onPress={() => handleGeneratePlan(false)}
             disabled={!canGeneratePlan || planLoading}
             style={[styles.footerButton, styles.generateButton]}
           />
@@ -1500,6 +1840,14 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
             variant="secondary"
             onPress={() => setStep('summary')}
             style={styles.footerButton}
+          />
+          <ConnectionDebugCard
+            debugState={connectionDebug}
+            isHealthzProbeRunning={isHealthzProbeRunning}
+            isTodayProbeRunning={isTodayProbeRunning}
+            onProbeHealthz={handleProbeHealthz}
+            onProbeToday={handleProbeToday}
+            visible={showConnectionDebug}
           />
         </ScrollView>
       ) : null}
@@ -1534,8 +1882,14 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
               <Text style={styles.errorTitle}>Couldn&apos;t generate your plan</Text>
               <Text style={styles.errorText}>{planError?.message || 'Unable to generate your plan right now.'}</Text>
               {planDiagnosticsLine ? <Text style={styles.planDiagnosticsText}>{planDiagnosticsLine}</Text> : null}
+              {planError?.stage === 'network' && planError?.resolved_api_base_url ? (
+                <Text style={styles.planHintText}>Resolved API: {planError.resolved_api_base_url}</Text>
+              ) : null}
+              {planError?.stage === 'network' && Array.isArray(planError?.attempted_base_urls) && planError.attempted_base_urls.length > 0 ? (
+                <Text style={styles.planHintText}>Attempted hosts: {planError.attempted_base_urls.join(', ')}</Text>
+              ) : null}
               {planError?.hint ? <Text style={styles.planHintText}>Hint: {planError.hint}</Text> : null}
-              <ModeButton title="Try again" onPress={handleGeneratePlan} style={styles.errorButton} />
+              <ModeButton title="Try again" onPress={() => handleGeneratePlan(false)} style={styles.errorButton} />
               <ModeButton
                 title="Copy diagnostics"
                 variant="secondary"
@@ -1572,11 +1926,25 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
               )}
               <View style={styles.bottomCtaBar}>
                 {!guidedMode ? (
-                  <ModeButton
-                    title="Begin Guided Workout"
-                    onPress={handleBeginGuidedWorkout}
-                    style={[styles.guidedButton, styles.guidedButtonPrimary]}
-                  />
+                  <>
+                    <ModeButton
+                      title="Adjust with Coach"
+                      variant="secondary"
+                      onPress={handleOpenWorkoutCoach}
+                      style={[styles.guidedButton, styles.coachAdjustButton]}
+                    />
+                    <ModeButton
+                      title="Regenerate Workout"
+                      variant="secondary"
+                      onPress={() => handleGeneratePlan(true)}
+                      style={[styles.guidedButton, styles.coachAdjustButton]}
+                    />
+                    <ModeButton
+                      title="Begin Guided Workout"
+                      onPress={handleBeginGuidedWorkout}
+                      style={[styles.guidedButton, styles.guidedButtonPrimary]}
+                    />
+                  </>
                 ) : (
                   <View style={styles.splitRow}>
                     <Pressable onPress={handlePauseResume} style={[styles.splitButton, styles.pauseButton]}>
@@ -1604,6 +1972,14 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
               </View>
             </ScrollView>
           ) : null}
+          <ConnectionDebugCard
+            debugState={connectionDebug}
+            isHealthzProbeRunning={isHealthzProbeRunning}
+            isTodayProbeRunning={isTodayProbeRunning}
+            onProbeHealthz={handleProbeHealthz}
+            onProbeToday={handleProbeToday}
+            visible={showConnectionDebug}
+          />
         </View>
       ) : null}
 
@@ -1622,6 +1998,14 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
               variant="secondary"
               onPress={onSignOut}
               style={styles.footerButton}
+            />
+            <ConnectionDebugCard
+              debugState={connectionDebug}
+              isHealthzProbeRunning={isHealthzProbeRunning}
+              isTodayProbeRunning={isTodayProbeRunning}
+              onProbeHealthz={handleProbeHealthz}
+              onProbeToday={handleProbeToday}
+              visible={showConnectionDebug}
             />
           </View>
         </View>
@@ -2153,21 +2537,20 @@ const styles = StyleSheet.create({
   environmentGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    marginHorizontal: -6,
+    justifyContent: 'space-between',
+    gap: 12,
   },
   environmentCard: {
-    width: '50%',
-    paddingHorizontal: 6,
-    marginBottom: 12,
+    width: '48%',
     borderRadius: 16,
     borderWidth: 1,
     borderColor: withAlpha('#FFFFFF', 0.1),
     backgroundColor: '#161D2A',
-    minHeight: 106,
-    paddingTop: 12,
-    paddingBottom: 10,
-    paddingLeft: 10,
-    paddingRight: 10,
+    minHeight: 118,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   environmentCardSelected: {
     borderColor: withAlpha(theme.colors.primary, 0.5),
@@ -2185,12 +2568,14 @@ const styles = StyleSheet.create({
     ...theme.typography.body2,
     fontFamily: theme.typography.fontFamily,
     fontWeight: '700',
+    textAlign: 'center',
   },
   environmentDesc: {
     color: theme.colors.textMedium,
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
     marginTop: 4,
+    textAlign: 'center',
   },
   timePillRow: {
     flexDirection: 'row',
@@ -2314,6 +2699,38 @@ const styles = StyleSheet.create({
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
     textAlign: 'center',
+  },
+  debugCard: {
+    width: '100%',
+    maxWidth: 384,
+    alignSelf: 'center',
+    marginTop: theme.spacing[3],
+    padding: theme.spacing[3],
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: withAlpha(theme.colors.textMedium, 0.2),
+    backgroundColor: withAlpha('#0F172A', 0.82),
+  },
+  debugCardTitle: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+    marginBottom: theme.spacing[2],
+  },
+  debugCardBody: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    marginBottom: 4,
+  },
+  debugButtonRow: {
+    flexDirection: 'row',
+    gap: theme.spacing[2],
+    marginTop: theme.spacing[2],
+  },
+  debugButton: {
+    flex: 1,
   },
   planScrollContent: {
     paddingHorizontal: theme.spacing[3],
@@ -2567,6 +2984,9 @@ const styles = StyleSheet.create({
   },
   guidedButton: {
     width: '100%',
+  },
+  coachAdjustButton: {
+    marginBottom: 10,
   },
   guidedButtonPrimary: {
     backgroundColor: '#84CC16',
