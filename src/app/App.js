@@ -7,7 +7,6 @@ import Login from '../features/auth/screens/Login';
 import OnboardingLandingScreen from '../features/auth/screens/OnboardingLandingScreen';
 import CoachChatScreen from '../features/chat/screens/CoachChatScreen';
 import DailyCheckinScreen from '../features/dailyCheckin/screens/DailyCheckinScreen';
-import ModeStateScreen from '../features/home/screens/ModeStateScreen';
 import CoachInsightsScreen from '../features/insights/screens/CoachInsightsScreen';
 import LiquidBottomNav from '../features/navigation/components/LiquidBottomNav';
 import ProfileScreen from '../features/profile/screens/ProfileScreen';
@@ -44,7 +43,6 @@ function AppShell() {
   const [activeTab, setActiveTab] = useState('home');
   const [chatLaunchContext, setChatLaunchContext] = useState(null);
   const [coachOverlayContext, setCoachOverlayContext] = useState(null);
-  const [homeRoute, setHomeRoute] = useState('checkin');
   const [progressRoute, setProgressRoute] = useState('progress');
   const [insightsOrigin, setInsightsOrigin] = useState('progress');
   const tabOpacity = useRef(new Animated.Value(1)).current;
@@ -75,7 +73,6 @@ function AppShell() {
       }
       setSession(nextSession || null);
       setActiveTab('home');
-      setHomeRoute('checkin');
       setProgressRoute('progress');
       setInsightsOrigin('progress');
       setChatLaunchContext(null);
@@ -159,7 +156,6 @@ function AppShell() {
     setAssignTrainerError(null);
     setIsAssigningTrainer(false);
     setActiveTab('home');
-    setHomeRoute('checkin');
     setProgressRoute('progress');
     setInsightsOrigin('progress');
     setChatLaunchContext(null);
@@ -182,7 +178,6 @@ function AppShell() {
       });
       await loadAssignmentStatus();
       setActiveTab('home');
-      setHomeRoute('checkin');
       setInsightsOrigin('progress');
       setChatLaunchContext(null);
       setCoachOverlayContext(null);
@@ -212,9 +207,6 @@ function AppShell() {
     if (nextTab !== 'coach') {
       setChatLaunchContext(null);
     }
-    if (nextTab !== 'home') {
-      setHomeRoute('checkin');
-    }
     if (nextTab !== 'progress') {
       setProgressRoute('progress');
     }
@@ -237,7 +229,6 @@ function AppShell() {
   const handleBackFromInsights = () => {
     if (insightsOrigin === 'home') {
       setActiveTab('home');
-      setHomeRoute('checkin');
       setProgressRoute('progress');
       return;
     }
@@ -306,19 +297,14 @@ function AppShell() {
           />
         ) : null}
 
-        {!showAssignmentGate && activeTab === 'home' && homeRoute === 'checkin' ? (
+        {!showAssignmentGate && activeTab === 'home' ? (
           <DailyCheckinScreen
             accessToken={session.access_token}
             bottomInset={contentBottomInset}
             floatingNavClearance={floatingNavClearance}
             onOpenChat={handleOpenChat}
-            onOpenStateGuide={() => setHomeRoute('state')}
             onOpenInsights={handleOpenHomeInsights}
           />
-        ) : null}
-
-        {!showAssignmentGate && activeTab === 'home' && homeRoute === 'state' ? (
-          <ModeStateScreen onBack={() => setHomeRoute('checkin')} />
         ) : null}
 
         {!showAssignmentGate && activeTab === 'coach' ? (

@@ -191,6 +191,21 @@ const MODE_RECOMMENDATIONS = {
   },
 };
 
+const MODE_GUIDE_DETAILS = {
+  REST: 'REST days protect your long-term progress. Use low-pressure movement, mobility, and recovery support.',
+  RECOVER: 'RECOVER keeps momentum without overload. Choose moderate work and stabilize your routines.',
+  BUILD: 'BUILD converts consistency into growth. Progress with focused training and supportive nutrition.',
+  BEAST: 'BEAST is intentional high-output mode. Use high effort selectively when readiness is truly strong.',
+};
+
+const INPUT_EXPLAINER_FIELDS = [
+  { key: 'sleep', label: 'Sleep' },
+  { key: 'stress', label: 'Stress' },
+  { key: 'soreness', label: 'Soreness' },
+  { key: 'nutrition', label: 'Nutrition' },
+  { key: 'motivation', label: 'Motivation' },
+];
+
 const SCORE_KEYS = QUESTIONS.map((question) => question.key);
 const GRID_COLUMNS = 18;
 const GRID_ROWS = 10;
@@ -338,6 +353,12 @@ function buildSupportBundle({ date, result, submitError }) {
     `Nutrition: ${withFallback(result?.nutrition?.rule)}`,
     `Mindset: ${withFallback(result?.mindset?.cue)}`,
   ].join('\n');
+}
+
+function getInputAnswerLabel(key, score) {
+  const question = QUESTIONS.find((item) => item.key === key);
+  const option = question?.options?.find((item) => item.score === score);
+  return option?.label || 'Not answered';
 }
 
 function buildPlanDiagnosticsLine(planError) {
@@ -698,19 +719,35 @@ function ResultCard({
   );
 }
 
-function HomeOverviewCard({ result, onOpenStateGuide, onOpenInsights, onOpenCoachChat }) {
+function HomeOverviewCard({ result, isModeInfoOpen, onToggleModeInfo, onOpenInsights, onOpenCoachChat }) {
   if (!result) {
     return null;
   }
 
   const modeTheme = MODE_THEME[result.mode] || MODE_THEME.RECOVER;
   const scoreProgress = Math.max(0, Math.min(1, (result.score || 0) / 25));
+  const modeGuideCopy = MODE_GUIDE_DETAILS[result.mode] || MODE_GUIDE_DETAILS.RECOVER;
 
   return (
     <ModeCard variant="surface" style={styles.homeOverviewCard}>
-      <ModeText variant="label" tone="tertiary" style={styles.homeOverviewModeLabel}>
-        Today&apos;s mode
-      </ModeText>
+      <View style={styles.homeOverviewModeRow}>
+        <ModeText variant="label" tone="tertiary" style={styles.homeOverviewModeLabel}>
+          Today&apos;s mode
+        </ModeText>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Explain today's mode"
+          accessibilityHint="Reveals how today's mode was determined from your check-in answers."
+          onPress={onToggleModeInfo}
+          hitSlop={10}
+          style={({ pressed }) => [
+            styles.homeOverviewInfoButton,
+            pressed && styles.homeOverviewInfoButtonPressed,
+          ]}
+        >
+          <Feather name="info" size={14} color={theme.colors.textMedium} />
+        </Pressable>
+      </View>
       <ModeText variant="display" style={[styles.homeOverviewModeValue, { color: modeTheme.accent }]}>
         {result.mode}
       </ModeText>
@@ -720,6 +757,29 @@ function HomeOverviewCard({ result, onOpenStateGuide, onOpenInsights, onOpenCoac
       <ModeText variant="bodySm" tone="secondary" style={styles.homeOverviewBody}>
         {result.mode_tagline || 'Progress today is about smart decisions, not pressure.'}
       </ModeText>
+      {isModeInfoOpen ? (
+        <View style={styles.homeOverviewInfoPanel}>
+          <ModeText variant="bodySm" tone="secondary" style={styles.homeOverviewInfoBody}>
+            {modeGuideCopy}
+          </ModeText>
+          <View style={styles.homeOverviewInputHeader}>
+            <ModeText variant="label" tone="tertiary">Today&apos;s inputs</ModeText>
+            <ModeText variant="caption" tone="tertiary">Readiness score {result.score}/25</ModeText>
+          </View>
+          <View style={styles.homeOverviewInputList}>
+            {INPUT_EXPLAINER_FIELDS.map((field) => (
+              <View key={field.key} style={styles.homeOverviewInputRow}>
+                <ModeText variant="caption" tone="tertiary" style={styles.homeOverviewInputLabel}>
+                  {field.label}
+                </ModeText>
+                <ModeText variant="bodySm" style={styles.homeOverviewInputValue}>
+                  {getInputAnswerLabel(field.key, result?.inputs?.[field.key])}
+                </ModeText>
+              </View>
+            ))}
+          </View>
+        </View>
+      ) : null}
       <View style={styles.homeOverviewMindsetWrap}>
         <ModeText variant="label" tone="tertiary">Mindset</ModeText>
         <ModeText variant="h3" style={styles.homeOverviewMindsetValue}>
@@ -736,7 +796,6 @@ function HomeOverviewCard({ result, onOpenStateGuide, onOpenInsights, onOpenCoac
         />
       </View>
       <View style={styles.homeOverviewActions}>
-        <ModeButton title="Understand my mode" variant="secondary" onPress={onOpenStateGuide} />
         <ModeButton title="Coach insights" variant="ghost" onPress={onOpenInsights} />
         <ModeButton title="Talk to coach" onPress={onOpenCoachChat} />
       </View>
@@ -1080,7 +1139,6 @@ function NutritionPlanView({ plan }) {
 export default function DailyCheckinScreen({
   accessToken,
   onOpenChat,
-  onOpenStateGuide,
   onOpenInsights,
   bottomInset = 0,
   floatingNavClearance = null,
@@ -1100,6 +1158,7 @@ export default function DailyCheckinScreen({
   const [errorMessage, setErrorMessage] = useState(null);
   const [submitError, setSubmitError] = useState(null);
   const [summaryResult, setSummaryResult] = useState(null);
+  const [isModeInfoOpen, setIsModeInfoOpen] = useState(false);
   const [submitState, setSubmitState] = useState('idle');
   const [copyFeedback, setCopyFeedback] = useState(null);
   const [planType, setPlanType] = useState(null);
@@ -1314,6 +1373,10 @@ export default function DailyCheckinScreen({
       clearTimeout(copyFeedbackTimerRef.current);
     }
   }, []);
+
+  useEffect(() => {
+    setIsModeInfoOpen(false);
+  }, [summaryResult]);
 
   useEffect(() => {
     refreshConnectionDebug();
@@ -1534,12 +1597,6 @@ export default function DailyCheckinScreen({
         checkin_score: summaryResult?.score ?? null,
       },
     });
-  };
-
-  const handleOpenStateGuide = () => {
-    if (typeof onOpenStateGuide === 'function') {
-      onOpenStateGuide();
-    }
   };
 
   const handleOpenInsights = () => {
@@ -1820,7 +1877,8 @@ export default function DailyCheckinScreen({
             <Text style={styles.resultsEyebrow}>{formatTodayLabel(today)}</Text>
             <HomeOverviewCard
               result={summaryResult}
-              onOpenStateGuide={handleOpenStateGuide}
+              isModeInfoOpen={isModeInfoOpen}
+              onToggleModeInfo={() => setIsModeInfoOpen((current) => !current)}
               onOpenInsights={handleOpenInsights}
               onOpenCoachChat={handleOpenCoachChat}
             />
@@ -2508,9 +2566,29 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border.soft,
     backgroundColor: theme.colors.surface.base,
   },
+  homeOverviewModeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[2],
+  },
   homeOverviewModeLabel: {
     letterSpacing: 0.4,
     textTransform: 'uppercase',
+  },
+  homeOverviewInfoButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.subtle,
+  },
+  homeOverviewInfoButtonPressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.96 }],
   },
   homeOverviewModeValue: {
     marginTop: theme.spacing[1],
@@ -2521,6 +2599,37 @@ const styles = StyleSheet.create({
   },
   homeOverviewBody: {
     marginTop: theme.spacing[1],
+  },
+  homeOverviewInfoPanel: {
+    marginTop: theme.spacing[3],
+    padding: theme.spacing[3],
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.subtle,
+    gap: theme.spacing[2],
+  },
+  homeOverviewInfoBody: {
+    lineHeight: 20,
+  },
+  homeOverviewInputHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[2],
+  },
+  homeOverviewInputList: {
+    gap: theme.spacing[2],
+  },
+  homeOverviewInputRow: {
+    gap: 4,
+  },
+  homeOverviewInputLabel: {
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
+  },
+  homeOverviewInputValue: {
+    color: theme.colors.textHigh,
   },
   homeOverviewMindsetWrap: {
     marginTop: theme.spacing[3],
