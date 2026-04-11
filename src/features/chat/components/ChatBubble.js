@@ -3,51 +3,13 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { theme } from '../../../../lib/theme';
 
-function formatTokenUsage(tokenUsage) {
-  if (!tokenUsage) {
-    return null;
-  }
-
-  const promptTokens = tokenUsage.prompt_tokens ?? 0;
-  const completionTokens = tokenUsage.completion_tokens ?? 0;
-  const totalTokens = tokenUsage.total_tokens ?? 0;
-  return `Tokens in ${promptTokens} • out ${completionTokens} • total ${totalTokens}`;
-}
-
-function formatConversationUsage(conversationUsage) {
-  if (!conversationUsage) {
-    return null;
-  }
-
-  const totalTokens = conversationUsage.total_tokens ?? 0;
-  const totalPromptTokens = conversationUsage.total_prompt_tokens ?? 0;
-  const totalCompletionTokens = conversationUsage.total_completion_tokens ?? 0;
-  return `Conversation tokens ${totalTokens} • in ${totalPromptTokens} • out ${totalCompletionTokens}`;
-}
-
-function formatModel(routeDebug, conversationUsage) {
-  const provider = routeDebug?.execution_provider || conversationUsage?.last_execution_provider;
-  const model = routeDebug?.execution_model || conversationUsage?.last_execution_model;
-  if (!provider || !model) {
-    return null;
-  }
-
-  return `Model ${provider}/${model}`;
-}
-
 export default function ChatBubble({
   role,
   text,
   isError = false,
   fallbackTriggered = false,
-  tokenUsage = null,
-  routeDebug = null,
-  conversationUsage = null,
 }) {
   const isUser = role === 'user';
-  const tokenUsageLabel = !isUser && !isError ? formatTokenUsage(tokenUsage) : null;
-  const conversationUsageLabel = !isUser && !isError ? formatConversationUsage(conversationUsage) : null;
-  const modelLabel = !isUser && !isError ? formatModel(routeDebug, conversationUsage) : null;
 
   return (
     <View style={[styles.row, isUser ? styles.userRow : styles.assistantRow]}>
@@ -58,19 +20,9 @@ export default function ChatBubble({
           isError && styles.errorBubble,
         ]}
       >
-        {!isUser ? <View style={styles.coachRail} /> : null}
-        <Text style={styles.text}>{text}</Text>
+        <Text style={[styles.text, isUser && styles.userText]}>{text}</Text>
         {fallbackTriggered ? (
-          <Text style={styles.metaText}>Flagged for trainer review</Text>
-        ) : null}
-        {tokenUsageLabel ? (
-          <Text style={styles.metaText}>{tokenUsageLabel}</Text>
-        ) : null}
-        {conversationUsageLabel ? (
-          <Text style={styles.metaText}>{conversationUsageLabel}</Text>
-        ) : null}
-        {modelLabel ? (
-          <Text style={styles.metaText}>{modelLabel}</Text>
+          <Text style={[styles.metaText, isUser && styles.userMetaText]}>Flagged for trainer review</Text>
         ) : null}
       </View>
     </View>
@@ -80,7 +32,7 @@ export default function ChatBubble({
 const styles = StyleSheet.create({
   row: {
     width: '100%',
-    marginBottom: theme.spacing[2],
+    marginBottom: theme.spacing[1],
   },
   assistantRow: {
     alignItems: 'flex-start',
@@ -89,30 +41,19 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   bubble: {
-    maxWidth: '88%',
-    borderRadius: theme.radii.l,
+    maxWidth: '84%',
+    borderRadius: 20,
     paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[2],
+    paddingVertical: theme.spacing[1] + 2,
     borderWidth: 1,
-    position: 'relative',
   },
   assistantBubble: {
-    backgroundColor: '#EAF3EE',
-    borderColor: 'rgba(111, 143, 123, 0.4)',
-    paddingLeft: theme.spacing[3],
-  },
-  coachRail: {
-    position: 'absolute',
-    left: 8,
-    top: 10,
-    bottom: 10,
-    width: 3,
-    borderRadius: 2,
-    backgroundColor: theme.colors.brand.progressCore,
+    backgroundColor: theme.colors.surface.raised,
+    borderColor: theme.colors.border.soft,
   },
   userBubble: {
-    backgroundColor: '#EFEDE6',
-    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.brand.progressCore,
+    borderColor: theme.colors.brand.progressCore,
   },
   errorBubble: {
     borderColor: theme.colors.status.error,
@@ -123,10 +64,18 @@ const styles = StyleSheet.create({
     ...theme.typography.body1,
     fontFamily: theme.typography.fontFamily,
   },
+  userText: {
+    color: theme.colors.text.inverse,
+  },
   metaText: {
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[1] - 2,
     color: theme.colors.text.tertiary,
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
+    fontWeight: '600',
+  },
+  userMetaText: {
+    color: theme.colors.text.inverse,
+    opacity: 0.92,
   },
 });

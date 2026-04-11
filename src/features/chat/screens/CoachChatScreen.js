@@ -1,14 +1,18 @@
-import React, { useMemo, useState } from 'react';
-import { FlatList, StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  FlatList,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+} from 'react-native';
 
 import {
   HeaderBar,
-  InlineFeedback,
-  ModeButton,
-  ModeCard,
   ModeText,
   SafeScreen,
-  StateBadge,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import ChatBubble from '../components/ChatBubble';
@@ -17,13 +21,18 @@ import QuickReplies from '../components/QuickReplies';
 import TypingIndicator from '../components/TypingIndicator';
 import { useChatConversation } from '../hooks/useChatConversation';
 
+const KEYBOARD_OPEN_DOCK_PADDING = theme.spacing[2];
+
 export default function CoachChatScreen({ accessToken, launchContext, bottomInset = 0 }) {
   const [draft, setDraft] = useState('');
+  const [dockHeight, setDockHeight] = useState(0);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const listRef = useRef(null);
+  const dockAnchorInset = Math.max(bottomInset, 0);
+
   const {
     messages,
     quickReplies,
-    conversationState,
-    trainerContext,
     isSending,
     error,
     hasRetryableFailure,
@@ -31,21 +40,13 @@ export default function CoachChatScreen({ accessToken, launchContext, bottomInse
     retryLastFailedMessage,
   } = useChatConversation(accessToken, launchContext);
 
-  const headerSubtitle = useMemo(() => {
-    if (trainerContext?.trainer_display_name) {
-      return `Coaching with ${trainerContext.trainer_display_name}`;
-    }
-    return 'Conversation-first coaching';
-  }, [trainerContext]);
-
-  const recommendationLabel = useMemo(() => {
-    if (quickReplies?.length > 0) {
-      return quickReplies[0];
-    }
-    return 'Share what feels hardest today and coach will simplify your next step.';
-  }, [quickReplies]);
-
-  const hasActionConfirmation = messages.length > 1 && !isSending && !error;
+  const scrollToLatest = useCallback((animated = true) => {
+    requestAnimationFrame(() => {
+      if (listRef.current?.scrollToEnd) {
+        listRef.current.scrollToEnd({ animated });
+      }
+    });
+  }, []);
 
   const handleSend = async () => {
     const message = draft.trim();
@@ -72,126 +73,178 @@ export default function CoachChatScreen({ accessToken, launchContext, bottomInse
     }
   };
 
+  useEffect(() => {
+    scrollToLatest(false);
+  }, [scrollToLatest]);
+
+  useEffect(() => {
+    scrollToLatest(true);
+  }, [messages.length, isSending, scrollToLatest]);
+
+  useEffect(() => {
+    const openEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const closeEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const keyboardOpenSubscription = Keyboard.addListener(openEvent, () => {
+      setIsKeyboardVisible(true);
+      scrollToLatest(true);
+    });
+    const keyboardCloseSubscription = Keyboard.addListener(closeEvent, () => {
+      setIsKeyboardVisible(false);
+    });
+
+    return () => {
+      keyboardOpenSubscription.remove();
+      keyboardCloseSubscription.remove();
+    };
+  }, [scrollToLatest]);
+
   return (
     <SafeScreen style={styles.screen}>
-      <HeaderBar title="Coach Chat" subtitle={headerSubtitle} />
+      <HeaderBar title="Coach Chat" />
 
-      <View style={[styles.content, { paddingBottom: theme.spacing[3] + bottomInset }]}> 
-        <ModeCard variant="tinted" style={styles.statusCard}>
-          <ModeText variant="label" tone="tertiary">Conversation stage</ModeText>
-          <ModeText variant="h3" style={styles.stageText}>{conversationState.current_stage}</ModeText>
-          <ModeText variant="bodySm" tone="secondary">
-            {conversationState.onboarding_complete ? 'Plan-ready and context-aware' : 'Learning your baseline'}
-          </ModeText>
-          <View style={styles.badgeWrap}>
-            <StateBadge mode="RECOVER" label="Supportive coaching" />
-          </View>
-        </ModeCard>
-
-        {hasActionConfirmation ? (
-          <InlineFeedback
-            type="success"
-            message="Action saved. Coach context has been updated."
-            style={styles.feedback}
+      <KeyboardAvoidingView
+        style={styles.content}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
+      >
+        <View style={styles.chatViewport}>
+          <FlatList
+            ref={listRef}
+            data={messages}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <ChatBubble
+                role={item.role}
+                text={item.text}
+                isError={item.isError}
+                fallbackTriggered={item.fallbackTriggered}
+              />
+            )}
+            style={styles.messagesList}
+            contentContainerStyle={[
+              styles.messages,
+              { paddingBottom: dockHeight + theme.spacing[2] },
+            ]}
+            ListFooterComponent={isSending ? <TypingIndicator /> : <View style={styles.threadSpacer} />}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            showsVerticalScrollIndicator={false}
+            onContentSizeChange={() => {
+              scrollToLatest(false);
+            }}
           />
-        ) : null}
 
-        <FlatList
-          data={messages}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <ChatBubble
-              role={item.role}
-              text={item.text}
-              isError={item.isError}
-              fallbackTriggered={item.fallbackTriggered}
-              tokenUsage={item.tokenUsage}
-              routeDebug={item.routeDebug}
-              conversationUsage={item.conversationUsage}
-            />
-          )}
-          contentContainerStyle={styles.messages}
-          ListFooterComponent={isSending ? <TypingIndicator /> : null}
-          keyboardShouldPersistTaps="handled"
-        />
+          <View
+            onLayout={(event) => setDockHeight(event.nativeEvent.layout.height)}
+            style={[
+              styles.dock,
+              {
+                paddingBottom: isKeyboardVisible ? KEYBOARD_OPEN_DOCK_PADDING : dockAnchorInset,
+              },
+            ]}
+          >
+            {hasRetryableFailure ? (
+              <View style={styles.errorRow}>
+                <ModeText variant="caption" tone="error" style={styles.errorText}>
+                  {error || 'Coach is temporarily unavailable.'}
+                </ModeText>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={handleRetryLastMessage}
+                  disabled={isSending}
+                  style={({ pressed }) => [
+                    styles.retryButton,
+                    (isSending || pressed) && styles.retryButtonMuted,
+                  ]}
+                >
+                  <ModeText variant="label" tone="accent">
+                    {isSending ? 'Retrying...' : 'Retry'}
+                  </ModeText>
+                </Pressable>
+              </View>
+            ) : null}
 
-        <ModeCard variant="surface" style={styles.recommendationCard}>
-          <ModeText variant="label" tone="tertiary">Coach recommendation</ModeText>
-          <ModeText variant="bodySm" tone="secondary" style={styles.recommendationText}>{recommendationLabel}</ModeText>
-        </ModeCard>
-
-        <QuickReplies
-          replies={quickReplies}
-          disabled={isSending}
-          onSelect={handleQuickReply}
-        />
-
-        {hasRetryableFailure ? (
-          <ModeCard variant="tinted" style={styles.errorCard}>
-            <ModeText variant="h3" tone="error">Message didn&apos;t send</ModeText>
-            <ModeText variant="bodySm" tone="secondary" style={styles.errorBody}>
-              {error || 'Coach is temporarily unavailable. Try again.'}
-            </ModeText>
-            <ModeButton
-              title={isSending ? 'Retrying...' : 'Retry last message'}
-              onPress={handleRetryLastMessage}
+            <QuickReplies
+              replies={quickReplies}
               disabled={isSending}
-              variant="destructive"
-              style={styles.errorButton}
+              onSelect={handleQuickReply}
+              style={styles.quickReplies}
+              contentContainerStyle={styles.quickRepliesContent}
             />
-          </ModeCard>
-        ) : null}
 
-        <CoachComposer
-          value={draft}
-          onChangeText={setDraft}
-          onSend={handleSend}
-          disabled={isSending}
-        />
-      </View>
+            <CoachComposer
+              value={draft}
+              onChangeText={setDraft}
+              onSend={handleSend}
+              disabled={isSending}
+              onFocus={() => scrollToLatest(false)}
+            />
+          </View>
+        </View>
+      </KeyboardAvoidingView>
     </SafeScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {},
+  screen: {
+    backgroundColor: theme.colors.surface.canvas,
+  },
   content: {
     flex: 1,
-    padding: theme.spacing[3],
   },
-  statusCard: {
-    marginTop: theme.spacing[1],
+  chatViewport: {
+    flex: 1,
+    position: 'relative',
   },
-  stageText: {
-    marginTop: theme.spacing[1],
-    marginBottom: theme.spacing[1],
-  },
-  badgeWrap: {
-    marginTop: theme.spacing[2],
-  },
-  feedback: {
-    marginTop: theme.spacing[1],
+  messagesList: {
+    flex: 1,
   },
   messages: {
     paddingTop: theme.spacing[2],
-    paddingBottom: theme.spacing[2],
+    paddingHorizontal: theme.spacing[3],
   },
-  recommendationCard: {
-    marginTop: theme.spacing[1],
+  threadSpacer: {
+    height: theme.spacing[1],
+  },
+  dock: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingTop: theme.spacing[1],
+    paddingHorizontal: theme.spacing[3],
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.canvas,
+  },
+  errorRow: {
+    marginBottom: theme.spacing[1],
+    borderRadius: theme.radii.s,
+    borderWidth: 1,
+    borderColor: 'rgba(196, 138, 138, 0.45)',
+    backgroundColor: 'rgba(232, 207, 207, 0.35)',
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[1],
+  },
+  errorText: {
+    flex: 1,
+  },
+  retryButton: {
+    paddingVertical: theme.spacing[1] - 2,
+    paddingHorizontal: theme.spacing[1],
+  },
+  retryButtonMuted: {
+    opacity: 0.65,
+  },
+  quickReplies: {
     marginBottom: theme.spacing[1],
   },
-  recommendationText: {
-    marginTop: theme.spacing[1],
-  },
-  errorCard: {
-    marginTop: theme.spacing[2],
-    borderColor: 'rgba(196, 138, 138, 0.4)',
-    backgroundColor: 'rgba(232, 207, 207, 0.4)',
-  },
-  errorBody: {
-    marginTop: theme.spacing[1],
-  },
-  errorButton: {
-    marginTop: theme.spacing[2],
+  quickRepliesContent: {
+    paddingHorizontal: 0,
   },
 });

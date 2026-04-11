@@ -125,11 +125,6 @@ export function useChatConversation(accessToken, launchContext = null) {
   const [messages, setMessages] = useState(() => [buildInitialMessage(launchContextPayload)]);
   const [conversationId, setConversationId] = useState(null);
   const [quickReplies, setQuickReplies] = useState(() => buildInitialQuickReplies(launchContextPayload));
-  const [conversationState, setConversationState] = useState({
-    current_stage: 'welcome',
-    onboarding_complete: false,
-  });
-  const [trainerContext, setTrainerContext] = useState(null);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState(null);
   const [lastFailedMessage, setLastFailedMessage] = useState(null);
@@ -162,8 +157,6 @@ export function useChatConversation(accessToken, launchContext = null) {
 
       setLastFailedMessage(null);
       setConversationId(payload.conversation_id || null);
-      setConversationState(payload.conversation_state || { current_stage: 'welcome', onboarding_complete: false });
-      setTrainerContext(payload.trainer_context || null);
       setQuickReplies(payload.quick_replies || []);
       setMessages((current) => [
         ...current,
@@ -172,9 +165,6 @@ export function useChatConversation(accessToken, launchContext = null) {
           role: 'assistant',
           text: payload.assistant_message,
           fallbackTriggered: payload.fallback_triggered,
-          tokenUsage: payload.token_usage || null,
-          routeDebug: payload.route_debug || null,
-          conversationUsage: payload.conversation_usage || null,
         },
       ]);
       return true;
@@ -198,8 +188,6 @@ export function useChatConversation(accessToken, launchContext = null) {
   return {
     messages,
     quickReplies,
-    conversationState,
-    trainerContext,
     isSending,
     error,
     lastFailedMessage,

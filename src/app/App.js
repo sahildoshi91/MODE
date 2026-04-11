@@ -16,6 +16,12 @@ import TrainerAssignmentScreen from '../features/trainerAssignment/screens/Train
 import { assignTrainer, getTrainerAssignmentStatus } from '../features/trainerAssignment/services/trainerAssignmentApi';
 import { supabase } from '../services/supabaseClient';
 
+const FLOATING_NAV_BOTTOM_OFFSET = 12;
+const FLOATING_NAV_PILL_HEIGHT = 62;
+const COACH_CHAT_NAV_GAP = 2;
+const COACH_CHAT_DOCK_CLEARANCE =
+  FLOATING_NAV_BOTTOM_OFFSET + FLOATING_NAV_PILL_HEIGHT + COACH_CHAT_NAV_GAP;
+
 function formatAssignmentError(error, fallbackMessage) {
   const message = error?.message || fallbackMessage;
   return {
@@ -243,6 +249,7 @@ function AppShell() {
 
   const navBottomInset = insets.bottom;
   const contentBottomInset = navBottomInset + 108;
+  const coachChatBottomInset = navBottomInset + COACH_CHAT_DOCK_CLEARANCE;
   const isBlockingStatusError = Boolean(assignmentStatusError);
   const assignmentError = assignTrainerError || assignmentStatusError;
   const needsAssignment = Boolean(assignmentStatus?.needs_assignment);
@@ -303,7 +310,7 @@ function AppShell() {
           <CoachChatScreen
             accessToken={session.access_token}
             launchContext={chatLaunchContext}
-            bottomInset={contentBottomInset}
+            bottomInset={coachChatBottomInset}
           />
         ) : null}
 
