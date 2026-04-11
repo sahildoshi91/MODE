@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -42,3 +43,50 @@ class TrainerHomeTodayResponse(BaseModel):
     trainer: TrainerHomeTrainerSummary
     totals: TrainerHomeTotals
     clients: list[TrainerHomeClientItem] = Field(default_factory=list)
+
+
+class TrainerHomeRiskFlag(BaseModel):
+    code: str
+    label: str
+    severity: Literal["low", "medium", "high"] = "medium"
+    detail: str | None = None
+
+
+class TrainerHomeTalkingPointSet(BaseModel):
+    points: list[str] = Field(default_factory=list)
+    generation_strategy: str = "deterministic"
+    generated_at: datetime | None = None
+    expires_at: datetime | None = None
+    cache_hit: bool = False
+
+
+class TrainerHomeCommandCenterClientItem(BaseModel):
+    client_id: str
+    client_name: str
+    priority_score: float = 0.0
+    priority_tier: Literal["low", "medium", "high", "critical"] = "low"
+    scheduled_today: bool = False
+    session_start_at: datetime | None = None
+    session_end_at: datetime | None = None
+    session_type: str | None = None
+    session_status: str | None = None
+    week_summary: TrainerHomeWeekSummary
+    risk_flags: list[TrainerHomeRiskFlag] = Field(default_factory=list)
+    talking_points: TrainerHomeTalkingPointSet = Field(default_factory=TrainerHomeTalkingPointSet)
+    last_checkin_date: date | None = None
+    days_since_last_checkin: int | None = None
+
+
+class TrainerHomeCommandCenterTotals(BaseModel):
+    assigned_clients: int = 0
+    scheduled_today: int = 0
+    checkins_completed_today: int = 0
+    high_priority_clients: int = 0
+    critical_priority_clients: int = 0
+
+
+class TrainerHomeCommandCenterResponse(BaseModel):
+    date: date
+    trainer: TrainerHomeTrainerSummary
+    totals: TrainerHomeCommandCenterTotals
+    clients: list[TrainerHomeCommandCenterClientItem] = Field(default_factory=list)

@@ -81,3 +81,69 @@ export function createTrainerKnowledgeDocument({
     },
   });
 }
+
+export function ingestTrainerKnowledgeDocument({
+  accessToken,
+  title,
+  rawText,
+  documentType = 'text',
+  fileUrl = null,
+  metadata = {},
+}) {
+  return requestTrainerKnowledge('/api/v1/trainer-knowledge/ingest', {
+    accessToken,
+    method: 'POST',
+    body: {
+      title,
+      raw_text: rawText,
+      document_type: documentType,
+      file_url: fileUrl,
+      metadata,
+    },
+  });
+}
+
+export function listTrainerRules({
+  accessToken,
+  includeArchived = false,
+  category = null,
+}) {
+  const query = [];
+  if (includeArchived) {
+    query.push('include_archived=true');
+  }
+  if (category) {
+    query.push(`category=${encodeURIComponent(category)}`);
+  }
+  const suffix = query.join('&');
+  const path = suffix
+    ? `/api/v1/trainer-knowledge/rules?${suffix}`
+    : '/api/v1/trainer-knowledge/rules';
+  return requestTrainerKnowledge(path, { accessToken });
+}
+
+export function updateTrainerRule({
+  accessToken,
+  ruleId,
+  category,
+  ruleText,
+}) {
+  return requestTrainerKnowledge(`/api/v1/trainer-knowledge/rules/${encodeURIComponent(ruleId)}`, {
+    accessToken,
+    method: 'PATCH',
+    body: {
+      ...(category ? { category } : {}),
+      ...(typeof ruleText === 'string' ? { rule_text: ruleText } : {}),
+    },
+  });
+}
+
+export function archiveTrainerRule({
+  accessToken,
+  ruleId,
+}) {
+  return requestTrainerKnowledge(`/api/v1/trainer-knowledge/rules/${encodeURIComponent(ruleId)}`, {
+    accessToken,
+    method: 'DELETE',
+  });
+}

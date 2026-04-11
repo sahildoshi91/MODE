@@ -3,6 +3,21 @@ MODE is an Expo + FastAPI project for trainer-aware AI coaching.
 
 The current repo is centered on a working client login + chat flow on the frontend and a multi-tenant coaching foundation on the backend. Legacy duplicate screens and unused setup files have been removed so the codebase now reflects the active product direction more closely.
 
+## Trainer Platform Planning (Phases 1-4)
+
+Pre-implementation architecture artifacts for the trainer-side expansion live in:
+
+```text
+docs/trainer-platform/
+```
+
+This includes:
+- repo audit
+- protected client surface area
+- target architecture
+- schema/domain model
+- phased implementation plan
+
 ## Active Structure
 
 ### Frontend

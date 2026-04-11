@@ -164,6 +164,10 @@ class DailyCheckinService:
         avg_30 = self._average(last_30_scores)
         prev_avg_7 = self._average(prev_7_scores)
         prev_avg_30 = self._average(prev_30_scores)
+        avg_7_change = self._round_for_change(avg_7)
+        avg_30_change = self._round_for_change(avg_30)
+        prev_avg_7_change = self._round_for_change(prev_avg_7)
+        prev_avg_30_change = self._round_for_change(prev_avg_30)
 
         has_enough_for_30d = len(normalized_rows) >= 30
         insufficient_data_reason = None
@@ -180,18 +184,22 @@ class DailyCheckinService:
             avg_score_last_30_days=avg_30 if has_enough_for_30d else None,
             avg_mode_last_30_days=self._assign_mode(avg_30) if has_enough_for_30d and avg_30 is not None else None,
             score_change_7d=ScoreWindowChange(
-                value=(avg_7 - prev_avg_7) if avg_7 is not None and prev_avg_7 is not None else None,
-                previous_average=prev_avg_7,
-                has_previous_window_data=prev_avg_7 is not None,
+                value=(
+                    round(avg_7_change - prev_avg_7_change, 2)
+                    if avg_7_change is not None and prev_avg_7_change is not None
+                    else None
+                ),
+                previous_average=prev_avg_7_change,
+                has_previous_window_data=prev_avg_7_change is not None,
             ),
             score_change_30d=ScoreWindowChange(
                 value=(
-                    (avg_30 - prev_avg_30)
-                    if has_enough_for_30d and avg_30 is not None and prev_avg_30 is not None
+                    round(avg_30_change - prev_avg_30_change, 2)
+                    if has_enough_for_30d and avg_30_change is not None and prev_avg_30_change is not None
                     else None
                 ),
-                previous_average=prev_avg_30 if has_enough_for_30d else None,
-                has_previous_window_data=bool(has_enough_for_30d and prev_avg_30 is not None),
+                previous_average=prev_avg_30_change if has_enough_for_30d else None,
+                has_previous_window_data=bool(has_enough_for_30d and prev_avg_30_change is not None),
             ),
             has_enough_for_30d=has_enough_for_30d,
             insufficient_data_reason=insufficient_data_reason,
@@ -545,6 +553,11 @@ class DailyCheckinService:
         if not values:
             return None
         return round(sum(values) / len(values), 2)
+
+    def _round_for_change(self, value: float | None) -> float | None:
+        if value is None:
+            return None
+        return float(round(value))
 
     def _get_lowest_dimension(self, inputs: DailyCheckinInputs) -> str:
         values = inputs.model_dump()

@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     ai_request_timeout_seconds: float = 30.0
     ai_max_retries: int = 2
     expose_route_debug: bool = False
+    trainer_intelligence_orchestration_enabled: bool = False
+    trainer_ai_review_auto_apply_enabled: bool = True
     supabase_url: str | None = None
     supabase_anon_key: str | None = Field(
         default=None,

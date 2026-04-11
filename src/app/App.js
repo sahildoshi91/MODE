@@ -14,7 +14,9 @@ import ProgressScreen from '../features/progress/screens/ProgressScreen';
 import TrainerClientsScreen from '../features/trainerClients/screens/TrainerClientsScreen';
 import TrainerAssignmentScreen from '../features/trainerAssignment/screens/TrainerAssignmentScreen';
 import TrainerHomeScreen from '../features/trainerHome/screens/TrainerHomeScreen';
+import TrainerRouteHost from '../features/trainerPlatform/routes/TrainerRouteHost';
 import { assignTrainer, getTrainerAssignmentStatus } from '../features/trainerAssignment/services/trainerAssignmentApi';
+import { TRAINER_ROUTE_FOUNDATION_ENABLED } from '../config/featureFlags';
 import { supabase } from '../services/supabaseClient';
 
 const FLOATING_NAV_BOTTOM_OFFSET = 12;
@@ -294,6 +296,11 @@ function AppShell() {
     !isTrainerViewer && (needsAssignment || isBlockingStatusError) && activeTab !== 'profile',
   );
   const isBlockingAssignmentLoad = isAssignmentStatusLoading && !assignmentStatus && !assignmentStatusError;
+  const shouldUseTrainerRouteFoundation = Boolean(
+    TRAINER_ROUTE_FOUNDATION_ENABLED
+      && !showAssignmentGate
+      && isTrainerViewer,
+  );
 
   if (isBlockingAssignmentLoad) {
     return (
@@ -331,66 +338,82 @@ function AppShell() {
           />
         ) : null}
 
-        {!showAssignmentGate && !isTrainerViewer && activeTab === 'home' ? (
-          <DailyCheckinScreen
+        {shouldUseTrainerRouteFoundation ? (
+          <TrainerRouteHost
+            activeTab={activeTab}
             accessToken={session.access_token}
-            bottomInset={contentBottomInset}
-            floatingNavClearance={floatingNavClearance}
-            onOpenChat={handleOpenChat}
-            onOpenInsights={handleOpenHomeInsights}
-          />
-        ) : null}
-
-        {!showAssignmentGate && isTrainerViewer && activeTab === 'home' ? (
-          <TrainerHomeScreen
-            accessToken={session.access_token}
-            bottomInset={contentBottomInset}
-            viewerDisplayName={assignmentStatus?.viewer_display_name || null}
-            trainerOnboardingCompleted={Boolean(assignmentStatus?.trainer_onboarding_completed)}
-            onOpenCoachTraining={handleOpenTrainerCoach}
-          />
-        ) : null}
-
-        {!showAssignmentGate && activeTab === 'coach' ? (
-          <CoachChatScreen
-            accessToken={session.access_token}
-            launchContext={chatLaunchContext}
-            bottomInset={coachChatBottomInset}
-          />
-        ) : null}
-
-        {!showAssignmentGate && !isTrainerViewer && activeTab === 'progress' && progressRoute === 'progress' ? (
-          <ProgressScreen
-            accessToken={session.access_token}
-            bottomInset={contentBottomInset}
-            onOpenInsights={handleOpenProgressInsights}
-            initialSection="habits"
-          />
-        ) : null}
-
-        {!showAssignmentGate && !isTrainerViewer && activeTab === 'progress' && progressRoute === 'insights' ? (
-          <CoachInsightsScreen
-            accessToken={session.access_token}
-            onBack={handleBackFromInsights}
-            bottomInset={contentBottomInset}
-          />
-        ) : null}
-
-        {!showAssignmentGate && isTrainerViewer && activeTab === 'clients' ? (
-          <TrainerClientsScreen
-            accessToken={session.access_token}
-            bottomInset={contentBottomInset}
-          />
-        ) : null}
-
-        {activeTab === 'profile' ? (
-          <ProfileScreen
-            session={session}
+            chatLaunchContext={chatLaunchContext}
+            contentBottomInset={contentBottomInset}
+            coachChatBottomInset={coachChatBottomInset}
             assignmentStatus={assignmentStatus}
+            session={session}
+            onOpenTrainerCoach={handleOpenTrainerCoach}
             onSignOut={handleSignOut}
-            bottomInset={contentBottomInset}
           />
-        ) : null}
+        ) : (
+          <>
+            {!showAssignmentGate && !isTrainerViewer && activeTab === 'home' ? (
+              <DailyCheckinScreen
+                accessToken={session.access_token}
+                bottomInset={contentBottomInset}
+                floatingNavClearance={floatingNavClearance}
+                onOpenChat={handleOpenChat}
+                onOpenInsights={handleOpenHomeInsights}
+              />
+            ) : null}
+
+            {!showAssignmentGate && isTrainerViewer && activeTab === 'home' ? (
+              <TrainerHomeScreen
+                accessToken={session.access_token}
+                bottomInset={contentBottomInset}
+                viewerDisplayName={assignmentStatus?.viewer_display_name || null}
+                trainerOnboardingCompleted={Boolean(assignmentStatus?.trainer_onboarding_completed)}
+                onOpenCoachTraining={handleOpenTrainerCoach}
+              />
+            ) : null}
+
+            {!showAssignmentGate && activeTab === 'coach' ? (
+              <CoachChatScreen
+                accessToken={session.access_token}
+                launchContext={chatLaunchContext}
+                bottomInset={coachChatBottomInset}
+              />
+            ) : null}
+
+            {!showAssignmentGate && !isTrainerViewer && activeTab === 'progress' && progressRoute === 'progress' ? (
+              <ProgressScreen
+                accessToken={session.access_token}
+                bottomInset={contentBottomInset}
+                onOpenInsights={handleOpenProgressInsights}
+                initialSection="habits"
+              />
+            ) : null}
+
+            {!showAssignmentGate && !isTrainerViewer && activeTab === 'progress' && progressRoute === 'insights' ? (
+              <CoachInsightsScreen
+                accessToken={session.access_token}
+                onBack={handleBackFromInsights}
+                bottomInset={contentBottomInset}
+              />
+            ) : null}
+
+            {!showAssignmentGate && isTrainerViewer && activeTab === 'clients' ? (
+              <TrainerClientsScreen
+                accessToken={session.access_token}
+                bottomInset={contentBottomInset}
+              />
+            ) : null}
+
+            {activeTab === 'profile' ? (
+              <ProfileScreen
+                session={session}
+                assignmentStatus={assignmentStatus}
+                onSignOut={handleSignOut}
+                bottomInset={contentBottomInset}
+              />
+            ) : null}
+          </>
+        )}
       </Animated.View>
 
       {coachOverlayContext ? (

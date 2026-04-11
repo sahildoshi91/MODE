@@ -4,6 +4,7 @@ import logging
 from collections.abc import Iterator
 from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from app.ai.client import (
@@ -17,6 +18,7 @@ from app.ai.client import (
 )
 from app.core.config import settings
 from app.core.tenancy import TrainerContext
+from app.modules.ai_feedback.service import AIFeedbackService
 from app.modules.conversation.repository import ConversationRepository
 from app.modules.conversation.routing import (
     CLAUDE_SONNET_4_6_MODEL,
@@ -28,6 +30,7 @@ from app.modules.conversation.routing import (
 )
 from app.modules.conversation.schemas import ChatRequest, ChatResponse, ConversationState, ConversationUsage, RouteDebug, TokenUsage
 from app.modules.profile.service import ProfileService
+from app.modules.trainer_intelligence.service import TrainerIntelligenceService
 from app.modules.trainer_persona.repository import TrainerPersonaRepository
 from app.modules.trainer_review.service import TrainerReviewService
 
@@ -39,6 +42,7 @@ logger = logging.getLogger(__name__)
 class PromptPackage:
     system_prompt: str
     user_prompt: str
+    orchestration_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -73,11 +77,15 @@ class ConversationService:
         profile_service: ProfileService,
         trainer_review_service: TrainerReviewService,
         trainer_persona_repository: TrainerPersonaRepository,
+        ai_feedback_logger_service: AIFeedbackService | None = None,
+        trainer_intelligence_service: TrainerIntelligenceService | None = None,
     ):
         self.repository = repository
         self.profile_service = profile_service
         self.trainer_review_service = trainer_review_service
         self.trainer_persona_repository = trainer_persona_repository
+        self.ai_feedback_logger_service = ai_feedback_logger_service
+        self.trainer_intelligence_service = trainer_intelligence_service
         self.router = ConversationRouter()
         self.gemini_client: GeminiClient | None = self._safe_init_gemini_client()
         self.openai_client: OpenAIClient | None = self._safe_init_openai_client()
@@ -221,6 +229,48 @@ class ConversationService:
         client_context = request.client_context or {}
         route_instructions = self._route_system_instructions(route)
         workout_prompt = self._workout_context_prompt(client_context)
+        orchestration_metadata: dict[str, Any] = {
+            "enabled": bool(settings.trainer_intelligence_orchestration_enabled),
+            "used": False,
+            "fallback_reason": "flag_disabled",
+        }
+        orchestration_system_appendix = ""
+        orchestration_user_appendix = ""
+
+        if settings.trainer_intelligence_orchestration_enabled and self.trainer_intelligence_service:
+            try:
+                orchestration_context = self.trainer_intelligence_service.assemble_prompt_context(
+                    trainer_context=trainer_context,
+                    route=route,
+                    client_context=client_context,
+                    profile=profile,
+                )
+                orchestration_system_appendix = orchestration_context.system_appendix or ""
+                orchestration_user_appendix = orchestration_context.user_appendix or ""
+                orchestration_metadata = {
+                    "enabled": True,
+                    **(orchestration_context.metadata or {}),
+                    "used": bool(orchestration_system_appendix or orchestration_user_appendix),
+                }
+            except Exception as exc:
+                logger.exception(
+                    "Trainer intelligence orchestration failed conversation_id=%s trainer_id=%s client_id=%s",
+                    conversation.get("id"),
+                    trainer_context.trainer_id,
+                    trainer_context.client_id,
+                )
+                orchestration_metadata = {
+                    "enabled": True,
+                    "used": False,
+                    "fallback_reason": exc.__class__.__name__,
+                }
+        elif settings.trainer_intelligence_orchestration_enabled:
+            orchestration_metadata = {
+                "enabled": True,
+                "used": False,
+                "fallback_reason": "orchestration_service_unavailable",
+            }
+        orchestration_system_block = f"{orchestration_system_appendix}\n" if orchestration_system_appendix else ""
 
         system_prompt = (
             "You are an expert fitness coach in the MODE app.\n"
@@ -233,18 +283,24 @@ class ConversationService:
             "Differentiate between what is known from context and what you are inferring.\n"
             f"{workout_prompt['system']}"
             f"{route_instructions}"
+            f"{orchestration_system_block}"
         )
         actor_label = "Trainer admin context" if self._is_trainer_only_context(trainer_context) else "Client profile"
         user_prompt = (
             f"{actor_label}: {profile}\n"
             f"Client context: {client_context}\n"
             f"{workout_prompt['user']}"
+            f"{orchestration_user_appendix}"
             "Conversation history:\n"
             f"{history_text}\n\n"
             f"USER: {request.message}\n"
             "ASSISTANT:"
         )
-        return PromptPackage(system_prompt=system_prompt, user_prompt=user_prompt)
+        return PromptPackage(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            orchestration_metadata=orchestration_metadata,
+        )
 
     def _workout_context_prompt(self, client_context: dict[str, Any]) -> dict[str, str]:
         entrypoint = str(client_context.get("entrypoint") or "").strip().lower()
@@ -687,7 +743,8 @@ class ConversationService:
         execution_model: str,
         completion: TextCompletion,
         fallback_reason: str | None = None,
-    ) -> tuple[RouteDebug, ConversationUsage]:
+        orchestration_metadata: dict[str, Any] | None = None,
+    ) -> tuple[RouteDebug, ConversationUsage, dict[str, Any]]:
         route_debug = self._build_route_debug(route, execution_provider, execution_model, fallback_reason)
         saved_message = self.repository.save_message(
             conversation_id,
@@ -703,6 +760,7 @@ class ConversationService:
                     "thoughts_tokens": completion.token_usage.thoughts_tokens,
                 },
                 "route": self._serialize_route_metadata(route, execution_provider, execution_model, fallback_reason),
+                "orchestration": orchestration_metadata or {},
             },
         )
         try:
@@ -728,7 +786,68 @@ class ConversationService:
             route.flow,
             False,
         )
-        return route_debug, self._get_conversation_usage(conversation_id)
+        return route_debug, self._get_conversation_usage(conversation_id), saved_message
+
+    def _log_generated_chat_output_safely(
+        self,
+        *,
+        trainer_context: TrainerContext,
+        conversation_id: str,
+        saved_assistant_message: dict[str, Any],
+        assistant_message: str,
+        route: RoutingDecision,
+        completion: TextCompletion,
+        execution_provider: str,
+        execution_model: str,
+        fallback_reason: str | None,
+        orchestration_metadata: dict[str, Any] | None,
+        request: ChatRequest,
+    ) -> None:
+        if not self.ai_feedback_logger_service:
+            return
+        if not trainer_context.tenant_id or not trainer_context.trainer_id:
+            return
+
+        message_id = str(saved_assistant_message.get("id") or "").strip() or None
+        if not message_id:
+            return
+        generated_at = saved_assistant_message.get("created_at") or datetime.now(timezone.utc).isoformat()
+        try:
+            self.ai_feedback_logger_service.log_generated_output(
+                tenant_id=trainer_context.tenant_id,
+                trainer_id=trainer_context.trainer_id,
+                client_id=trainer_context.client_id,
+                source_type="chat",
+                source_ref_id=message_id,
+                conversation_id=conversation_id,
+                message_id=message_id,
+                output_text=assistant_message,
+                output_json={
+                    "route": {
+                        "task_type": route.task_type,
+                        "response_mode": route.response_mode,
+                        "flow": route.flow,
+                    },
+                    "request_message": request.message,
+                },
+                generation_metadata={
+                    "producer": "conversation_service",
+                    "generation_strategy": execution_provider,
+                    "generated_at": generated_at,
+                    "provider": execution_provider,
+                    "model": execution_model,
+                    "fallback_reason": fallback_reason,
+                    "token_usage": {
+                        "prompt_tokens": completion.token_usage.prompt_tokens,
+                        "completion_tokens": completion.token_usage.completion_tokens,
+                        "total_tokens": completion.token_usage.total_tokens,
+                        "thoughts_tokens": completion.token_usage.thoughts_tokens,
+                    },
+                    "orchestration": orchestration_metadata or {},
+                },
+            )
+        except Exception:
+            logger.exception("Failed to write chat output to ai_generated_outputs message_id=%s", message_id)
 
     def _get_conversation_usage(self, conversation_id: str) -> ConversationUsage:
         try:
@@ -842,15 +961,29 @@ class ConversationService:
                         text=assistant_message,
                         token_usage=AIClientTokenUsage(),
                     )
-                    _, conversation_usage = self._persist_assistant_message(
+                    _, conversation_usage, saved_assistant_message = self._persist_assistant_message(
                         conversation["id"],
                         assistant_message,
                         route,
                         "anthropic",
                         ANTHROPIC_SONNET_MODEL,
                         completion,
+                        orchestration_metadata=prompt.orchestration_metadata,
                     )
                     result_state.conversation_usage = conversation_usage
+                    self._log_generated_chat_output_safely(
+                        trainer_context=trainer_context,
+                        conversation_id=conversation["id"],
+                        saved_assistant_message=saved_assistant_message,
+                        assistant_message=assistant_message,
+                        route=route,
+                        completion=completion,
+                        execution_provider="anthropic",
+                        execution_model=ANTHROPIC_SONNET_MODEL,
+                        fallback_reason=None,
+                        orchestration_metadata=prompt.orchestration_metadata,
+                        request=request,
+                    )
                     self._queue_trainer_review_safely(
                         trainer_context,
                         conversation["id"],
@@ -891,7 +1024,7 @@ class ConversationService:
                     if not assistant_message:
                         assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
                     yield assistant_message
-                    _, conversation_usage = self._persist_assistant_message(
+                    _, conversation_usage, saved_assistant_message = self._persist_assistant_message(
                         conversation["id"],
                         assistant_message,
                         route,
@@ -899,8 +1032,22 @@ class ConversationService:
                         execution_model,
                         completion,
                         fallback_reason,
+                        orchestration_metadata=prompt.orchestration_metadata,
                     )
                     result_state.conversation_usage = conversation_usage
+                    self._log_generated_chat_output_safely(
+                        trainer_context=trainer_context,
+                        conversation_id=conversation["id"],
+                        saved_assistant_message=saved_assistant_message,
+                        assistant_message=assistant_message,
+                        route=route,
+                        completion=completion,
+                        execution_provider=execution_provider,
+                        execution_model=execution_model,
+                        fallback_reason=fallback_reason,
+                        orchestration_metadata=prompt.orchestration_metadata,
+                        request=request,
+                    )
                     self._queue_trainer_review_safely(
                         trainer_context,
                         conversation["id"],
@@ -937,15 +1084,29 @@ class ConversationService:
                     text=assistant_message,
                     token_usage=AIClientTokenUsage(),
                 )
-                _, conversation_usage = self._persist_assistant_message(
+                _, conversation_usage, saved_assistant_message = self._persist_assistant_message(
                     conversation["id"],
                     assistant_message,
                     route,
                     "gemini",
                     GEMINI_MODEL,
                     completion,
+                    orchestration_metadata=prompt.orchestration_metadata,
                 )
                 result_state.conversation_usage = conversation_usage
+                self._log_generated_chat_output_safely(
+                    trainer_context=trainer_context,
+                    conversation_id=conversation["id"],
+                    saved_assistant_message=saved_assistant_message,
+                    assistant_message=assistant_message,
+                    route=route,
+                    completion=completion,
+                    execution_provider="gemini",
+                    execution_model=GEMINI_MODEL,
+                    fallback_reason=None,
+                    orchestration_metadata=prompt.orchestration_metadata,
+                    request=request,
+                )
                 self._queue_trainer_review_safely(
                     trainer_context,
                     conversation["id"],
@@ -994,7 +1155,7 @@ class ConversationService:
             if not assistant_message:
                 assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
 
-            route_debug, conversation_usage = self._persist_assistant_message(
+            route_debug, conversation_usage, saved_assistant_message = self._persist_assistant_message(
                 conversation["id"],
                 assistant_message,
                 route,
@@ -1002,6 +1163,7 @@ class ConversationService:
                 execution_model,
                 completion,
                 fallback_reason,
+                orchestration_metadata=prompt.orchestration_metadata,
             )
         except ConversationProcessingError:
             self._mark_conversation_failed(conversation["id"])
@@ -1010,6 +1172,19 @@ class ConversationService:
             self._mark_conversation_failed(conversation["id"])
             raise ConversationProcessingError("Chat response could not be completed") from exc
 
+        self._log_generated_chat_output_safely(
+            trainer_context=trainer_context,
+            conversation_id=conversation["id"],
+            saved_assistant_message=saved_assistant_message,
+            assistant_message=assistant_message,
+            route=route,
+            completion=completion,
+            execution_provider=execution_provider,
+            execution_model=execution_model,
+            fallback_reason=fallback_reason,
+            orchestration_metadata=prompt.orchestration_metadata,
+            request=request,
+        )
         self._queue_trainer_review_safely(
             trainer_context,
             conversation["id"],

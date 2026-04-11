@@ -28,6 +28,7 @@ export default function CoachChatScreen({
   launchContext,
   bottomInset = 0,
   onBack = null,
+  topToolbar = null,
 }) {
   const [draft, setDraft] = useState('');
   const [dockHeight, setDockHeight] = useState(0);
@@ -114,6 +115,11 @@ export default function CoachChatScreen({
         onBack={onBack}
         backAccessibilityLabel={backAccessibilityLabel}
       />
+      {topToolbar ? (
+        <View style={styles.toolbarContainer}>
+          {topToolbar}
+        </View>
+      ) : null}
 
       <KeyboardAvoidingView
         style={styles.content}
@@ -205,6 +211,10 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
+  },
+  toolbarContainer: {
+    paddingHorizontal: theme.spacing[3],
+    paddingBottom: theme.spacing[1],
   },
   chatViewport: {
     flex: 1,

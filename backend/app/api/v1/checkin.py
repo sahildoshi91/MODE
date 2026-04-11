@@ -5,8 +5,9 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.core.auth import AuthenticatedUser, CurrentUser
-from app.core.dependencies import get_daily_checkin_service, get_trainer_context
+from app.core.dependencies import get_ai_feedback_logger_service, get_daily_checkin_service, get_trainer_context
 from app.core.tenancy import TrainerContext
+from app.modules.ai_feedback.service import AIFeedbackService
 from app.modules.daily_checkins.repository import DailyCheckinRepositoryError
 from app.modules.daily_checkins.schemas import (
     CheckinProgressResponse,
@@ -190,11 +191,61 @@ async def generate_checkin_plan(
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: DailyCheckinService = Depends(get_daily_checkin_service),
+    ai_feedback_logger_service: AIFeedbackService = Depends(get_ai_feedback_logger_service),
 ):
     client_id = _resolve_client_id(trainer_context)
     request_id = uuid4().hex[:12]
     try:
-        return service.generate_plan(client_id=client_id, user_id=user.id, request=request)
+        response = service.generate_plan(client_id=client_id, user_id=user.id, request=request)
+        response_payload = (
+            response.model_dump()
+            if hasattr(response, "model_dump")
+            else (response if isinstance(response, dict) else None)
+        )
+        if trainer_context.tenant_id and trainer_context.trainer_id:
+            try:
+                plan_id = response_payload.get("plan_id") if isinstance(response_payload, dict) else None
+                if not isinstance(plan_id, str) or not plan_id.strip():
+                    return response
+                plan_type = response_payload.get("plan_type")
+                if hasattr(plan_type, "value"):
+                    plan_type_value = plan_type.value
+                else:
+                    plan_type_value = str(plan_type) if plan_type is not None else None
+                ai_feedback_logger_service.log_generated_output(
+                    tenant_id=trainer_context.tenant_id,
+                    trainer_id=trainer_context.trainer_id,
+                    client_id=client_id,
+                    source_type="generated_checkin_plan",
+                    source_ref_id=plan_id,
+                    output_text=response_payload.get("content") if isinstance(response_payload, dict) else None,
+                    output_json={
+                        "plan_type": plan_type_value,
+                        "structured": response_payload.get("structured"),
+                        "request_fingerprint": response_payload.get("request_fingerprint"),
+                        "revision_number": response_payload.get("revision_number"),
+                        "workout_context": response_payload.get("workout_context"),
+                    },
+                    generation_metadata={
+                        "producer": "daily_checkin_generate_plan",
+                        "generation_strategy": "llm_with_fallback",
+                        "generated_at": datetime.now(timezone.utc).isoformat(),
+                        "request_id": request_id,
+                        "plan_type": request.plan_type.value,
+                        "refresh_requested": request.refresh_requested,
+                        "include_yesterday_context": request.include_yesterday_context,
+                        "environment": request.environment.value if request.environment else None,
+                        "time_available": request.time_available,
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to log generated checkin plan output request_id=%s client_id=%s plan_id=%s",
+                    request_id,
+                    client_id,
+                    response_payload.get("plan_id") if isinstance(response_payload, dict) else None,
+                )
+        return response
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
