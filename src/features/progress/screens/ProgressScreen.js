@@ -51,6 +51,10 @@ function clampToPercent(value) {
   return Math.max(0, Math.min(1, value));
 }
 
+function formatCheckinCount(value) {
+  return value === 1 ? '1 check-in' : `${value} check-ins`;
+}
+
 const HABIT_ITEMS = [
   { key: 'movement', label: 'Movement done' },
   { key: 'protein', label: 'Protein anchor hit' },
@@ -108,6 +112,11 @@ export default function ProgressScreen({
   const consistencyRatio = useMemo(() => {
     return clampToPercent((payload?.checkins_last_7_days || 0) / 7);
   }, [payload?.checkins_last_7_days]);
+  const totalCheckinsCount = payload?.total_checkins_count || 0;
+  const remainingForThirtyDayAverage = Math.max(0, 30 - totalCheckinsCount);
+  const thirtyDayAvailabilityCopy = payload?.has_enough_for_30d
+    ? '30-day trend is unlocked and updates with each new check-in.'
+    : `${formatCheckinCount(remainingForThirtyDayAverage)} more needed to unlock your 30-day average.`;
 
   const sevenDayChange = payload?.score_change_7d?.value || 0;
   const changeFeedback = sevenDayChange >= 0
@@ -166,8 +175,11 @@ export default function ProgressScreen({
               <View style={styles.summaryTopRow}>
                 <StreakRing value={payload.current_streak_days || 0} label="days" />
                 <View style={styles.summaryCopy}>
-                  <ModeText variant="h3">Weekly consistency</ModeText>
-                  <ModeText variant="bodySm" tone="secondary" style={styles.summaryMeta}>
+                  <ModeText variant="h3">Current check-in streak</ModeText>
+                  <ModeText variant="label" tone="tertiary" style={styles.summarySectionLabel}>
+                    Weekly consistency
+                  </ModeText>
+                  <ModeText variant="bodySm" tone="secondary" style={styles.summarySectionMeta}>
                     {payload.checkins_last_7_days || 0} of 7 check-ins complete
                   </ModeText>
                   <ProgressBar
@@ -191,14 +203,21 @@ export default function ProgressScreen({
                 <View style={styles.metricCell}>
                   <ModeText variant="caption" tone="tertiary">7-day average</ModeText>
                   <ModeText variant="h2">{formatScore(payload.avg_score_last_7_days)}</ModeText>
-                  <ModeText variant="bodySm" tone="secondary">{payload.avg_mode_last_7_days || '--'}</ModeText>
+                  <ModeText variant="bodySm" tone="secondary">
+                    {payload.avg_mode_last_7_days || 'Builds after your first week of check-ins.'}
+                  </ModeText>
                 </View>
                 <View style={styles.metricCell}>
                   <ModeText variant="caption" tone="tertiary">30-day average</ModeText>
                   <ModeText variant="h2">{formatScore(payload.avg_score_last_30_days)}</ModeText>
-                  <ModeText variant="bodySm" tone="secondary">{payload.avg_mode_last_30_days || '--'}</ModeText>
+                  <ModeText variant="bodySm" tone="secondary">
+                    {payload.avg_mode_last_30_days || thirtyDayAvailabilityCopy}
+                  </ModeText>
                 </View>
               </View>
+              <ModeText variant="bodySm" tone="secondary" style={styles.readinessFooter}>
+                Your readiness averages summarize recent daily check-in scores so you can spot short-term and long-term trends.
+              </ModeText>
             </ModeCard>
 
             <ModeCard variant="surface">
@@ -216,12 +235,15 @@ export default function ProgressScreen({
                   );
                 })}
               </View>
+              <ModeText variant="bodySm" tone="secondary" style={styles.chartFooter}>
+                Each bar shows one recent day&apos;s readiness score from a completed check-in. If a day is missing, no check-in was logged for that date.
+              </ModeText>
             </ModeCard>
 
             <ModeCard variant="tinted">
-              <ModeText variant="h3">Daily completion toggles</ModeText>
+              <ModeText variant="h3">Today&apos;s quick wins</ModeText>
               <ModeText variant="bodySm" tone="secondary" style={styles.habitIntro}>
-                Reward consistency over perfection by locking small wins daily.
+                Use these as a lightweight session checklist. They do not save or affect your streak, readiness averages, or coach insights yet.
               </ModeText>
 
               <View style={styles.habitList}>
@@ -296,7 +318,10 @@ const styles = StyleSheet.create({
   summaryCopy: {
     flex: 1,
   },
-  summaryMeta: {
+  summarySectionLabel: {
+    marginTop: theme.spacing[1],
+  },
+  summarySectionMeta: {
     marginTop: theme.spacing[1],
     marginBottom: theme.spacing[2],
   },
@@ -315,6 +340,9 @@ const styles = StyleSheet.create({
     borderRadius: theme.radii.s,
     backgroundColor: theme.colors.surface.base,
     padding: theme.spacing[2],
+  },
+  readinessFooter: {
+    marginTop: theme.spacing[2],
   },
   chartRow: {
     marginTop: theme.spacing[2],
@@ -341,6 +369,9 @@ const styles = StyleSheet.create({
     width: '100%',
     borderRadius: 12,
     backgroundColor: theme.colors.brand.progressCore,
+  },
+  chartFooter: {
+    marginTop: theme.spacing[2],
   },
   habitIntro: {
     marginTop: theme.spacing[1],

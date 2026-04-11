@@ -173,6 +173,7 @@ class DailyCheckinService:
         return CheckinProgressResponse(
             as_of_date=as_of_date,
             current_streak_days=current_streak,
+            total_checkins_count=len(normalized_rows),
             checkins_last_7_days=len(last_7_scores),
             avg_score_last_7_days=avg_7,
             avg_mode_last_7_days=self._assign_mode(avg_7) if avg_7 is not None else None,

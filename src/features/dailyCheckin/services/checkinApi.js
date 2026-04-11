@@ -1,6 +1,11 @@
 import { fetchWithApiFallback } from '../../../services/apiRequest';
 import { buildApiNetworkError } from '../../../services/apiNetworkError';
 
+export function getLocalDateString(date = new Date()) {
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 10);
+}
+
 function buildRequestOptions(accessToken, method = 'GET', body) {
   return {
     method,
@@ -70,9 +75,7 @@ function buildNetworkError(error, path) {
 }
 
 export async function getTodayCheckin({ accessToken, date }) {
-  const today = new Date();
-  const offset = today.getTimezoneOffset() * 60000;
-  const localDate = date || new Date(today.getTime() - offset).toISOString().slice(0, 10);
+  const localDate = date || getLocalDateString();
   let response;
   let baseUrl;
 
@@ -117,7 +120,7 @@ export async function submitTodayCheckin({ accessToken, date, inputs, timeToComp
 export async function getPreviousCheckin({ accessToken, beforeDate }) {
   const queryDate = beforeDate
     ? encodeURIComponent(beforeDate)
-    : encodeURIComponent(new Date().toISOString().slice(0, 10));
+    : encodeURIComponent(getLocalDateString());
   let response;
   let baseUrl;
 
@@ -139,7 +142,7 @@ export async function getPreviousCheckin({ accessToken, beforeDate }) {
 export async function getCheckinProgress({ accessToken, asOfDate }) {
   const queryDate = asOfDate
     ? encodeURIComponent(asOfDate)
-    : encodeURIComponent(new Date().toISOString().slice(0, 10));
+    : encodeURIComponent(getLocalDateString());
   let response;
   let baseUrl;
 

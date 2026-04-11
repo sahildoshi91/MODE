@@ -79,6 +79,7 @@ class ProgressRecentCheckin(BaseModel):
 class CheckinProgressResponse(BaseModel):
     as_of_date: date
     current_streak_days: int = 0
+    total_checkins_count: int = 0
     checkins_last_7_days: int = 0
     avg_score_last_7_days: float | None = None
     avg_mode_last_7_days: str | None = None
