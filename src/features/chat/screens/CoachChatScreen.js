@@ -99,7 +99,7 @@ export default function CoachChatScreen({ accessToken, launchContext, bottomInse
   }, [scrollToLatest]);
 
   return (
-    <SafeScreen style={styles.screen}>
+    <SafeScreen includeTopInset={false} style={styles.screen}>
       <HeaderBar title="Coach Chat" />
 
       <KeyboardAvoidingView

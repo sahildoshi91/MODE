@@ -31,7 +31,7 @@ export default function TrainerAssignmentScreen({
   const showEmptyState = hasLoadedStatus && resolvedTrainerCount === 0 && !statusLoadFailed;
 
   return (
-    <SafeScreen style={styles.screen}>
+    <SafeScreen includeTopInset={false} style={styles.screen}>
       <HeaderBar title="Pick Your Coach" subtitle="Choose who should guide this account" />
 
       <ScrollView

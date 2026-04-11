@@ -115,7 +115,7 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
   }, [payload]);
 
   return (
-    <SafeScreen style={styles.screen}>
+    <SafeScreen includeTopInset={false} style={styles.screen}>
       <HeaderBar
         title="Coach Insights"
         subtitle="Calm signals from your recent check-ins"

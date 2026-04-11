@@ -1683,7 +1683,7 @@ export default function DailyCheckinScreen({
   const coachName = getCoachName(summaryResult?.mode);
 
   return (
-    <SafeScreen style={styles.screen}>
+    <SafeScreen includeTopInset={false} style={styles.screen}>
       <Animated.View
         pointerEvents="none"
         style={[

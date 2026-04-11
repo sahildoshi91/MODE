@@ -3,6 +3,7 @@ import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import Constants from 'expo-constants';
 
 import {
+  HeaderBar,
   ModeButton,
   ModeCard,
   ModeText,
@@ -43,18 +44,18 @@ export default function ProfileScreen({ session, assignmentStatus, onSignOut, bo
   const [reminderPreference, setReminderPreference] = useState(true);
 
   return (
-    <SafeScreen style={styles.screen}>
+    <SafeScreen includeTopInset={false} style={styles.screen}>
+      <HeaderBar
+        title="Settings"
+        subtitle="Personalization and account details"
+      />
+
       <ScrollView
         contentContainerStyle={[
           styles.content,
           { paddingBottom: theme.spacing[4] + bottomInset },
         ]}
       >
-        <View style={styles.headerBlock}>
-          <ModeText variant="display">Settings</ModeText>
-          <ModeText variant="bodySm" tone="secondary">Personalization and account details</ModeText>
-        </View>
-
         <ModeCard variant="surface">
           <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Account</ModeText>
           <View style={styles.row}>
@@ -119,11 +120,8 @@ const styles = StyleSheet.create({
   },
   content: {
     paddingHorizontal: theme.spacing[3],
-    paddingTop: theme.spacing[4],
+    paddingTop: theme.spacing[3],
     gap: theme.spacing[2],
-  },
-  headerBlock: {
-    marginBottom: theme.spacing[1],
   },
   sectionLabel: {
     textTransform: 'uppercase',

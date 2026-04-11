@@ -33,7 +33,7 @@ const STATE_DETAILS = [
 
 export default function ModeStateScreen({ onBack }) {
   return (
-    <SafeScreen style={styles.screen}>
+    <SafeScreen includeTopInset={false} style={styles.screen}>
       <HeaderBar
         title="State Guide"
         subtitle="How mode colors map to smart effort"

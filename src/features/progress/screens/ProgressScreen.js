@@ -115,7 +115,7 @@ export default function ProgressScreen({
     : `Weekly readiness trend: ${sevenDayChange.toFixed(1)} (recovery support recommended).`;
 
   return (
-    <SafeScreen style={styles.screen}>
+    <SafeScreen includeTopInset={false} style={styles.screen}>
       <HeaderBar title="Progress" subtitle="Consistency, habits, and recovery-aware trends" />
 
       <ScrollView

@@ -34,7 +34,7 @@ export default function Login({ onBackToIntro = null }) {
   };
 
   return (
-    <SafeScreen style={styles.screenContainer}>
+    <SafeScreen includeTopInset={false} style={styles.screenContainer}>
       <HeaderBar title="MODE" subtitle="Calm coaching for sustainable progress" />
 
       <View style={styles.stack}>
