@@ -11,7 +11,9 @@ import CoachInsightsScreen from '../features/insights/screens/CoachInsightsScree
 import LiquidBottomNav from '../features/navigation/components/LiquidBottomNav';
 import ProfileScreen from '../features/profile/screens/ProfileScreen';
 import ProgressScreen from '../features/progress/screens/ProgressScreen';
+import TrainerClientsScreen from '../features/trainerClients/screens/TrainerClientsScreen';
 import TrainerAssignmentScreen from '../features/trainerAssignment/screens/TrainerAssignmentScreen';
+import TrainerHomeScreen from '../features/trainerHome/screens/TrainerHomeScreen';
 import { assignTrainer, getTrainerAssignmentStatus } from '../features/trainerAssignment/services/trainerAssignmentApi';
 import { supabase } from '../services/supabaseClient';
 
@@ -20,6 +22,11 @@ const FLOATING_NAV_PILL_HEIGHT = 62;
 const COACH_CHAT_NAV_GAP = 2;
 const COACH_CHAT_DOCK_CLEARANCE =
   FLOATING_NAV_BOTTOM_OFFSET + FLOATING_NAV_PILL_HEIGHT + COACH_CHAT_NAV_GAP;
+const VIEWER_ROLE = {
+  TRAINER: 'trainer',
+  CLIENT: 'client',
+  UNASSIGNED: 'unassigned',
+};
 
 function formatAssignmentError(error, fallbackMessage) {
   const message = error?.message || fallbackMessage;
@@ -201,16 +208,41 @@ function AppShell() {
     setActiveTab('coach');
   };
 
+  const handleOpenTrainerCoach = () => {
+    setCoachOverlayContext(null);
+    setChatLaunchContext({ entrypoint: 'trainer_agent_training' });
+    setActiveTab('coach');
+  };
+
+  const viewerRole = assignmentStatus?.viewer_role || VIEWER_ROLE.UNASSIGNED;
+  const isTrainerViewer = viewerRole === VIEWER_ROLE.TRAINER;
+
+  useEffect(() => {
+    if (isTrainerViewer && activeTab === 'progress') {
+      setActiveTab('clients');
+      return;
+    }
+    if (!isTrainerViewer && activeTab === 'clients') {
+      setActiveTab('home');
+    }
+  }, [isTrainerViewer, activeTab]);
+
   const handleTabChange = (nextTab) => {
+    if (!isTrainerViewer && nextTab === 'clients') {
+      return;
+    }
+    if (isTrainerViewer && nextTab === 'progress') {
+      return;
+    }
     setCoachOverlayContext(null);
     setActiveTab(nextTab);
     if (nextTab !== 'coach') {
       setChatLaunchContext(null);
     }
-    if (nextTab !== 'progress') {
+    if (!isTrainerViewer && nextTab !== 'progress') {
       setProgressRoute('progress');
     }
-    if (nextTab !== 'progress' && nextTab !== 'home') {
+    if (!isTrainerViewer && nextTab !== 'progress' && nextTab !== 'home') {
       setInsightsOrigin('progress');
     }
   };
@@ -258,7 +290,9 @@ function AppShell() {
   const isBlockingStatusError = Boolean(assignmentStatusError);
   const assignmentError = assignTrainerError || assignmentStatusError;
   const needsAssignment = Boolean(assignmentStatus?.needs_assignment);
-  const showAssignmentGate = Boolean((needsAssignment || isBlockingStatusError) && activeTab !== 'profile');
+  const showAssignmentGate = Boolean(
+    !isTrainerViewer && (needsAssignment || isBlockingStatusError) && activeTab !== 'profile',
+  );
   const isBlockingAssignmentLoad = isAssignmentStatusLoading && !assignmentStatus && !assignmentStatusError;
 
   if (isBlockingAssignmentLoad) {
@@ -297,13 +331,23 @@ function AppShell() {
           />
         ) : null}
 
-        {!showAssignmentGate && activeTab === 'home' ? (
+        {!showAssignmentGate && !isTrainerViewer && activeTab === 'home' ? (
           <DailyCheckinScreen
             accessToken={session.access_token}
             bottomInset={contentBottomInset}
             floatingNavClearance={floatingNavClearance}
             onOpenChat={handleOpenChat}
             onOpenInsights={handleOpenHomeInsights}
+          />
+        ) : null}
+
+        {!showAssignmentGate && isTrainerViewer && activeTab === 'home' ? (
+          <TrainerHomeScreen
+            accessToken={session.access_token}
+            bottomInset={contentBottomInset}
+            viewerDisplayName={assignmentStatus?.viewer_display_name || null}
+            trainerOnboardingCompleted={Boolean(assignmentStatus?.trainer_onboarding_completed)}
+            onOpenCoachTraining={handleOpenTrainerCoach}
           />
         ) : null}
 
@@ -315,7 +359,7 @@ function AppShell() {
           />
         ) : null}
 
-        {!showAssignmentGate && activeTab === 'progress' && progressRoute === 'progress' ? (
+        {!showAssignmentGate && !isTrainerViewer && activeTab === 'progress' && progressRoute === 'progress' ? (
           <ProgressScreen
             accessToken={session.access_token}
             bottomInset={contentBottomInset}
@@ -324,10 +368,17 @@ function AppShell() {
           />
         ) : null}
 
-        {!showAssignmentGate && activeTab === 'progress' && progressRoute === 'insights' ? (
+        {!showAssignmentGate && !isTrainerViewer && activeTab === 'progress' && progressRoute === 'insights' ? (
           <CoachInsightsScreen
             accessToken={session.access_token}
             onBack={handleBackFromInsights}
+            bottomInset={contentBottomInset}
+          />
+        ) : null}
+
+        {!showAssignmentGate && isTrainerViewer && activeTab === 'clients' ? (
+          <TrainerClientsScreen
+            accessToken={session.access_token}
             bottomInset={contentBottomInset}
           />
         ) : null}
@@ -358,6 +409,7 @@ function AppShell() {
           activeTab={activeTab}
           onTabChange={handleTabChange}
           bottomInset={navBottomInset}
+          role={isTrainerViewer ? 'trainer' : 'client'}
         />
       ) : null}
     </View>

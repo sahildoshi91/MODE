@@ -1,15 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Pressable, StyleSheet, View } from 'react-native';
 import { BlurView } from 'expo-blur';
-import { BarChart3, Dumbbell, Home, User } from 'lucide-react-native';
+import { BarChart3, Dumbbell, Home, User, Users } from 'lucide-react-native';
 
 import { ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 
-const TABS = [
+const CLIENT_TABS = [
   { key: 'home', label: 'Home', Icon: Home },
   { key: 'coach', label: 'Coach', Icon: Dumbbell },
   { key: 'progress', label: 'Progress', Icon: BarChart3 },
+  { key: 'profile', label: 'Settings', Icon: User },
+];
+
+const TRAINER_TABS = [
+  { key: 'home', label: 'Home', Icon: Home },
+  { key: 'coach', label: 'Coach', Icon: Dumbbell },
+  { key: 'clients', label: 'Clients', Icon: Users },
   { key: 'profile', label: 'Settings', Icon: User },
 ];
 
@@ -17,17 +24,19 @@ export default function LiquidBottomNav({
   activeTab,
   onTabChange,
   bottomInset = 0,
+  role = 'client',
 }) {
   const [containerWidth, setContainerWidth] = useState(0);
   const [iconCenters, setIconCenters] = useState({});
   const indicatorX = useRef(new Animated.Value(0)).current;
+  const tabs = role === 'trainer' ? TRAINER_TABS : CLIENT_TABS;
 
   const activeIndex = useMemo(() => {
-    const found = TABS.findIndex((item) => item.key === activeTab);
+    const found = tabs.findIndex((item) => item.key === activeTab);
     return found >= 0 ? found : 0;
-  }, [activeTab]);
+  }, [activeTab, tabs]);
 
-  const tabWidth = containerWidth > 0 ? containerWidth / TABS.length : 0;
+  const tabWidth = containerWidth > 0 ? containerWidth / tabs.length : 0;
   const indicatorWidth = Math.max(0, tabWidth - 10);
 
   useEffect(() => {
@@ -68,7 +77,7 @@ export default function LiquidBottomNav({
           ]}
         />
 
-        {TABS.map(({ key, label, Icon }) => {
+        {tabs.map(({ key, label, Icon }) => {
           const selected = key === activeTab;
           return (
             <Pressable

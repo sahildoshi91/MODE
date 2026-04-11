@@ -5,6 +5,12 @@ import { sendChatMessage } from '../services/chatApi';
 
 const DEFAULT_WELCOME_MESSAGE = 'I am here to help you make steady progress that fits your day. Share what you need and we will choose the next smart step together.';
 const DEFAULT_QUICK_REPLIES = ['Plan my next best action', 'Adjust today\'s training', 'Help with consistency'];
+const TRAINER_AGENT_WELCOME_MESSAGE = 'Let\'s train your MODE coaching agent. Share your philosophy, programming rules, and how you coach through hard days.';
+const TRAINER_AGENT_QUICK_REPLIES = [
+  'Refine my coaching philosophy',
+  'Set my program-building rules',
+  'Draft response examples in my voice',
+];
 const POST_CHECKIN_QUICK_REPLIES_BY_MODE = {
   BEAST: [
     'Build my strongest session for today',
@@ -90,6 +96,13 @@ function buildInitialMessage(launchContextPayload) {
   const checkinContext = launchContextPayload?.checkin_context || {};
   const workoutContext = launchContextPayload?.workout_context || {};
   const nutritionContext = launchContextPayload?.nutrition_context || {};
+  if (launchContextPayload?.entrypoint === 'trainer_agent_training') {
+    return {
+      id: 'welcome-trainer-agent',
+      role: 'assistant',
+      text: TRAINER_AGENT_WELCOME_MESSAGE,
+    };
+  }
   if (launchContextPayload?.entrypoint === 'generated_workout') {
     const title = typeof workoutContext.plan_title === 'string' ? workoutContext.plan_title : null;
     return {
@@ -130,6 +143,9 @@ function buildInitialMessage(launchContextPayload) {
 }
 
 function buildInitialQuickReplies(launchContextPayload) {
+  if (launchContextPayload?.entrypoint === 'trainer_agent_training') {
+    return TRAINER_AGENT_QUICK_REPLIES;
+  }
   if (launchContextPayload?.entrypoint === 'generated_workout') {
     return WORKOUT_ADJUSTMENT_QUICK_REPLIES;
   }
