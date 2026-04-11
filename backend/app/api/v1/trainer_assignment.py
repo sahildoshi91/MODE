@@ -21,6 +21,9 @@ class TrainerAssignmentStatus(BaseModel):
     needs_assignment: bool
     assigned_trainer_id: str | None = None
     assigned_trainer_display_name: str | None = None
+    viewer_role: Literal["trainer", "client", "unassigned"] = "unassigned"
+    viewer_display_name: str | None = None
+    trainer_onboarding_completed: bool = False
     available_trainers: list[TrainerOption] = Field(default_factory=list)
     available_trainers_count: int = 0
     scope: Literal["tenant", "global_fallback"] = "global_fallback"
@@ -32,6 +35,36 @@ class TrainerAssignmentRequest(BaseModel):
 
 def _resolve_scope(trainer_context: TrainerContext) -> Literal["tenant", "global_fallback"]:
     return "tenant" if trainer_context.tenant_id else "global_fallback"
+
+
+def _email_local_part(email: str | None) -> str | None:
+    if not email:
+        return None
+    local_part, _, _domain = email.partition("@")
+    return local_part or email
+
+
+def _resolve_viewer_role(
+    *,
+    trainer_context: TrainerContext,
+    user: AuthenticatedUser,
+) -> Literal["trainer", "client", "unassigned"]:
+    if trainer_context.trainer_id and trainer_context.trainer_user_id == user.id:
+        return "trainer"
+    if trainer_context.client_id:
+        return "client"
+    return "unassigned"
+
+
+def _resolve_viewer_display_name(
+    *,
+    trainer_context: TrainerContext,
+    user: AuthenticatedUser,
+    viewer_role: Literal["trainer", "client", "unassigned"],
+) -> str | None:
+    if viewer_role == "trainer":
+        return trainer_context.trainer_display_name or _email_local_part(user.email)
+    return _email_local_part(user.email)
 
 
 def _list_active_trainers(*, tenant_id: str | None) -> list[dict]:
@@ -49,14 +82,23 @@ def _list_active_trainers(*, tenant_id: str | None) -> list[dict]:
 
 def _build_status_response(
     trainer_context: TrainerContext,
+    user: AuthenticatedUser,
     available_trainers: list[dict] | None = None,
 ) -> TrainerAssignmentStatus:
     needs_assignment = not trainer_context.trainer_id
     scoped_trainers = (available_trainers or []) if needs_assignment else []
+    viewer_role = _resolve_viewer_role(trainer_context=trainer_context, user=user)
     return TrainerAssignmentStatus(
         needs_assignment=needs_assignment,
         assigned_trainer_id=trainer_context.trainer_id,
         assigned_trainer_display_name=trainer_context.trainer_display_name,
+        viewer_role=viewer_role,
+        viewer_display_name=_resolve_viewer_display_name(
+            trainer_context=trainer_context,
+            user=user,
+            viewer_role=viewer_role,
+        ),
+        trainer_onboarding_completed=bool(trainer_context.trainer_onboarding_completed),
         available_trainers=[
             TrainerOption(id=trainer["id"], display_name=trainer["display_name"])
             for trainer in scoped_trainers
@@ -68,13 +110,15 @@ def _build_status_response(
 
 @router.get("/status", response_model=TrainerAssignmentStatus)
 async def get_assignment_status(
+    user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
 ):
     if trainer_context.trainer_id:
-        return _build_status_response(trainer_context)
+        return _build_status_response(trainer_context, user)
 
     return _build_status_response(
         trainer_context,
+        user,
         available_trainers=_list_active_trainers(tenant_id=trainer_context.tenant_id),
     )
 
@@ -146,4 +190,4 @@ async def assign_trainer(
         trainer_display_name=selected_trainer["display_name"],
         client_id=existing_client.get("id") if existing_client else None,
     )
-    return _build_status_response(updated_context)
+    return _build_status_response(updated_context, user)

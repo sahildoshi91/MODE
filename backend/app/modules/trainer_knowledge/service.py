@@ -1,5 +1,5 @@
 from app.modules.trainer_knowledge.repository import TrainerKnowledgeRepository
-from app.modules.trainer_knowledge.schemas import TrainerKnowledgeDocument
+from app.modules.trainer_knowledge.schemas import TrainerKnowledgeDocument, TrainerKnowledgeDocumentCreate
 
 
 class TrainerKnowledgeService:
@@ -9,7 +9,7 @@ class TrainerKnowledgeService:
     def list_documents(self, trainer_id: str) -> list[TrainerKnowledgeDocument]:
         return [TrainerKnowledgeDocument(**row) for row in self.repository.list_by_trainer(trainer_id)]
 
-    def create_document(self, trainer_id: str, document: TrainerKnowledgeDocument) -> TrainerKnowledgeDocument:
+    def create_document(self, trainer_id: str, document: TrainerKnowledgeDocumentCreate) -> TrainerKnowledgeDocument:
         payload = document.model_dump()
         payload["trainer_id"] = trainer_id
         created = self.repository.create(payload)

@@ -14,6 +14,8 @@ from app.modules.profile.repository import ProfileRepository
 from app.modules.profile.service import ProfileService
 from app.modules.trainer_knowledge.repository import TrainerKnowledgeRepository
 from app.modules.trainer_knowledge.service import TrainerKnowledgeService
+from app.modules.trainer_home.repository import TrainerHomeRepository
+from app.modules.trainer_home.service import TrainerHomeService
 from app.modules.trainer_persona.repository import TrainerPersonaRepository
 from app.modules.trainer_persona.service import TrainerPersonaService
 from app.modules.trainer_review.repository import TrainerReviewRepository
@@ -108,6 +110,16 @@ def get_trainer_knowledge_service(
     repository: TrainerKnowledgeRepository = Depends(get_trainer_knowledge_repository),
 ) -> TrainerKnowledgeService:
     return TrainerKnowledgeService(repository)
+
+
+def get_trainer_home_repository() -> TrainerHomeRepository:
+    return TrainerHomeRepository(get_supabase_admin_client())
+
+
+def get_trainer_home_service(
+    repository: TrainerHomeRepository = Depends(get_trainer_home_repository),
+) -> TrainerHomeService:
+    return TrainerHomeService(repository)
 
 
 def get_trainer_review_repository(
