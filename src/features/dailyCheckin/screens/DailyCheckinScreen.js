@@ -560,6 +560,37 @@ function buildWorkoutSummary(plan) {
   };
 }
 
+function buildNutritionSummary(plan) {
+  if (!plan || typeof plan !== 'object') {
+    return null;
+  }
+
+  return {
+    title: plan.title || null,
+    coach_note: plan.coachNote || null,
+    total_calories: plan.totalCalories ?? null,
+    total_protein: plan.totalProtein ?? null,
+    meals: Array.isArray(plan.meals)
+      ? plan.meals.map((meal) => ({
+        name: meal?.name || null,
+        emoji: meal?.emoji || null,
+        timing: meal?.timing || null,
+        total_calories: meal?.totalCalories ?? null,
+        total_protein: meal?.totalProtein ?? null,
+        foods: Array.isArray(meal?.foods)
+          ? meal.foods.map((food) => ({
+            name: food?.name || null,
+            amount: food?.amount || null,
+            calories: food?.calories ?? null,
+            protein: food?.protein ?? null,
+          }))
+          : [],
+        notes: meal?.notes || null,
+      }))
+      : [],
+  };
+}
+
 function buildWorkoutLaunchContext({
   result,
   date,
@@ -574,6 +605,23 @@ function buildWorkoutLaunchContext({
       checkin_score: result?.score ?? null,
     },
     workout_context: workoutContext || null,
+  };
+}
+
+function buildNutritionLaunchContext({
+  result,
+  date,
+  nutritionContext,
+}) {
+  return {
+    entrypoint: 'generated_nutrition',
+    checkin_context: {
+      checkin_id: result?.id || null,
+      checkin_date: result?.date || date,
+      assigned_mode: result?.mode || null,
+      checkin_score: result?.score ?? null,
+    },
+    nutrition_context: nutritionContext || null,
   };
 }
 
@@ -1518,6 +1566,23 @@ export default function DailyCheckinScreen({
     }));
   };
 
+  const handleOpenNutritionCoach = () => {
+    if (typeof onOpenChat !== 'function' || !structuredNutritionPlan) {
+      return;
+    }
+
+    onOpenChat(buildNutritionLaunchContext({
+      result: summaryResult,
+      date: today,
+      nutritionContext: {
+        generated_plan_id: generatedPlanId || null,
+        plan_title: structuredNutritionPlan?.title || null,
+        coach_note: structuredNutritionPlan?.coachNote || null,
+        plan_summary: buildNutritionSummary(structuredNutritionPlan),
+      },
+    }));
+  };
+
   const canGeneratePlan = useMemo(() => {
     if (planType === PLAN_TYPE.TRAINING) {
       return Boolean(environment);
@@ -2037,14 +2102,29 @@ export default function DailyCheckinScreen({
             </>
           ) : (
             <>
-              <View style={[styles.planTopBar, { paddingTop: Math.max(insets.top, theme.spacing[3]) }]}>
-                <ModeButton
-                  title="Back to Options"
-                  variant="secondary"
-                  onPress={() => setStep('environment')}
-                  style={styles.planBackButton}
-                />
-              </View>
+              <HeaderBar
+                title="Generated Nutrition Plan"
+                style={styles.generatedWorkoutHeaderBar}
+                onBack={() => setStep('environment')}
+                backAccessibilityLabel="Back to options"
+                rightSlot={
+                  !planLoading && !planError && structuredNutritionPlan ? (
+                    <Pressable
+                      accessibilityLabel="Chat with Coach about nutrition plan"
+                      accessibilityRole="button"
+                      hitSlop={10}
+                      onPress={handleOpenNutritionCoach}
+                      style={({ pressed }) => [
+                        styles.planAdjustButton,
+                        pressed && styles.planAdjustButtonPressed,
+                      ]}
+                    >
+                      <Feather name="message-circle" size={16} color={theme.colors.text.primary} />
+                      <Text style={styles.planAdjustButtonLabel}>Coach</Text>
+                    </Pressable>
+                  ) : null
+                }
+              />
 
               {planLoading ? (
                 <View style={styles.planLoadingWrap}>
@@ -2786,13 +2866,6 @@ const styles = StyleSheet.create({
   },
   planStepWrap: {
     flex: 1,
-  },
-  planTopBar: {
-    paddingHorizontal: theme.spacing[3],
-  },
-  planBackButton: {
-    marginTop: theme.spacing[1],
-    maxWidth: 220,
   },
   generatedWorkoutHeaderBar: {
     backgroundColor: 'transparent',

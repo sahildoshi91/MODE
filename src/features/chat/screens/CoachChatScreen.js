@@ -34,6 +34,10 @@ export default function CoachChatScreen({
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const listRef = useRef(null);
   const dockAnchorInset = Math.max(bottomInset, 0);
+  const backAccessibilityLabel =
+    launchContext?.entrypoint === 'generated_nutrition'
+      ? 'Back to generated nutrition plan'
+      : 'Back to generated workout';
 
   const {
     messages,
@@ -108,7 +112,7 @@ export default function CoachChatScreen({
       <HeaderBar
         title="Coach Chat"
         onBack={onBack}
-        backAccessibilityLabel="Back to generated workout"
+        backAccessibilityLabel={backAccessibilityLabel}
       />
 
       <KeyboardAvoidingView

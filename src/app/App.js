@@ -194,7 +194,10 @@ function AppShell() {
   };
 
   const handleOpenChat = (launchContext = null) => {
-    if (launchContext?.entrypoint === 'generated_workout') {
+    if (
+      launchContext?.entrypoint === 'generated_workout'
+      || launchContext?.entrypoint === 'generated_nutrition'
+    ) {
       setCoachOverlayContext(launchContext);
       return;
     }

@@ -32,6 +32,11 @@ const WORKOUT_ADJUSTMENT_QUICK_REPLIES = [
   'Swap an exercise for me',
   'Shorten this workout',
 ];
+const NUTRITION_ADJUSTMENT_QUICK_REPLIES = [
+  'Adjust these meals for my day',
+  'Increase the protein',
+  'Make this easier to follow',
+];
 
 function normalizeMode(mode) {
   return typeof mode === 'string' ? mode.trim().toUpperCase() : null;
@@ -52,6 +57,9 @@ function buildLaunchContextPayload(launchContext) {
   const workoutContext = launchContext.workout_context && typeof launchContext.workout_context === 'object'
     ? launchContext.workout_context
     : {};
+  const nutritionContext = launchContext.nutrition_context && typeof launchContext.nutrition_context === 'object'
+    ? launchContext.nutrition_context
+    : {};
 
   return {
     ...(entrypoint ? { entrypoint } : {}),
@@ -70,12 +78,18 @@ function buildLaunchContextPayload(launchContext) {
         workout_context: workoutContext,
       }
       : {}),
+    ...(Object.keys(nutritionContext).length > 0
+      ? {
+        nutrition_context: nutritionContext,
+      }
+      : {}),
   };
 }
 
 function buildInitialMessage(launchContextPayload) {
   const checkinContext = launchContextPayload?.checkin_context || {};
   const workoutContext = launchContextPayload?.workout_context || {};
+  const nutritionContext = launchContextPayload?.nutrition_context || {};
   if (launchContextPayload?.entrypoint === 'generated_workout') {
     const title = typeof workoutContext.plan_title === 'string' ? workoutContext.plan_title : null;
     return {
@@ -84,6 +98,16 @@ function buildInitialMessage(launchContextPayload) {
       text: title
         ? `I’ve got your workout "${title}" in view. Tell me what you want to change and I’ll adjust it around your time, energy, and equipment.`
         : 'I’ve got your generated workout in view. Tell me what you want to change and I’ll adjust it around your time, energy, and equipment.',
+    };
+  }
+  if (launchContextPayload?.entrypoint === 'generated_nutrition') {
+    const title = typeof nutritionContext.plan_title === 'string' ? nutritionContext.plan_title : null;
+    return {
+      id: 'welcome-generated-nutrition',
+      role: 'assistant',
+      text: title
+        ? `I’ve got your nutrition plan "${title}" in view. Tell me what you want to change and I’ll adjust it around your schedule, preferences, and goals.`
+        : 'I’ve got your generated nutrition plan in view. Tell me what you want to change and I’ll adjust it around your schedule, preferences, and goals.',
     };
   }
   if (launchContextPayload?.entrypoint !== 'post_checkin') {
@@ -108,6 +132,9 @@ function buildInitialMessage(launchContextPayload) {
 function buildInitialQuickReplies(launchContextPayload) {
   if (launchContextPayload?.entrypoint === 'generated_workout') {
     return WORKOUT_ADJUSTMENT_QUICK_REPLIES;
+  }
+  if (launchContextPayload?.entrypoint === 'generated_nutrition') {
+    return NUTRITION_ADJUSTMENT_QUICK_REPLIES;
   }
   if (launchContextPayload?.entrypoint !== 'post_checkin') {
     return DEFAULT_QUICK_REPLIES;
