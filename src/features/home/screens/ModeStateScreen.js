@@ -1,7 +1,7 @@
 import React from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 
-import { HeaderBar, ModeButton, ModeCard, ModeText, SafeScreen, StateBadge } from '../../../../lib/components';
+import { HeaderBar, ModeCard, ModeText, SafeScreen, StateBadge } from '../../../../lib/components';
 import { MODE_STATE_MAP, STATE_VISUALS, theme } from '../../../../lib/theme';
 
 const STATE_DETAILS = [
@@ -34,7 +34,12 @@ const STATE_DETAILS = [
 export default function ModeStateScreen({ onBack }) {
   return (
     <SafeScreen style={styles.screen}>
-      <HeaderBar title="State Guide" subtitle="How mode colors map to smart effort" />
+      <HeaderBar
+        title="State Guide"
+        subtitle="How mode colors map to smart effort"
+        onBack={onBack}
+        backAccessibilityLabel="Back to Home"
+      />
 
       <ScrollView contentContainerStyle={styles.content}>
         <ModeCard variant="tinted" style={styles.introCard}>
@@ -79,10 +84,6 @@ export default function ModeStateScreen({ onBack }) {
           );
         })}
       </ScrollView>
-
-      <View style={styles.footer}>
-        <ModeButton title="Back to Home" onPress={onBack} style={styles.footerButton} />
-      </View>
     </SafeScreen>
   );
 }
@@ -110,16 +111,6 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing[1],
   },
   stateMeaning: {
-    marginTop: theme.spacing[2],
-  },
-  footer: {
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.canvas,
-    paddingHorizontal: theme.spacing[3],
-    paddingBottom: theme.spacing[3],
-  },
-  footerButton: {
     marginTop: theme.spacing[2],
   },
 });

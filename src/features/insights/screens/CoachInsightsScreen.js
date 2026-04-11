@@ -5,7 +5,6 @@ import {
   EmptyState,
   HeaderBar,
   InlineFeedback,
-  ModeButton,
   ModeCard,
   ModeText,
   SafeScreen,
@@ -117,11 +116,14 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
 
   return (
     <SafeScreen style={styles.screen}>
-      <HeaderBar title="Coach Insights" subtitle="Calm signals from your recent check-ins" />
+      <HeaderBar
+        title="Coach Insights"
+        subtitle="Calm signals from your recent check-ins"
+        onBack={onBack}
+        backAccessibilityLabel="Go back"
+      />
 
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: theme.spacing[4] + bottomInset }]}>
-        <ModeButton title="Back to Progress" variant="ghost" onPress={onBack} />
-
         {isLoading ? (
           <ModeCard variant="tinted" style={styles.loadingCard}>
             <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />

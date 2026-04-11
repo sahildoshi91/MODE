@@ -19,7 +19,6 @@ import {
   ModeText,
   ProgressBar,
   SafeScreen,
-  StateBadge,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { SHOW_DEV_CONNECTION_DEBUG } from '../../../config/featureFlags';
@@ -130,13 +129,6 @@ const MODE_THEME = {
     accent: '#6F8F7B',
     badge: 'Reset support',
   },
-};
-
-const MODE_STATE_COPY = {
-  BEAST: 'OVERDRIVE',
-  BUILD: 'BUILD',
-  RECOVER: 'BASE',
-  REST: 'RESET',
 };
 
 const MODE_RECOMMENDATIONS = {
@@ -611,40 +603,47 @@ function BackgroundGrid() {
   );
 }
 
-function ResultCard({ result }) {
+function ResultCard({
+  result,
+  onBuildTraining,
+  onBuildNutrition,
+  showPlanActions,
+}) {
   const modeTheme = MODE_THEME[result.mode] || MODE_THEME.RECOVER;
-  const summaryBody = result.mode_tagline
-    ? `${result.mode_tagline} Score ${result.score}/25.`
-    : `Score ${result.score}/25. Your check-in is translated into a clear call for training, nutrition, and mindset.`;
 
   return (
     <View style={[styles.resultCard, { borderColor: withAlpha(modeTheme.accent, 0.55) }]}>
-      <View style={styles.resultHero}>
-        <Text style={styles.resultEyebrow}>Today&apos;s mode</Text>
-        <View style={[styles.resultModeBadge, { backgroundColor: withAlpha(modeTheme.accent, 0.18) }]}>
-          <Text style={[styles.resultModeBadgeText, { color: modeTheme.accent }]}>{modeTheme.badge}</Text>
-        </View>
-      </View>
-
-      <Text style={[styles.resultMode, { color: modeTheme.accent }]}>{result.mode}</Text>
-      <Text style={styles.resultBody}>{summaryBody}</Text>
-
-      <View style={styles.bundleBlock}>
+      <View style={[styles.bundleBlock, styles.bundleBlockFirst]}>
         <Text style={styles.bundleLabel}>Training</Text>
         <Text style={styles.bundleValue}>{result.training.type}</Text>
         <Text style={styles.bundleMeta}>
           {result.training.duration} • {result.training.intensity}
         </Text>
+        {showPlanActions ? (
+          <PlanActionCard
+            icon="dumbbell"
+            title="Build me a training routine"
+            subtitle={`Tailored to your ${result?.mode || 'BUILD'} mode today`}
+            accent={theme.colors.brand.progressSuccess}
+            onPress={onBuildTraining}
+            style={styles.bundleActionCard}
+          />
+        ) : null}
       </View>
 
       <View style={styles.bundleBlock}>
         <Text style={styles.bundleLabel}>Nutrition</Text>
         <Text style={styles.bundleValue}>{result.nutrition.rule}</Text>
-      </View>
-
-      <View style={styles.bundleBlock}>
-        <Text style={styles.bundleLabel}>Mindset</Text>
-        <Text style={styles.bundleValue}>{result.mindset.cue}</Text>
+        {showPlanActions ? (
+          <PlanActionCard
+            icon="food-apple-outline"
+            title="Build me a nutrition plan"
+            subtitle="Meals optimized for your readiness"
+            accent={theme.colors.brand.progressCore}
+            onPress={onBuildNutrition}
+            style={styles.bundleActionCard}
+          />
+        ) : null}
       </View>
     </View>
   );
@@ -656,21 +655,28 @@ function HomeOverviewCard({ result, onOpenStateGuide, onOpenInsights, onOpenCoac
   }
 
   const modeTheme = MODE_THEME[result.mode] || MODE_THEME.RECOVER;
-  const stateLabel = MODE_STATE_COPY[result.mode] || MODE_STATE_COPY.RECOVER;
   const scoreProgress = Math.max(0, Math.min(1, (result.score || 0) / 25));
 
   return (
     <ModeCard variant="surface" style={styles.homeOverviewCard}>
-      <ModeText variant="label" tone="tertiary" style={styles.homeOverviewEyebrow}>
-        Today's state
+      <ModeText variant="label" tone="tertiary" style={styles.homeOverviewModeLabel}>
+        Today&apos;s mode
       </ModeText>
-      <StateBadge mode={result.mode} label={`${result.mode} • ${stateLabel}`} />
+      <ModeText variant="display" style={[styles.homeOverviewModeValue, { color: modeTheme.accent }]}>
+        {result.mode}
+      </ModeText>
       <ModeText variant="h3" style={styles.homeOverviewTitle}>
         {modeTheme.badge}
       </ModeText>
       <ModeText variant="bodySm" tone="secondary" style={styles.homeOverviewBody}>
         {result.mode_tagline || 'Progress today is about smart decisions, not pressure.'}
       </ModeText>
+      <View style={styles.homeOverviewMindsetWrap}>
+        <ModeText variant="label" tone="tertiary">Mindset</ModeText>
+        <ModeText variant="h3" style={styles.homeOverviewMindsetValue}>
+          {result?.mindset?.cue || 'Show up with disciplined reps.'}
+        </ModeText>
+      </View>
       <View style={styles.homeOverviewProgressWrap}>
         <ModeText variant="caption" tone="tertiary">Readiness score {result.score}/25</ModeText>
         <ProgressBar
@@ -819,12 +825,14 @@ function PlanActionCard({
   subtitle,
   accent,
   onPress,
+  style,
 }) {
   return (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [
         styles.planActionCard,
+        style,
         { borderColor: withAlpha(accent, 0.45) },
         pressed && { transform: [{ scale: 0.99 }], backgroundColor: withAlpha(accent, 0.1) },
       ]}
@@ -1732,14 +1740,6 @@ export default function DailyCheckinScreen({
         >
           <View style={styles.phoneFrame}>
             <Text style={styles.resultsEyebrow}>{formatTodayLabel(today)}</Text>
-            <Text style={styles.resultsTitle}>
-              {submitState === 'saved' ? 'Today\'s mode is ready.' : 'Your mode is ready.'}
-            </Text>
-            <Text style={styles.resultsSubtitle}>
-              {submitState === 'saved'
-                ? 'Check-in saved. Your recommendations are ready for today.'
-                : 'We couldn\'t save your check-in yet, but your recommendations are ready now.'}
-            </Text>
             <HomeOverviewCard
               result={summaryResult}
               onOpenStateGuide={handleOpenStateGuide}
@@ -1764,29 +1764,12 @@ export default function DailyCheckinScreen({
                 ) : null}
               </View>
             ) : null}
-            <ResultCard result={summaryResult} />
-            {submitState === 'saved' && summaryResult?.id ? (
-              <View style={styles.postCheckinActionsWrap}>
-                <Text style={styles.postCheckinHeading}>What should coach build next?</Text>
-                <PlanActionCard
-                  icon="dumbbell"
-                  title="Build me a training routine"
-                  subtitle={`Tailored to your ${summaryResult?.mode || 'BUILD'} mode today`}
-                  accent={theme.colors.brand.progressSuccess}
-                  onPress={() => handleSelectPlan(PLAN_TYPE.TRAINING)}
-                />
-                <PlanActionCard
-                  icon="food-apple-outline"
-                  title="Build me a nutrition plan"
-                  subtitle="Meals optimized for your readiness"
-                  accent={theme.colors.brand.progressCore}
-                  onPress={() => handleSelectPlan(PLAN_TYPE.NUTRITION)}
-                />
-                <Pressable onPress={handleOpenCoachChat} style={styles.talkCoachGhost}>
-                  <Text style={styles.talkCoachGhostText}>Talk to Coach</Text>
-                </Pressable>
-              </View>
-            ) : null}
+            <ResultCard
+              result={summaryResult}
+              onBuildTraining={() => handleSelectPlan(PLAN_TYPE.TRAINING)}
+              onBuildNutrition={() => handleSelectPlan(PLAN_TYPE.NUTRITION)}
+              showPlanActions={submitState === 'saved' && Boolean(summaryResult?.id)}
+            />
           </View>
           {submitState === 'pending' ? (
             <ModeButton
@@ -2286,46 +2269,16 @@ const styles = StyleSheet.create({
     padding: theme.spacing[4],
     marginTop: theme.spacing[4],
   },
-  resultHero: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: theme.spacing[2],
-    marginBottom: theme.spacing[2],
-  },
-  resultEyebrow: {
-    color: theme.colors.textMedium,
-    ...theme.typography.label,
-    textTransform: 'uppercase',
-    marginBottom: theme.spacing[1],
-    fontFamily: theme.typography.fontFamily,
-  },
-  resultMode: {
-    ...theme.typography.h1,
-    fontFamily: theme.typography.fontFamily,
-    marginBottom: theme.spacing[1],
-  },
-  resultModeBadge: {
-    alignSelf: 'flex-start',
-    borderRadius: 999,
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
-  },
-  resultModeBadgeText: {
-    ...theme.typography.body3,
-    fontFamily: theme.typography.fontFamily,
-    fontWeight: '600',
-  },
-  resultBody: {
-    color: theme.colors.textMedium,
-    ...theme.typography.body2,
-    fontFamily: theme.typography.fontFamily,
-    marginBottom: theme.spacing[2],
-  },
   bundleBlock: {
     paddingTop: theme.spacing[2],
     borderTopWidth: 1,
     borderTopColor: theme.colors.border.soft,
     marginTop: theme.spacing[2],
+  },
+  bundleBlockFirst: {
+    paddingTop: 0,
+    borderTopWidth: 0,
+    marginTop: 0,
   },
   bundleLabel: {
     color: theme.colors.textMedium,
@@ -2345,6 +2298,10 @@ const styles = StyleSheet.create({
     ...theme.typography.body2,
     fontFamily: theme.typography.fontFamily,
   },
+  bundleActionCard: {
+    marginTop: theme.spacing[2],
+    minHeight: 84,
+  },
   resultsContent: {
     paddingHorizontal: theme.spacing[3],
     paddingBottom: theme.spacing[4],
@@ -2355,18 +2312,6 @@ const styles = StyleSheet.create({
     ...theme.typography.label,
     fontFamily: theme.typography.fontFamily,
     textTransform: 'uppercase',
-  },
-  resultsTitle: {
-    color: theme.colors.textHigh,
-    ...theme.typography.h1,
-    fontFamily: theme.typography.fontFamily,
-    marginTop: theme.spacing[1],
-  },
-  resultsSubtitle: {
-    color: theme.colors.textMedium,
-    ...theme.typography.body1,
-    fontFamily: theme.typography.fontFamily,
-    marginTop: theme.spacing[2],
   },
   summaryStatusCard: {
     marginTop: theme.spacing[3],
@@ -2381,9 +2326,13 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border.soft,
     backgroundColor: theme.colors.surface.base,
   },
-  homeOverviewEyebrow: {
+  homeOverviewModeLabel: {
+    letterSpacing: 0.4,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+  },
+  homeOverviewModeValue: {
+    marginTop: theme.spacing[1],
+    fontWeight: '700',
   },
   homeOverviewTitle: {
     marginTop: theme.spacing[2],
@@ -2391,8 +2340,15 @@ const styles = StyleSheet.create({
   homeOverviewBody: {
     marginTop: theme.spacing[1],
   },
+  homeOverviewMindsetWrap: {
+    marginTop: theme.spacing[3],
+  },
+  homeOverviewMindsetValue: {
+    marginTop: theme.spacing[1],
+    color: theme.colors.textHigh,
+  },
   homeOverviewProgressWrap: {
-    marginTop: theme.spacing[2],
+    marginTop: theme.spacing[3],
   },
   homeOverviewProgress: {
     marginTop: theme.spacing[1],
@@ -2513,16 +2469,6 @@ const styles = StyleSheet.create({
     borderRadius: 1,
     backgroundColor: theme.colors.border.soft,
   },
-  postCheckinActionsWrap: {
-    marginTop: theme.spacing[4],
-    gap: theme.spacing[2],
-  },
-  postCheckinHeading: {
-    color: theme.colors.textHigh,
-    ...theme.typography.body1,
-    fontFamily: theme.typography.fontFamily,
-    fontWeight: '700',
-  },
   planActionCard: {
     minHeight: 92,
     borderRadius: 18,
@@ -2558,21 +2504,6 @@ const styles = StyleSheet.create({
   },
   planActionArrow: {
     transform: [{ rotate: '-12deg' }],
-  },
-  talkCoachGhost: {
-    borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 46,
-    marginTop: theme.spacing[1],
-  },
-  talkCoachGhostText: {
-    color: theme.colors.textHigh,
-    ...theme.typography.body2,
-    fontFamily: theme.typography.fontFamily,
-    fontWeight: '600',
   },
   previousCard: {
     marginTop: theme.spacing[3],

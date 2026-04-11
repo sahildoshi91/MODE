@@ -39,6 +39,7 @@ function AppShell() {
   const [chatLaunchContext, setChatLaunchContext] = useState(null);
   const [homeRoute, setHomeRoute] = useState('checkin');
   const [progressRoute, setProgressRoute] = useState('progress');
+  const [insightsOrigin, setInsightsOrigin] = useState('progress');
   const tabOpacity = useRef(new Animated.Value(1)).current;
   const tabTranslateY = useRef(new Animated.Value(0)).current;
 
@@ -69,6 +70,7 @@ function AppShell() {
       setActiveTab('home');
       setHomeRoute('checkin');
       setProgressRoute('progress');
+      setInsightsOrigin('progress');
       setChatLaunchContext(null);
       if (!nextSession) {
         setAuthStage('intro');
@@ -151,6 +153,7 @@ function AppShell() {
     setActiveTab('home');
     setHomeRoute('checkin');
     setProgressRoute('progress');
+    setInsightsOrigin('progress');
     setChatLaunchContext(null);
     setAuthStage('intro');
   };
@@ -171,6 +174,7 @@ function AppShell() {
       await loadAssignmentStatus();
       setActiveTab('home');
       setHomeRoute('checkin');
+      setInsightsOrigin('progress');
       setChatLaunchContext(null);
     } catch (error) {
       setAssignTrainerError(formatAssignmentError(error, 'Unable to assign trainer.'));
@@ -195,6 +199,31 @@ function AppShell() {
     if (nextTab !== 'progress') {
       setProgressRoute('progress');
     }
+    if (nextTab !== 'progress' && nextTab !== 'home') {
+      setInsightsOrigin('progress');
+    }
+  };
+
+  const handleOpenHomeInsights = () => {
+    setInsightsOrigin('home');
+    setActiveTab('progress');
+    setProgressRoute('insights');
+  };
+
+  const handleOpenProgressInsights = () => {
+    setInsightsOrigin('progress');
+    setProgressRoute('insights');
+  };
+
+  const handleBackFromInsights = () => {
+    if (insightsOrigin === 'home') {
+      setActiveTab('home');
+      setHomeRoute('checkin');
+      setProgressRoute('progress');
+      return;
+    }
+    setActiveTab('progress');
+    setProgressRoute('progress');
   };
 
   if (isSessionLoading) {
@@ -262,10 +291,7 @@ function AppShell() {
             bottomInset={contentBottomInset}
             onOpenChat={handleOpenChat}
             onOpenStateGuide={() => setHomeRoute('state')}
-            onOpenInsights={() => {
-              setActiveTab('progress');
-              setProgressRoute('insights');
-            }}
+            onOpenInsights={handleOpenHomeInsights}
           />
         ) : null}
 
@@ -285,7 +311,7 @@ function AppShell() {
           <ProgressScreen
             accessToken={session.access_token}
             bottomInset={contentBottomInset}
-            onOpenInsights={() => setProgressRoute('insights')}
+            onOpenInsights={handleOpenProgressInsights}
             initialSection="habits"
           />
         ) : null}
@@ -293,7 +319,7 @@ function AppShell() {
         {!showAssignmentGate && activeTab === 'progress' && progressRoute === 'insights' ? (
           <CoachInsightsScreen
             accessToken={session.access_token}
-            onBack={() => setProgressRoute('progress')}
+            onBack={handleBackFromInsights}
             bottomInset={contentBottomInset}
           />
         ) : null}
