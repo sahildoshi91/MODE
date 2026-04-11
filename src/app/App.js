@@ -1,23 +1,40 @@
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, Easing, StyleSheet, View } from 'react-native';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { supabase } from '../services/supabaseClient';
 import Login from '../features/auth/screens/Login';
 import CoachChatScreen from '../features/chat/screens/CoachChatScreen';
 import DailyCheckinScreen from '../features/dailyCheckin/screens/DailyCheckinScreen';
+import LiquidBottomNav from '../features/navigation/components/LiquidBottomNav';
+import ProfileScreen from '../features/profile/screens/ProfileScreen';
+import ProgressScreen from '../features/progress/screens/ProgressScreen';
 import TrainerAssignmentScreen from '../features/trainerAssignment/screens/TrainerAssignmentScreen';
 import { assignTrainer, getTrainerAssignmentStatus } from '../features/trainerAssignment/services/trainerAssignmentApi';
 import { theme } from '../../lib/theme';
 
+function formatAssignmentError(error, fallbackMessage) {
+  const message = error?.message || fallbackMessage;
+  return {
+    message,
+    requestId: error?.request_id || null,
+    apiBase: error?.api_base_url || error?.resolved_api_base_url || null,
+  };
+}
+
 function AppShell() {
+  const insets = useSafeAreaInsets();
   const [session, setSession] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isSessionLoading, setIsSessionLoading] = useState(true);
+  const [isAssignmentStatusLoading, setIsAssignmentStatusLoading] = useState(false);
   const [assignmentStatus, setAssignmentStatus] = useState(null);
-  const [assignmentError, setAssignmentError] = useState(null);
+  const [assignmentStatusError, setAssignmentStatusError] = useState(null);
+  const [assignTrainerError, setAssignTrainerError] = useState(null);
   const [isAssigningTrainer, setIsAssigningTrainer] = useState(false);
-  const [activeScreen, setActiveScreen] = useState('checkin');
+  const [activeTab, setActiveTab] = useState('home');
   const [chatLaunchContext, setChatLaunchContext] = useState(null);
+  const tabOpacity = useRef(new Animated.Value(1)).current;
+  const tabTranslateY = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     let isMounted = true;
@@ -28,7 +45,7 @@ function AppShell() {
         return;
       }
       setSession(data.session || null);
-      setIsLoading(false);
+      setIsSessionLoading(false);
     };
 
     loadSession();
@@ -40,9 +57,9 @@ function AppShell() {
         return;
       }
       setSession(nextSession || null);
-      setActiveScreen('checkin');
+      setActiveTab('home');
       setChatLaunchContext(null);
-      setIsLoading(false);
+      setIsSessionLoading(false);
     });
 
     return () => {
@@ -51,55 +68,73 @@ function AppShell() {
     };
   }, []);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    const loadAssignmentStatus = async () => {
-      if (!session?.access_token) {
+  const loadAssignmentStatus = useCallback(
+    async ({ accessTokenOverride } = {}) => {
+      const accessToken = accessTokenOverride || session?.access_token;
+      if (!accessToken) {
         setAssignmentStatus(null);
-        setAssignmentError(null);
-        return;
+        setAssignmentStatusError(null);
+        return null;
       }
 
-      setIsLoading(true);
-      setAssignmentError(null);
+      setIsAssignmentStatusLoading(true);
+      setAssignmentStatusError(null);
 
       try {
-        const status = await getTrainerAssignmentStatus({ accessToken: session.access_token });
-        if (!isMounted) {
-          return;
-        }
+        const status = await getTrainerAssignmentStatus({ accessToken });
         setAssignmentStatus(status);
+        return status;
       } catch (error) {
-        if (!isMounted) {
-          return;
-        }
-        setAssignmentError(error.message || 'Unable to load trainer assignment status.');
-        setAssignmentStatus({
-          needs_assignment: true,
-          available_trainers: [],
-        });
+        setAssignmentStatus(null);
+        setAssignmentStatusError(
+          formatAssignmentError(error, 'Unable to load trainer assignment status.'),
+        );
+        return null;
       } finally {
-        if (isMounted) {
-          setIsLoading(false);
-        }
+        setIsAssignmentStatusLoading(false);
       }
-    };
+    },
+    [session?.access_token],
+  );
 
-    loadAssignmentStatus();
+  useEffect(() => {
+    if (!session?.access_token) {
+      setAssignmentStatus(null);
+      setAssignmentStatusError(null);
+      setAssignTrainerError(null);
+      return;
+    }
+    loadAssignmentStatus({ accessTokenOverride: session.access_token });
+  }, [session?.access_token, loadAssignmentStatus]);
 
-    return () => {
-      isMounted = false;
-    };
-  }, [session]);
+  useEffect(() => {
+    tabOpacity.setValue(0);
+    tabTranslateY.setValue(10);
+
+    Animated.parallel([
+      Animated.timing(tabOpacity, {
+        toValue: 1,
+        duration: 260,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(tabTranslateY, {
+        toValue: 0,
+        duration: 320,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [activeTab, tabOpacity, tabTranslateY]);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     setSession(null);
     setAssignmentStatus(null);
-    setAssignmentError(null);
+    setAssignmentStatusError(null);
+    setAssignTrainerError(null);
     setIsAssigningTrainer(false);
-    setActiveScreen('checkin');
+    setActiveTab('home');
     setChatLaunchContext(null);
   };
 
@@ -110,22 +145,35 @@ function AppShell() {
 
     try {
       setIsAssigningTrainer(true);
-      setAssignmentError(null);
-      const updatedStatus = await assignTrainer({
+      setAssignTrainerError(null);
+      setAssignmentStatusError(null);
+      await assignTrainer({
         accessToken: session.access_token,
         trainerId,
       });
-      setAssignmentStatus(updatedStatus);
-      setActiveScreen('checkin');
+      await loadAssignmentStatus();
+      setActiveTab('home');
       setChatLaunchContext(null);
     } catch (error) {
-      setAssignmentError(error.message || 'Unable to assign trainer.');
+      setAssignTrainerError(formatAssignmentError(error, 'Unable to assign trainer.'));
     } finally {
       setIsAssigningTrainer(false);
     }
   };
 
-  if (isLoading) {
+  const handleOpenChat = (launchContext = null) => {
+    setChatLaunchContext(launchContext);
+    setActiveTab('coach');
+  };
+
+  const handleTabChange = (nextTab) => {
+    setActiveTab(nextTab);
+    if (nextTab !== 'coach') {
+      setChatLaunchContext(null);
+    }
+  };
+
+  if (isSessionLoading) {
     return (
       <View style={styles.loadingScreen}>
         <ActivityIndicator size="large" color={theme.colors.accent} />
@@ -137,41 +185,89 @@ function AppShell() {
     return <Login />;
   }
 
-  if (assignmentStatus?.needs_assignment) {
-    return (
-      <TrainerAssignmentScreen
-        trainers={assignmentStatus.available_trainers || []}
-        isSubmitting={isAssigningTrainer}
-        errorMessage={assignmentError}
-        onAssignTrainer={handleAssignTrainer}
-        onSignOut={handleSignOut}
-      />
-    );
-  }
+  const navBottomInset = insets.bottom;
+  const contentBottomInset = navBottomInset + 108;
+  const isBlockingStatusError = Boolean(assignmentStatusError);
+  const assignmentError = assignTrainerError || assignmentStatusError;
+  const needsAssignment = Boolean(assignmentStatus?.needs_assignment);
+  const showAssignmentGate = Boolean((needsAssignment || isBlockingStatusError) && activeTab !== 'profile');
+  const isBlockingAssignmentLoad = isAssignmentStatusLoading && !assignmentStatus && !assignmentStatusError;
 
-  if (activeScreen === 'chat') {
+  if (isBlockingAssignmentLoad) {
     return (
-      <CoachChatScreen
-        accessToken={session.access_token}
-        launchContext={chatLaunchContext}
-        onSignOut={handleSignOut}
-        onBackToCheckin={() => {
-          setActiveScreen('checkin');
-          setChatLaunchContext(null);
-        }}
-      />
+      <View style={styles.loadingScreen}>
+        <ActivityIndicator size="large" color={theme.colors.accent} />
+      </View>
     );
   }
 
   return (
-    <DailyCheckinScreen
-      accessToken={session.access_token}
-      onSignOut={handleSignOut}
-      onOpenChat={(launchContext = null) => {
-        setChatLaunchContext(launchContext);
-        setActiveScreen('chat');
-      }}
-    />
+    <View style={styles.shell}>
+      <Animated.View
+        style={[
+          styles.screenContainer,
+          {
+            opacity: tabOpacity,
+            transform: [{ translateY: tabTranslateY }],
+          },
+        ]}
+      >
+        {showAssignmentGate ? (
+          <TrainerAssignmentScreen
+            trainers={assignmentStatus?.available_trainers || []}
+            availableTrainerCount={assignmentStatus?.available_trainers_count}
+            hasLoadedStatus={Boolean(assignmentStatus)}
+            isStatusLoading={isAssignmentStatusLoading}
+            statusLoadFailed={isBlockingStatusError}
+            isSubmitting={isAssigningTrainer}
+            errorMessage={assignmentError?.message || null}
+            errorRequestId={assignmentError?.requestId || null}
+            errorApiBase={assignmentError?.apiBase || null}
+            onRetryStatusLoad={loadAssignmentStatus}
+            onAssignTrainer={handleAssignTrainer}
+            bottomInset={contentBottomInset}
+          />
+        ) : null}
+
+        {!showAssignmentGate && activeTab === 'home' ? (
+          <DailyCheckinScreen
+            accessToken={session.access_token}
+            bottomInset={contentBottomInset}
+            onOpenChat={handleOpenChat}
+          />
+        ) : null}
+
+        {!showAssignmentGate && activeTab === 'coach' ? (
+          <CoachChatScreen
+            accessToken={session.access_token}
+            launchContext={chatLaunchContext}
+            bottomInset={contentBottomInset}
+          />
+        ) : null}
+
+        {!showAssignmentGate && activeTab === 'progress' ? (
+          <ProgressScreen
+            accessToken={session.access_token}
+            bottomInset={contentBottomInset}
+          />
+        ) : null}
+
+        {activeTab === 'profile' ? (
+          <ProfileScreen
+            session={session}
+            assignmentStatus={assignmentStatus}
+            onSignOut={handleSignOut}
+            bottomInset={contentBottomInset}
+          />
+        ) : null}
+      </Animated.View>
+
+      <LiquidBottomNav
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+        bottomInset={navBottomInset}
+      />
+    </View>
   );
 }
 
@@ -184,6 +280,13 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
+  shell: {
+    flex: 1,
+    backgroundColor: theme.colors.bg.primary,
+  },
+  screenContainer: {
+    flex: 1,
+  },
   loadingScreen: {
     flex: 1,
     alignItems: 'center',

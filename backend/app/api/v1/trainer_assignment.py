@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -20,21 +22,28 @@ class TrainerAssignmentStatus(BaseModel):
     assigned_trainer_id: str | None = None
     assigned_trainer_display_name: str | None = None
     available_trainers: list[TrainerOption] = Field(default_factory=list)
+    available_trainers_count: int = 0
+    scope: Literal["tenant", "global_fallback"] = "global_fallback"
 
 
 class TrainerAssignmentRequest(BaseModel):
     trainer_id: str
 
 
-def _list_active_trainers() -> list[dict]:
-    response = (
+def _resolve_scope(trainer_context: TrainerContext) -> Literal["tenant", "global_fallback"]:
+    return "tenant" if trainer_context.tenant_id else "global_fallback"
+
+
+def _list_active_trainers(*, tenant_id: str | None) -> list[dict]:
+    query = (
         get_supabase_client()
         .table("trainers")
         .select("id, tenant_id, display_name, is_active")
         .eq("is_active", True)
-        .order("display_name")
-        .execute()
     )
+    if tenant_id:
+        query = query.eq("tenant_id", tenant_id)
+    response = query.order("display_name").order("id").execute()
     return response.data or []
 
 
@@ -43,14 +52,17 @@ def _build_status_response(
     available_trainers: list[dict] | None = None,
 ) -> TrainerAssignmentStatus:
     needs_assignment = not trainer_context.trainer_id
+    scoped_trainers = (available_trainers or []) if needs_assignment else []
     return TrainerAssignmentStatus(
         needs_assignment=needs_assignment,
         assigned_trainer_id=trainer_context.trainer_id,
         assigned_trainer_display_name=trainer_context.trainer_display_name,
         available_trainers=[
             TrainerOption(id=trainer["id"], display_name=trainer["display_name"])
-            for trainer in (available_trainers or [])
-        ] if needs_assignment else [],
+            for trainer in scoped_trainers
+        ],
+        available_trainers_count=len(scoped_trainers),
+        scope=_resolve_scope(trainer_context),
     )
 
 
@@ -63,7 +75,7 @@ async def get_assignment_status(
 
     return _build_status_response(
         trainer_context,
-        available_trainers=_list_active_trainers(),
+        available_trainers=_list_active_trainers(tenant_id=trainer_context.tenant_id),
     )
 
 
@@ -85,12 +97,12 @@ async def assign_trainer(
         )
 
     admin_client = get_supabase_client()
-    trainers = _list_active_trainers()
+    trainers = _list_active_trainers(tenant_id=trainer_context.tenant_id)
     selected_trainer = next((trainer for trainer in trainers if trainer["id"] == request.trainer_id), None)
     if not selected_trainer:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Selected trainer was not found",
+            detail="Selected trainer was not found in the available trainer scope",
         )
 
     existing_clients = (

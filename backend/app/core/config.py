@@ -6,6 +6,8 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
     anthropic_api_key: str | None = None
+    ai_request_timeout_seconds: float = 30.0
+    ai_max_retries: int = 2
     expose_route_debug: bool = False
     supabase_url: str | None = None
     supabase_anon_key: str | None = Field(

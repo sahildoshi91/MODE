@@ -34,12 +34,14 @@ class FakeDailyCheckinService:
         self.last_submit = None
         self.last_generate = None
         self.last_log = None
+        self.last_progress = None
 
     def get_status(self, client_id: str, checkin_date: date) -> DailyCheckinStatusResponse:
         if client_id == "client-complete":
             return DailyCheckinStatusResponse(
                 date=checkin_date,
                 completed=True,
+                current_streak=4,
                 checkin=DailyCheckinResult(
                     id="checkin-1",
                     date=checkin_date,
@@ -63,7 +65,7 @@ class FakeDailyCheckinService:
                     completion_timestamp=datetime(2026, 3, 27, 16, 0, tzinfo=timezone.utc),
                 ),
             )
-        return DailyCheckinStatusResponse(date=checkin_date, completed=False)
+        return DailyCheckinStatusResponse(date=checkin_date, completed=False, current_streak=0)
 
     def get_previous_checkin_summary(self, client_id: str, before_date: date):
         if client_id == "client-generate":
@@ -80,6 +82,37 @@ class FakeDailyCheckinService:
                 ),
             )
         return None
+
+    def get_progress_analytics(self, client_id: str, as_of_date: date):
+        self.last_progress = {
+            "client_id": client_id,
+            "as_of_date": as_of_date,
+        }
+        return {
+            "as_of_date": as_of_date,
+            "current_streak_days": 5,
+            "checkins_last_7_days": 6,
+            "avg_score_last_7_days": 18.33,
+            "avg_mode_last_7_days": "BUILD",
+            "avg_score_last_30_days": 17.8,
+            "avg_mode_last_30_days": "BUILD",
+            "score_change_7d": {
+                "value": 1.5,
+                "previous_average": 16.83,
+                "has_previous_window_data": True,
+            },
+            "score_change_30d": {
+                "value": None,
+                "previous_average": None,
+                "has_previous_window_data": False,
+            },
+            "has_enough_for_30d": False,
+            "insufficient_data_reason": "Not enough data yet for 30-day analytics. Log at least 30 check-ins.",
+            "recent_checkins": [
+                {"date": date(2026, 4, 8), "score": 19, "mode": "BUILD"},
+                {"date": date(2026, 4, 7), "score": 18, "mode": "BUILD"},
+            ],
+        }
 
     def submit_checkin(self, client_id: str, checkin_date: date, inputs: DailyCheckinInputs, time_to_complete=None):
         self.last_submit = {
@@ -210,6 +243,9 @@ class StubTable:
     def neq(self, *_args, **_kwargs):
         return self
 
+    def lte(self, *_args, **_kwargs):
+        return self
+
     def order(self, *_args, **_kwargs):
         return self
 
@@ -338,6 +374,192 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertEqual(repository.calls[1]["assigned_mode"], "YELLOW")
         self.assertEqual(result.mode, "BUILD")
         self.assertEqual(result.score, 20)
+
+    def test_get_status_returns_zero_streak_when_no_checkin_exists(self):
+        class FakeRepository:
+            def get_by_client_and_date(self, _client_id, _checkin_date):
+                return None
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+
+        result = service.get_status("client-1", date(2026, 4, 7))
+
+        self.assertFalse(result.completed)
+        self.assertEqual(result.current_streak, 0)
+        self.assertIsNone(result.checkin)
+
+    def test_get_status_returns_consecutive_streak_for_completed_checkin(self):
+        class FakeRepository:
+            def get_by_client_and_date(self, _client_id, _checkin_date):
+                return {
+                    "id": "checkin-1",
+                    "client_id": "client-1",
+                    "date": "2026-04-07",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 4,
+                        "nutrition": 4,
+                        "motivation": 4,
+                    },
+                    "total_score": 20,
+                    "assigned_mode": "BUILD",
+                    "time_to_complete": 10,
+                    "completion_timestamp": "2026-04-07T16:00:00+00:00",
+                }
+
+            def list_checkin_dates_on_or_before(self, _client_id, _checkin_date):
+                return [
+                    date(2026, 4, 7),
+                    date(2026, 4, 6),
+                    date(2026, 4, 5),
+                    date(2026, 4, 3),
+                ]
+
+            def get_previous_checkin(self, _client_id, _parsed_date):
+                return None
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+
+        result = service.get_status("client-1", date(2026, 4, 7))
+
+        self.assertTrue(result.completed)
+        self.assertEqual(result.current_streak, 3)
+        self.assertEqual(result.checkin.id, "checkin-1")
+
+    def test_get_status_returns_zero_streak_when_streak_lookup_fails(self):
+        class FakeRepository:
+            def get_by_client_and_date(self, _client_id, _checkin_date):
+                return {
+                    "id": "checkin-1",
+                    "client_id": "client-1",
+                    "date": "2026-04-07",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 4,
+                        "nutrition": 4,
+                        "motivation": 4,
+                    },
+                    "total_score": 20,
+                    "assigned_mode": "BUILD",
+                    "time_to_complete": 10,
+                    "completion_timestamp": "2026-04-07T16:00:00+00:00",
+                }
+
+            def list_checkin_dates_on_or_before(self, _client_id, _checkin_date):
+                raise RuntimeError("streak lookup failed")
+
+            def get_previous_checkin(self, _client_id, _parsed_date):
+                return None
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+
+        result = service.get_status("client-1", date(2026, 4, 7))
+
+        self.assertTrue(result.completed)
+        self.assertEqual(result.current_streak, 0)
+
+    def test_progress_analytics_streak_and_last_7_count_are_correct(self):
+        class FakeRepository:
+            def list_checkins_on_or_before(self, _client_id, _as_of_date):
+                return [
+                    {"date": "2026-04-10", "total_score": 20, "assigned_mode": "BUILD"},
+                    {"date": "2026-04-09", "total_score": 19, "assigned_mode": "BUILD"},
+                    {"date": "2026-04-08", "total_score": 18, "assigned_mode": "BUILD"},
+                    {"date": "2026-04-06", "total_score": 17, "assigned_mode": "BUILD"},
+                ]
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+        result = service.get_progress_analytics("client-1", date(2026, 4, 10))
+
+        self.assertEqual(result.current_streak_days, 3)
+        self.assertEqual(result.checkins_last_7_days, 4)
+
+    def test_progress_analytics_average_score_and_mode_mapping_are_correct(self):
+        class FakeRepository:
+            def list_checkins_on_or_before(self, _client_id, _as_of_date):
+                return [
+                    {"date": "2026-04-10", "total_score": 21, "assigned_mode": "BEAST"},
+                    {"date": "2026-04-09", "total_score": 20, "assigned_mode": "BUILD"},
+                    {"date": "2026-04-08", "total_score": 19, "assigned_mode": "BUILD"},
+                    {"date": "2026-04-07", "total_score": 18, "assigned_mode": "BUILD"},
+                ]
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+        result = service.get_progress_analytics("client-1", date(2026, 4, 10))
+
+        self.assertEqual(result.avg_score_last_7_days, 19.5)
+        self.assertEqual(result.avg_mode_last_7_days, "BUILD")
+
+    def test_progress_analytics_7d_delta_compares_previous_7_day_window(self):
+        class FakeRepository:
+            def list_checkins_on_or_before(self, _client_id, _as_of_date):
+                return [
+                    {"date": "2026-04-10", "total_score": 20, "assigned_mode": "BUILD"},
+                    {"date": "2026-04-09", "total_score": 19, "assigned_mode": "BUILD"},
+                    {"date": "2026-04-08", "total_score": 18, "assigned_mode": "BUILD"},
+                    {"date": "2026-04-07", "total_score": 17, "assigned_mode": "BUILD"},
+                    {"date": "2026-04-04", "total_score": 15, "assigned_mode": "RECOVER"},
+                    {"date": "2026-04-03", "total_score": 14, "assigned_mode": "RECOVER"},
+                    {"date": "2026-04-02", "total_score": 13, "assigned_mode": "RECOVER"},
+                ]
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+        result = service.get_progress_analytics("client-1", date(2026, 4, 10))
+
+        self.assertEqual(result.score_change_7d.previous_average, 14.0)
+        self.assertEqual(result.score_change_7d.value, 4.0)
+        self.assertTrue(result.score_change_7d.has_previous_window_data)
+
+    def test_progress_analytics_hides_30d_metrics_until_threshold_met(self):
+        class FakeRepository:
+            def list_checkins_on_or_before(self, _client_id, _as_of_date):
+                return [
+                    {"date": f"2026-04-{day:02d}", "total_score": 18, "assigned_mode": "BUILD"}
+                    for day in range(1, 30)
+                ]
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+        result = service.get_progress_analytics("client-1", date(2026, 4, 29))
+
+        self.assertFalse(result.has_enough_for_30d)
+        self.assertIsNone(result.avg_score_last_30_days)
+        self.assertIsNotNone(result.insufficient_data_reason)
+
+    def test_progress_analytics_30d_delta_requires_previous_30_day_window_data(self):
+        class FakeRepository:
+            def list_checkins_on_or_before(self, _client_id, _as_of_date):
+                rows = []
+                for day in range(0, 30):
+                    target = date(2026, 4, 10).fromordinal(date(2026, 4, 10).toordinal() - day)
+                    rows.append({
+                        "date": target.isoformat(),
+                        "total_score": 18,
+                        "assigned_mode": "BUILD",
+                    })
+                return rows
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+        result = service.get_progress_analytics("client-1", date(2026, 4, 10))
+
+        self.assertTrue(result.has_enough_for_30d)
+        self.assertEqual(result.avg_score_last_30_days, 18.0)
+        self.assertIsNone(result.score_change_30d.value)
+        self.assertFalse(result.score_change_30d.has_previous_window_data)
+
+    def test_progress_analytics_returns_safe_defaults_for_empty_history(self):
+        class FakeRepository:
+            def list_checkins_on_or_before(self, _client_id, _as_of_date):
+                return []
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+        result = service.get_progress_analytics("client-1", date(2026, 4, 10))
+
+        self.assertEqual(result.current_streak_days, 0)
+        self.assertEqual(result.checkins_last_7_days, 0)
+        self.assertIsNone(result.avg_score_last_7_days)
+        self.assertEqual(result.recent_checkins, [])
 
     def test_build_result_succeeds_when_profile_lookup_raises(self):
         class FakeProfileService:
@@ -957,6 +1179,35 @@ class DailyCheckinServiceTests(unittest.TestCase):
 
 
 class DailyCheckinRepositoryTests(unittest.TestCase):
+    def test_list_checkin_dates_on_or_before_returns_dates(self):
+        table = StubTable(
+            lookup_data=[
+                {"date": "2026-03-27"},
+                {"date": "2026-03-26"},
+                {"date": "2026-03-25"},
+            ],
+        )
+        repository = DailyCheckinRepository(StubSupabase(table))
+
+        result = repository.list_checkin_dates_on_or_before("client-1", date(2026, 3, 27))
+
+        self.assertEqual(result, [date(2026, 3, 27), date(2026, 3, 26), date(2026, 3, 25)])
+
+    def test_list_checkins_on_or_before_returns_compact_rows(self):
+        table = StubTable(
+            lookup_data=[
+                {"date": "2026-03-27", "total_score": 18, "assigned_mode": "BUILD"},
+                {"date": "2026-03-26", "total_score": 16, "assigned_mode": "YELLOW"},
+            ],
+        )
+        repository = DailyCheckinRepository(StubSupabase(table))
+
+        result = repository.list_checkins_on_or_before("client-1", date(2026, 3, 27))
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0]["date"], "2026-03-27")
+        self.assertEqual(result[1]["assigned_mode"], "YELLOW")
+
     def test_upsert_checkin_surfaces_supabase_error_details(self):
         table = StubTable(
             execute_error=FakeSupabaseFailure(FailingResponse()),
@@ -1093,7 +1344,77 @@ class DailyCheckinApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["completed"])
+        self.assertEqual(response.json()["current_streak"], 0)
         self.assertIsNone(response.json()["checkin"])
+
+    def test_today_returns_current_streak_when_checkin_exists(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id="client-complete",
+            client_user_id="user-123",
+        )
+
+        response = self.client.get(
+            "/api/v1/checkin/today",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["completed"])
+        self.assertEqual(response.json()["current_streak"], 4)
+        self.assertEqual(response.json()["checkin"]["id"], "checkin-1")
+
+    def test_progress_returns_analytics_schema(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id="client-complete",
+            client_user_id="user-123",
+        )
+
+        response = self.client.get(
+            "/api/v1/checkin/progress?as_of_date=2026-04-08",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["current_streak_days"], 5)
+        self.assertIn("score_change_7d", payload)
+        self.assertIn("has_enough_for_30d", payload)
+        self.assertEqual(payload["recent_checkins"][0]["score"], 19)
+        self.assertEqual(self.fake_service.last_progress["client_id"], "client-complete")
+
+    def test_progress_rejects_missing_client_context(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id=None,
+        )
+
+        response = self.client.get(
+            "/api/v1/checkin/progress",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "No client assignment found")
+
+    def test_progress_requires_authentication(self):
+        app.dependency_overrides.pop(require_user, None)
+        app.dependency_overrides.pop(get_trainer_context, None)
+        auth_client = TestClient(app)
+
+        response = auth_client.get("/api/v1/checkin/progress")
+
+        self.assertEqual(response.status_code, 401)
 
     def test_submit_returns_daily_bundle_and_passes_client_context(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(

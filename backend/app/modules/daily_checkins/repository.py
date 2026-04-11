@@ -95,6 +95,30 @@ class DailyCheckinRepository:
         )
         return response.data[0] if response.data else None
 
+    def list_checkin_dates_on_or_before(self, client_id: str, on_or_before: date) -> list[date]:
+        response = (
+            self.supabase
+            .table("daily_checkins")
+            .select("date")
+            .eq("client_id", client_id)
+            .lte("date", on_or_before.isoformat())
+            .order("date", desc=True)
+            .execute()
+        )
+        return [date.fromisoformat(row["date"]) for row in response.data or [] if row.get("date")]
+
+    def list_checkins_on_or_before(self, client_id: str, on_or_before: date) -> list[dict[str, Any]]:
+        response = (
+            self.supabase
+            .table("daily_checkins")
+            .select("date,total_score,assigned_mode")
+            .eq("client_id", client_id)
+            .lte("date", on_or_before.isoformat())
+            .order("date", desc=True)
+            .execute()
+        )
+        return response.data or []
+
     def upsert_checkin(self, payload: dict[str, Any]) -> dict[str, Any]:
         try:
             response = (

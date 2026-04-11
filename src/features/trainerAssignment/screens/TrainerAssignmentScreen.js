@@ -1,57 +1,78 @@
 import React from 'react';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ScrollView, StyleSheet, Text } from 'react-native';
 
 import { HeaderBar, ModeButton, ModeCard, SafeScreen } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 
 export default function TrainerAssignmentScreen({
   trainers,
+  availableTrainerCount,
+  hasLoadedStatus,
+  isStatusLoading,
+  statusLoadFailed,
   isSubmitting,
   errorMessage,
+  errorRequestId,
+  errorApiBase,
+  onRetryStatusLoad,
   onAssignTrainer,
-  onSignOut,
+  bottomInset = 0,
 }) {
-  const showEmptyState = trainers.length === 0 && !errorMessage;
+  const resolvedTrainerCount = Number.isInteger(availableTrainerCount)
+    ? availableTrainerCount
+    : trainers.length;
+  const showEmptyState = hasLoadedStatus && resolvedTrainerCount === 0 && !statusLoadFailed;
 
   return (
     <SafeScreen style={styles.screen}>
       <HeaderBar title="Pick Your Trainer" subtitle="Choose who should coach this account" />
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: theme.spacing[5] + bottomInset },
+        ]}
+      >
         <ModeCard>
           <Text style={styles.title}>No active trainer is assigned yet</Text>
           <Text style={styles.body}>
             Pick a trainer below and we'll connect this login to that coaching context before chat starts.
           </Text>
-          {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
+          {!statusLoadFailed && errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
         </ModeCard>
 
-        {trainers.map((trainer) => (
+        {statusLoadFailed ? (
+          <ModeCard style={styles.blockingCard}>
+            <Text style={styles.blockingTitle}>Unable to load trainer options</Text>
+            {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
+            {errorRequestId ? <Text style={styles.meta}>Request ID: {errorRequestId}</Text> : null}
+            {errorApiBase ? <Text style={styles.meta}>API Base: {errorApiBase}</Text> : null}
+            <ModeButton
+              title={isStatusLoading ? 'Retrying...' : 'Retry'}
+              onPress={onRetryStatusLoad}
+              disabled={isStatusLoading}
+            />
+          </ModeCard>
+        ) : null}
+
+        {!statusLoadFailed ? trainers.map((trainer) => (
           <ModeCard key={trainer.id} style={styles.trainerCard}>
             <Text style={styles.trainerName}>{trainer.display_name}</Text>
             <ModeButton
               title={isSubmitting ? 'Assigning...' : `Choose ${trainer.display_name}`}
               onPress={() => onAssignTrainer(trainer.id)}
-              disabled={isSubmitting}
+              disabled={isSubmitting || isStatusLoading}
             />
           </ModeCard>
-        ))}
+        )) : null}
 
         {showEmptyState ? (
           <ModeCard>
             <Text style={styles.body}>
-              No active trainers are available right now. Sign out and try another account, or add an active trainer in the admin setup first.
+              No active trainers are available right now. Try another account from the Profile tab, or add an active trainer in the admin setup first.
             </Text>
           </ModeCard>
         ) : null}
-
-        <ModeButton
-          title="Sign Out"
-          variant="secondary"
-          onPress={onSignOut}
-          disabled={isSubmitting}
-          style={styles.signOutButton}
-        />
       </ScrollView>
     </SafeScreen>
   );
@@ -62,7 +83,6 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: theme.spacing[3],
-    paddingBottom: theme.spacing[5],
   },
   title: {
     color: theme.colors.textHigh,
@@ -78,14 +98,22 @@ const styles = StyleSheet.create({
     ...theme.typography.body2,
     marginTop: theme.spacing[2],
   },
+  blockingCard: {
+    gap: theme.spacing[2],
+  },
+  blockingTitle: {
+    color: theme.colors.textHigh,
+    ...theme.typography.h3,
+  },
+  meta: {
+    color: theme.colors.textMedium,
+    ...theme.typography.body2,
+  },
   trainerCard: {
     gap: theme.spacing[2],
   },
   trainerName: {
     color: theme.colors.textHigh,
     ...theme.typography.h3,
-  },
-  signOutButton: {
-    marginTop: theme.spacing[2],
   },
 });

@@ -9,7 +9,7 @@ import QuickReplies from '../components/QuickReplies';
 import TypingIndicator from '../components/TypingIndicator';
 import { useChatConversation } from '../hooks/useChatConversation';
 
-export default function CoachChatScreen({ accessToken, launchContext, onSignOut, onBackToCheckin }) {
+export default function CoachChatScreen({ accessToken, launchContext, bottomInset = 0 }) {
   const [draft, setDraft] = useState('');
   const {
     messages,
@@ -59,7 +59,7 @@ export default function CoachChatScreen({ accessToken, launchContext, onSignOut,
     <SafeScreen style={styles.screen}>
       <HeaderBar title="MODE Coach" subtitle={headerSubtitle} />
 
-      <View style={styles.content}>
+      <View style={[styles.content, { paddingBottom: theme.spacing[3] + bottomInset }]}>
         <ModeCard style={styles.statusCard}>
           <Text style={styles.statusLabel}>Stage</Text>
           <Text style={styles.statusValue}>{conversationState.current_stage}</Text>
@@ -112,21 +112,6 @@ export default function CoachChatScreen({ accessToken, launchContext, onSignOut,
           disabled={isSending}
         />
 
-        {typeof onBackToCheckin === 'function' ? (
-          <ModeButton
-            title="Back to Check-in"
-            variant="secondary"
-            onPress={onBackToCheckin}
-            style={styles.backButton}
-          />
-        ) : null}
-
-        <ModeButton
-          title="Sign Out"
-          variant="secondary"
-          onPress={onSignOut}
-          style={styles.signOutButton}
-        />
       </View>
     </SafeScreen>
   );
@@ -176,12 +161,6 @@ const styles = StyleSheet.create({
     ...theme.typography.body2,
   },
   errorButton: {
-    marginTop: theme.spacing[2],
-  },
-  backButton: {
-    marginTop: theme.spacing[2],
-  },
-  signOutButton: {
     marginTop: theme.spacing[2],
   },
 });

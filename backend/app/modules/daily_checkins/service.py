@@ -6,6 +6,7 @@ from typing import Any
 
 from app.modules.daily_checkins.repository import DailyCheckinRepository, DailyCheckinRepositoryError
 from app.modules.daily_checkins.schemas import (
+    CheckinProgressResponse,
     DailyCheckinInputs,
     DailyCheckinResult,
     DailyCheckinStatusResponse,
@@ -16,6 +17,8 @@ from app.modules.daily_checkins.schemas import (
     MindsetRecommendation,
     NutritionRecommendation,
     PlanType,
+    ProgressRecentCheckin,
+    ScoreWindowChange,
     StructuredNutritionPlan,
     StructuredTrainingPlan,
     TrainingRecommendation,
@@ -110,17 +113,96 @@ class DailyCheckinService:
     def get_status(self, client_id: str, checkin_date: date) -> DailyCheckinStatusResponse:
         record = self.repository.get_by_client_and_date(client_id, checkin_date)
         if not record:
-            return DailyCheckinStatusResponse(date=checkin_date, completed=False)
+            return DailyCheckinStatusResponse(date=checkin_date, completed=False, current_streak=0)
 
         return DailyCheckinStatusResponse(
             date=checkin_date,
             completed=True,
+            current_streak=self._calculate_current_streak(client_id, checkin_date),
             checkin=self._build_result(record),
         )
 
     def get_previous_checkin_summary(self, client_id: str, before_date: date):
         record = self.repository.get_previous_checkin(client_id, before_date)
         return self._build_yesterday_summary(record)
+
+    def get_progress_analytics(self, client_id: str, as_of_date: date) -> CheckinProgressResponse:
+        if not self.repository or not hasattr(self.repository, "list_checkins_on_or_before"):
+            return CheckinProgressResponse(
+                as_of_date=as_of_date,
+                score_change_7d=ScoreWindowChange(),
+                score_change_30d=ScoreWindowChange(),
+            )
+
+        rows = self.repository.list_checkins_on_or_before(client_id, as_of_date)
+        normalized_rows = []
+        for row in rows or []:
+            row_date = row.get("date")
+            if not row_date:
+                continue
+            parsed_date = self._coerce_date(row_date)
+            score = row.get("total_score")
+            if score is None:
+                continue
+            normalized_rows.append(
+                {
+                    "date": parsed_date,
+                    "score": float(score),
+                    "mode": self._normalize_mode(str(row.get("assigned_mode") or "")),
+                }
+            )
+
+        date_to_score = {row["date"]: row["score"] for row in normalized_rows}
+        current_streak = self._calculate_streak_from_dates(set(date_to_score.keys()), as_of_date)
+
+        last_7_scores = self._window_scores(date_to_score, as_of_date=as_of_date, window_days=7, offset_days=0)
+        prev_7_scores = self._window_scores(date_to_score, as_of_date=as_of_date, window_days=7, offset_days=7)
+        last_30_scores = self._window_scores(date_to_score, as_of_date=as_of_date, window_days=30, offset_days=0)
+        prev_30_scores = self._window_scores(date_to_score, as_of_date=as_of_date, window_days=30, offset_days=30)
+
+        avg_7 = self._average(last_7_scores)
+        avg_30 = self._average(last_30_scores)
+        prev_avg_7 = self._average(prev_7_scores)
+        prev_avg_30 = self._average(prev_30_scores)
+
+        has_enough_for_30d = len(normalized_rows) >= 30
+        insufficient_data_reason = None
+        if not has_enough_for_30d:
+            insufficient_data_reason = "Not enough data yet for 30-day analytics. Log at least 30 check-ins."
+
+        return CheckinProgressResponse(
+            as_of_date=as_of_date,
+            current_streak_days=current_streak,
+            checkins_last_7_days=len(last_7_scores),
+            avg_score_last_7_days=avg_7,
+            avg_mode_last_7_days=self._assign_mode(avg_7) if avg_7 is not None else None,
+            avg_score_last_30_days=avg_30 if has_enough_for_30d else None,
+            avg_mode_last_30_days=self._assign_mode(avg_30) if has_enough_for_30d and avg_30 is not None else None,
+            score_change_7d=ScoreWindowChange(
+                value=(avg_7 - prev_avg_7) if avg_7 is not None and prev_avg_7 is not None else None,
+                previous_average=prev_avg_7,
+                has_previous_window_data=prev_avg_7 is not None,
+            ),
+            score_change_30d=ScoreWindowChange(
+                value=(
+                    (avg_30 - prev_avg_30)
+                    if has_enough_for_30d and avg_30 is not None and prev_avg_30 is not None
+                    else None
+                ),
+                previous_average=prev_avg_30 if has_enough_for_30d else None,
+                has_previous_window_data=bool(has_enough_for_30d and prev_avg_30 is not None),
+            ),
+            has_enough_for_30d=has_enough_for_30d,
+            insufficient_data_reason=insufficient_data_reason,
+            recent_checkins=[
+                ProgressRecentCheckin(
+                    date=row["date"],
+                    score=int(row["score"]),
+                    mode=row["mode"],
+                )
+                for row in normalized_rows[:12]
+            ],
+        )
 
     def submit_checkin(
         self,
@@ -402,10 +484,66 @@ class DailyCheckinService:
             inputs=DailyCheckinInputs(**record["inputs"]),
         )
 
+    def _calculate_current_streak(self, client_id: str, checkin_date: date) -> int:
+        if not self.repository or not hasattr(self.repository, "list_checkin_dates_on_or_before"):
+            return 0
+
+        try:
+            checkin_dates = self.repository.list_checkin_dates_on_or_before(client_id, checkin_date)
+        except Exception as exc:
+            logger.warning(
+                "Daily check-in streak lookup failed for client_id=%s date=%s: %s",
+                client_id,
+                checkin_date,
+                exc,
+            )
+            return 0
+
+        streak = 0
+        expected_date = checkin_date
+        for completed_date in checkin_dates:
+            if completed_date != expected_date:
+                break
+            streak += 1
+            expected_date = expected_date.fromordinal(expected_date.toordinal() - 1)
+        return streak
+
     def _coerce_date(self, value):
         if isinstance(value, str):
             return date.fromisoformat(value)
         return value
+
+    def _calculate_streak_from_dates(self, completed_dates: set[date], as_of_date: date) -> int:
+        streak = 0
+        day_cursor = as_of_date
+        while day_cursor in completed_dates:
+            streak += 1
+            day_cursor = day_cursor.fromordinal(day_cursor.toordinal() - 1)
+        return streak
+
+    def _window_scores(
+        self,
+        date_to_score: dict[date, float],
+        *,
+        as_of_date: date,
+        window_days: int,
+        offset_days: int,
+    ) -> list[float]:
+        end_date = as_of_date.fromordinal(as_of_date.toordinal() - offset_days)
+        start_date = end_date.fromordinal(end_date.toordinal() - (window_days - 1))
+        scores = []
+        day_cursor = start_date
+        while day_cursor <= end_date:
+            score = date_to_score.get(day_cursor)
+            if score is not None:
+                scores.append(score)
+            day_cursor = day_cursor.fromordinal(day_cursor.toordinal() + 1)
+        return scores
+
+    def _average(self, values: list[float]) -> float | None:
+        if not values:
+            return None
+        return round(sum(values) / len(values), 2)
 
     def _get_lowest_dimension(self, inputs: DailyCheckinInputs) -> str:
         values = inputs.model_dump()

@@ -15,6 +15,7 @@ import * as Clipboard from 'expo-clipboard';
 
 import { ModeButton, SafeScreen } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { SHOW_DEV_CONNECTION_DEBUG } from '../../../config/featureFlags';
 import { getApiDebugInfo } from '../../../services/apiBaseUrl';
 import { getApiRequestDebugState } from '../../../services/apiRequest';
 import {
@@ -966,7 +967,7 @@ function NutritionPlanView({ plan }) {
   );
 }
 
-export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat }) {
+export default function DailyCheckinScreen({ accessToken, onOpenChat, bottomInset = 0 }) {
   const insets = useSafeAreaInsets();
   const sessionStartRef = useRef(Date.now());
   const nutritionDayNoteRef = useRef(null);
@@ -1017,7 +1018,7 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
   const [glowFromColor, setGlowFromColor] = useState(QUESTIONS[0].color);
   const [glowToColor, setGlowToColor] = useState(QUESTIONS[0].color);
   const planDiagnosticsLine = useMemo(() => buildPlanDiagnosticsLine(planError), [planError]);
-  const showConnectionDebug = __DEV__;
+  const showConnectionDebug = __DEV__ && SHOW_DEV_CONNECTION_DEBUG;
 
   useEffect(() => {
     if (currentQuestion.color === glowTargetRef.current) {
@@ -1624,7 +1625,7 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
       ) : null}
 
       {step === 'questionnaire' ? (
-        <View style={styles.centerStage}>
+        <View style={[styles.centerStage, { paddingBottom: theme.spacing[3] + bottomInset }]}>
           <QuestionScreen
             question={currentQuestion}
             questionIndex={questionIndex}
@@ -1635,7 +1636,6 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
             isBusy={animating || isSubmitting}
             topInset={insets.top}
           />
-          <ModeButton title="Sign Out" variant="secondary" onPress={onSignOut} style={styles.footerButton} />
         </View>
       ) : null}
 
@@ -1650,7 +1650,15 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
       ) : null}
 
       {step === 'summary' && hasSummary ? (
-        <ScrollView contentContainerStyle={[styles.resultsContent, { paddingTop: Math.max(insets.top, theme.spacing[3]) }]}>
+        <ScrollView
+          contentContainerStyle={[
+            styles.resultsContent,
+            {
+              paddingTop: Math.max(insets.top, theme.spacing[3]),
+              paddingBottom: theme.spacing[4] + bottomInset,
+            },
+          ]}
+        >
           <View style={styles.phoneFrame}>
             <Text style={styles.resultsEyebrow}>{formatTodayLabel(today)}</Text>
             <Text style={styles.resultsTitle}>
@@ -1718,12 +1726,6 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
               style={styles.footerButton}
             />
           ) : null}
-          <ModeButton
-            title="Sign Out"
-            variant="secondary"
-            onPress={onSignOut}
-            style={styles.footerButton}
-          />
           <ConnectionDebugCard
             debugState={connectionDebug}
             isHealthzProbeRunning={isHealthzProbeRunning}
@@ -1736,7 +1738,15 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
       ) : null}
 
       {step === 'environment' ? (
-        <ScrollView contentContainerStyle={[styles.resultsContent, { paddingTop: Math.max(insets.top, theme.spacing[3]) }]}>
+        <ScrollView
+          contentContainerStyle={[
+            styles.resultsContent,
+            {
+              paddingTop: Math.max(insets.top, theme.spacing[3]),
+              paddingBottom: theme.spacing[4] + bottomInset,
+            },
+          ]}
+        >
           <View style={styles.phoneFrame}>
             <Text style={styles.resultsEyebrow}>{planType === PLAN_TYPE.TRAINING ? 'Training Setup' : 'Nutrition Setup'}</Text>
             <Text style={styles.resultsTitle}>
@@ -1924,7 +1934,7 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
                   onToggleExercise={handleToggleExercise}
                 />
               )}
-              <View style={styles.bottomCtaBar}>
+              <View style={[styles.bottomCtaBar, { bottom: bottomInset }]}>
                 {!guidedMode ? (
                   <>
                     <ModeButton
@@ -1992,12 +2002,6 @@ export default function DailyCheckinScreen({ accessToken, onSignOut, onOpenChat 
               title="Try again"
               onPress={loadToday}
               style={styles.errorButton}
-            />
-            <ModeButton
-              title="Sign Out"
-              variant="secondary"
-              onPress={onSignOut}
-              style={styles.footerButton}
             />
             <ConnectionDebugCard
               debugState={connectionDebug}

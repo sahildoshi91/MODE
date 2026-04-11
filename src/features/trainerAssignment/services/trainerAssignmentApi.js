@@ -4,9 +4,19 @@ import { buildApiNetworkError } from '../../../services/apiNetworkError';
 async function parseError(response) {
   try {
     const payload = await response.json();
-    return payload?.detail || payload?.message || 'Request failed';
+    return {
+      message: payload?.detail || payload?.message || 'Request failed',
+      code: payload?.code || null,
+      hint: payload?.hint || null,
+      details: payload?.details || null,
+    };
   } catch (_error) {
-    return 'Request failed';
+    return {
+      message: 'Request failed',
+      code: null,
+      hint: null,
+      details: null,
+    };
   }
 }
 
@@ -16,9 +26,10 @@ function buildNetworkError(error, path) {
 
 async function requestTrainerAssignment(path, { accessToken, method = 'GET', body } = {}) {
   let response;
+  let baseUrl = null;
 
   try {
-    ({ response } = await fetchWithApiFallback(path, {
+    ({ response, baseUrl } = await fetchWithApiFallback(path, {
       method,
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -32,7 +43,15 @@ async function requestTrainerAssignment(path, { accessToken, method = 'GET', bod
   }
 
   if (!response.ok) {
-    throw new Error(await parseError(response));
+    const parsed = await parseError(response);
+    const error = new Error(parsed.message || 'Request failed');
+    error.status = response.status;
+    error.code = parsed.code;
+    error.hint = parsed.hint;
+    error.details = parsed.details;
+    error.request_id = response.headers.get('x-request-id');
+    error.api_base_url = baseUrl;
+    throw error;
   }
 
   return response.json();

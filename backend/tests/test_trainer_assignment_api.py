@@ -103,6 +103,61 @@ class TrainerAssignmentApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["needs_assignment"])
         self.assertEqual(len(response.json()["available_trainers"]), 2)
+        self.assertEqual(response.json()["available_trainers_count"], 2)
+        self.assertEqual(response.json()["scope"], "global_fallback")
+
+    def test_status_scopes_trainers_to_existing_client_tenant(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id=None,
+            trainer_user_id=None,
+            trainer_display_name=None,
+            client_id="client-123",
+        )
+        fake_admin_client = FakeAdminClient(
+            trainers=[
+                {"id": "trainer-1", "tenant_id": "tenant-1", "display_name": "Coach Maya", "is_active": True},
+                {"id": "trainer-2", "tenant_id": "tenant-2", "display_name": "Coach Alex", "is_active": True},
+            ]
+        )
+
+        with patch("app.api.v1.trainer_assignment.get_supabase_client", return_value=fake_admin_client):
+            response = self.client.get(
+                "/api/v1/trainer-assignment/status",
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["needs_assignment"])
+        self.assertEqual(response.json()["scope"], "tenant")
+        self.assertEqual(response.json()["available_trainers_count"], 1)
+        self.assertEqual(response.json()["available_trainers"][0]["id"], "trainer-1")
+
+    def test_status_returns_empty_scoped_list_with_count_zero(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-no-trainers",
+            trainer_id=None,
+            trainer_user_id=None,
+            trainer_display_name=None,
+            client_id="client-123",
+        )
+        fake_admin_client = FakeAdminClient(
+            trainers=[
+                {"id": "trainer-1", "tenant_id": "tenant-1", "display_name": "Coach Maya", "is_active": True},
+            ]
+        )
+
+        with patch("app.api.v1.trainer_assignment.get_supabase_client", return_value=fake_admin_client):
+            response = self.client.get(
+                "/api/v1/trainer-assignment/status",
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["needs_assignment"])
+        self.assertEqual(response.json()["scope"], "tenant")
+        self.assertEqual(response.json()["available_trainers_count"], 0)
+        self.assertEqual(response.json()["available_trainers"], [])
 
     def test_assign_trainer_uses_rpc_for_unassigned_user(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
@@ -164,6 +219,36 @@ class TrainerAssignmentApiTests(unittest.TestCase):
         self.assertEqual(
             response.json()["detail"],
             "User is already linked to a different tenant and cannot self-assign to this trainer",
+        )
+
+    def test_assign_trainer_rejects_selection_outside_scoped_trainer_list(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id=None,
+            trainer_user_id=None,
+            trainer_display_name=None,
+            client_id="client-123",
+        )
+        fake_admin_client = FakeAdminClient(
+            trainers=[
+                {"id": "trainer-2", "tenant_id": "tenant-2", "display_name": "Coach Alex", "is_active": True},
+            ],
+            clients=[
+                {"id": "client-123", "user_id": "user-123", "tenant_id": "tenant-1", "assigned_trainer_id": None},
+            ],
+        )
+
+        with patch("app.api.v1.trainer_assignment.get_supabase_client", return_value=fake_admin_client):
+            response = self.client.post(
+                "/api/v1/trainer-assignment/assign",
+                json={"trainer_id": "trainer-2"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(
+            response.json()["detail"],
+            "Selected trainer was not found in the available trainer scope",
         )
 
 

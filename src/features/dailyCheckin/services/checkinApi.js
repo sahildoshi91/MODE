@@ -12,7 +12,7 @@ function buildRequestOptions(accessToken, method = 'GET', body) {
   };
 }
 
-async function parseJsonResponse(response, path) {
+async function parseJsonResponse(response, path, options = {}) {
   const responseText = await response.text().catch(() => '');
   let payload = {};
   if (typeof responseText === 'string' && responseText.trim()) {
@@ -60,6 +60,7 @@ async function parseJsonResponse(response, path) {
     error.stage = stage;
     error.request_id = requestId;
     error.path = path || null;
+    error.api_base_url = options?.baseUrl || null;
     throw error;
   }
 }
@@ -73,9 +74,10 @@ export async function getTodayCheckin({ accessToken, date }) {
   const offset = today.getTimezoneOffset() * 60000;
   const localDate = date || new Date(today.getTime() - offset).toISOString().slice(0, 10);
   let response;
+  let baseUrl;
 
   try {
-    ({ response } = await fetchWithApiFallback(
+    ({ response, baseUrl } = await fetchWithApiFallback(
       `/api/v1/checkin/today?request_date=${encodeURIComponent(localDate)}`,
       {
         ...buildRequestOptions(accessToken),
@@ -86,14 +88,15 @@ export async function getTodayCheckin({ accessToken, date }) {
     throw buildNetworkError(error, '/api/v1/checkin/today');
   }
 
-  return parseJsonResponse(response, '/api/v1/checkin/today');
+  return parseJsonResponse(response, '/api/v1/checkin/today', { baseUrl });
 }
 
 export async function submitTodayCheckin({ accessToken, date, inputs, timeToComplete }) {
   let response;
+  let baseUrl;
 
   try {
-    ({ response } = await fetchWithApiFallback(
+    ({ response, baseUrl } = await fetchWithApiFallback(
       '/api/v1/checkin',
       {
         ...buildRequestOptions(accessToken, 'POST', {
@@ -108,7 +111,7 @@ export async function submitTodayCheckin({ accessToken, date, inputs, timeToComp
     throw buildNetworkError(error, '/api/v1/checkin');
   }
 
-  return parseJsonResponse(response, '/api/v1/checkin');
+  return parseJsonResponse(response, '/api/v1/checkin', { baseUrl });
 }
 
 export async function getPreviousCheckin({ accessToken, beforeDate }) {
@@ -116,9 +119,10 @@ export async function getPreviousCheckin({ accessToken, beforeDate }) {
     ? encodeURIComponent(beforeDate)
     : encodeURIComponent(new Date().toISOString().slice(0, 10));
   let response;
+  let baseUrl;
 
   try {
-    ({ response } = await fetchWithApiFallback(
+    ({ response, baseUrl } = await fetchWithApiFallback(
       `/api/v1/checkin/previous?before_date=${queryDate}`,
       {
         ...buildRequestOptions(accessToken),
@@ -129,7 +133,29 @@ export async function getPreviousCheckin({ accessToken, beforeDate }) {
     throw buildNetworkError(error, '/api/v1/checkin/previous');
   }
 
-  return parseJsonResponse(response, '/api/v1/checkin/previous');
+  return parseJsonResponse(response, '/api/v1/checkin/previous', { baseUrl });
+}
+
+export async function getCheckinProgress({ accessToken, asOfDate }) {
+  const queryDate = asOfDate
+    ? encodeURIComponent(asOfDate)
+    : encodeURIComponent(new Date().toISOString().slice(0, 10));
+  let response;
+  let baseUrl;
+
+  try {
+    ({ response, baseUrl } = await fetchWithApiFallback(
+      `/api/v1/checkin/progress?as_of_date=${queryDate}`,
+      {
+        ...buildRequestOptions(accessToken),
+        timeoutMs: 8000,
+      },
+    ));
+  } catch (error) {
+    throw buildNetworkError(error, '/api/v1/checkin/progress');
+  }
+
+  return parseJsonResponse(response, '/api/v1/checkin/progress', { baseUrl });
 }
 
 export async function generateCheckinPlan({
@@ -143,9 +169,10 @@ export async function generateCheckinPlan({
   refreshRequested = false,
 }) {
   let response;
+  let baseUrl;
 
   try {
-    ({ response } = await fetchWithApiFallback(
+    ({ response, baseUrl } = await fetchWithApiFallback(
       '/api/v1/checkin/generate-plan',
       {
         ...buildRequestOptions(accessToken, 'POST', {
@@ -164,7 +191,7 @@ export async function generateCheckinPlan({
     throw buildNetworkError(error, '/api/v1/checkin/generate-plan');
   }
 
-  return parseJsonResponse(response, '/api/v1/checkin/generate-plan');
+  return parseJsonResponse(response, '/api/v1/checkin/generate-plan', { baseUrl });
 }
 
 export async function logGeneratedWorkout({
@@ -176,9 +203,10 @@ export async function logGeneratedWorkout({
   feelRating,
 }) {
   let response;
+  let baseUrl;
 
   try {
-    ({ response } = await fetchWithApiFallback(
+    ({ response, baseUrl } = await fetchWithApiFallback(
       '/api/v1/checkin/log-workout',
       {
         ...buildRequestOptions(accessToken, 'POST', {
@@ -195,7 +223,7 @@ export async function logGeneratedWorkout({
     throw buildNetworkError(error, '/api/v1/checkin/log-workout');
   }
 
-  return parseJsonResponse(response, '/api/v1/checkin/log-workout');
+  return parseJsonResponse(response, '/api/v1/checkin/log-workout', { baseUrl });
 }
 
 export async function probeBackendHealthz() {

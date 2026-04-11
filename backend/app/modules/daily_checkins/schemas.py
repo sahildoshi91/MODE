@@ -55,12 +55,40 @@ class DailyCheckinResult(BaseModel):
 class DailyCheckinStatusResponse(BaseModel):
     date: date
     completed: bool
+    current_streak: int = 0
     checkin: DailyCheckinResult | None = None
 
 
 class PreviousCheckinResponse(BaseModel):
     before_date: date
     checkin: YesterdayCheckinSummary | None = None
+
+
+class ScoreWindowChange(BaseModel):
+    value: float | None = None
+    previous_average: float | None = None
+    has_previous_window_data: bool = False
+
+
+class ProgressRecentCheckin(BaseModel):
+    date: date
+    score: int
+    mode: str
+
+
+class CheckinProgressResponse(BaseModel):
+    as_of_date: date
+    current_streak_days: int = 0
+    checkins_last_7_days: int = 0
+    avg_score_last_7_days: float | None = None
+    avg_mode_last_7_days: str | None = None
+    avg_score_last_30_days: float | None = None
+    avg_mode_last_30_days: str | None = None
+    score_change_7d: ScoreWindowChange
+    score_change_30d: ScoreWindowChange
+    has_enough_for_30d: bool = False
+    insufficient_data_reason: str | None = None
+    recent_checkins: list[ProgressRecentCheckin] = Field(default_factory=list)
 
 
 class SubmitDailyCheckinRequest(BaseModel):

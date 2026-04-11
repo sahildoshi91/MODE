@@ -9,6 +9,7 @@ from app.core.dependencies import get_daily_checkin_service, get_trainer_context
 from app.core.tenancy import TrainerContext
 from app.modules.daily_checkins.repository import DailyCheckinRepositoryError
 from app.modules.daily_checkins.schemas import (
+    CheckinProgressResponse,
     DailyCheckinResult,
     DailyCheckinStatusResponse,
     GenerateCheckinPlanRequest,
@@ -91,6 +92,17 @@ async def get_previous_checkin(
     target_date = before_date or datetime.now(timezone.utc).date()
     summary = service.get_previous_checkin_summary(client_id, target_date)
     return PreviousCheckinResponse(before_date=target_date, checkin=summary)
+
+
+@router.get("/progress", response_model=CheckinProgressResponse)
+async def get_checkin_progress(
+    as_of_date: date | None = None,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: DailyCheckinService = Depends(get_daily_checkin_service),
+):
+    client_id = _resolve_client_id(trainer_context)
+    target_date = as_of_date or datetime.now(timezone.utc).date()
+    return service.get_progress_analytics(client_id, target_date)
 
 
 @router.post("", response_model=DailyCheckinResult)
