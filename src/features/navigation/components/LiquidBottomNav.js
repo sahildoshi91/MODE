@@ -1,15 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, StyleSheet, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { BarChart3, Dumbbell, Home, User } from 'lucide-react-native';
 
+import { ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 
 const TABS = [
   { key: 'home', label: 'Home', Icon: Home },
   { key: 'coach', label: 'Coach', Icon: Dumbbell },
   { key: 'progress', label: 'Progress', Icon: BarChart3 },
-  { key: 'profile', label: 'Profile', Icon: User },
+  { key: 'profile', label: 'Settings', Icon: User },
 ];
 
 export default function LiquidBottomNav({
@@ -38,9 +39,9 @@ export default function LiquidBottomNav({
 
     Animated.spring(indicatorX, {
       toValue: targetX,
-      damping: 17,
-      mass: 0.8,
-      stiffness: 180,
+      damping: 16,
+      mass: 0.9,
+      stiffness: 170,
       useNativeDriver: true,
     }).start();
   }, [activeIndex, activeTab, containerWidth, iconCenters, indicatorWidth, indicatorX, tabWidth]);
@@ -48,13 +49,14 @@ export default function LiquidBottomNav({
   return (
     <View
       pointerEvents="box-none"
-      style={[styles.wrapper, { bottom: Math.max(bottomInset, 0) + 24 }]}
+      style={[styles.wrapper, { bottom: Math.max(bottomInset, 0) + 12 }]}
     >
       <View
         onLayout={(event) => setContainerWidth(event.nativeEvent.layout.width)}
         style={styles.pill}
       >
-        <BlurView intensity={18} tint="dark" style={StyleSheet.absoluteFill} />
+        <View pointerEvents="none" style={styles.lightFallback} />
+        <BlurView intensity={24} tint="light" style={StyleSheet.absoluteFill} />
         <Animated.View
           pointerEvents="none"
           style={[
@@ -93,10 +95,16 @@ export default function LiquidBottomNav({
             >
               <Icon
                 size={18}
-                color={selected ? '#FFFFFF' : 'rgba(255, 255, 255, 0.56)'}
+                color={selected ? theme.colors.brand.progressDeep : theme.colors.text.tertiary}
                 strokeWidth={2.2}
               />
-              <Text style={[styles.tabLabel, selected && styles.tabLabelActive]}>{label}</Text>
+              <ModeText
+                variant="caption"
+                tone={selected ? 'accent' : 'tertiary'}
+                style={selected ? styles.tabLabelActive : null}
+              >
+                {label}
+              </ModeText>
             </Pressable>
           );
         })}
@@ -114,31 +122,32 @@ const styles = StyleSheet.create({
     zIndex: 20,
   },
   pill: {
-    width: '88%',
-    maxWidth: 440,
+    width: '92%',
+    maxWidth: 460,
     minWidth: 280,
-    borderRadius: 999,
+    borderRadius: theme.radii.pill,
     overflow: 'hidden',
     flexDirection: 'row',
     alignItems: 'center',
     padding: 5,
-    backgroundColor: 'rgba(5, 5, 6, 0.94)',
+    backgroundColor: theme.colors.surface.overlay,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.22)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.12,
-    shadowRadius: 20,
-    elevation: 10,
+    borderColor: theme.colors.border.soft,
+    ...theme.shadows.medium,
+  },
+  lightFallback: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: theme.colors.surface.base,
+    opacity: 0.94,
   },
   activePill: {
     position: 'absolute',
     top: 5,
     bottom: 5,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255, 255, 255, 0.10)',
+    borderRadius: theme.radii.pill,
+    backgroundColor: 'rgba(111, 143, 123, 0.18)',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.36)',
+    borderColor: 'rgba(111, 143, 123, 0.42)',
   },
   tabButton: {
     flex: 1,
@@ -146,20 +155,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 4,
-    borderRadius: 999,
+    borderRadius: theme.radii.pill,
   },
   tabButtonPressed: {
-    transform: [{ scale: 0.95 }],
-  },
-  tabLabel: {
-    color: 'rgba(255, 255, 255, 0.56)',
-    fontSize: 12,
-    lineHeight: 16,
-    fontWeight: '500',
-    fontFamily: theme.typography.fontFamily,
+    transform: [{ scale: 0.96 }],
   },
   tabLabelActive: {
-    color: '#FFFFFF',
-    fontWeight: '600',
+    fontWeight: '700',
   },
 });

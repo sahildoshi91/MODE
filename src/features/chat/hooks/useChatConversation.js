@@ -3,8 +3,8 @@ import { Platform } from 'react-native';
 
 import { sendChatMessage } from '../services/chatApi';
 
-const DEFAULT_WELCOME_MESSAGE = 'Send a message to start coaching. If you are a trainer, I will help set up your assistant first. If you are a client, we can jump straight into your plan.';
-const DEFAULT_QUICK_REPLIES = ['Set up my coaching assistant', 'Build muscle', 'General fitness'];
+const DEFAULT_WELCOME_MESSAGE = 'I am here to help you make steady progress that fits your day. Share what you need and we will choose the next smart step together.';
+const DEFAULT_QUICK_REPLIES = ['Plan my next best action', 'Adjust today\'s training', 'Help with consistency'];
 const POST_CHECKIN_QUICK_REPLIES_BY_MODE = {
   BEAST: [
     'Build my strongest session for today',

@@ -13,7 +13,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 
-import { ModeButton, SafeScreen } from '../../../../lib/components';
+import {
+  ModeButton,
+  ModeCard,
+  ModeText,
+  ProgressBar,
+  SafeScreen,
+  StateBadge,
+} from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { SHOW_DEV_CONNECTION_DEBUG } from '../../../config/featureFlags';
 import { getApiDebugInfo } from '../../../services/apiBaseUrl';
@@ -35,7 +42,7 @@ const QUESTIONS = [
     icon: { family: 'material', name: 'weather-night' },
     question: 'How well did you sleep?',
     subtitle: 'Quality rest is the foundation of performance',
-    color: '#8B5CF6',
+    color: '#6F8F7B',
     options: [
       { score: 1, label: 'Barely slept', sublabel: 'Under 4 hours' },
       { score: 2, label: 'Poor sleep', sublabel: 'Restless night' },
@@ -50,7 +57,7 @@ const QUESTIONS = [
     icon: { family: 'feather', name: 'wind' },
     question: 'How heavy is your stress today?',
     subtitle: 'Calm systems recover and perform better',
-    color: '#14B8A6',
+    color: '#4CAF7D',
     options: [
       { score: 1, label: 'Maxed out', sublabel: 'I feel overloaded' },
       { score: 2, label: 'High stress', sublabel: 'Hard to settle' },
@@ -65,7 +72,7 @@ const QUESTIONS = [
     icon: { family: 'material', name: 'arm-flex' },
     question: 'How is your body feeling?',
     subtitle: 'Soreness changes how hard you should push',
-    color: '#F97316',
+    color: '#A8C1B3',
     options: [
       { score: 1, label: 'Very sore', sublabel: 'Movement feels heavy' },
       { score: 2, label: 'Pretty sore', sublabel: 'A lot of stiffness today' },
@@ -80,7 +87,7 @@ const QUESTIONS = [
     icon: { family: 'material', name: 'food-apple-outline' },
     question: 'How well have you fueled yourself?',
     subtitle: 'Nutrition sets the ceiling for recovery and output',
-    color: '#84CC16',
+    color: '#6F8F7B',
     options: [
       { score: 1, label: 'Way off', sublabel: 'Little structure today' },
       { score: 2, label: 'Below target', sublabel: 'Missed a lot of basics' },
@@ -95,7 +102,7 @@ const QUESTIONS = [
     icon: { family: 'feather', name: 'zap' },
     question: 'How motivated do you feel?',
     subtitle: 'Honest effort starts with honest readiness',
-    color: '#EC4899',
+    color: '#1F3D36',
     options: [
       { score: 1, label: 'Running on empty', sublabel: 'I do not want to do this' },
       { score: 2, label: 'Low motivation', sublabel: 'Willpower feels thin' },
@@ -108,21 +115,28 @@ const QUESTIONS = [
 
 const MODE_THEME = {
   BEAST: {
-    accent: '#84CC16',
-    badge: 'Peak readiness',
+    accent: '#1F3D36',
+    badge: 'Overdrive readiness',
   },
   BUILD: {
-    accent: '#14B8A6',
-    badge: 'Strong and stable',
+    accent: '#4CAF7D',
+    badge: 'Build momentum',
   },
   RECOVER: {
-    accent: '#60A5FA',
-    badge: 'Recovery leaning',
+    accent: '#6F8F7B',
+    badge: 'Base recovery',
   },
   REST: {
-    accent: '#FB7185',
-    badge: 'Restorative need',
+    accent: '#6F8F7B',
+    badge: 'Reset support',
   },
+};
+
+const MODE_STATE_COPY = {
+  BEAST: 'OVERDRIVE',
+  BUILD: 'BUILD',
+  RECOVER: 'BASE',
+  REST: 'RESET',
 };
 
 const MODE_RECOMMENDATIONS = {
@@ -636,6 +650,45 @@ function ResultCard({ result }) {
   );
 }
 
+function HomeOverviewCard({ result, onOpenStateGuide, onOpenInsights, onOpenCoachChat }) {
+  if (!result) {
+    return null;
+  }
+
+  const modeTheme = MODE_THEME[result.mode] || MODE_THEME.RECOVER;
+  const stateLabel = MODE_STATE_COPY[result.mode] || MODE_STATE_COPY.RECOVER;
+  const scoreProgress = Math.max(0, Math.min(1, (result.score || 0) / 25));
+
+  return (
+    <ModeCard variant="surface" style={styles.homeOverviewCard}>
+      <ModeText variant="label" tone="tertiary" style={styles.homeOverviewEyebrow}>
+        Today's state
+      </ModeText>
+      <StateBadge mode={result.mode} label={`${result.mode} • ${stateLabel}`} />
+      <ModeText variant="h3" style={styles.homeOverviewTitle}>
+        {modeTheme.badge}
+      </ModeText>
+      <ModeText variant="bodySm" tone="secondary" style={styles.homeOverviewBody}>
+        {result.mode_tagline || 'Progress today is about smart decisions, not pressure.'}
+      </ModeText>
+      <View style={styles.homeOverviewProgressWrap}>
+        <ModeText variant="caption" tone="tertiary">Readiness score {result.score}/25</ModeText>
+        <ProgressBar
+          progress={scoreProgress}
+          trackColor="#EFEDE6"
+          fillColor={modeTheme.accent}
+          style={styles.homeOverviewProgress}
+        />
+      </View>
+      <View style={styles.homeOverviewActions}>
+        <ModeButton title="Understand my mode" variant="secondary" onPress={onOpenStateGuide} />
+        <ModeButton title="Coach insights" variant="ghost" onPress={onOpenInsights} />
+        <ModeButton title="Talk to coach" onPress={onOpenCoachChat} />
+      </View>
+    </ModeCard>
+  );
+}
+
 function TopBar({ canGoBack, onGoBack, onSkip, disableSkip }) {
   return (
     <View style={styles.topBar}>
@@ -700,10 +753,10 @@ function QuestionScreen({
         <View style={styles.progressRow}>
           {QUESTIONS.map((item, index) => {
             const backgroundColor = index < questionIndex
-              ? '#84CC16'
+              ? theme.colors.brand.progressSuccess
               : index === questionIndex
                 ? question.color
-                : '#232838';
+                : theme.colors.surface.subtle;
 
             return (
               <View
@@ -746,7 +799,7 @@ function QuestionScreen({
                 </View>
                 {isJustTapped ? (
                   <View style={[styles.answerCheck, { backgroundColor: question.color }]}>
-                    <Feather name="check" size={14} color="#081018" />
+                    <Feather name="check" size={14} color={theme.colors.text.inverse} />
                   </View>
                 ) : (
                   <View style={styles.answerCheckPlaceholder} />
@@ -839,7 +892,7 @@ function TrainingPlanView({ plan, expandedExercises, onToggleExercise }) {
         <Text style={styles.sectionTitle}>🔥 Warm-Up</Text>
         {(plan.warmup || []).map((item, index) => (
           <View key={`warmup-${index}`} style={styles.simpleRow}>
-            <View style={[styles.simpleDot, { backgroundColor: '#F97316' }]} />
+            <View style={[styles.simpleDot, { backgroundColor: theme.colors.emotional.warmGold }]} />
             <View style={styles.simpleBody}>
               <Text style={styles.simpleName}>{item.name}</Text>
               {item.description ? <Text style={styles.simpleDesc}>{item.description}</Text> : null}
@@ -890,7 +943,7 @@ function TrainingPlanView({ plan, expandedExercises, onToggleExercise }) {
         <Text style={styles.sectionTitle}>🧊 Cool-Down</Text>
         {(plan.cooldown || []).map((item, index) => (
           <View key={`cooldown-${index}`} style={styles.simpleRow}>
-            <View style={[styles.simpleDot, { backgroundColor: '#60A5FA' }]} />
+            <View style={[styles.simpleDot, { backgroundColor: theme.colors.brand.progressSoft }]} />
             <View style={styles.simpleBody}>
               <Text style={styles.simpleName}>{item.name}</Text>
               {item.description ? <Text style={styles.simpleDesc}>{item.description}</Text> : null}
@@ -967,7 +1020,13 @@ function NutritionPlanView({ plan }) {
   );
 }
 
-export default function DailyCheckinScreen({ accessToken, onOpenChat, bottomInset = 0 }) {
+export default function DailyCheckinScreen({
+  accessToken,
+  onOpenChat,
+  onOpenStateGuide,
+  onOpenInsights,
+  bottomInset = 0,
+}) {
   const insets = useSafeAreaInsets();
   const sessionStartRef = useRef(Date.now());
   const nutritionDayNoteRef = useRef(null);
@@ -1421,6 +1480,18 @@ export default function DailyCheckinScreen({ accessToken, onOpenChat, bottomInse
     });
   };
 
+  const handleOpenStateGuide = () => {
+    if (typeof onOpenStateGuide === 'function') {
+      onOpenStateGuide();
+    }
+  };
+
+  const handleOpenInsights = () => {
+    if (typeof onOpenInsights === 'function') {
+      onOpenInsights();
+    }
+  };
+
   const handleOpenWorkoutCoach = () => {
     if (typeof onOpenChat !== 'function' || !structuredPlan) {
       return;
@@ -1669,6 +1740,12 @@ export default function DailyCheckinScreen({ accessToken, onOpenChat, bottomInse
                 ? 'Check-in saved. Your recommendations are ready for today.'
                 : 'We couldn\'t save your check-in yet, but your recommendations are ready now.'}
             </Text>
+            <HomeOverviewCard
+              result={summaryResult}
+              onOpenStateGuide={handleOpenStateGuide}
+              onOpenInsights={handleOpenInsights}
+              onOpenCoachChat={handleOpenCoachChat}
+            />
             {submitState === 'pending' ? (
               <View style={styles.summaryStatusCard}>
                 <Text style={styles.summaryStatusTitle}>Save still pending</Text>
@@ -1694,15 +1771,15 @@ export default function DailyCheckinScreen({ accessToken, onOpenChat, bottomInse
                 <PlanActionCard
                   icon="dumbbell"
                   title="Build me a training routine"
-                  subtitle="Tailored to your BEAST mode today"
-                  accent="#84CC16"
+                  subtitle={`Tailored to your ${summaryResult?.mode || 'BUILD'} mode today`}
+                  accent={theme.colors.brand.progressSuccess}
                   onPress={() => handleSelectPlan(PLAN_TYPE.TRAINING)}
                 />
                 <PlanActionCard
                   icon="food-apple-outline"
                   title="Build me a nutrition plan"
                   subtitle="Meals optimized for your readiness"
-                  accent="#14B8A6"
+                  accent={theme.colors.brand.progressCore}
                   onPress={() => handleSelectPlan(PLAN_TYPE.NUTRITION)}
                 />
                 <Pressable onPress={handleOpenCoachChat} style={styles.talkCoachGhost}>
@@ -2091,9 +2168,9 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: withAlpha('#FFFFFF', 0.04),
+    backgroundColor: theme.colors.surface.subtle,
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.08),
+    borderColor: theme.colors.border.soft,
   },
   topBarActionDisabled: {
     opacity: 0.45,
@@ -2168,8 +2245,8 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 22,
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.08),
-    backgroundColor: '#161B24',
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
   },
   answerRowPressed: {
     opacity: 0.92,
@@ -2202,7 +2279,8 @@ const styles = StyleSheet.create({
     height: 26,
   },
   resultCard: {
-    backgroundColor: '#101722',
+    backgroundColor: theme.colors.surface.base,
+    borderColor: theme.colors.border.soft,
     borderWidth: 1,
     borderRadius: 28,
     padding: theme.spacing[4],
@@ -2246,7 +2324,7 @@ const styles = StyleSheet.create({
   bundleBlock: {
     paddingTop: theme.spacing[2],
     borderTopWidth: 1,
-    borderTopColor: theme.colors.border,
+    borderTopColor: theme.colors.border.soft,
     marginTop: theme.spacing[2],
   },
   bundleLabel: {
@@ -2298,6 +2376,31 @@ const styles = StyleSheet.create({
     borderColor: withAlpha(theme.colors.error, 0.35),
     padding: theme.spacing[3],
   },
+  homeOverviewCard: {
+    marginTop: theme.spacing[3],
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
+  },
+  homeOverviewEyebrow: {
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  homeOverviewTitle: {
+    marginTop: theme.spacing[2],
+  },
+  homeOverviewBody: {
+    marginTop: theme.spacing[1],
+  },
+  homeOverviewProgressWrap: {
+    marginTop: theme.spacing[2],
+  },
+  homeOverviewProgress: {
+    marginTop: theme.spacing[1],
+  },
+  homeOverviewActions: {
+    marginTop: theme.spacing[2],
+    gap: theme.spacing[1],
+  },
   summaryStatusTitle: {
     color: theme.colors.textHigh,
     ...theme.typography.body2,
@@ -2320,7 +2423,7 @@ const styles = StyleSheet.create({
     color: theme.colors.accent,
   },
   copyFeedbackError: {
-    color: '#FDBA74',
+    color: theme.colors.warning,
   },
   footerButton: {
     width: '100%',
@@ -2331,9 +2434,9 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 384,
     borderRadius: 28,
-    backgroundColor: '#111721',
+    backgroundColor: theme.colors.surface.base,
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.08),
+    borderColor: theme.colors.border.soft,
     padding: theme.spacing[4],
     alignItems: 'center',
   },
@@ -2353,7 +2456,7 @@ const styles = StyleSheet.create({
     width: '100%',
     maxWidth: 384,
     borderRadius: 28,
-    backgroundColor: '#111721',
+    backgroundColor: theme.colors.surface.base,
     borderWidth: 1,
     borderColor: withAlpha(theme.colors.error, 0.34),
     padding: theme.spacing[4],
@@ -2408,7 +2511,7 @@ const styles = StyleSheet.create({
     width: 2,
     height: 2,
     borderRadius: 1,
-    backgroundColor: '#C9D2EA',
+    backgroundColor: theme.colors.border.soft,
   },
   postCheckinActionsWrap: {
     marginTop: theme.spacing[4],
@@ -2424,7 +2527,7 @@ const styles = StyleSheet.create({
     minHeight: 92,
     borderRadius: 18,
     borderWidth: 1,
-    backgroundColor: '#111926',
+    backgroundColor: theme.colors.surface.base,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[2],
     flexDirection: 'row',
@@ -2458,7 +2561,7 @@ const styles = StyleSheet.create({
   },
   talkCoachGhost: {
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.18),
+    borderColor: theme.colors.border.soft,
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
@@ -2514,7 +2617,7 @@ const styles = StyleSheet.create({
     width: 42,
     height: 24,
     borderRadius: 999,
-    backgroundColor: withAlpha('#FFFFFF', 0.16),
+    backgroundColor: theme.colors.border.strong,
     padding: 2,
     justifyContent: 'center',
   },
@@ -2525,7 +2628,7 @@ const styles = StyleSheet.create({
     width: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: '#EEF3FF',
+    backgroundColor: theme.colors.surface.base,
   },
   toggleThumbOn: {
     alignSelf: 'flex-end',
@@ -2548,8 +2651,8 @@ const styles = StyleSheet.create({
     width: '48%',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.1),
-    backgroundColor: '#161D2A',
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
     minHeight: 118,
     paddingVertical: 14,
     paddingHorizontal: 12,
@@ -2588,11 +2691,11 @@ const styles = StyleSheet.create({
   },
   timePill: {
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.16),
+    borderColor: theme.colors.border.soft,
     borderRadius: 999,
     paddingHorizontal: 14,
     paddingVertical: 8,
-    backgroundColor: '#151C27',
+    backgroundColor: theme.colors.surface.base,
   },
   timePillSelected: {
     backgroundColor: withAlpha(theme.colors.primary, 0.1),
@@ -2613,8 +2716,8 @@ const styles = StyleSheet.create({
   dayTypeCard: {
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.1),
-    backgroundColor: '#161D2A',
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
     padding: theme.spacing[2],
   },
   dayTypeCardSelected: {
@@ -2638,15 +2741,15 @@ const styles = StyleSheet.create({
     minHeight: 112,
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.14),
-    backgroundColor: '#141B27',
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
     color: theme.colors.textHigh,
     ...theme.typography.body2,
     fontFamily: theme.typography.fontFamily,
     padding: 12,
   },
   generateButton: {
-    backgroundColor: '#84CC16',
+    backgroundColor: theme.colors.brand.progressCore,
   },
   planStepWrap: {
     flex: 1,
@@ -2713,7 +2816,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     borderWidth: 1,
     borderColor: withAlpha(theme.colors.textMedium, 0.2),
-    backgroundColor: withAlpha('#0F172A', 0.82),
+    backgroundColor: theme.colors.surface.muted,
   },
   debugCardTitle: {
     color: theme.colors.textHigh,
@@ -2744,9 +2847,9 @@ const styles = StyleSheet.create({
   },
   trainingHeaderCard: {
     borderRadius: 20,
-    backgroundColor: withAlpha('#84CC16', 0.12),
+    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.22),
     borderWidth: 1,
-    borderColor: withAlpha('#84CC16', 0.4),
+    borderColor: withAlpha(theme.colors.brand.progressCore, 0.34),
     padding: theme.spacing[3],
   },
   trainingTitle: {
@@ -2770,9 +2873,9 @@ const styles = StyleSheet.create({
     color: theme.colors.textHigh,
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
-    backgroundColor: withAlpha('#84CC16', 0.16),
+    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.24),
     borderWidth: 1,
-    borderColor: withAlpha('#84CC16', 0.35),
+    borderColor: withAlpha(theme.colors.brand.progressCore, 0.35),
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -2781,8 +2884,8 @@ const styles = StyleSheet.create({
   sectionCard: {
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.1),
-    backgroundColor: '#121A26',
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
     padding: theme.spacing[2],
   },
   sectionTitle: {
@@ -2825,9 +2928,9 @@ const styles = StyleSheet.create({
   },
   exerciseCard: {
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.1),
+    borderColor: theme.colors.border.soft,
     borderRadius: 14,
-    backgroundColor: '#171F2C',
+    backgroundColor: theme.colors.surface.muted,
     marginBottom: 10,
   },
   exerciseTopRow: {
@@ -2870,7 +2973,7 @@ const styles = StyleSheet.create({
     color: theme.colors.textMedium,
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
-    backgroundColor: withAlpha('#FFFFFF', 0.06),
+    backgroundColor: theme.colors.surface.subtle,
     borderRadius: 999,
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -2882,7 +2985,7 @@ const styles = StyleSheet.create({
   },
   exerciseExpanded: {
     borderTopWidth: 1,
-    borderTopColor: withAlpha('#FFFFFF', 0.08),
+    borderTopColor: theme.colors.border.soft,
     padding: 10,
     gap: 8,
   },
@@ -2894,8 +2997,8 @@ const styles = StyleSheet.create({
   coachTipBox: {
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: withAlpha('#84CC16', 0.45),
-    backgroundColor: withAlpha('#84CC16', 0.15),
+    borderColor: withAlpha(theme.colors.brand.progressCore, 0.42),
+    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.25),
     padding: 8,
   },
   coachTipText: {
@@ -2905,9 +3008,9 @@ const styles = StyleSheet.create({
   },
   videoPlaceholder: {
     borderRadius: 10,
-    backgroundColor: '#0C1119',
+    backgroundColor: theme.colors.surface.subtle,
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.1),
+    borderColor: theme.colors.border.soft,
     minHeight: 72,
     alignItems: 'center',
     justifyContent: 'center',
@@ -2934,8 +3037,8 @@ const styles = StyleSheet.create({
   guidedHeroCard: {
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: withAlpha('#84CC16', 0.4),
-    backgroundColor: withAlpha('#84CC16', 0.14),
+    borderColor: withAlpha(theme.colors.brand.progressCore, 0.38),
+    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.24),
     padding: theme.spacing[3],
     alignItems: 'center',
   },
@@ -2953,7 +3056,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   guidedTimer: {
-    color: '#84CC16',
+    color: theme.colors.brand.progressCore,
     fontSize: 42,
     fontWeight: '700',
     marginTop: 10,
@@ -2967,8 +3070,8 @@ const styles = StyleSheet.create({
   guidedExerciseRow: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.08),
-    backgroundColor: '#141D2A',
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
     padding: theme.spacing[2],
     flexDirection: 'row',
     alignItems: 'center',
@@ -2982,9 +3085,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing[3],
     paddingTop: 10,
     paddingBottom: 16,
-    backgroundColor: withAlpha('#0D131E', 0.96),
+    backgroundColor: theme.colors.surface.overlay,
     borderTopWidth: 1,
-    borderTopColor: withAlpha('#FFFFFF', 0.08),
+    borderTopColor: theme.colors.border.soft,
   },
   guidedButton: {
     width: '100%',
@@ -2993,7 +3096,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   guidedButtonPrimary: {
-    backgroundColor: '#84CC16',
+    backgroundColor: theme.colors.brand.progressCore,
   },
   splitRow: {
     flexDirection: 'row',
@@ -3007,13 +3110,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pauseButton: {
-    backgroundColor: '#D97706',
+    backgroundColor: theme.colors.warning,
   },
   endButton: {
-    backgroundColor: '#84CC16',
+    backgroundColor: theme.colors.brand.progressSuccess,
   },
   splitButtonText: {
-    color: '#0C121B',
+    color: theme.colors.text.primary,
     ...theme.typography.body2,
     fontFamily: theme.typography.fontFamily,
     fontWeight: '700',
@@ -3027,9 +3130,9 @@ const styles = StyleSheet.create({
   },
   nutritionHeaderCard: {
     borderRadius: 20,
-    backgroundColor: withAlpha('#14B8A6', 0.16),
+    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.2),
     borderWidth: 1,
-    borderColor: withAlpha('#14B8A6', 0.38),
+    borderColor: withAlpha(theme.colors.brand.progressCore, 0.35),
     padding: theme.spacing[3],
   },
   nutritionCoachNote: {
@@ -3042,8 +3145,8 @@ const styles = StyleSheet.create({
   mealCard: {
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.1),
-    backgroundColor: '#141D2A',
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
     padding: theme.spacing[2],
     gap: 8,
   },
@@ -3071,7 +3174,7 @@ const styles = StyleSheet.create({
   },
   logOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(6, 10, 18, 0.6)',
+    backgroundColor: 'rgba(31, 61, 54, 0.24)',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: theme.spacing[3],
@@ -3081,8 +3184,8 @@ const styles = StyleSheet.create({
     maxWidth: 380,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.12),
-    backgroundColor: '#111926',
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
     padding: theme.spacing[3],
   },
   logSheetTitle: {
@@ -3102,14 +3205,14 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 21,
     borderWidth: 1,
-    borderColor: withAlpha('#FFFFFF', 0.2),
+    borderColor: theme.colors.border.soft,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: withAlpha('#FFFFFF', 0.05),
+    backgroundColor: theme.colors.surface.subtle,
   },
   ratingPillSelected: {
-    borderColor: withAlpha('#84CC16', 0.65),
-    backgroundColor: withAlpha('#84CC16', 0.2),
+    borderColor: withAlpha(theme.colors.brand.progressCore, 0.52),
+    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.32),
   },
   ratingPillText: {
     color: theme.colors.textMedium,
@@ -3118,7 +3221,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   ratingPillTextSelected: {
-    color: '#D9F99D',
+    color: theme.colors.brand.progressDeep,
   },
   logActionRow: {
     flexDirection: 'row',

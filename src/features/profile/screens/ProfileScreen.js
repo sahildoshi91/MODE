@@ -1,8 +1,13 @@
-import React, { useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import React, { useMemo, useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import Constants from 'expo-constants';
 
-import { SafeScreen } from '../../../../lib/components';
+import {
+  ModeButton,
+  ModeCard,
+  ModeText,
+  SafeScreen,
+} from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { getApiDebugInfo } from '../../../services/apiBaseUrl';
 
@@ -13,12 +18,29 @@ function valueOrFallback(value, fallback = 'Not available') {
   return fallback;
 }
 
+function SettingToggle({ label, description, enabled, onToggle }) {
+  return (
+    <Pressable style={[styles.toggleRow, enabled && styles.toggleRowEnabled]} onPress={onToggle}>
+      <View style={styles.toggleCopy}>
+        <ModeText variant="bodySm">{label}</ModeText>
+        <ModeText variant="caption" tone="secondary">{description}</ModeText>
+      </View>
+      <View style={[styles.toggleTrack, enabled && styles.toggleTrackEnabled]}>
+        <View style={[styles.toggleThumb, enabled && styles.toggleThumbEnabled]} />
+      </View>
+    </Pressable>
+  );
+}
+
 export default function ProfileScreen({ session, assignmentStatus, onSignOut, bottomInset = 0 }) {
   const debugInfo = useMemo(() => getApiDebugInfo(), []);
   const email = valueOrFallback(session?.user?.email, 'No email found');
   const trainerName = valueOrFallback(assignmentStatus?.assigned_trainer_display_name, 'No trainer assigned');
   const appVersion = valueOrFallback(Constants.expoConfig?.version, 'dev');
   const environment = __DEV__ ? 'Development' : 'Production';
+
+  const [tonePreference, setTonePreference] = useState(true);
+  const [reminderPreference, setReminderPreference] = useState(true);
 
   return (
     <SafeScreen style={styles.screen}>
@@ -29,53 +51,63 @@ export default function ProfileScreen({ session, assignmentStatus, onSignOut, bo
         ]}
       >
         <View style={styles.headerBlock}>
-          <Text style={styles.title}>Profile</Text>
-          <Text style={styles.subtitle}>Account and app details</Text>
+          <ModeText variant="display">Settings</ModeText>
+          <ModeText variant="bodySm" tone="secondary">Personalization and account details</ModeText>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Account</Text>
+        <ModeCard variant="surface">
+          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Account</ModeText>
           <View style={styles.row}>
-            <Text style={styles.rowLabel}>Email</Text>
-            <Text style={styles.rowValue}>{email}</Text>
+            <ModeText variant="bodySm" tone="secondary">Email</ModeText>
+            <ModeText variant="bodySm">{email}</ModeText>
           </View>
           <View style={styles.divider} />
           <View style={styles.row}>
-            <Text style={styles.rowLabel}>Coach</Text>
-            <Text style={styles.rowValue}>{trainerName}</Text>
+            <ModeText variant="bodySm" tone="secondary">Coach</ModeText>
+            <ModeText variant="bodySm">{trainerName}</ModeText>
           </View>
-        </View>
+        </ModeCard>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Diagnostics</Text>
+        <ModeCard variant="tinted">
+          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Personalization</ModeText>
+          <SettingToggle
+            label="Supportive coaching tone"
+            description="Keep language calm, clear, and emotionally intelligent."
+            enabled={tonePreference}
+            onToggle={() => setTonePreference((current) => !current)}
+          />
+          <SettingToggle
+            label="Gentle progress reminders"
+            description="Use low-pressure nudges focused on consistency."
+            enabled={reminderPreference}
+            onToggle={() => setReminderPreference((current) => !current)}
+          />
+        </ModeCard>
+
+        <ModeCard variant="surface">
+          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Diagnostics</ModeText>
           <View style={styles.row}>
-            <Text style={styles.rowLabel}>Environment</Text>
-            <Text style={styles.rowValue}>{environment}</Text>
+            <ModeText variant="bodySm" tone="secondary">Environment</ModeText>
+            <ModeText variant="bodySm">{environment}</ModeText>
           </View>
           <View style={styles.divider} />
           <View style={styles.row}>
-            <Text style={styles.rowLabel}>Version</Text>
-            <Text style={styles.rowValue}>{appVersion}</Text>
+            <ModeText variant="bodySm" tone="secondary">Version</ModeText>
+            <ModeText variant="bodySm">{appVersion}</ModeText>
           </View>
           <View style={styles.divider} />
           <View style={styles.row}>
-            <Text style={styles.rowLabel}>API Base</Text>
-            <Text style={styles.rowValue}>{valueOrFallback(debugInfo.resolvedApiBaseUrl)}</Text>
+            <ModeText variant="bodySm" tone="secondary">API Base</ModeText>
+            <ModeText variant="bodySm" style={styles.apiText}>{valueOrFallback(debugInfo.resolvedApiBaseUrl)}</ModeText>
           </View>
-        </View>
+        </ModeCard>
 
-        <View style={styles.signOutWrap}>
-          <Pressable
-            onPress={onSignOut}
-            accessibilityRole="button"
-            style={({ pressed }) => [
-              styles.signOutButton,
-              pressed && styles.signOutButtonPressed,
-            ]}
-          >
-            <Text style={styles.signOutText}>Sign Out</Text>
-          </Pressable>
-        </View>
+        <ModeButton
+          title="Sign out"
+          variant="destructive"
+          onPress={onSignOut}
+          size="lg"
+        />
       </ScrollView>
     </SafeScreen>
   );
@@ -83,7 +115,7 @@ export default function ProfileScreen({ session, assignmentStatus, onSignOut, bo
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: '#F2F4F7',
+    backgroundColor: theme.colors.surface.canvas,
   },
   content: {
     paddingHorizontal: theme.spacing[3],
@@ -93,42 +125,9 @@ const styles = StyleSheet.create({
   headerBlock: {
     marginBottom: theme.spacing[1],
   },
-  title: {
-    color: '#0F1115',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 34,
-    lineHeight: 40,
-    fontWeight: '700',
-    letterSpacing: -0.4,
-  },
-  subtitle: {
-    marginTop: theme.spacing[1],
-    color: 'rgba(15, 17, 21, 0.66)',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '400',
-  },
-  card: {
-    borderRadius: 22,
-    padding: theme.spacing[3],
-    backgroundColor: 'rgba(255, 255, 255, 0.72)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.56)',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.06,
-    shadowRadius: 18,
-    elevation: 4,
-  },
-  cardTitle: {
-    color: 'rgba(15, 17, 21, 0.72)',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: '600',
+  sectionLabel: {
     textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    letterSpacing: 0.5,
     marginBottom: theme.spacing[2],
   },
   row: {
@@ -137,50 +136,54 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: theme.spacing[2],
   },
-  rowLabel: {
-    flexShrink: 0,
-    color: 'rgba(15, 17, 21, 0.58)',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '500',
-  },
-  rowValue: {
-    flex: 1,
-    textAlign: 'right',
-    color: '#0F1115',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 15,
-    lineHeight: 20,
-    fontWeight: '500',
-  },
   divider: {
     height: 1,
-    backgroundColor: 'rgba(15, 17, 21, 0.08)',
+    backgroundColor: theme.colors.border.soft,
     marginVertical: theme.spacing[2],
   },
-  signOutWrap: {
-    marginTop: theme.spacing[1],
+  apiText: {
+    flex: 1,
+    textAlign: 'right',
   },
-  signOutButton: {
-    borderRadius: 18,
-    minHeight: 54,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.68)',
+  toggleRow: {
     borderWidth: 1,
-    borderColor: 'rgba(15, 17, 21, 0.12)',
-    shadowOpacity: 0,
+    borderColor: theme.colors.border.soft,
+    borderRadius: theme.radii.s,
+    backgroundColor: theme.colors.surface.base,
+    minHeight: 56,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: theme.spacing[1],
+    gap: theme.spacing[2],
   },
-  signOutButtonPressed: {
-    transform: [{ scale: 0.98 }],
-    opacity: 0.92,
+  toggleRowEnabled: {
+    borderColor: 'rgba(76, 175, 125, 0.42)',
+    backgroundColor: 'rgba(76, 175, 125, 0.1)',
   },
-  signOutText: {
-    color: '#0F1115',
-    fontFamily: theme.typography.fontFamily,
-    fontSize: 16,
-    lineHeight: 20,
-    fontWeight: '600',
+  toggleCopy: {
+    flex: 1,
+  },
+  toggleTrack: {
+    width: 42,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#D9D9D9',
+    padding: 2,
+    justifyContent: 'center',
+  },
+  toggleTrackEnabled: {
+    backgroundColor: 'rgba(76, 175, 125, 0.52)',
+  },
+  toggleThumb: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#FFFFFF',
+  },
+  toggleThumbEnabled: {
+    alignSelf: 'flex-end',
   },
 });

@@ -17,6 +17,7 @@ export default function CoachComposer({
         onChangeText={onChangeText}
         placeholder="Tell your coach what you need..."
         editable={!disabled}
+        multiline
         style={styles.input}
       />
       <ModeButton
@@ -34,8 +35,7 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing[2],
   },
   input: {
-    height: 56,
-    textAlignVertical: 'top',
+    minHeight: 76,
   },
   button: {
     marginTop: theme.spacing[1],

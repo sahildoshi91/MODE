@@ -1,7 +1,14 @@
 import React from 'react';
-import { ScrollView, StyleSheet, Text } from 'react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 
-import { HeaderBar, ModeButton, ModeCard, SafeScreen } from '../../../../lib/components';
+import {
+  HeaderBar,
+  InlineFeedback,
+  ModeButton,
+  ModeCard,
+  ModeText,
+  SafeScreen,
+} from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 
 export default function TrainerAssignmentScreen({
@@ -25,7 +32,7 @@ export default function TrainerAssignmentScreen({
 
   return (
     <SafeScreen style={styles.screen}>
-      <HeaderBar title="Pick Your Trainer" subtitle="Choose who should coach this account" />
+      <HeaderBar title="Pick Your Coach" subtitle="Choose who should guide this account" />
 
       <ScrollView
         contentContainerStyle={[
@@ -33,20 +40,20 @@ export default function TrainerAssignmentScreen({
           { paddingBottom: theme.spacing[5] + bottomInset },
         ]}
       >
-        <ModeCard>
-          <Text style={styles.title}>No active trainer is assigned yet</Text>
-          <Text style={styles.body}>
-            Pick a trainer below and we'll connect this login to that coaching context before chat starts.
-          </Text>
-          {!statusLoadFailed && errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
+        <ModeCard variant="tinted">
+          <ModeText variant="h3" style={styles.title}>No active coach is assigned yet</ModeText>
+          <ModeText variant="bodySm" tone="secondary" style={styles.body}>
+            Select a coach below and we will attach this login to the right coaching context before chat starts.
+          </ModeText>
+          {!statusLoadFailed && errorMessage ? <InlineFeedback type="warning" message={errorMessage} style={styles.feedback} /> : null}
         </ModeCard>
 
         {statusLoadFailed ? (
-          <ModeCard style={styles.blockingCard}>
-            <Text style={styles.blockingTitle}>Unable to load trainer options</Text>
-            {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
-            {errorRequestId ? <Text style={styles.meta}>Request ID: {errorRequestId}</Text> : null}
-            {errorApiBase ? <Text style={styles.meta}>API Base: {errorApiBase}</Text> : null}
+          <ModeCard variant="surface" style={styles.blockingCard}>
+            <ModeText variant="h3">Unable to load coach options</ModeText>
+            {errorMessage ? <InlineFeedback type="error" message={errorMessage} /> : null}
+            {errorRequestId ? <ModeText variant="caption" tone="tertiary">Request ID: {errorRequestId}</ModeText> : null}
+            {errorApiBase ? <ModeText variant="caption" tone="tertiary">API Base: {errorApiBase}</ModeText> : null}
             <ModeButton
               title={isStatusLoading ? 'Retrying...' : 'Retry'}
               onPress={onRetryStatusLoad}
@@ -56,8 +63,8 @@ export default function TrainerAssignmentScreen({
         ) : null}
 
         {!statusLoadFailed ? trainers.map((trainer) => (
-          <ModeCard key={trainer.id} style={styles.trainerCard}>
-            <Text style={styles.trainerName}>{trainer.display_name}</Text>
+          <ModeCard key={trainer.id} variant="surface" style={styles.trainerCard}>
+            <ModeText variant="h3">{trainer.display_name}</ModeText>
             <ModeButton
               title={isSubmitting ? 'Assigning...' : `Choose ${trainer.display_name}`}
               onPress={() => onAssignTrainer(trainer.id)}
@@ -67,10 +74,10 @@ export default function TrainerAssignmentScreen({
         )) : null}
 
         {showEmptyState ? (
-          <ModeCard>
-            <Text style={styles.body}>
-              No active trainers are available right now. Try another account from the Profile tab, or add an active trainer in the admin setup first.
-            </Text>
+          <ModeCard variant="surface">
+            <ModeText variant="bodySm" tone="secondary">
+              No active coaches are available right now. Try another account from Settings, or add an active trainer in admin setup first.
+            </ModeText>
           </ModeCard>
         ) : null}
       </ScrollView>
@@ -79,41 +86,23 @@ export default function TrainerAssignmentScreen({
 }
 
 const styles = StyleSheet.create({
-  screen: {
-  },
+  screen: {},
   content: {
     padding: theme.spacing[3],
   },
   title: {
-    color: theme.colors.textHigh,
-    ...theme.typography.h3,
     marginBottom: theme.spacing[1],
   },
   body: {
-    color: theme.colors.textMedium,
-    ...theme.typography.body1,
+    marginBottom: theme.spacing[1],
   },
-  error: {
-    color: theme.colors.error,
-    ...theme.typography.body2,
+  feedback: {
     marginTop: theme.spacing[2],
   },
   blockingCard: {
     gap: theme.spacing[2],
   },
-  blockingTitle: {
-    color: theme.colors.textHigh,
-    ...theme.typography.h3,
-  },
-  meta: {
-    color: theme.colors.textMedium,
-    ...theme.typography.body2,
-  },
   trainerCard: {
     gap: theme.spacing[2],
-  },
-  trainerName: {
-    color: theme.colors.textHigh,
-    ...theme.typography.h3,
   },
 });

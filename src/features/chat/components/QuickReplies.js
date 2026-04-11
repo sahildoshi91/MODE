@@ -1,6 +1,7 @@
 import React from 'react';
-import { ScrollView, StyleSheet, Text, Pressable } from 'react-native';
+import { ScrollView, StyleSheet } from 'react-native';
 
+import { ModeChip } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 
 export default function QuickReplies({ replies, disabled = false, onSelect }) {
@@ -15,18 +16,12 @@ export default function QuickReplies({ replies, disabled = false, onSelect }) {
       contentContainerStyle={styles.container}
     >
       {replies.map((reply) => (
-        <Pressable
+        <ModeChip
           key={reply}
-          onPress={() => onSelect(reply)}
-          disabled={disabled}
-          style={({ pressed }) => [
-            styles.replyChip,
-            disabled && styles.replyChipDisabled,
-            pressed && !disabled && styles.replyChipPressed,
-          ]}
-        >
-          <Text style={styles.replyText}>{reply}</Text>
-        </Pressable>
+          label={reply}
+          onPress={disabled ? undefined : () => onSelect(reply)}
+          style={[styles.replyChip, disabled && styles.replyChipDisabled]}
+        />
       ))}
     </ScrollView>
   );
@@ -38,22 +33,9 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing[1],
   },
   replyChip: {
-    borderRadius: theme.radii.xl,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceSoft,
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
     marginRight: theme.spacing[1],
-  },
-  replyChipPressed: {
-    opacity: 0.85,
   },
   replyChipDisabled: {
     opacity: 0.5,
-  },
-  replyText: {
-    color: theme.colors.textHigh,
-    ...theme.typography.body2,
   },
 });

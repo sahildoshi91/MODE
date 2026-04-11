@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, Alert } from 'react-native';
-import { supabase } from '../../../services/supabaseClient';
-import { ModeInput, ModeButton, HeaderBar, SafeScreen } from '../../../../lib/components';
-import { theme } from '../../../../lib/theme';
+import { Alert, StyleSheet, View } from 'react-native';
 
-export default function Login() {
+import { HeaderBar, ModeButton, ModeInput, ModeText, SafeScreen } from '../../../../lib/components';
+import { theme } from '../../../../lib/theme';
+import { supabase } from '../../../services/supabaseClient';
+
+export default function Login({ onBackToIntro = null }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isSignup, setIsSignup] = useState(false);
@@ -20,13 +21,13 @@ export default function Login() {
       if (isSignup) {
         const { error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
-        Alert.alert('Success', 'Check your email for confirmation');
+        Alert.alert('Success', 'Check your email for confirmation.');
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
       }
     } catch (error) {
-      Alert.alert('Error', error.message);
+      Alert.alert('Error', error?.message || 'Unable to sign in right now.');
     } finally {
       setIsSubmitting(false);
     }
@@ -34,9 +35,16 @@ export default function Login() {
 
   return (
     <SafeScreen style={styles.screenContainer}>
-      <HeaderBar title="MODE Workout" subtitle="Secure AI workouts, no fluff" />
+      <HeaderBar title="MODE" subtitle="Calm coaching for sustainable progress" />
+
       <View style={styles.stack}>
-        <Text style={styles.title}>{isSignup ? 'Create your account' : 'Welcome back'}</Text>
+        <ModeText variant="h2">{isSignup ? 'Create your account' : 'Welcome back'}</ModeText>
+        <ModeText variant="bodySm" tone="secondary" style={styles.supportText}>
+          {isSignup
+            ? 'Set up your account to start personalized coaching.'
+            : 'Sign in to continue with your coach and daily plan.'}
+        </ModeText>
+
         <ModeInput
           testID="email-input"
           placeholder="Email"
@@ -44,6 +52,7 @@ export default function Login() {
           onChangeText={setEmail}
           keyboardType="email-address"
         />
+
         <ModeInput
           testID="password-input"
           placeholder="Password"
@@ -51,20 +60,33 @@ export default function Login() {
           onChangeText={setPassword}
           secureTextEntry
         />
+
         <ModeButton
           testID="action-button"
-          title={isSubmitting ? 'Please wait...' : isSignup ? 'Sign Up' : 'Login'}
+          size="lg"
+          title={isSubmitting ? 'Please wait...' : isSignup ? 'Create account' : 'Sign in'}
           onPress={handleAuth}
           disabled={isSubmitting}
+          style={styles.primaryButton}
         />
+
         <ModeButton
           testID="switch-auth"
           variant="secondary"
-          title={isSignup ? 'Have an account? Login' : 'New? Sign Up'}
-          onPress={() => setIsSignup(!isSignup)}
+          title={isSignup ? 'Have an account? Sign in' : 'New here? Create account'}
+          onPress={() => setIsSignup((current) => !current)}
           disabled={isSubmitting}
-          style={styles.switchButton}
         />
+
+        {typeof onBackToIntro === 'function' ? (
+          <ModeButton
+            variant="ghost"
+            title="Back to intro"
+            onPress={onBackToIntro}
+            disabled={isSubmitting}
+            style={styles.backButton}
+          />
+        ) : null}
       </View>
     </SafeScreen>
   );
@@ -73,19 +95,19 @@ export default function Login() {
 const styles = StyleSheet.create({
   screenContainer: {
     paddingHorizontal: theme.spacing[3],
+    backgroundColor: theme.colors.surface.canvas,
   },
   stack: {
     marginTop: theme.spacing[4],
     gap: theme.spacing[2],
   },
-  title: {
-    color: theme.colors.textHigh,
-    ...theme.typography.h2,
-    marginBottom: theme.spacing[2],
+  supportText: {
+    marginBottom: theme.spacing[1],
   },
-  switchButton: {
+  primaryButton: {
     marginTop: theme.spacing[1],
-    shadowColor: 'transparent',
-    elevation: 0,
+  },
+  backButton: {
+    marginTop: theme.spacing[1],
   },
 });

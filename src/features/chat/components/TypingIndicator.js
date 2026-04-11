@@ -6,6 +6,7 @@ import { theme } from '../../../../lib/theme';
 export default function TypingIndicator() {
   return (
     <View style={styles.wrap}>
+      <View style={styles.coachRail} />
       <Text style={styles.text}>Coach is thinking…</Text>
     </View>
   );
@@ -14,16 +15,27 @@ export default function TypingIndicator() {
 const styles = StyleSheet.create({
   wrap: {
     alignSelf: 'flex-start',
-    backgroundColor: theme.colors.surface,
+    backgroundColor: '#EAF3EE',
     borderRadius: theme.radii.l,
     borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: theme.spacing[2],
+    borderColor: 'rgba(111, 143, 123, 0.4)',
+    paddingHorizontal: theme.spacing[3],
     paddingVertical: theme.spacing[1],
     marginBottom: theme.spacing[2],
+    position: 'relative',
+  },
+  coachRail: {
+    position: 'absolute',
+    left: 8,
+    top: 8,
+    bottom: 8,
+    width: 3,
+    borderRadius: 2,
+    backgroundColor: theme.colors.brand.progressCore,
   },
   text: {
-    color: theme.colors.textMedium,
+    color: theme.colors.text.secondary,
     ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
   },
 });

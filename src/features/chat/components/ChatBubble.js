@@ -58,7 +58,8 @@ export default function ChatBubble({
           isError && styles.errorBubble,
         ]}
       >
-        <Text style={[styles.text, isUser && styles.userText]}>{text}</Text>
+        {!isUser ? <View style={styles.coachRail} /> : null}
+        <Text style={styles.text}>{text}</Text>
         {fallbackTriggered ? (
           <Text style={styles.metaText}>Flagged for trainer review</Text>
         ) : null}
@@ -88,33 +89,44 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
   },
   bubble: {
-    maxWidth: '86%',
+    maxWidth: '88%',
     borderRadius: theme.radii.l,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[2],
     borderWidth: 1,
+    position: 'relative',
   },
   assistantBubble: {
-    backgroundColor: theme.colors.surface,
-    borderColor: theme.colors.border,
+    backgroundColor: '#EAF3EE',
+    borderColor: 'rgba(111, 143, 123, 0.4)',
+    paddingLeft: theme.spacing[3],
+  },
+  coachRail: {
+    position: 'absolute',
+    left: 8,
+    top: 10,
+    bottom: 10,
+    width: 3,
+    borderRadius: 2,
+    backgroundColor: theme.colors.brand.progressCore,
   },
   userBubble: {
-    backgroundColor: theme.colors.primary,
-    borderColor: theme.colors.primary,
+    backgroundColor: '#EFEDE6',
+    borderColor: theme.colors.border.soft,
   },
   errorBubble: {
-    borderColor: theme.colors.error,
+    borderColor: theme.colors.status.error,
+    backgroundColor: 'rgba(196, 138, 138, 0.1)',
   },
   text: {
-    color: theme.colors.textHigh,
+    color: theme.colors.text.primary,
     ...theme.typography.body1,
-  },
-  userText: {
-    color: theme.colors.onPrimary,
+    fontFamily: theme.typography.fontFamily,
   },
   metaText: {
     marginTop: theme.spacing[1],
-    color: theme.colors.textMedium,
+    color: theme.colors.text.tertiary,
     ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
   },
 });

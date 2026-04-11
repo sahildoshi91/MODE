@@ -2,16 +2,19 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Easing, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { supabase } from '../services/supabaseClient';
+import { theme } from '../../lib/theme';
 import Login from '../features/auth/screens/Login';
+import OnboardingLandingScreen from '../features/auth/screens/OnboardingLandingScreen';
 import CoachChatScreen from '../features/chat/screens/CoachChatScreen';
 import DailyCheckinScreen from '../features/dailyCheckin/screens/DailyCheckinScreen';
+import ModeStateScreen from '../features/home/screens/ModeStateScreen';
+import CoachInsightsScreen from '../features/insights/screens/CoachInsightsScreen';
 import LiquidBottomNav from '../features/navigation/components/LiquidBottomNav';
 import ProfileScreen from '../features/profile/screens/ProfileScreen';
 import ProgressScreen from '../features/progress/screens/ProgressScreen';
 import TrainerAssignmentScreen from '../features/trainerAssignment/screens/TrainerAssignmentScreen';
 import { assignTrainer, getTrainerAssignmentStatus } from '../features/trainerAssignment/services/trainerAssignmentApi';
-import { theme } from '../../lib/theme';
+import { supabase } from '../services/supabaseClient';
 
 function formatAssignmentError(error, fallbackMessage) {
   const message = error?.message || fallbackMessage;
@@ -25,6 +28,7 @@ function formatAssignmentError(error, fallbackMessage) {
 function AppShell() {
   const insets = useSafeAreaInsets();
   const [session, setSession] = useState(null);
+  const [authStage, setAuthStage] = useState('intro');
   const [isSessionLoading, setIsSessionLoading] = useState(true);
   const [isAssignmentStatusLoading, setIsAssignmentStatusLoading] = useState(false);
   const [assignmentStatus, setAssignmentStatus] = useState(null);
@@ -33,6 +37,8 @@ function AppShell() {
   const [isAssigningTrainer, setIsAssigningTrainer] = useState(false);
   const [activeTab, setActiveTab] = useState('home');
   const [chatLaunchContext, setChatLaunchContext] = useState(null);
+  const [homeRoute, setHomeRoute] = useState('checkin');
+  const [progressRoute, setProgressRoute] = useState('progress');
   const tabOpacity = useRef(new Animated.Value(1)).current;
   const tabTranslateY = useRef(new Animated.Value(0)).current;
 
@@ -45,6 +51,9 @@ function AppShell() {
         return;
       }
       setSession(data.session || null);
+      if (!data.session) {
+        setAuthStage('intro');
+      }
       setIsSessionLoading(false);
     };
 
@@ -58,7 +67,12 @@ function AppShell() {
       }
       setSession(nextSession || null);
       setActiveTab('home');
+      setHomeRoute('checkin');
+      setProgressRoute('progress');
       setChatLaunchContext(null);
+      if (!nextSession) {
+        setAuthStage('intro');
+      }
       setIsSessionLoading(false);
     });
 
@@ -114,13 +128,13 @@ function AppShell() {
     Animated.parallel([
       Animated.timing(tabOpacity, {
         toValue: 1,
-        duration: 260,
+        duration: theme.animation.duration.normal,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
       Animated.timing(tabTranslateY, {
         toValue: 0,
-        duration: 320,
+        duration: theme.animation.duration.long,
         easing: Easing.out(Easing.cubic),
         useNativeDriver: true,
       }),
@@ -135,7 +149,10 @@ function AppShell() {
     setAssignTrainerError(null);
     setIsAssigningTrainer(false);
     setActiveTab('home');
+    setHomeRoute('checkin');
+    setProgressRoute('progress');
     setChatLaunchContext(null);
+    setAuthStage('intro');
   };
 
   const handleAssignTrainer = async (trainerId) => {
@@ -153,6 +170,7 @@ function AppShell() {
       });
       await loadAssignmentStatus();
       setActiveTab('home');
+      setHomeRoute('checkin');
       setChatLaunchContext(null);
     } catch (error) {
       setAssignTrainerError(formatAssignmentError(error, 'Unable to assign trainer.'));
@@ -171,18 +189,27 @@ function AppShell() {
     if (nextTab !== 'coach') {
       setChatLaunchContext(null);
     }
+    if (nextTab !== 'home') {
+      setHomeRoute('checkin');
+    }
+    if (nextTab !== 'progress') {
+      setProgressRoute('progress');
+    }
   };
 
   if (isSessionLoading) {
     return (
       <View style={styles.loadingScreen}>
-        <ActivityIndicator size="large" color={theme.colors.accent} />
+        <ActivityIndicator size="large" color={theme.colors.brand.progressCore} />
       </View>
     );
   }
 
   if (!session?.access_token) {
-    return <Login />;
+    if (authStage === 'intro') {
+      return <OnboardingLandingScreen onContinue={() => setAuthStage('login')} />;
+    }
+    return <Login onBackToIntro={() => setAuthStage('intro')} />;
   }
 
   const navBottomInset = insets.bottom;
@@ -196,7 +223,7 @@ function AppShell() {
   if (isBlockingAssignmentLoad) {
     return (
       <View style={styles.loadingScreen}>
-        <ActivityIndicator size="large" color={theme.colors.accent} />
+        <ActivityIndicator size="large" color={theme.colors.brand.progressCore} />
       </View>
     );
   }
@@ -229,12 +256,21 @@ function AppShell() {
           />
         ) : null}
 
-        {!showAssignmentGate && activeTab === 'home' ? (
+        {!showAssignmentGate && activeTab === 'home' && homeRoute === 'checkin' ? (
           <DailyCheckinScreen
             accessToken={session.access_token}
             bottomInset={contentBottomInset}
             onOpenChat={handleOpenChat}
+            onOpenStateGuide={() => setHomeRoute('state')}
+            onOpenInsights={() => {
+              setActiveTab('progress');
+              setProgressRoute('insights');
+            }}
           />
+        ) : null}
+
+        {!showAssignmentGate && activeTab === 'home' && homeRoute === 'state' ? (
+          <ModeStateScreen onBack={() => setHomeRoute('checkin')} />
         ) : null}
 
         {!showAssignmentGate && activeTab === 'coach' ? (
@@ -245,9 +281,19 @@ function AppShell() {
           />
         ) : null}
 
-        {!showAssignmentGate && activeTab === 'progress' ? (
+        {!showAssignmentGate && activeTab === 'progress' && progressRoute === 'progress' ? (
           <ProgressScreen
             accessToken={session.access_token}
+            bottomInset={contentBottomInset}
+            onOpenInsights={() => setProgressRoute('insights')}
+            initialSection="habits"
+          />
+        ) : null}
+
+        {!showAssignmentGate && activeTab === 'progress' && progressRoute === 'insights' ? (
+          <CoachInsightsScreen
+            accessToken={session.access_token}
+            onBack={() => setProgressRoute('progress')}
             bottomInset={contentBottomInset}
           />
         ) : null}
@@ -282,7 +328,7 @@ export default function App() {
 const styles = StyleSheet.create({
   shell: {
     flex: 1,
-    backgroundColor: theme.colors.bg.primary,
+    backgroundColor: theme.colors.surface.canvas,
   },
   screenContainer: {
     flex: 1,
@@ -291,6 +337,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.bg.primary,
+    backgroundColor: theme.colors.surface.canvas,
   },
 });

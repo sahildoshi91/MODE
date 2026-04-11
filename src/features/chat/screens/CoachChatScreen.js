@@ -1,7 +1,15 @@
 import React, { useMemo, useState } from 'react';
-import { FlatList, StyleSheet, Text, View } from 'react-native';
+import { FlatList, StyleSheet, View } from 'react-native';
 
-import { HeaderBar, ModeButton, ModeCard, SafeScreen } from '../../../../lib/components';
+import {
+  HeaderBar,
+  InlineFeedback,
+  ModeButton,
+  ModeCard,
+  ModeText,
+  SafeScreen,
+  StateBadge,
+} from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import ChatBubble from '../components/ChatBubble';
 import CoachComposer from '../components/CoachComposer';
@@ -30,6 +38,15 @@ export default function CoachChatScreen({ accessToken, launchContext, bottomInse
     return 'Conversation-first coaching';
   }, [trainerContext]);
 
+  const recommendationLabel = useMemo(() => {
+    if (quickReplies?.length > 0) {
+      return quickReplies[0];
+    }
+    return 'Share what feels hardest today and coach will simplify your next step.';
+  }, [quickReplies]);
+
+  const hasActionConfirmation = messages.length > 1 && !isSending && !error;
+
   const handleSend = async () => {
     const message = draft.trim();
     if (!message) {
@@ -57,16 +74,27 @@ export default function CoachChatScreen({ accessToken, launchContext, bottomInse
 
   return (
     <SafeScreen style={styles.screen}>
-      <HeaderBar title="MODE Coach" subtitle={headerSubtitle} />
+      <HeaderBar title="Coach Chat" subtitle={headerSubtitle} />
 
-      <View style={[styles.content, { paddingBottom: theme.spacing[3] + bottomInset }]}>
-        <ModeCard style={styles.statusCard}>
-          <Text style={styles.statusLabel}>Stage</Text>
-          <Text style={styles.statusValue}>{conversationState.current_stage}</Text>
-          <Text style={styles.statusMeta}>
-            {conversationState.onboarding_complete ? 'Plan-ready' : 'Learning your baseline'}
-          </Text>
+      <View style={[styles.content, { paddingBottom: theme.spacing[3] + bottomInset }]}> 
+        <ModeCard variant="tinted" style={styles.statusCard}>
+          <ModeText variant="label" tone="tertiary">Conversation stage</ModeText>
+          <ModeText variant="h3" style={styles.stageText}>{conversationState.current_stage}</ModeText>
+          <ModeText variant="bodySm" tone="secondary">
+            {conversationState.onboarding_complete ? 'Plan-ready and context-aware' : 'Learning your baseline'}
+          </ModeText>
+          <View style={styles.badgeWrap}>
+            <StateBadge mode="RECOVER" label="Supportive coaching" />
+          </View>
         </ModeCard>
+
+        {hasActionConfirmation ? (
+          <InlineFeedback
+            type="success"
+            message="Action saved. Coach context has been updated."
+            style={styles.feedback}
+          />
+        ) : null}
 
         <FlatList
           data={messages}
@@ -84,7 +112,13 @@ export default function CoachChatScreen({ accessToken, launchContext, bottomInse
           )}
           contentContainerStyle={styles.messages}
           ListFooterComponent={isSending ? <TypingIndicator /> : null}
+          keyboardShouldPersistTaps="handled"
         />
+
+        <ModeCard variant="surface" style={styles.recommendationCard}>
+          <ModeText variant="label" tone="tertiary">Coach recommendation</ModeText>
+          <ModeText variant="bodySm" tone="secondary" style={styles.recommendationText}>{recommendationLabel}</ModeText>
+        </ModeCard>
 
         <QuickReplies
           replies={quickReplies}
@@ -93,13 +127,16 @@ export default function CoachChatScreen({ accessToken, launchContext, bottomInse
         />
 
         {hasRetryableFailure ? (
-          <ModeCard style={styles.errorCard}>
-            <Text style={styles.errorTitle}>Message didn&apos;t send</Text>
-            <Text style={styles.errorBody}>{error || 'Coach is temporarily unavailable. Try again.'}</Text>
+          <ModeCard variant="tinted" style={styles.errorCard}>
+            <ModeText variant="h3" tone="error">Message didn&apos;t send</ModeText>
+            <ModeText variant="bodySm" tone="secondary" style={styles.errorBody}>
+              {error || 'Coach is temporarily unavailable. Try again.'}
+            </ModeText>
             <ModeButton
-              title={isSending ? 'Retrying...' : 'Retry Last Message'}
+              title={isSending ? 'Retrying...' : 'Retry last message'}
               onPress={handleRetryLastMessage}
               disabled={isSending}
+              variant="destructive"
               style={styles.errorButton}
             />
           </ModeCard>
@@ -111,15 +148,13 @@ export default function CoachChatScreen({ accessToken, launchContext, bottomInse
           onSend={handleSend}
           disabled={isSending}
         />
-
       </View>
     </SafeScreen>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-  },
+  screen: {},
   content: {
     flex: 1,
     padding: theme.spacing[3],
@@ -127,38 +162,34 @@ const styles = StyleSheet.create({
   statusCard: {
     marginTop: theme.spacing[1],
   },
-  statusLabel: {
-    color: theme.colors.textMedium,
-    ...theme.typography.label,
-    textTransform: 'uppercase',
+  stageText: {
+    marginTop: theme.spacing[1],
     marginBottom: theme.spacing[1],
   },
-  statusValue: {
-    color: theme.colors.textHigh,
-    ...theme.typography.h3,
-    marginBottom: theme.spacing[0],
+  badgeWrap: {
+    marginTop: theme.spacing[2],
   },
-  statusMeta: {
-    color: theme.colors.accent,
-    ...theme.typography.body2,
+  feedback: {
+    marginTop: theme.spacing[1],
   },
   messages: {
     paddingTop: theme.spacing[2],
     paddingBottom: theme.spacing[2],
   },
+  recommendationCard: {
+    marginTop: theme.spacing[1],
+    marginBottom: theme.spacing[1],
+  },
+  recommendationText: {
+    marginTop: theme.spacing[1],
+  },
   errorCard: {
     marginTop: theme.spacing[2],
-    borderColor: theme.colors.error,
-    borderWidth: 1,
-  },
-  errorTitle: {
-    color: theme.colors.error,
-    ...theme.typography.h3,
+    borderColor: 'rgba(196, 138, 138, 0.4)',
+    backgroundColor: 'rgba(232, 207, 207, 0.4)',
   },
   errorBody: {
     marginTop: theme.spacing[1],
-    color: theme.colors.textMedium,
-    ...theme.typography.body2,
   },
   errorButton: {
     marginTop: theme.spacing[2],
