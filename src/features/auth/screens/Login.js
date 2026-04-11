@@ -35,7 +35,12 @@ export default function Login({ onBackToIntro = null }) {
 
   return (
     <SafeScreen includeTopInset={false} style={styles.screenContainer}>
-      <HeaderBar title="MODE" subtitle="Calm coaching for sustainable progress" />
+      <HeaderBar
+        title="MODE"
+        subtitle="Calm coaching for sustainable progress"
+        onBack={typeof onBackToIntro === 'function' ? onBackToIntro : null}
+        backAccessibilityLabel="Back to intro"
+      />
 
       <View style={styles.stack}>
         <ModeText variant="h2">{isSignup ? 'Create your account' : 'Welcome back'}</ModeText>
@@ -78,15 +83,6 @@ export default function Login({ onBackToIntro = null }) {
           disabled={isSubmitting}
         />
 
-        {typeof onBackToIntro === 'function' ? (
-          <ModeButton
-            variant="ghost"
-            title="Back to intro"
-            onPress={onBackToIntro}
-            disabled={isSubmitting}
-            style={styles.backButton}
-          />
-        ) : null}
       </View>
     </SafeScreen>
   );
@@ -105,9 +101,6 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing[1],
   },
   primaryButton: {
-    marginTop: theme.spacing[1],
-  },
-  backButton: {
     marginTop: theme.spacing[1],
   },
 });

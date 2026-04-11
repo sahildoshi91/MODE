@@ -816,7 +816,7 @@ function TopBar({ canGoBack, onGoBack, onSkip, disableSkip }) {
           pressed && canGoBack && styles.topBarActionPressed,
         ]}
       >
-        <Feather name="chevron-left" size={22} color={canGoBack ? theme.colors.textHigh : theme.colors.textDisabled} />
+        <Feather name="arrow-left" size={22} color={canGoBack ? theme.colors.textHigh : theme.colors.textDisabled} />
       </Pressable>
 
       <Pressable
@@ -1934,128 +1934,128 @@ export default function DailyCheckinScreen({
       ) : null}
 
       {step === 'environment' ? (
-        <ScrollView
-          contentContainerStyle={[
-            styles.resultsContent,
-            {
-              paddingTop: Math.max(insets.top, theme.spacing[3]),
-              paddingBottom: theme.spacing[4] + bottomInset,
-            },
-          ]}
-        >
-          <View style={styles.phoneFrame}>
-            <Text style={styles.resultsEyebrow}>{planType === PLAN_TYPE.TRAINING ? 'Training Setup' : 'Nutrition Setup'}</Text>
-            <Text style={styles.resultsTitle}>
-              {planType === PLAN_TYPE.TRAINING ? 'Dial in your workout context' : 'Dial in today\'s nutrition context'}
-            </Text>
+        <View style={styles.planStepWrap}>
+          <HeaderBar
+            title={planType === PLAN_TYPE.TRAINING ? 'Training Setup' : 'Nutrition Setup'}
+            onBack={() => setStep('summary')}
+            backAccessibilityLabel="Back to summary"
+          />
+          <ScrollView
+            contentContainerStyle={[
+              styles.resultsContent,
+              {
+                paddingTop: theme.spacing[3],
+                paddingBottom: theme.spacing[4] + bottomInset,
+              },
+            ]}
+          >
+            <View style={styles.phoneFrame}>
+              <Text style={styles.resultsTitle}>
+                {planType === PLAN_TYPE.TRAINING ? 'Dial in your workout context' : 'Dial in today\'s nutrition context'}
+              </Text>
 
-            <PreviousContextToggle
-              previousCheckin={previousCheckin}
-              isLoadingPreviousCheckin={isLoadingPreviousCheckin}
-              includeYesterdayContext={includeYesterdayContext}
-              onToggle={setIncludeYesterdayContext}
+              <PreviousContextToggle
+                previousCheckin={previousCheckin}
+                isLoadingPreviousCheckin={isLoadingPreviousCheckin}
+                includeYesterdayContext={includeYesterdayContext}
+                onToggle={setIncludeYesterdayContext}
+              />
+
+              {planType === PLAN_TYPE.TRAINING ? (
+                <>
+                  <Text style={styles.sectionHeading}>Environment</Text>
+                  <View style={styles.environmentGrid}>
+                    {ENVIRONMENT_OPTIONS.map((option) => {
+                      const selected = environment === option.value;
+                      return (
+                        <Pressable
+                          key={option.value}
+                          onPress={() => setEnvironment(option.value)}
+                          style={({ pressed }) => [
+                            styles.environmentCard,
+                            selected && styles.environmentCardSelected,
+                            pressed && styles.environmentCardPressed,
+                          ]}
+                        >
+                          <Text style={styles.environmentEmoji}>{option.emoji}</Text>
+                          <Text style={styles.environmentLabel}>{option.label}</Text>
+                          <Text style={styles.environmentDesc}>{option.description}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <Text style={styles.sectionHeading}>Time available</Text>
+                  <View style={styles.timePillRow}>
+                    {TIME_OPTIONS.map((minutes) => {
+                      const selected = timeAvailable === minutes;
+                      return (
+                        <Pressable
+                          key={minutes}
+                          onPress={() => setTimeAvailable(minutes)}
+                          style={[styles.timePill, selected && styles.timePillSelected]}
+                        >
+                          <Text style={[styles.timePillText, selected && styles.timePillTextSelected]}>{minutes}m</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.sectionHeading}>Day Type</Text>
+                  <View style={styles.dayTypeList}>
+                    <Pressable
+                      onPress={() => {
+                        setNutritionDayType('normal');
+                        setNutritionDayNote('');
+                      }}
+                      style={[styles.dayTypeCard, nutritionDayType === 'normal' && styles.dayTypeCardSelected]}
+                    >
+                      <Text style={styles.dayTypeTitle}>📅 Normal day</Text>
+                      <Text style={styles.dayTypeBody}>Regular routine, no special context</Text>
+                    </Pressable>
+
+                    <Pressable
+                      onPress={() => setNutritionDayType('custom')}
+                      style={[styles.dayTypeCard, nutritionDayType === 'custom' && styles.dayTypeCardSelected]}
+                    >
+                      <Text style={styles.dayTypeTitle}>✏️ Something different today</Text>
+                      <Text style={styles.dayTypeBody}>Travel, event, dietary change, etc.</Text>
+                    </Pressable>
+                  </View>
+
+                  {nutritionDayType === 'custom' ? (
+                    <TextInput
+                      ref={nutritionDayNoteRef}
+                      style={styles.nutritionNoteInput}
+                      value={nutritionDayNote}
+                      onChangeText={setNutritionDayNote}
+                      placeholder="I'm at a hotel in Austin, eating out for every meal"
+                      placeholderTextColor={theme.colors.textDisabled}
+                      multiline
+                      textAlignVertical="top"
+                    />
+                  ) : null}
+                </>
+              )}
+            </View>
+
+            <ModeButton
+              title={planType === PLAN_TYPE.TRAINING ? 'Generate My Workout' : 'Generate My Nutrition Plan'}
+              onPress={() => handleGeneratePlan(false)}
+              disabled={!canGeneratePlan || planLoading}
+              style={[styles.footerButton, styles.generateButton]}
             />
-
-            {planType === PLAN_TYPE.TRAINING ? (
-              <>
-                <Text style={styles.sectionHeading}>Environment</Text>
-                <View style={styles.environmentGrid}>
-                  {ENVIRONMENT_OPTIONS.map((option) => {
-                    const selected = environment === option.value;
-                    return (
-                      <Pressable
-                        key={option.value}
-                        onPress={() => setEnvironment(option.value)}
-                        style={({ pressed }) => [
-                          styles.environmentCard,
-                          selected && styles.environmentCardSelected,
-                          pressed && styles.environmentCardPressed,
-                        ]}
-                      >
-                        <Text style={styles.environmentEmoji}>{option.emoji}</Text>
-                        <Text style={styles.environmentLabel}>{option.label}</Text>
-                        <Text style={styles.environmentDesc}>{option.description}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-                <Text style={styles.sectionHeading}>Time available</Text>
-                <View style={styles.timePillRow}>
-                  {TIME_OPTIONS.map((minutes) => {
-                    const selected = timeAvailable === minutes;
-                    return (
-                      <Pressable
-                        key={minutes}
-                        onPress={() => setTimeAvailable(minutes)}
-                        style={[styles.timePill, selected && styles.timePillSelected]}
-                      >
-                        <Text style={[styles.timePillText, selected && styles.timePillTextSelected]}>{minutes}m</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </>
-            ) : (
-              <>
-                <Text style={styles.sectionHeading}>Day Type</Text>
-                <View style={styles.dayTypeList}>
-                  <Pressable
-                    onPress={() => {
-                      setNutritionDayType('normal');
-                      setNutritionDayNote('');
-                    }}
-                    style={[styles.dayTypeCard, nutritionDayType === 'normal' && styles.dayTypeCardSelected]}
-                  >
-                    <Text style={styles.dayTypeTitle}>📅 Normal day</Text>
-                    <Text style={styles.dayTypeBody}>Regular routine, no special context</Text>
-                  </Pressable>
-
-                  <Pressable
-                    onPress={() => setNutritionDayType('custom')}
-                    style={[styles.dayTypeCard, nutritionDayType === 'custom' && styles.dayTypeCardSelected]}
-                  >
-                    <Text style={styles.dayTypeTitle}>✏️ Something different today</Text>
-                    <Text style={styles.dayTypeBody}>Travel, event, dietary change, etc.</Text>
-                  </Pressable>
-                </View>
-
-                {nutritionDayType === 'custom' ? (
-                  <TextInput
-                    ref={nutritionDayNoteRef}
-                    style={styles.nutritionNoteInput}
-                    value={nutritionDayNote}
-                    onChangeText={setNutritionDayNote}
-                    placeholder="I'm at a hotel in Austin, eating out for every meal"
-                    placeholderTextColor={theme.colors.textDisabled}
-                    multiline
-                    textAlignVertical="top"
-                  />
-                ) : null}
-              </>
-            )}
-          </View>
-
-          <ModeButton
-            title={planType === PLAN_TYPE.TRAINING ? 'Generate My Workout' : 'Generate My Nutrition Plan'}
-            onPress={() => handleGeneratePlan(false)}
-            disabled={!canGeneratePlan || planLoading}
-            style={[styles.footerButton, styles.generateButton]}
-          />
-          <ModeButton
-            title="Back"
-            variant="secondary"
-            onPress={() => setStep('summary')}
-            style={styles.footerButton}
-          />
-          <ConnectionDebugCard
-            debugState={connectionDebug}
-            isHealthzProbeRunning={isHealthzProbeRunning}
-            isTodayProbeRunning={isTodayProbeRunning}
-            onProbeHealthz={handleProbeHealthz}
-            onProbeToday={handleProbeToday}
-            visible={showConnectionDebug}
-          />
-        </ScrollView>
+            <ConnectionDebugCard
+              debugState={connectionDebug}
+              isHealthzProbeRunning={isHealthzProbeRunning}
+              isTodayProbeRunning={isTodayProbeRunning}
+              onProbeHealthz={handleProbeHealthz}
+              onProbeToday={handleProbeToday}
+              visible={showConnectionDebug}
+            />
+          </ScrollView>
+        </View>
       ) : null}
 
       {step === 'plan' ? (
