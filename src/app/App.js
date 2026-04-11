@@ -43,6 +43,7 @@ function AppShell() {
   const [isAssigningTrainer, setIsAssigningTrainer] = useState(false);
   const [activeTab, setActiveTab] = useState('home');
   const [chatLaunchContext, setChatLaunchContext] = useState(null);
+  const [coachOverlayContext, setCoachOverlayContext] = useState(null);
   const [homeRoute, setHomeRoute] = useState('checkin');
   const [progressRoute, setProgressRoute] = useState('progress');
   const [insightsOrigin, setInsightsOrigin] = useState('progress');
@@ -78,6 +79,7 @@ function AppShell() {
       setProgressRoute('progress');
       setInsightsOrigin('progress');
       setChatLaunchContext(null);
+      setCoachOverlayContext(null);
       if (!nextSession) {
         setAuthStage('intro');
       }
@@ -161,6 +163,7 @@ function AppShell() {
     setProgressRoute('progress');
     setInsightsOrigin('progress');
     setChatLaunchContext(null);
+    setCoachOverlayContext(null);
     setAuthStage('intro');
   };
 
@@ -182,6 +185,7 @@ function AppShell() {
       setHomeRoute('checkin');
       setInsightsOrigin('progress');
       setChatLaunchContext(null);
+      setCoachOverlayContext(null);
     } catch (error) {
       setAssignTrainerError(formatAssignmentError(error, 'Unable to assign trainer.'));
     } finally {
@@ -190,11 +194,17 @@ function AppShell() {
   };
 
   const handleOpenChat = (launchContext = null) => {
+    if (launchContext?.entrypoint === 'generated_workout') {
+      setCoachOverlayContext(launchContext);
+      return;
+    }
+    setCoachOverlayContext(null);
     setChatLaunchContext(launchContext);
     setActiveTab('coach');
   };
 
   const handleTabChange = (nextTab) => {
+    setCoachOverlayContext(null);
     setActiveTab(nextTab);
     if (nextTab !== 'coach') {
       setChatLaunchContext(null);
@@ -248,6 +258,7 @@ function AppShell() {
   }
 
   const navBottomInset = insets.bottom;
+  const floatingNavClearance = navBottomInset + FLOATING_NAV_BOTTOM_OFFSET + FLOATING_NAV_PILL_HEIGHT;
   const contentBottomInset = navBottomInset + 108;
   const coachChatBottomInset = navBottomInset + COACH_CHAT_DOCK_CLEARANCE;
   const isBlockingStatusError = Boolean(assignmentStatusError);
@@ -296,6 +307,7 @@ function AppShell() {
           <DailyCheckinScreen
             accessToken={session.access_token}
             bottomInset={contentBottomInset}
+            floatingNavClearance={floatingNavClearance}
             onOpenChat={handleOpenChat}
             onOpenStateGuide={() => setHomeRoute('state')}
             onOpenInsights={handleOpenHomeInsights}
@@ -341,11 +353,24 @@ function AppShell() {
         ) : null}
       </Animated.View>
 
-      <LiquidBottomNav
-        activeTab={activeTab}
-        onTabChange={handleTabChange}
-        bottomInset={navBottomInset}
-      />
+      {coachOverlayContext ? (
+        <View style={styles.coachOverlay}>
+          <CoachChatScreen
+            accessToken={session.access_token}
+            launchContext={coachOverlayContext}
+            bottomInset={navBottomInset}
+            onBack={() => setCoachOverlayContext(null)}
+          />
+        </View>
+      ) : null}
+
+      {!coachOverlayContext ? (
+        <LiquidBottomNav
+          activeTab={activeTab}
+          onTabChange={handleTabChange}
+          bottomInset={navBottomInset}
+        />
+      ) : null}
     </View>
   );
 }
@@ -365,6 +390,10 @@ const styles = StyleSheet.create({
   },
   screenContainer: {
     flex: 1,
+  },
+  coachOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 40,
   },
   loadingScreen: {
     flex: 1,

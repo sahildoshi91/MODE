@@ -23,7 +23,12 @@ import { useChatConversation } from '../hooks/useChatConversation';
 
 const KEYBOARD_OPEN_DOCK_PADDING = theme.spacing[2];
 
-export default function CoachChatScreen({ accessToken, launchContext, bottomInset = 0 }) {
+export default function CoachChatScreen({
+  accessToken,
+  launchContext,
+  bottomInset = 0,
+  onBack = null,
+}) {
   const [draft, setDraft] = useState('');
   const [dockHeight, setDockHeight] = useState(0);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
@@ -100,7 +105,11 @@ export default function CoachChatScreen({ accessToken, launchContext, bottomInse
 
   return (
     <SafeScreen includeTopInset={false} style={styles.screen}>
-      <HeaderBar title="Coach Chat" />
+      <HeaderBar
+        title="Coach Chat"
+        onBack={onBack}
+        backAccessibilityLabel="Back to generated workout"
+      />
 
       <KeyboardAvoidingView
         style={styles.content}
