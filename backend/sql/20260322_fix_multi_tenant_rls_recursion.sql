@@ -288,8 +288,13 @@ CREATE POLICY onboarding_answers_insert_visible ON public.onboarding_answers
 CREATE POLICY coach_memory_select_visible ON public.coach_memory
   FOR SELECT TO authenticated
   USING (
-    public.auth_can_view_client(client_id)
-    OR public.auth_is_trainer_user(trainer_id)
+    -- Post-2026-04-12 safety fix: preserve the hardened visibility rule in
+    -- repair/setup SQL so internal_only rows never reappear for client tokens.
+    public.auth_is_trainer_user(trainer_id)
+    OR (
+      public.auth_is_client_user(client_id)
+      AND COALESCE(LOWER(value_json ->> 'visibility'), 'internal_only') <> 'internal_only'
+    )
   );
 
 CREATE POLICY coach_memory_insert_trainer ON public.coach_memory

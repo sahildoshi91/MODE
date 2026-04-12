@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
@@ -1147,7 +1147,6 @@ export default function DailyCheckinScreen({
   const sessionStartRef = useRef(Date.now());
   const nutritionDayNoteRef = useRef(null);
   const today = useMemo(() => getLocalDateString(), []);
-  const [status, setStatus] = useState(null);
   const [step, setStep] = useState('loading');
   const [scores, setScores] = useState(createEmptyAnswers);
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -1217,9 +1216,9 @@ export default function DailyCheckinScreen({
     outputRange: [glowFromColor, glowToColor],
   });
 
-  const refreshConnectionDebug = (overrides = {}) => {
+  const refreshConnectionDebug = useCallback((overrides = {}) => {
     setConnectionDebug(buildConnectionDebugSnapshot(overrides));
-  };
+  }, []);
 
   const handleProbeHealthz = async () => {
     if (isHealthzProbeRunning || isTodayProbeRunning) {
@@ -1307,7 +1306,7 @@ export default function DailyCheckinScreen({
     }
   };
 
-  const loadToday = async () => {
+  const loadToday = useCallback(async () => {
     setIsLoading(true);
     setStep('loading');
     setErrorMessage(null);
@@ -1328,7 +1327,6 @@ export default function DailyCheckinScreen({
           }),
         },
       });
-      setStatus(nextStatus);
       if (nextStatus.completed) {
         setSummaryResult(nextStatus.checkin);
         setSubmitState('saved');
@@ -1362,11 +1360,11 @@ export default function DailyCheckinScreen({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [accessToken, refreshConnectionDebug]);
 
   useEffect(() => {
     loadToday();
-  }, [accessToken]);
+  }, [loadToday]);
 
   useEffect(() => () => {
     if (copyFeedbackTimerRef.current) {
@@ -1380,7 +1378,7 @@ export default function DailyCheckinScreen({
 
   useEffect(() => {
     refreshConnectionDebug();
-  }, [accessToken, today]);
+  }, [accessToken, refreshConnectionDebug, today]);
 
   useEffect(() => {
     if (step !== 'environment') {
@@ -1478,11 +1476,6 @@ export default function DailyCheckinScreen({
         date: today,
         inputs: updatedScores,
         timeToComplete,
-      });
-      setStatus({
-        date: today,
-        completed: true,
-        checkin: result,
       });
       setSummaryResult(result);
       setSubmitState('saved');

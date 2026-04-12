@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -78,7 +78,7 @@ export default function ProgressScreen({
     sleep: false,
   });
 
-  const loadProgress = async ({ refresh = false } = {}) => {
+  const loadProgress = useCallback(async ({ refresh = false } = {}) => {
     if (!accessToken) {
       return;
     }
@@ -103,11 +103,11 @@ export default function ProgressScreen({
         setIsLoading(false);
       }
     }
-  };
+  }, [accessToken]);
 
   useEffect(() => {
     loadProgress();
-  }, [accessToken]);
+  }, [loadProgress]);
 
   const consistencyRatio = useMemo(() => {
     return clampToPercent((payload?.checkins_last_7_days || 0) / 7);

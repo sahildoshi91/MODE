@@ -13,10 +13,11 @@ After migration apply, run:
 - `backend/sql/20260411d_verify_trainer_platform_rls.sql`
 
 Expected outcome:
-- All five tables exist.
-- RLS is enabled and forced for all five.
+- All five trainer-platform tables exist.
+- `coach_memory` exists and reports RLS enabled + forced.
 - Expected trainer-owner policies are present.
-- `coach_memory` no longer exposes `internal_only` rows to client tokens.
+- `coach_memory_select_visible` shows the hardened predicate.
+- The verification script fails immediately if `coach_memory` still uses the legacy client-visible policy.
 
 ## 2) Guarded staging rollout (orchestration off -> on)
 Keep orchestration off for baseline:
@@ -42,6 +43,8 @@ TRAINER_INTELLIGENCE_ORCHESTRATION_ENABLED=true
 ```
 
 Re-run the same staging suite and compare parity with baseline.
+
+Record the verification SQL output and both staging pytest runs in the rollout ticket or release note before moving on.
 
 ### Orchestration schema preflight (before enabling ON)
 Confirm the workouts analytics field used by trainer-intelligence exists:
@@ -78,7 +81,18 @@ Expected outcome:
 - No unexpected 5xx chat errors.
 - Orchestration metadata reflects enabled/used/fallback states.
 
-## 4) Rollback rule
+## 4) Required artifacts and signoff
+Do not promote beyond staging until all of the following are captured:
+
+- verification SQL output showing the hardened `coach_memory` policy check passed
+- staging pytest output with `TRAINER_INTELLIGENCE_ORCHESTRATION_ENABLED=false`
+- staging pytest output with `TRAINER_INTELLIGENCE_ORCHESTRATION_ENABLED=true`
+- one recent assistant message sample showing `structured_payload.orchestration`
+- release owner + approver + date recorded in the rollout ticket
+
+If any artifact is missing, treat rollout status as not signed off.
+
+## 5) Rollback rule
 Immediately set:
 
 ```bash

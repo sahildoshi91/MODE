@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 
 import {
@@ -68,7 +68,7 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  const loadInsights = async () => {
+  const loadInsights = useCallback(async () => {
     if (!accessToken) {
       setPayload(null);
       setError(null);
@@ -87,11 +87,11 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [accessToken]);
 
   useEffect(() => {
     loadInsights();
-  }, [accessToken]);
+  }, [loadInsights]);
 
   const sections = useMemo(() => {
     if (!payload) {

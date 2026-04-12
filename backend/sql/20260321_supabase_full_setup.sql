@@ -1007,16 +1007,15 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'coach_memory' AND policyname = 'coach_memory_select_visible'
   ) THEN
+    -- Post-2026-04-12 safety fix: embed the hardened visibility guard here
+    -- so fresh setup paths cannot recreate client access to internal_only rows.
     CREATE POLICY coach_memory_select_visible ON public.coach_memory
       FOR SELECT TO authenticated
       USING (
-        EXISTS (
-          SELECT 1
-          FROM public.clients c
-          JOIN public.trainers t ON t.id = c.assigned_trainer_id
-          WHERE c.id = coach_memory.client_id
-            AND (c.user_id = auth.uid() OR t.user_id = auth.uid())
-            AND t.id = coach_memory.trainer_id
+        public.auth_is_trainer_user(trainer_id)
+        OR (
+          public.auth_is_client_user(client_id)
+          AND COALESCE(LOWER(value_json ->> 'visibility'), 'internal_only') <> 'internal_only'
         )
       );
   END IF;
@@ -1600,8 +1599,13 @@ CREATE POLICY onboarding_answers_insert_visible ON public.onboarding_answers
 CREATE POLICY coach_memory_select_visible ON public.coach_memory
   FOR SELECT TO authenticated
   USING (
-    public.auth_can_view_client(client_id)
-    OR public.auth_is_trainer_user(trainer_id)
+    -- Post-2026-04-12 safety fix: keep the canonical full-setup path aligned
+    -- with the repair migration so clients never read internal_only memory rows.
+    public.auth_is_trainer_user(trainer_id)
+    OR (
+      public.auth_is_client_user(client_id)
+      AND COALESCE(LOWER(value_json ->> 'visibility'), 'internal_only') <> 'internal_only'
+    )
   );
 
 CREATE POLICY coach_memory_insert_trainer ON public.coach_memory

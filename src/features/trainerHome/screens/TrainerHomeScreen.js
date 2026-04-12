@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 
 import {
@@ -102,7 +102,7 @@ export default function TrainerHomeScreen({
       }));
   }, [rules]);
 
-  const loadDocuments = async () => {
+  const loadDocuments = useCallback(async () => {
     if (!accessToken) {
       return;
     }
@@ -116,9 +116,9 @@ export default function TrainerHomeScreen({
     } finally {
       setIsLoadingDocuments(false);
     }
-  };
+  }, [accessToken]);
 
-  const loadRules = async () => {
+  const loadRules = useCallback(async () => {
     if (!accessToken || !TRAINER_AGENT_LAB_ENABLED) {
       setRules([]);
       setIsLoadingRules(false);
@@ -136,15 +136,15 @@ export default function TrainerHomeScreen({
     } finally {
       setIsLoadingRules(false);
     }
-  };
+  }, [accessToken]);
 
-  const refreshAll = async () => {
+  const refreshAll = useCallback(async () => {
     await Promise.all([loadDocuments(), loadRules()]);
-  };
+  }, [loadDocuments, loadRules]);
 
   useEffect(() => {
     refreshAll();
-  }, [accessToken]);
+  }, [refreshAll]);
 
   const runKnowledgeSave = async ({
     incomingTitle,

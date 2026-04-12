@@ -656,16 +656,15 @@ BEGIN
     SELECT 1 FROM pg_policies
     WHERE schemaname = 'public' AND tablename = 'coach_memory' AND policyname = 'coach_memory_select_visible'
   ) THEN
+    -- Post-2026-04-12 safety fix: embed the hardened visibility guard so
+    -- fresh provisioning cannot recreate the internal_only exposure bug.
     CREATE POLICY coach_memory_select_visible ON public.coach_memory
       FOR SELECT TO authenticated
       USING (
-        EXISTS (
-          SELECT 1
-          FROM public.clients c
-          JOIN public.trainers t ON t.id = c.assigned_trainer_id
-          WHERE c.id = coach_memory.client_id
-            AND (c.user_id = auth.uid() OR t.user_id = auth.uid())
-            AND t.id = coach_memory.trainer_id
+        public.auth_is_trainer_user(trainer_id)
+        OR (
+          public.auth_is_client_user(client_id)
+          AND COALESCE(LOWER(value_json ->> 'visibility'), 'internal_only') <> 'internal_only'
         )
       );
   END IF;

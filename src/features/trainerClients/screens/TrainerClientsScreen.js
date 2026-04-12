@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
 
 import {
@@ -176,9 +176,11 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   const [editingVisibility, setEditingVisibility] = useState('internal_only');
   const [editingTagsText, setEditingTagsText] = useState('');
 
-  const clientItems = Array.isArray(commandCenterPayload?.clients)
-    ? commandCenterPayload.clients
-    : [];
+  const clientItems = useMemo(() => (
+    Array.isArray(commandCenterPayload?.clients)
+      ? commandCenterPayload.clients
+      : []
+  ), [commandCenterPayload?.clients]);
 
   const selectedClientFromList = useMemo(
     () => clientItems.find((item) => item.client_id === selectedClientId) || null,
@@ -201,7 +203,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     return clientItems;
   }, [clientItems, priorityFilter]);
 
-  const loadCommandCenter = async ({
+  const loadCommandCenter = useCallback(async ({
     refreshTalkingPoints = false,
     silent = false,
   } = {}) => {
@@ -231,9 +233,9 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         setIsRefreshingTalkingPoints(false);
       }
     }
-  };
+  }, [accessToken]);
 
-  const loadClientDetailView = async (clientId) => {
+  const loadClientDetailView = useCallback(async (clientId) => {
     if (!accessToken || !clientId) {
       return;
     }
@@ -255,11 +257,11 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     } finally {
       setIsLoadingDetail(false);
     }
-  };
+  }, [accessToken]);
 
   useEffect(() => {
     loadCommandCenter();
-  }, [accessToken]);
+  }, [loadCommandCenter]);
 
   const handleOpenClientDetail = async (clientId) => {
     setSelectedClientId(clientId);
