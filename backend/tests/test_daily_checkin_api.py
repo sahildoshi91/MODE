@@ -920,7 +920,30 @@ class DailyCheckinServiceTests(unittest.TestCase):
 
         self.assertIn("warmup descriptions", prompt[0]["content"].lower())
         self.assertIn("selected environment and exact time available", prompt[0]["content"].lower())
+        self.assertIn("do not use emoji", prompt[0]["content"].lower())
         self.assertIn("make the warmup specific and descriptive", prompt[1]["content"].lower())
+        self.assertIn("emoji-free", prompt[1]["content"].lower())
+
+    def test_fallback_training_plan_supports_hotel_room_environment(self):
+        service = DailyCheckinService(repository=None)
+        inputs = DailyCheckinInputs(sleep=4, stress=3, soreness=3, nutrition=4, motivation=4)
+
+        hotel_plan = service._build_fallback_plan(
+            plan_type=PlanType.TRAINING,
+            mode="BUILD",
+            inputs=inputs,
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.TRAINING,
+                environment=Environment.HOTEL_ROOM,
+                time_available=30,
+            ),
+            profile={},
+            last_workout=None,
+        )
+
+        self.assertIn("hotel room", hotel_plan.title.lower())
+        self.assertEqual(hotel_plan.exercises[0].name, "Suitcase squat")
 
     def test_generate_plan_requires_time_available_for_training(self):
         class GeneratePlanRepository:

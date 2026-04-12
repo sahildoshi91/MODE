@@ -12,6 +12,18 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
+import {
+  BedSingle,
+  Clock3,
+  Dumbbell,
+  Flame,
+  Info,
+  Lightbulb,
+  PersonStanding,
+  PlayCircle,
+  Snowflake,
+  TreePine,
+} from 'lucide-react-native';
 
 import {
   HeaderBar,
@@ -25,6 +37,7 @@ import { theme } from '../../../../lib/theme';
 import { SHOW_DEV_CONNECTION_DEBUG } from '../../../config/featureFlags';
 import { getApiDebugInfo } from '../../../services/apiBaseUrl';
 import { getApiRequestDebugState } from '../../../services/apiRequest';
+import { resolveTrainingItemVisual, TRAINING_ITEM_SECTIONS } from './trainingVisuals';
 import {
   generateCheckinPlan,
   getPreviousCheckin,
@@ -223,41 +236,30 @@ const TIME_OPTIONS = [10, 30, 45, 60];
 const ENVIRONMENT_OPTIONS = [
   {
     value: 'full_gym',
-    emoji: '🏋️',
+    Icon: Dumbbell,
     label: 'Full Gym',
     description: 'Barbells, racks, machines',
   },
   {
-    value: 'home_gym',
-    emoji: '🏠',
-    label: 'Home Gym',
-    description: 'Your setup at home',
-  },
-  {
     value: 'hotel_room',
-    emoji: '🏨',
+    Icon: BedSingle,
     label: 'Hotel Room',
-    description: 'Minimal equipment',
+    description: 'Travel-ready, minimal equipment',
   },
   {
     value: 'outdoors',
-    emoji: '🌳',
+    Icon: TreePine,
     label: 'Outdoors',
     description: 'Track, trail, park',
   },
   {
     value: 'bodyweight',
-    emoji: '🤸',
+    Icon: PersonStanding,
     label: 'Bodyweight',
     description: 'No equipment needed',
   },
-  {
-    value: 'limited',
-    emoji: '⏱️',
-    label: 'Limited',
-    description: 'Tight setup today',
-  },
 ];
+const TRAINING_TEXT_EMOJI_PATTERN = /[\u200D\uFE0F\u{1F1E6}-\u{1F1FF}\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu;
 
 function getLocalDateString() {
   const now = new Date();
@@ -541,6 +543,58 @@ function getCoachName(mode) {
   return COACH_BY_MODE[mode] || 'Coach';
 }
 
+function sanitizeTrainingText(value) {
+  if (typeof value !== 'string') {
+    return value ?? '';
+  }
+
+  return value
+    .replace(TRAINING_TEXT_EMOJI_PATTERN, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+function sanitizeTrainingPlan(plan) {
+  if (!plan || typeof plan !== 'object') {
+    return null;
+  }
+
+  return {
+    ...plan,
+    title: sanitizeTrainingText(plan.title),
+    description: sanitizeTrainingText(plan.description),
+    difficulty: sanitizeTrainingText(plan.difficulty),
+    coachNote: sanitizeTrainingText(plan.coachNote),
+    warmup: Array.isArray(plan.warmup)
+      ? plan.warmup.map((item) => ({
+        ...item,
+        name: sanitizeTrainingText(item?.name),
+        duration: sanitizeTrainingText(item?.duration),
+        description: sanitizeTrainingText(item?.description),
+      }))
+      : [],
+    exercises: Array.isArray(plan.exercises)
+      ? plan.exercises.map((exercise) => ({
+        ...exercise,
+        name: sanitizeTrainingText(exercise?.name),
+        reps: sanitizeTrainingText(exercise?.reps),
+        rest: sanitizeTrainingText(exercise?.rest),
+        muscleGroup: sanitizeTrainingText(exercise?.muscleGroup),
+        description: sanitizeTrainingText(exercise?.description),
+        coachTip: sanitizeTrainingText(exercise?.coachTip),
+      }))
+      : [],
+    cooldown: Array.isArray(plan.cooldown)
+      ? plan.cooldown.map((item) => ({
+        ...item,
+        name: sanitizeTrainingText(item?.name),
+        duration: sanitizeTrainingText(item?.duration),
+        description: sanitizeTrainingText(item?.description),
+      }))
+      : [],
+  };
+}
+
 function buildWorkoutSummary(plan) {
   if (!plan || typeof plan !== 'object') {
     return null;
@@ -697,6 +751,7 @@ function ResultCard({
             accent={theme.colors.brand.progressSuccess}
             onPress={onBuildTraining}
             style={styles.bundleActionCard}
+            testID="build-training-routine-action"
           />
         ) : null}
       </View>
@@ -934,10 +989,12 @@ function PlanActionCard({
   accent,
   onPress,
   style,
+  testID,
 }) {
   return (
     <Pressable
       onPress={onPress}
+      testID={testID}
       style={({ pressed }) => [
         styles.planActionCard,
         style,
@@ -987,28 +1044,118 @@ function PreviousContextToggle({ previousCheckin, isLoadingPreviousCheckin, incl
   );
 }
 
+function TrainingIconBadge({
+  Icon,
+  icon,
+  color = theme.colors.brand.progressCore,
+  backgroundColor = withAlpha(theme.colors.brand.progressCore, 0.14),
+  borderColor = withAlpha(theme.colors.brand.progressCore, 0.22),
+  size = 18,
+  style,
+  testID,
+}) {
+  const ResolvedIcon = icon?.Icon || Icon;
+  const strokeWidth = icon?.strokeWidth || 2.1;
+
+  if (!ResolvedIcon) {
+    return null;
+  }
+
+  return (
+    <View
+      testID={testID}
+      style={[
+        styles.trainingIconBadge,
+        { backgroundColor, borderColor },
+        style,
+      ]}
+    >
+      <ResolvedIcon color={color} size={size} strokeWidth={strokeWidth} />
+    </View>
+  );
+}
+
+function TrainingSectionHeader({ Icon, title, iconTestID }) {
+  return (
+    <View style={styles.sectionHeaderRow}>
+      <TrainingIconBadge Icon={Icon} size={16} testID={iconTestID} />
+      <Text style={styles.sectionTitleInline}>{title}</Text>
+    </View>
+  );
+}
+
+function TrainingItemIconBadge({
+  section,
+  item,
+  testID,
+  style,
+  size = 15,
+}) {
+  const visual = resolveTrainingItemVisual({
+    section,
+    name: item?.name,
+    description: item?.description,
+    muscleGroup: item?.muscleGroup,
+  });
+
+  return (
+    <TrainingIconBadge
+      icon={visual.icon}
+      color={visual.badgeColors.color}
+      backgroundColor={visual.badgeColors.backgroundColor}
+      borderColor={visual.badgeColors.borderColor}
+      size={size}
+      style={style}
+      testID={testID}
+    />
+  );
+}
+
 function TrainingPlanView({ plan, expandedExercises, onToggleExercise, bottomPadding = 120 }) {
   if (!plan) {
     return null;
   }
 
+  const displayPlan = sanitizeTrainingPlan(plan);
+
   return (
     <ScrollView contentContainerStyle={[styles.planScrollContent, { paddingBottom: bottomPadding }]}>
       <View style={styles.trainingHeaderCard}>
-        <Text style={styles.trainingTitle}>💪 {plan.title}</Text>
-        <Text style={styles.trainingDescription}>{plan.description}</Text>
+        <View style={styles.trainingHeaderRow}>
+          <TrainingIconBadge
+            Icon={Dumbbell}
+            size={20}
+            style={styles.trainingHeaderIconBadge}
+            testID="training-section-icon-title"
+          />
+          <View style={styles.trainingHeaderCopy}>
+            <Text style={styles.trainingTitle}>{displayPlan.title}</Text>
+            {displayPlan.description ? (
+              <Text style={styles.trainingDescription}>{displayPlan.description}</Text>
+            ) : null}
+          </View>
+        </View>
         <View style={styles.metaRow}>
-          <Text style={styles.metaPill}>{plan.difficulty}</Text>
-          <Text style={styles.metaPill}>{plan.durationMinutes} min</Text>
-          <Text style={styles.metaPill}>{(plan.exercises || []).length} exercises</Text>
+          <Text style={styles.metaPill}>{displayPlan.difficulty}</Text>
+          <Text style={styles.metaPill}>{displayPlan.durationMinutes} min</Text>
+          <Text style={styles.metaPill}>{(displayPlan.exercises || []).length} exercises</Text>
         </View>
       </View>
 
       <View style={styles.sectionCard}>
-        <Text style={styles.sectionTitle}>🔥 Warm-Up</Text>
-        {(plan.warmup || []).map((item, index) => (
+        <TrainingSectionHeader
+          Icon={Flame}
+          title="Warm-Up"
+          iconTestID="training-section-icon-warmup"
+        />
+        {(displayPlan.warmup || []).map((item, index) => (
           <View key={`warmup-${index}`} style={styles.simpleRow}>
-            <View style={[styles.simpleDot, { backgroundColor: theme.colors.emotional.warmGold }]} />
+            <TrainingItemIconBadge
+              section={TRAINING_ITEM_SECTIONS.WARMUP}
+              item={item}
+              testID={`training-warmup-item-icon-${index}`}
+              style={styles.simpleIconBadge}
+            />
             <View style={styles.simpleBody}>
               <Text style={styles.simpleName}>{item.name}</Text>
               {item.description ? <Text style={styles.simpleDesc}>{item.description}</Text> : null}
@@ -1019,13 +1166,22 @@ function TrainingPlanView({ plan, expandedExercises, onToggleExercise, bottomPad
       </View>
 
       <View style={styles.sectionCard}>
-        <Text style={styles.sectionTitle}>💪 Main Workout</Text>
-        {(plan.exercises || []).map((exercise, index) => {
+        <TrainingSectionHeader
+          Icon={Dumbbell}
+          title="Main Workout"
+          iconTestID="training-section-icon-main"
+        />
+        {(displayPlan.exercises || []).map((exercise, index) => {
           const expanded = Boolean(expandedExercises[index]);
           return (
             <View key={`exercise-${index}`} style={styles.exerciseCard}>
               <View style={styles.exerciseTopRow}>
-                <View style={styles.exerciseNumber}><Text style={styles.exerciseNumberText}>{index + 1}</Text></View>
+                <TrainingItemIconBadge
+                  section={TRAINING_ITEM_SECTIONS.MAIN}
+                  item={exercise}
+                  testID={`training-main-exercise-icon-${index}`}
+                  style={styles.exerciseLeadingIconBadge}
+                />
                 <View style={styles.exerciseBody}>
                   <Text style={styles.exerciseName}>{exercise.name}</Text>
                   <View style={styles.exerciseMetaRow}>
@@ -1034,18 +1190,42 @@ function TrainingPlanView({ plan, expandedExercises, onToggleExercise, bottomPad
                     <Text style={styles.exerciseChip}>{exercise.rest}</Text>
                   </View>
                 </View>
-                <Pressable onPress={() => onToggleExercise(index)} style={styles.chevronButton}>
+                <Pressable
+                  onPress={() => onToggleExercise(index)}
+                  style={styles.chevronButton}
+                  testID={`training-exercise-toggle-${index}`}
+                >
                   <Feather name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={theme.colors.textMedium} />
                 </Pressable>
               </View>
               {expanded ? (
                 <View style={styles.exerciseExpanded}>
-                  <Text style={styles.exerciseDetail}>ℹ️ {exercise.description}</Text>
-                  <View style={styles.coachTipBox}>
-                    <Text style={styles.coachTipText}>💡 {exercise.coachTip}</Text>
-                  </View>
+                  {exercise.description ? (
+                    <View style={styles.exerciseDetailRow}>
+                      <TrainingIconBadge
+                        Icon={Info}
+                        size={14}
+                        style={styles.exerciseDetailIconBadge}
+                        testID={`training-exercise-detail-icon-${index}`}
+                      />
+                      <Text style={styles.exerciseDetail}>{exercise.description}</Text>
+                    </View>
+                  ) : null}
+                  {exercise.coachTip ? (
+                    <View style={styles.coachTipBox}>
+                      <View style={styles.exerciseDetailRow}>
+                        <TrainingIconBadge
+                          Icon={Lightbulb}
+                          size={14}
+                          style={styles.exerciseDetailIconBadge}
+                          testID={`training-exercise-tip-icon-${index}`}
+                        />
+                        <Text style={styles.coachTipText}>{exercise.coachTip}</Text>
+                      </View>
+                    </View>
+                  ) : null}
                   <View style={styles.videoPlaceholder}>
-                    <Feather name="play-circle" size={24} color={theme.colors.textHigh} />
+                    <PlayCircle color={theme.colors.textHigh} size={22} strokeWidth={2.1} />
                     <Text style={styles.videoPlaceholderText}>Video Placeholder</Text>
                   </View>
                 </View>
@@ -1056,10 +1236,19 @@ function TrainingPlanView({ plan, expandedExercises, onToggleExercise, bottomPad
       </View>
 
       <View style={styles.sectionCard}>
-        <Text style={styles.sectionTitle}>🧊 Cool-Down</Text>
-        {(plan.cooldown || []).map((item, index) => (
+        <TrainingSectionHeader
+          Icon={Snowflake}
+          title="Cool-Down"
+          iconTestID="training-section-icon-cooldown"
+        />
+        {(displayPlan.cooldown || []).map((item, index) => (
           <View key={`cooldown-${index}`} style={styles.simpleRow}>
-            <View style={[styles.simpleDot, { backgroundColor: theme.colors.brand.progressSoft }]} />
+            <TrainingItemIconBadge
+              section={TRAINING_ITEM_SECTIONS.COOLDOWN}
+              item={item}
+              testID={`training-cooldown-item-icon-${index}`}
+              style={styles.simpleIconBadge}
+            />
             <View style={styles.simpleBody}>
               <Text style={styles.simpleName}>{item.name}</Text>
               {item.description ? <Text style={styles.simpleDesc}>{item.description}</Text> : null}
@@ -1070,24 +1259,31 @@ function TrainingPlanView({ plan, expandedExercises, onToggleExercise, bottomPad
       </View>
 
       <View style={styles.coachNoteCard}>
-        <Text style={styles.coachNoteText}>{plan.coachNote}</Text>
+        <Text style={styles.coachNoteText}>{displayPlan.coachNote}</Text>
       </View>
     </ScrollView>
   );
 }
 
 function GuidedWorkoutView({ plan, elapsedSeconds, guidedStatus, bottomPadding = 120 }) {
+  const displayPlan = sanitizeTrainingPlan(plan);
+
   return (
     <ScrollView contentContainerStyle={[styles.planScrollContent, { paddingBottom: bottomPadding }]}>
       <View style={styles.guidedHeroCard}>
         <Text style={styles.guidedEyebrow}>Guided Workout</Text>
-        <Text style={styles.guidedTitle}>{plan?.title}</Text>
+        <Text style={styles.guidedTitle}>{displayPlan?.title}</Text>
         <Text style={styles.guidedTimer}>{formatDuration(elapsedSeconds)}</Text>
         <Text style={styles.guidedStatus}>Status: {guidedStatus}</Text>
       </View>
-      {(plan?.exercises || []).map((exercise, index) => (
+      {(displayPlan?.exercises || []).map((exercise, index) => (
         <View key={`guided-${index}`} style={styles.guidedExerciseRow}>
-          <View style={styles.exerciseNumber}><Text style={styles.exerciseNumberText}>{index + 1}</Text></View>
+          <TrainingItemIconBadge
+            section={TRAINING_ITEM_SECTIONS.GUIDED}
+            item={exercise}
+            testID={`training-guided-exercise-icon-${index}`}
+            style={styles.guidedExerciseIconBadge}
+          />
           <View style={styles.exerciseBody}>
             <Text style={styles.exerciseName}>{exercise.name}</Text>
             <Text style={styles.simpleDesc}>{exercise.sets}x{exercise.reps} • Rest {exercise.rest}</Text>
@@ -1807,8 +2003,9 @@ export default function DailyCheckinScreen({
   const resolvedFloatingNavClearance = typeof floatingNavClearance === 'number'
     ? floatingNavClearance
     : inferredFloatingNavClearance;
-  const planPrimaryCtaBottom = resolvedFloatingNavClearance + 8;
-  const planCtaOffset = planPrimaryCtaBottom + 88;
+  const planPrimaryCtaBottom = resolvedFloatingNavClearance + 2;
+  const planCtaOffset = planPrimaryCtaBottom + 64;
+  const guidedWorkoutCtaOffset = bottomInset + 116;
 
   return (
     <SafeScreen includeTopInset={false} style={styles.screen}>
@@ -1960,37 +2157,65 @@ export default function DailyCheckinScreen({
                   <View style={styles.environmentGrid}>
                     {ENVIRONMENT_OPTIONS.map((option) => {
                       const selected = environment === option.value;
+                      const Icon = option.Icon;
                       return (
                         <Pressable
                           key={option.value}
                           onPress={() => setEnvironment(option.value)}
+                          testID={`environment-option-${option.value}`}
+                          accessibilityState={{ selected }}
                           style={({ pressed }) => [
                             styles.environmentCard,
                             selected && styles.environmentCardSelected,
                             pressed && styles.environmentCardPressed,
                           ]}
                         >
-                          <Text style={styles.environmentEmoji}>{option.emoji}</Text>
+                          <TrainingIconBadge
+                            Icon={Icon}
+                            size={18}
+                            style={[
+                              styles.environmentIconBadge,
+                              selected && styles.environmentIconBadgeSelected,
+                            ]}
+                            testID={`environment-option-icon-${option.value}`}
+                          />
                           <Text style={styles.environmentLabel}>{option.label}</Text>
                           <Text style={styles.environmentDesc}>{option.description}</Text>
                         </Pressable>
                       );
                     })}
                   </View>
-                  <Text style={styles.sectionHeading}>Time available</Text>
-                  <View style={styles.timePillRow}>
-                    {TIME_OPTIONS.map((minutes) => {
-                      const selected = timeAvailable === minutes;
-                      return (
-                        <Pressable
-                          key={minutes}
-                          onPress={() => setTimeAvailable(minutes)}
-                          style={[styles.timePill, selected && styles.timePillSelected]}
-                        >
-                          <Text style={[styles.timePillText, selected && styles.timePillTextSelected]}>{minutes}m</Text>
-                        </Pressable>
-                      );
-                    })}
+                  <View style={styles.timeSelectorRow} testID="training-time-row">
+                    <View style={styles.timeLabelRow}>
+                      <TrainingIconBadge
+                        Icon={Clock3}
+                        size={16}
+                        style={styles.timeIconBadge}
+                        testID="training-time-icon"
+                      />
+                      <Text style={styles.timeLabel}>Time available</Text>
+                    </View>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.timePillRow}
+                      style={styles.timePillScroller}
+                      testID="training-time-scroller"
+                    >
+                      {TIME_OPTIONS.map((minutes) => {
+                        const selected = timeAvailable === minutes;
+                        return (
+                          <Pressable
+                            key={minutes}
+                            onPress={() => setTimeAvailable(minutes)}
+                            testID={`training-time-pill-${minutes}`}
+                            style={[styles.timePill, selected && styles.timePillSelected]}
+                          >
+                            <Text style={[styles.timePillText, selected && styles.timePillTextSelected]}>{minutes}m</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </ScrollView>
                   </View>
                 </>
               ) : (
@@ -2131,12 +2356,28 @@ export default function DailyCheckinScreen({
                     onToggleExercise={handleToggleExercise}
                     bottomPadding={planCtaOffset}
                   />
-                  <View style={[styles.bottomCtaBar, styles.bottomSingleCtaBar, { bottom: planPrimaryCtaBottom }]}>
-                    <ModeButton
-                      title="Begin Guided Workout"
+                  <View style={[styles.guidedActionDock, { bottom: planPrimaryCtaBottom }]}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Begin Guided Workout"
                       onPress={handleBeginGuidedWorkout}
-                      style={[styles.guidedButton, styles.guidedButtonPrimary]}
-                    />
+                      testID="guided-workout-compact-cta"
+                      style={({ pressed }) => [
+                        styles.guidedActionButton,
+                        pressed && styles.guidedActionButtonPressed,
+                      ]}
+                    >
+                      <TrainingIconBadge
+                        Icon={PlayCircle}
+                        size={16}
+                        style={styles.guidedActionIconBadge}
+                        backgroundColor={withAlpha(theme.colors.surface.base, 0.18)}
+                        borderColor={withAlpha(theme.colors.surface.base, 0.22)}
+                        color={theme.colors.text.inverse}
+                        testID="guided-workout-compact-cta-icon"
+                      />
+                      <Text style={styles.guidedActionLabel}>Begin guided workout</Text>
+                    </Pressable>
                     {logFeedback ? <Text style={styles.logFeedback}>{logFeedback}</Text> : null}
                   </View>
                 </>
@@ -2145,8 +2386,12 @@ export default function DailyCheckinScreen({
               {!planLoading && !planError && !structuredPlan && planContent ? (
                 <ScrollView contentContainerStyle={[styles.planScrollContent, { paddingBottom: planCtaOffset }]}>
                   <View style={styles.sectionCard}>
-                    <Text style={styles.sectionTitle}>Generated Content</Text>
-                    <Text style={styles.simpleDesc}>{planContent}</Text>
+                    <TrainingSectionHeader
+                      Icon={Info}
+                      title="Generated Content"
+                      iconTestID="training-section-icon-content"
+                    />
+                    <Text style={styles.simpleDesc}>{sanitizeTrainingText(planContent)}</Text>
                   </View>
                 </ScrollView>
               ) : null}
@@ -2260,7 +2505,7 @@ export default function DailyCheckinScreen({
             plan={structuredPlan}
             elapsedSeconds={elapsedSeconds}
             guidedStatus={guidedStatus}
-            bottomPadding={planCtaOffset}
+            bottomPadding={guidedWorkoutCtaOffset}
           />
 
           <View style={[styles.bottomCtaBar, { bottom: bottomInset }]}>
@@ -2881,9 +3126,20 @@ const styles = StyleSheet.create({
   environmentCardPressed: {
     transform: [{ scale: 0.99 }],
   },
-  environmentEmoji: {
-    fontSize: 20,
-    marginBottom: 6,
+  trainingIconBadge: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  environmentIconBadge: {
+    marginBottom: 10,
+  },
+  environmentIconBadgeSelected: {
+    backgroundColor: withAlpha(theme.colors.primary, 0.16),
+    borderColor: withAlpha(theme.colors.primary, 0.26),
   },
   environmentLabel: {
     color: theme.colors.textHigh,
@@ -2899,18 +3155,46 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textAlign: 'center',
   },
+  timeSelectorRow: {
+    marginTop: theme.spacing[3],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  timeLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
+  timeIconBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+  },
+  timeLabel: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+  },
+  timePillScroller: {
+    flex: 1,
+  },
   timePillRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+    gap: 6,
+    paddingRight: 2,
   },
   timePill: {
     borderWidth: 1,
     borderColor: theme.colors.border.soft,
     borderRadius: 999,
-    paddingHorizontal: 14,
+    minWidth: 52,
+    paddingHorizontal: 12,
     paddingVertical: 8,
     backgroundColor: theme.colors.surface.base,
+    alignItems: 'center',
   },
   timePillSelected: {
     backgroundColor: withAlpha(theme.colors.primary, 0.1),
@@ -3086,6 +3370,19 @@ const styles = StyleSheet.create({
     borderColor: withAlpha(theme.colors.brand.progressCore, 0.34),
     padding: theme.spacing[3],
   },
+  trainingHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  trainingHeaderIconBadge: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+  },
+  trainingHeaderCopy: {
+    flex: 1,
+  },
   trainingTitle: {
     color: theme.colors.textHigh,
     ...theme.typography.h3,
@@ -3129,16 +3426,31 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginBottom: theme.spacing[2],
   },
-  simpleRow: {
+  sectionHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
+    marginBottom: theme.spacing[2],
+  },
+  sectionTitleInline: {
+    color: theme.colors.textHigh,
+    ...theme.typography.body1,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
+    flex: 1,
+  },
+  simpleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     paddingVertical: 8,
   },
-  simpleDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  simpleIconBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     marginRight: 10,
+    marginTop: 1,
+    flexShrink: 0,
   },
   simpleBody: {
     flex: 1,
@@ -3159,6 +3471,8 @@ const styles = StyleSheet.create({
     color: theme.colors.textMedium,
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
+    paddingTop: 3,
+    paddingLeft: 10,
   },
   exerciseCard: {
     borderWidth: 1,
@@ -3173,20 +3487,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 10,
   },
-  exerciseNumber: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: withAlpha(theme.colors.primary, 0.3),
+  exerciseLeadingIconBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     marginRight: 8,
-  },
-  exerciseNumberText: {
-    color: theme.colors.textHigh,
-    ...theme.typography.body3,
-    fontFamily: theme.typography.fontFamily,
-    fontWeight: '700',
+    marginTop: 2,
+    flexShrink: 0,
+    alignSelf: 'flex-start',
   },
   exerciseBody: {
     flex: 1,
@@ -3223,10 +3531,22 @@ const styles = StyleSheet.create({
     padding: 10,
     gap: 8,
   },
+  exerciseDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  exerciseDetailIconBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    marginTop: 1,
+  },
   exerciseDetail: {
     color: theme.colors.textMedium,
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
+    flex: 1,
   },
   coachTipBox: {
     borderRadius: 10,
@@ -3239,6 +3559,7 @@ const styles = StyleSheet.create({
     color: theme.colors.textHigh,
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
+    flex: 1,
   },
   videoPlaceholder: {
     borderRadius: 10,
@@ -3310,6 +3631,49 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+  },
+  guidedExerciseIconBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    marginTop: 2,
+    flexShrink: 0,
+    alignSelf: 'flex-start',
+  },
+  guidedActionDock: {
+    position: 'absolute',
+    left: theme.spacing[3],
+    right: theme.spacing[3],
+    alignItems: 'center',
+    gap: 8,
+  },
+  guidedActionButton: {
+    minHeight: 46,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: withAlpha(theme.colors.brand.progressCore, 0.16),
+    backgroundColor: theme.colors.brand.progressCore,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    alignSelf: 'center',
+  },
+  guidedActionButtonPressed: {
+    opacity: 0.88,
+    transform: [{ scale: 0.99 }],
+  },
+  guidedActionIconBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+  },
+  guidedActionLabel: {
+    color: theme.colors.text.inverse,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '700',
   },
   bottomCtaBar: {
     position: 'absolute',

@@ -668,7 +668,8 @@ class DailyCheckinService:
                 " Build a workout that treats the selected environment and exact time available as hard constraints. "
                 "Use warmup descriptions that explain the movement focus and why that block prepares the athlete for the main work. "
                 "Make the exercise selection feel specific to the day's readiness, not like a generic template. "
-                "Change block structure, exercise selection, and pacing when environment or time changes."
+                "Change block structure, exercise selection, and pacing when environment or time changes. "
+                "Do not use emoji in any training-plan field."
             )
         workout_context = self._build_workout_context(
             generated_plan_id=None,
@@ -724,7 +725,7 @@ class DailyCheckinService:
                 "content": (
                     f"Build a {request.plan_type.value} plan using this context:\n"
                     f"{json.dumps(request_details)}\n"
-                    "If this is a training plan, make the warmup specific and descriptive, and make the main work match the selected environment and time cap.\n"
+                    "If this is a training plan, make the warmup specific and descriptive, make the main work match the selected environment and time cap, and keep every field emoji-free.\n"
                     f"Return JSON matching exactly this schema:\n{schema_text}"
                 ),
             },
