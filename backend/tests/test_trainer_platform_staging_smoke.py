@@ -13,7 +13,7 @@ from supabase.lib.client_options import SyncClientOptions
 
 from app.ai.client import GeminiCompletion, TokenUsage
 from app.core.config import settings
-from app.db.client import get_supabase_admin_client
+from app.db.client import get_supabase_admin_client, get_supabase_user_client
 from app.main import app
 
 
@@ -244,6 +244,54 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
             headers=self._headers(self.trainer_2_access_token),
         )
         self.assertEqual(trainer_2_cross_response.status_code, 404, trainer_2_cross_response.text)
+
+    def test_client_tokens_cannot_read_internal_only_coach_memory(self):
+        inserted_rows = self.admin.table("coach_memory").insert(
+            {
+                "trainer_id": self.trainer_1_id,
+                "client_id": self.client_1_id,
+                "memory_type": "note",
+                "memory_key": f"internal-only-visibility-{self.run_id}",
+                "value_json": {
+                    "visibility": "internal_only",
+                    "text": "Internal trainer note for RLS smoke coverage.",
+                },
+            }
+        ).execute().data or []
+        self.assertEqual(len(inserted_rows), 1)
+        memory_id = inserted_rows[0]["id"]
+
+        assigned_client_rows = (
+            get_supabase_user_client(self.client_1_access_token)
+            .table("coach_memory")
+            .select("id")
+            .eq("id", memory_id)
+            .execute()
+            .data
+        )
+        self.assertEqual(assigned_client_rows, [])
+
+        cross_tenant_client_rows = (
+            get_supabase_user_client(self.client_2_access_token)
+            .table("coach_memory")
+            .select("id")
+            .eq("id", memory_id)
+            .execute()
+            .data
+        )
+        self.assertEqual(cross_tenant_client_rows, [])
+
+        trainer_owner_rows = (
+            get_supabase_user_client(self.trainer_1_access_token)
+            .table("coach_memory")
+            .select("id, trainer_id, client_id")
+            .eq("id", memory_id)
+            .execute()
+            .data
+        )
+        self.assertEqual(len(trainer_owner_rows), 1)
+        self.assertEqual(trainer_owner_rows[0]["trainer_id"], self.trainer_1_id)
+        self.assertEqual(trainer_owner_rows[0]["client_id"], self.client_1_id)
 
     def test_trainer_review_outputs_are_scoped_to_current_trainer(self):
         self._send_chat(self.client_1_access_token, "Give me a quick progression adjustment.")

@@ -62,16 +62,42 @@ backend/
 
 - `POST /workouts/generate`
 - `POST /api/v1/chat`
+- `POST /api/v1/chat/stream`
+- `GET /api/v1/checkin/today`
+- `GET /api/v1/checkin/previous`
+- `GET /api/v1/checkin/progress`
+- `POST /api/v1/checkin`
+- `POST /api/v1/checkin/generate-plan`
+- `POST /api/v1/checkin/log-workout`
 - `GET /api/v1/profiles/me`
 - `PATCH /api/v1/profiles/me`
 - `GET /api/v1/plans/active`
 - `POST /api/v1/plans/generate`
+- `GET /api/v1/trainer-assignment/status`
+- `POST /api/v1/trainer-assignment/assign`
+- `GET /api/v1/trainer-home/today`
+- `GET /api/v1/trainer-home/command-center`
+- `GET /api/v1/trainer-clients/{client_id}/detail`
+- `GET /api/v1/trainer-clients/{client_id}/memory`
+- `POST /api/v1/trainer-clients/{client_id}/memory`
+- `PATCH /api/v1/trainer-clients/{client_id}/memory/{memory_id}`
+- `DELETE /api/v1/trainer-clients/{client_id}/memory/{memory_id}`
+- `GET /api/v1/trainer-clients/{client_id}/ai-context`
 - `GET /api/v1/trainer-personas`
 - `POST /api/v1/trainer-personas`
 - `GET /api/v1/trainer-knowledge`
 - `POST /api/v1/trainer-knowledge`
-- `GET /api/v1/trainer-review/queue`
-- `POST /api/v1/trainer-review/queue/{queue_id}/approve`
+- `POST /api/v1/trainer-knowledge/ingest`
+- `GET /api/v1/trainer-knowledge/rules`
+- `PATCH /api/v1/trainer-knowledge/rules/{rule_id}`
+- `DELETE /api/v1/trainer-knowledge/rules/{rule_id}`
+- `GET /api/v1/trainer-review/outputs`
+- `GET /api/v1/trainer-review/outputs/{output_id}`
+- `POST /api/v1/trainer-review/outputs/{output_id}/edit`
+- `POST /api/v1/trainer-review/outputs/{output_id}/approve`
+- `POST /api/v1/trainer-review/outputs/{output_id}/reject`
+- Legacy: `GET /api/v1/trainer-review/queue`
+- Legacy: `POST /api/v1/trainer-review/queue/{queue_id}/approve`
 
 ## Supabase Setup
 

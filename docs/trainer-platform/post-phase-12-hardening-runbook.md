@@ -6,6 +6,7 @@ Apply these SQL files in staging in this exact order:
 1. `backend/sql/20260411_create_trainer_rules_and_versions.sql`
 2. `backend/sql/20260411b_create_trainer_talking_points_and_memory_indexes.sql`
 3. `backend/sql/20260411c_create_ai_review_outputs_and_feedback.sql`
+4. `backend/sql/20260412_fix_coach_memory_internal_visibility_rls.sql`
 
 After migration apply, run:
 
@@ -15,6 +16,7 @@ Expected outcome:
 - All five tables exist.
 - RLS is enabled and forced for all five.
 - Expected trainer-owner policies are present.
+- `coach_memory` no longer exposes `internal_only` rows to client tokens.
 
 ## 2) Guarded staging rollout (orchestration off -> on)
 Keep orchestration off for baseline:
