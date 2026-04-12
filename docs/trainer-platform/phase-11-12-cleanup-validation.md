@@ -67,3 +67,44 @@
 - Frontend static lint coverage remains limited while repo lacks `eslint.config.*`.
 - Migration drift remains possible if environments skip incremental SQL order.
 - Orchestration output quality drift is possible without staged parity checks.
+
+## Staging Hardening Evidence
+- Date executed: 2026-04-11 (`America/Los_Angeles`).
+- Verification SQL status: user reported running `backend/sql/20260411d_verify_trainer_platform_rls.sql` in Supabase and it passed without a `coach_memory` verification exception.
+- Artifact directory: `/tmp/mode_stage_hardening_20260411_182918`
+- Orchestration schema preflight:
+  - `workouts.feel_rating` query succeeded.
+  - Sample artifact: `feel_rating_preflight.json`
+- Baseline staging command:
+  - `cd backend && TRAINER_INTELLIGENCE_ORCHESTRATION_ENABLED=false MODE_RUN_STAGING_SUPABASE_TESTS=1 ./venv/bin/pytest -q tests/test_chat_api_staging_integration.py tests/test_daily_checkin_staging_integration.py tests/test_trainer_platform_staging_smoke.py`
+  - Result: `9 passed, 134 warnings in 96.18s (0:01:36)`
+  - Warnings were Supabase client deprecation warnings for `timeout` and `verify`; no auth/RLS failures or unexpected 5xx errors were observed.
+- Baseline orchestration metadata probe:
+  - Artifact: `staging_off_probe.json`
+  - Sample:
+    - `enabled=false`
+    - `used=false`
+    - `fallback_reason=flag_disabled`
+    - assistant row timestamp: `2026-04-12T01:32:50.131653+00:00`
+- Orchestration-on staging command:
+  - `cd backend && TRAINER_INTELLIGENCE_ORCHESTRATION_ENABLED=true MODE_RUN_STAGING_SUPABASE_TESTS=1 ./venv/bin/pytest -q tests/test_chat_api_staging_integration.py tests/test_daily_checkin_staging_integration.py tests/test_trainer_platform_staging_smoke.py`
+  - Result: `9 passed, 142 warnings in 102.37s (0:01:42)`
+  - Warnings were Supabase client deprecation warnings for `timeout` and `verify`; no auth/RLS failures or unexpected 5xx errors were observed.
+- Orchestration-on metadata probe:
+  - Artifact: `staging_on_probe.json`
+  - Sample:
+    - `enabled=true`
+    - `used=true`
+    - `memory_count=1`
+    - `trainer_rules_count=0`
+    - no `fallback_reason` present
+    - assistant row timestamp: `2026-04-12T01:34:41.75303+00:00`
+- Functional parity verdict: `pass`
+  - Trainer routes worked for trainer users.
+  - Client and outsider trainer-route access remained blocked.
+  - Cross-trainer access remained blocked.
+  - `internal_only` coach memory remained hidden from client tokens.
+  - Chat and daily check-in persistence continued to pass under real RLS with orchestration both off and on.
+- Release owner: pending assignment.
+- Approver: pending assignment.
+- Signoff status: evidence captured, owner/approver entry still pending before promotion beyond staging.
