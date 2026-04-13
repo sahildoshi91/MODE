@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -9,12 +10,15 @@ from app.modules.trainer_knowledge.repository import TrainerKnowledgeRepository
 from app.modules.trainer_knowledge.schemas import (
     TrainerKnowledgeDocument,
     TrainerKnowledgeDocumentCreate,
+    TrainerKnowledgeDocumentUpdateRequest,
     TrainerKnowledgeExtractionSummary,
     TrainerKnowledgeIngestRequest,
-    TrainerKnowledgeIngestResponse,
+    TrainerKnowledgeSaveResponse,
     TrainerRule,
     TrainerRuleUpdateRequest,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TrainerKnowledgeService:
@@ -39,11 +43,9 @@ class TrainerKnowledgeService:
         self,
         trainer_context: TrainerContext,
         request: TrainerKnowledgeIngestRequest,
-    ) -> TrainerKnowledgeIngestResponse:
+    ) -> TrainerKnowledgeSaveResponse:
         if not trainer_context.trainer_id:
             raise ValueError("No trainer context found")
-        if not trainer_context.tenant_id:
-            raise ValueError("Trainer tenant context is missing")
 
         document_payload = request.model_dump()
         document_payload["trainer_id"] = trainer_context.trainer_id
@@ -52,43 +54,75 @@ class TrainerKnowledgeService:
 
         created_document = self.repository.create(document_payload)
         document = TrainerKnowledgeDocument(**created_document)
-
-        raw_text = (request.raw_text or "").strip()
-        if not raw_text:
-            return TrainerKnowledgeIngestResponse(
-                document=document,
-                extracted_rules=[],
-                extraction=TrainerKnowledgeExtractionSummary(
-                    strategy="deterministic",
-                    llm_attempted=False,
-                    llm_succeeded=False,
-                    fallback_reason="raw_text_missing",
-                    rules_created=0,
-                ),
-            )
-
-        extracted_candidates, extraction_summary = self.extractor.extract(
-            raw_text=raw_text,
-            title=request.title,
-        )
-        created_rules: list[TrainerRule] = []
-        for candidate in extracted_candidates:
-            created = self._create_extracted_rule(
-                trainer_context=trainer_context,
-                document=document,
-                candidate=candidate,
-            )
-            if created:
-                created_rules.append(TrainerRule(**created))
-
-        summary_payload = {
-            **extraction_summary,
-            "rules_created": len(created_rules),
-        }
-        return TrainerKnowledgeIngestResponse(
+        extracted_rules, extraction_summary = self._extract_and_persist_rules(
+            trainer_context=trainer_context,
             document=document,
-            extracted_rules=created_rules,
-            extraction=TrainerKnowledgeExtractionSummary(**summary_payload),
+            raw_text=(request.raw_text or ""),
+            title=request.title,
+            replace_document_rules=False,
+            archive_change_summary="Replaced due to document ingest",
+            create_change_summary="Created from Agent Lab ingest",
+        )
+        return TrainerKnowledgeSaveResponse(
+            document=document,
+            extracted_rules=extracted_rules,
+            extraction=extraction_summary,
+        )
+
+    def update_document(
+        self,
+        trainer_context: TrainerContext,
+        document_id: str,
+        request: TrainerKnowledgeDocumentUpdateRequest,
+    ) -> TrainerKnowledgeSaveResponse:
+        trainer_id = trainer_context.trainer_id
+        if not trainer_id:
+            raise ValueError("No trainer context found")
+
+        existing = self.repository.get_document(trainer_id, document_id)
+        if not existing:
+            raise ValueError("Document not found")
+
+        updates: dict[str, Any] = {}
+        if request.title is not None:
+            title = request.title.strip()
+            if not title:
+                raise ValueError("Title cannot be empty")
+            updates["title"] = title
+        if request.raw_text is not None:
+            raw_text = request.raw_text.strip()
+            if not raw_text:
+                raise ValueError("Raw text cannot be empty")
+            updates["raw_text"] = raw_text
+        if request.document_type is not None:
+            document_type = request.document_type.strip()
+            updates["document_type"] = document_type or "text"
+        if request.file_url is not None:
+            updates["file_url"] = request.file_url
+        if request.metadata is not None:
+            updates["metadata"] = request.metadata
+
+        updated_row = existing
+        if updates:
+            updated = self.repository.update_document(trainer_id, document_id, updates)
+            if not updated:
+                raise ValueError("Document update failed")
+            updated_row = updated
+
+        document = TrainerKnowledgeDocument(**updated_row)
+        extracted_rules, extraction_summary = self._extract_and_persist_rules(
+            trainer_context=trainer_context,
+            document=document,
+            raw_text=(document.raw_text or ""),
+            title=document.title,
+            replace_document_rules=True,
+            archive_change_summary="Archived due to knowledge document resave",
+            create_change_summary="Created from knowledge document resave",
+        )
+        return TrainerKnowledgeSaveResponse(
+            document=document,
+            extracted_rules=extracted_rules,
+            extraction=extraction_summary,
         )
 
     def list_rules(
@@ -193,6 +227,7 @@ class TrainerKnowledgeService:
         trainer_context: TrainerContext,
         document: TrainerKnowledgeDocument,
         candidate: dict[str, Any],
+        create_change_summary: str = "Created from Agent Lab ingest",
     ) -> dict[str, Any] | None:
         trainer_id = trainer_context.trainer_id
         tenant_id = trainer_context.tenant_id
@@ -227,9 +262,131 @@ class TrainerKnowledgeService:
             rule=created,
             version_number=1,
             change_type="created",
-            change_summary="Created from Agent Lab ingest",
+            change_summary=create_change_summary,
         )
         return created
+
+    def _extract_and_persist_rules(
+        self,
+        *,
+        trainer_context: TrainerContext,
+        document: TrainerKnowledgeDocument,
+        raw_text: str,
+        title: str | None,
+        replace_document_rules: bool,
+        archive_change_summary: str,
+        create_change_summary: str,
+    ) -> tuple[list[TrainerRule], TrainerKnowledgeExtractionSummary]:
+        normalized_raw_text = raw_text.strip()
+        if not normalized_raw_text:
+            return [], TrainerKnowledgeExtractionSummary(
+                strategy="deterministic",
+                llm_attempted=False,
+                llm_succeeded=False,
+                fallback_reason="raw_text_missing",
+                rules_created=0,
+            )
+
+        if not trainer_context.tenant_id:
+            return [], TrainerKnowledgeExtractionSummary(
+                strategy="deterministic",
+                llm_attempted=False,
+                llm_succeeded=False,
+                fallback_reason="tenant_context_missing_for_extraction",
+                rules_created=0,
+            )
+
+        try:
+            extracted_candidates, extraction_summary = self.extractor.extract(
+                raw_text=normalized_raw_text,
+                title=title,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Trainer knowledge extraction failed for trainer_id=%s",
+                trainer_context.trainer_id,
+            )
+            return [], TrainerKnowledgeExtractionSummary(
+                strategy="deterministic",
+                llm_attempted=False,
+                llm_succeeded=False,
+                fallback_reason=f"extractor_exception:{exc.__class__.__name__}",
+                rules_created=0,
+            )
+
+        created_rules: list[TrainerRule] = []
+        try:
+            if replace_document_rules:
+                self._archive_document_rules(
+                    trainer_context=trainer_context,
+                    document_id=document.id,
+                    change_summary=archive_change_summary,
+                )
+
+            for candidate in extracted_candidates:
+                created = self._create_extracted_rule(
+                    trainer_context=trainer_context,
+                    document=document,
+                    candidate=candidate,
+                    create_change_summary=create_change_summary,
+                )
+                if created:
+                    created_rules.append(TrainerRule(**created))
+        except Exception as exc:
+            logger.exception(
+                "Trainer rule persistence failed for trainer_id=%s",
+                trainer_context.trainer_id,
+            )
+            summary_payload = {
+                **extraction_summary,
+                "fallback_reason": f"rule_persistence_exception:{exc.__class__.__name__}",
+                "rules_created": 0,
+            }
+            return [], TrainerKnowledgeExtractionSummary(**summary_payload)
+
+        summary_payload = {
+            **extraction_summary,
+            "rules_created": len(created_rules),
+        }
+        return created_rules, TrainerKnowledgeExtractionSummary(**summary_payload)
+
+    def _archive_document_rules(
+        self,
+        *,
+        trainer_context: TrainerContext,
+        document_id: str | None,
+        change_summary: str,
+    ) -> None:
+        trainer_id = trainer_context.trainer_id
+        if not trainer_id or not document_id:
+            return
+
+        existing_rules = self.repository.list_rules_by_document(
+            trainer_id,
+            document_id,
+            include_archived=False,
+        )
+        for existing in existing_rules:
+            rule_id = existing.get("id")
+            if not rule_id:
+                continue
+
+            next_version = int(existing.get("current_version") or 1) + 1
+            updates = {
+                "is_archived": True,
+                "current_version": next_version,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            updated = self.repository.update_rule(trainer_id, rule_id, updates)
+            if not updated:
+                raise ValueError("Rule archive failed")
+
+            self._create_rule_version(
+                rule=updated,
+                version_number=next_version,
+                change_type="archived",
+                change_summary=change_summary,
+            )
 
     def _create_rule_version(
         self,

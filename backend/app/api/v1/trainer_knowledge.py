@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.v1.trainer_auth import require_trainer_actor
 from app.core.auth import AuthenticatedUser, CurrentUser
@@ -7,8 +7,9 @@ from app.core.tenancy import TrainerContext
 from app.modules.trainer_knowledge.schemas import (
     TrainerKnowledgeDocument,
     TrainerKnowledgeDocumentCreate,
+    TrainerKnowledgeDocumentUpdateRequest,
     TrainerKnowledgeIngestRequest,
-    TrainerKnowledgeIngestResponse,
+    TrainerKnowledgeSaveResponse,
     TrainerRule,
     TrainerRuleUpdateRequest,
 )
@@ -38,7 +39,7 @@ async def create_document(
     return service.create_document(trainer_id, request)
 
 
-@router.post("/ingest", response_model=TrainerKnowledgeIngestResponse)
+@router.post("/ingest", response_model=TrainerKnowledgeSaveResponse)
 async def ingest_document(
     request: TrainerKnowledgeIngestRequest,
     user: AuthenticatedUser = CurrentUser,
@@ -49,6 +50,23 @@ async def ingest_document(
     try:
         return service.ingest_document(trainer_context, request)
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.patch("/{document_id}", response_model=TrainerKnowledgeSaveResponse)
+async def update_document(
+    document_id: str,
+    request: TrainerKnowledgeDocumentUpdateRequest,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerKnowledgeService = Depends(get_trainer_knowledge_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.update_document(trainer_context, document_id, request)
+    except ValueError as exc:
+        if str(exc).lower() == "document not found":
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

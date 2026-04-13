@@ -22,6 +22,29 @@ class TrainerKnowledgeRepository:
         result = self.supabase.table("trainer_knowledge_documents").insert(payload).execute()
         return (result.data or [None])[0] or {}
 
+    def get_document(self, trainer_id: str, document_id: str) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("trainer_knowledge_documents")
+            .select("*")
+            .eq("trainer_id", trainer_id)
+            .eq("id", document_id)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def update_document(self, trainer_id: str, document_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        response = (
+            self.supabase
+            .table("trainer_knowledge_documents")
+            .update(payload)
+            .eq("trainer_id", trainer_id)
+            .eq("id", document_id)
+            .execute()
+        )
+        return (response.data or [None])[0] or {}
+
     def list_rules_by_trainer(
         self,
         trainer_id: str,
@@ -39,6 +62,25 @@ class TrainerKnowledgeRepository:
             query = query.eq("is_archived", False)
         if category:
             query = query.eq("category", category)
+        response = query.order("updated_at", desc=True).order("id").execute()
+        return response.data or []
+
+    def list_rules_by_document(
+        self,
+        trainer_id: str,
+        document_id: str,
+        *,
+        include_archived: bool = False,
+    ) -> list[dict[str, Any]]:
+        query = (
+            self.supabase
+            .table("trainer_rules")
+            .select("*")
+            .eq("trainer_id", trainer_id)
+            .eq("document_id", document_id)
+        )
+        if not include_archived:
+            query = query.eq("is_archived", False)
         response = query.order("updated_at", desc=True).order("id").execute()
         return response.data or []
 

@@ -13,6 +13,7 @@ class TrainerKnowledgeDocument(BaseModel):
     raw_text: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     indexing_status: str = "pending"
+    created_at: datetime | None = None
 
 
 class TrainerKnowledgeDocumentCreate(BaseModel):
@@ -25,6 +26,14 @@ class TrainerKnowledgeDocumentCreate(BaseModel):
 
 class TrainerKnowledgeIngestRequest(TrainerKnowledgeDocumentCreate):
     pass
+
+
+class TrainerKnowledgeDocumentUpdateRequest(BaseModel):
+    title: str | None = None
+    file_url: str | None = None
+    document_type: str | None = None
+    raw_text: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class TrainerRule(BaseModel):
@@ -63,3 +72,7 @@ class TrainerKnowledgeIngestResponse(BaseModel):
     document: TrainerKnowledgeDocument
     extracted_rules: list[TrainerRule] = Field(default_factory=list)
     extraction: TrainerKnowledgeExtractionSummary = Field(default_factory=TrainerKnowledgeExtractionSummary)
+
+
+class TrainerKnowledgeSaveResponse(TrainerKnowledgeIngestResponse):
+    pass

@@ -24,7 +24,12 @@ async function parseError(response) {
   }
 }
 
-async function requestTrainerKnowledge(path, { accessToken, method = 'GET', body } = {}) {
+async function requestTrainerKnowledge(path, {
+  accessToken,
+  method = 'GET',
+  body,
+  timeoutMs = 10000,
+} = {}) {
   let response;
   let baseUrl = null;
 
@@ -36,7 +41,7 @@ async function requestTrainerKnowledge(path, { accessToken, method = 'GET', body
         ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
-      timeoutMs: 10000,
+      timeoutMs,
     }));
   } catch (error) {
     throw buildNetworkError(error, path);
@@ -93,6 +98,7 @@ export function ingestTrainerKnowledgeDocument({
   return requestTrainerKnowledge('/api/v1/trainer-knowledge/ingest', {
     accessToken,
     method: 'POST',
+    timeoutMs: 20000,
     body: {
       title,
       raw_text: rawText,
@@ -101,6 +107,79 @@ export function ingestTrainerKnowledgeDocument({
       metadata,
     },
   });
+}
+
+export function updateTrainerKnowledgeDocument({
+  accessToken,
+  documentId,
+  title = undefined,
+  rawText = undefined,
+  documentType = undefined,
+  fileUrl = undefined,
+  metadata = undefined,
+}) {
+  return requestTrainerKnowledge(`/api/v1/trainer-knowledge/${encodeURIComponent(documentId)}`, {
+    accessToken,
+    method: 'PATCH',
+    timeoutMs: 20000,
+    body: {
+      ...(typeof title === 'string' ? { title } : {}),
+      ...(typeof rawText === 'string' ? { raw_text: rawText } : {}),
+      ...(typeof documentType === 'string' ? { document_type: documentType } : {}),
+      ...(typeof fileUrl === 'string' || fileUrl === null ? { file_url: fileUrl } : {}),
+      ...(typeof metadata === 'object' && metadata !== null ? { metadata } : {}),
+    },
+  });
+}
+
+export async function saveTrainerKnowledgeDocumentWithFallback({
+  accessToken,
+  title,
+  rawText,
+  documentType = 'text',
+  fileUrl = null,
+  metadata = {},
+}) {
+  try {
+    const payload = await ingestTrainerKnowledgeDocument({
+      accessToken,
+      title,
+      rawText,
+      documentType,
+      fileUrl,
+      metadata,
+    });
+    return {
+      ...payload,
+      fallback_used: false,
+      ingest_error: null,
+    };
+  } catch (ingestError) {
+    const document = await createTrainerKnowledgeDocument({
+      accessToken,
+      title,
+      rawText,
+      documentType,
+      fileUrl,
+      metadata,
+    });
+    return {
+      document,
+      extracted_rules: [],
+      extraction: {
+        strategy: 'fallback_create_only',
+        llm_attempted: false,
+        llm_succeeded: false,
+        fallback_reason: 'ingest_request_failed',
+        rules_created: 0,
+      },
+      fallback_used: true,
+      ingest_error: {
+        message: ingestError?.message || 'Ingest request failed',
+        code: ingestError?.code || null,
+      },
+    };
+  }
 }
 
 export function listTrainerRules({

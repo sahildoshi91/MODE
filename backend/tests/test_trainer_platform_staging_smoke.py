@@ -245,6 +245,45 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
         )
         self.assertEqual(trainer_2_cross_response.status_code, 404, trainer_2_cross_response.text)
 
+    def test_trainer_knowledge_ingest_persists_and_lists_for_owner(self):
+        ingest_response = self.client.post(
+            "/api/v1/trainer-knowledge/ingest",
+            json={
+                "title": f"Stage Methodology {self.run_id[:8]}",
+                "raw_text": "If fatigue is elevated, reduce intensity before reducing frequency.",
+                "document_type": "text",
+                "metadata": {"source": "staging_smoke"},
+            },
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(ingest_response.status_code, 200, ingest_response.text)
+        ingest_payload = ingest_response.json()
+        created_document_id = ingest_payload.get("document", {}).get("id")
+        self.assertTrue(created_document_id)
+
+        list_response = self.client.get(
+            "/api/v1/trainer-knowledge",
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(list_response.status_code, 200, list_response.text)
+        listed_ids = [row.get("id") for row in (list_response.json() or [])]
+        self.assertIn(created_document_id, listed_ids)
+
+        patch_response = self.client.patch(
+            f"/api/v1/trainer-knowledge/{created_document_id}",
+            json={
+                "title": f"Stage Methodology Updated {self.run_id[:8]}",
+                "raw_text": "Updated: reduce intensity first, then adjust volume if fatigue stays high.",
+            },
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(patch_response.status_code, 200, patch_response.text)
+        patch_payload = patch_response.json()
+        self.assertEqual(
+            patch_payload.get("document", {}).get("title"),
+            f"Stage Methodology Updated {self.run_id[:8]}",
+        )
+
     def test_client_tokens_cannot_read_internal_only_coach_memory(self):
         inserted_rows = self.admin.table("coach_memory").insert(
             {

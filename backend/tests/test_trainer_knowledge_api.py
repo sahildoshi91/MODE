@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -20,6 +21,20 @@ from app.main import app
 class FakeTrainerKnowledgeService:
     def __init__(self):
         self.last_create = None
+        self.last_update = None
+        self.documents = [
+            {
+                "id": "doc-1",
+                "trainer_id": "trainer-123",
+                "title": "Programming Rules",
+                "file_url": None,
+                "document_type": "text",
+                "raw_text": "Always prioritize movement quality before volume.",
+                "metadata": {"source": "trainer_home"},
+                "indexing_status": "pending",
+                "created_at": "2026-04-11T10:00:00+00:00",
+            }
+        ]
         self.rules = [
             {
                 "id": "rule-1",
@@ -40,14 +55,14 @@ class FakeTrainerKnowledgeService:
 
     def list_documents(self, trainer_id: str):
         del trainer_id
-        return []
+        return [*self.documents]
 
     def create_document(self, trainer_id: str, document):
         self.last_create = {
             "trainer_id": trainer_id,
             "document": document.model_dump(),
         }
-        return {
+        created = {
             "id": "doc-1",
             "trainer_id": trainer_id,
             "title": document.title,
@@ -56,7 +71,10 @@ class FakeTrainerKnowledgeService:
             "raw_text": document.raw_text,
             "metadata": document.metadata,
             "indexing_status": "pending",
+            "created_at": "2026-04-11T10:00:00+00:00",
         }
+        self.documents = [created, *self.documents]
+        return created
 
     def ingest_document(self, trainer_context, request):
         return {
@@ -69,12 +87,47 @@ class FakeTrainerKnowledgeService:
                 "raw_text": request.raw_text,
                 "metadata": request.metadata,
                 "indexing_status": "pending",
+                "created_at": "2026-04-11T10:00:00+00:00",
             },
             "extracted_rules": self.rules,
             "extraction": {
                 "strategy": "hybrid_llm_normalized",
                 "llm_attempted": True,
                 "llm_succeeded": True,
+                "fallback_reason": None,
+                "rules_created": len(self.rules),
+            },
+        }
+
+    def update_document(self, trainer_context, document_id, request):
+        del trainer_context
+        target = next((doc for doc in self.documents if doc["id"] == document_id), None)
+        if not target:
+            raise ValueError("Document not found")
+
+        payload = request.model_dump()
+        self.last_update = {
+            "document_id": document_id,
+            "payload": payload,
+        }
+        if request.title is not None:
+            target["title"] = request.title
+        if request.raw_text is not None:
+            target["raw_text"] = request.raw_text
+        if request.document_type is not None:
+            target["document_type"] = request.document_type
+        if request.file_url is not None:
+            target["file_url"] = request.file_url
+        if request.metadata is not None:
+            target["metadata"] = request.metadata
+
+        return {
+            "document": target,
+            "extracted_rules": self.rules,
+            "extraction": {
+                "strategy": "deterministic",
+                "llm_attempted": False,
+                "llm_succeeded": False,
                 "fallback_reason": None,
                 "rules_created": len(self.rules),
             },
@@ -156,6 +209,20 @@ class TrainerKnowledgeApiTests(unittest.TestCase):
             "Always prioritize movement quality before volume.",
         )
 
+    def test_list_documents_returns_created_at(self):
+        response = self.client.get(
+            "/api/v1/trainer-knowledge",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertGreaterEqual(len(payload), 1)
+        self.assertEqual(payload[0]["id"], "doc-1")
+        created_at = payload[0].get("created_at")
+        self.assertIsInstance(created_at, str)
+        self.assertIsNotNone(datetime.fromisoformat(created_at.replace("Z", "+00:00")))
+
     def test_ingest_document_returns_document_and_extracted_rules(self):
         response = self.client.post(
             "/api/v1/trainer-knowledge/ingest",
@@ -197,12 +264,35 @@ class TrainerKnowledgeApiTests(unittest.TestCase):
         self.assertEqual(archive_response.status_code, 200)
         self.assertTrue(archive_response.json()["is_archived"])
 
-    def test_write_endpoints_reject_non_trainer_actor(self):
+    def test_patch_document_updates_and_returns_extraction(self):
+        response = self.client.patch(
+            "/api/v1/trainer-knowledge/doc-1",
+            json={
+                "title": "Updated Methodology",
+                "raw_text": "Always coach quality before load increases.",
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["document"]["title"], "Updated Methodology")
+        self.assertEqual(payload["extraction"]["rules_created"], 1)
+        self.assertEqual(self.fake_service.last_update["document_id"], "doc-1")
+
+    def test_trainer_only_access_rejects_non_trainer_actor(self):
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
             id="not-the-trainer",
             email="trainer@example.com",
             access_token="token-123",
         )
+
+        list_response = self.client.get(
+            "/api/v1/trainer-knowledge",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(list_response.status_code, 403)
+        self.assertEqual(list_response.json()["detail"], "Trainer-only endpoint")
 
         create_response = self.client.post(
             "/api/v1/trainer-knowledge",
@@ -225,6 +315,17 @@ class TrainerKnowledgeApiTests(unittest.TestCase):
         )
         self.assertEqual(ingest_response.status_code, 403)
         self.assertEqual(ingest_response.json()["detail"], "Trainer-only endpoint")
+
+        patch_response = self.client.patch(
+            "/api/v1/trainer-knowledge/doc-1",
+            json={
+                "title": "Should fail",
+                "raw_text": "This request is from a non-trainer actor.",
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(patch_response.status_code, 403)
+        self.assertEqual(patch_response.json()["detail"], "Trainer-only endpoint")
 
 
 if __name__ == "__main__":
