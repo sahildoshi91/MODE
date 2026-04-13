@@ -39,7 +39,9 @@ async function requestTrainerApi(path, { accessToken, method = 'GET', body } = {
       timeoutMs: 10000,
     }));
   } catch (error) {
-    throw buildNetworkError(error, path);
+    const networkError = buildNetworkError(error, path);
+    networkError.request_path = path;
+    throw networkError;
   }
 
   if (!response.ok) {
@@ -51,6 +53,15 @@ async function requestTrainerApi(path, { accessToken, method = 'GET', body } = {
     error.details = parsed.details;
     error.request_id = response.headers.get('x-request-id');
     error.api_base_url = baseUrl;
+    error.request_path = path;
+    error.is_missing_trainer_route = (
+      error.status === 404
+      && String(error.message || '').trim().toLowerCase() === 'not found'
+      && (
+        path.startsWith('/api/v1/trainer-home/command-center')
+        || path.startsWith('/api/v1/trainer-clients/')
+      )
+    );
     throw error;
   }
 

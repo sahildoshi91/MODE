@@ -148,11 +148,42 @@ function formatDateLabel(value) {
   });
 }
 
+function buildTrainerRouteError(error, fallbackMessage) {
+  const message = String(error?.message || fallbackMessage);
+  const status = typeof error?.status === 'number' ? error.status : null;
+  const requestPath = typeof error?.request_path === 'string'
+    ? error.request_path
+    : (typeof error?.path === 'string' ? error.path : null);
+  const apiBase = typeof error?.api_base_url === 'string'
+    ? error.api_base_url
+    : (typeof error?.resolved_api_base_url === 'string' ? error.resolved_api_base_url : null);
+  const isStaleBackendRoute = (
+    Boolean(error?.is_missing_trainer_route)
+    || (
+      status === 404
+      && message.trim().toLowerCase() === 'not found'
+      && (
+        (typeof requestPath === 'string' && requestPath.startsWith('/api/v1/trainer-home/command-center'))
+        || (typeof requestPath === 'string' && requestPath.startsWith('/api/v1/trainer-clients/'))
+      )
+    )
+  );
+
+  return {
+    message,
+    status,
+    requestPath,
+    apiBase,
+    isStaleBackendRoute,
+  };
+}
+
 export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   const [viewMode, setViewMode] = useState(VIEW_MODE.COMMAND_CENTER);
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [commandCenterPayload, setCommandCenterPayload] = useState(null);
   const [isLoadingCommandCenter, setIsLoadingCommandCenter] = useState(true);
+  const [hasLoadedCommandCenter, setHasLoadedCommandCenter] = useState(false);
   const [isRefreshingTalkingPoints, setIsRefreshingTalkingPoints] = useState(false);
   const [commandCenterError, setCommandCenterError] = useState(null);
 
@@ -208,6 +239,9 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     silent = false,
   } = {}) => {
     if (!accessToken) {
+      setCommandCenterPayload(null);
+      setHasLoadedCommandCenter(false);
+      setIsLoadingCommandCenter(false);
       return;
     }
     if (!silent) {
@@ -223,8 +257,9 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         refreshTalkingPoints,
       });
       setCommandCenterPayload(payload);
+      setHasLoadedCommandCenter(true);
     } catch (error) {
-      setCommandCenterError(error?.message || 'Unable to load Command Center.');
+      setCommandCenterError(buildTrainerRouteError(error, 'Unable to load Command Center.'));
     } finally {
       if (!silent) {
         setIsLoadingCommandCenter(false);
@@ -253,7 +288,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
       setMemoryRecords(Array.isArray(memory) ? memory : []);
       setAiContextPayload(aiContext);
     } catch (error) {
-      setDetailError(error?.message || 'Unable to load client detail.');
+      setDetailError(buildTrainerRouteError(error, 'Unable to load client detail.'));
     } finally {
       setIsLoadingDetail(false);
     }
@@ -437,7 +472,27 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
 
           {!isLoadingDetail && detailError ? (
             <ModeCard variant="surface">
-              <ModeText variant="bodySm" tone="error">{detailError}</ModeText>
+              <ModeText variant="bodySm" tone="error">{detailError.message}</ModeText>
+              {detailError.isStaleBackendRoute ? (
+                <View style={styles.routeDiagnosticBlock}>
+                  <ModeText variant="bodySm" tone="secondary">
+                    The backend appears stale and is missing trainer client routes.
+                  </ModeText>
+                  {detailError.requestPath ? (
+                    <ModeText variant="caption" tone="tertiary">
+                      Missing route: {detailError.requestPath}
+                    </ModeText>
+                  ) : null}
+                  {detailError.apiBase ? (
+                    <ModeText variant="caption" tone="tertiary">
+                      API base: {detailError.apiBase}
+                    </ModeText>
+                  ) : null}
+                  <ModeText variant="caption" tone="tertiary">
+                    Restart or redeploy backend from current repo code, then verify `/openapi.json`.
+                  </ModeText>
+                </View>
+              ) : null}
               <ModeButton
                 title="Retry"
                 variant="secondary"
@@ -724,7 +779,27 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
 
         {!isLoadingCommandCenter && commandCenterError ? (
           <ModeCard variant="surface">
-            <ModeText variant="bodySm" tone="error">{commandCenterError}</ModeText>
+            <ModeText variant="bodySm" tone="error">{commandCenterError.message}</ModeText>
+            {commandCenterError.isStaleBackendRoute ? (
+              <View style={styles.routeDiagnosticBlock}>
+                <ModeText variant="bodySm" tone="secondary">
+                  The backend appears stale and is missing Trainer Command Center routes.
+                </ModeText>
+                {commandCenterError.requestPath ? (
+                  <ModeText variant="caption" tone="tertiary">
+                    Missing route: {commandCenterError.requestPath}
+                  </ModeText>
+                ) : null}
+                {commandCenterError.apiBase ? (
+                  <ModeText variant="caption" tone="tertiary">
+                    API base: {commandCenterError.apiBase}
+                  </ModeText>
+                ) : null}
+                <ModeText variant="caption" tone="tertiary">
+                  Restart or redeploy backend from current repo code, then verify `/openapi.json`.
+                </ModeText>
+              </View>
+            ) : null}
             <ModeButton
               title="Retry"
               variant="secondary"
@@ -734,7 +809,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
           </ModeCard>
         ) : null}
 
-        {!isLoadingCommandCenter && !commandCenterError && visibleClientItems.length === 0 ? (
+        {!isLoadingCommandCenter && hasLoadedCommandCenter && !commandCenterError && visibleClientItems.length === 0 ? (
           <ModeCard variant="surface">
             <ModeText variant="bodySm" tone="secondary">
               No clients match the selected filter.
@@ -829,6 +904,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: theme.spacing[2],
+  },
+  routeDiagnosticBlock: {
+    marginTop: theme.spacing[2],
+    gap: theme.spacing[1] - 2,
   },
   actionButton: {
     marginTop: theme.spacing[2],

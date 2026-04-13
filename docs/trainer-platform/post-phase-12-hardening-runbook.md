@@ -19,7 +19,24 @@ Expected outcome:
 - `coach_memory_select_visible` shows the hardened predicate.
 - The verification script fails immediately if `coach_memory` still uses the legacy client-visible policy.
 
-## 2) Guarded staging rollout (orchestration off -> on)
+## 2) Trainer Clients Runtime Alignment Preflight
+Before trainer QA and before any staging smoke run, verify the runtime API surface matches the current repo code:
+
+```bash
+BASE_URL="http://<api-host>:8000"
+curl -sS -D - "$BASE_URL/healthz"
+curl -sS "$BASE_URL/openapi.json" | rg '"/api/v1/trainer-home/command-center"|"/api/v1/trainer-clients/{client_id}/detail"'
+curl -sS -D - "$BASE_URL/api/v1/trainer-home/command-center"
+```
+
+Expected outcome:
+- `/healthz` returns `200`.
+- `/openapi.json` includes `"/api/v1/trainer-home/command-center"` and `"/api/v1/trainer-clients/{client_id}/detail"`.
+- unauthenticated `/api/v1/trainer-home/command-center` returns `401` or `403` (never `404`).
+
+If `404` appears on trainer routes, treat it as a stale runtime mismatch and restart/redeploy backend from current repo code before continuing.
+
+## 3) Guarded staging rollout (orchestration off -> on)
 Keep orchestration off for baseline:
 
 ```bash
@@ -61,7 +78,7 @@ Expected outcome:
 - One row with `feel_rating`.
 - If missing, apply `backend/sql/20260408_add_workouts_feel_rating.sql` before enabling orchestration.
 
-## 3) Orchestration fallback metadata check
+## 4) Orchestration fallback metadata check
 Query assistant messages and inspect `structured_payload.orchestration` metadata:
 
 ```sql
@@ -81,7 +98,7 @@ Expected outcome:
 - No unexpected 5xx chat errors.
 - Orchestration metadata reflects enabled/used/fallback states.
 
-## 4) Required artifacts and signoff
+## 5) Required artifacts and signoff
 Do not promote beyond staging until all of the following are captured:
 
 - verification SQL output showing the hardened `coach_memory` policy check passed
@@ -92,7 +109,7 @@ Do not promote beyond staging until all of the following are captured:
 
 If any artifact is missing, treat rollout status as not signed off.
 
-## 5) Rollback rule
+## 6) Rollback rule
 Immediately set:
 
 ```bash
