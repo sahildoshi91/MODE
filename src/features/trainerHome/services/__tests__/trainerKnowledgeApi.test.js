@@ -8,6 +8,7 @@ jest.mock('../../../../services/apiNetworkError', () => ({
 
 import { fetchWithApiFallback } from '../../../../services/apiRequest';
 import {
+  deleteTrainerKnowledgeDocument,
   saveTrainerKnowledgeDocumentWithFallback,
   updateTrainerKnowledgeDocument,
 } from '../trainerKnowledgeApi';
@@ -143,6 +144,31 @@ describe('trainerKnowledgeApi', () => {
           document_type: 'text',
           file_url: null,
           metadata: { source: 'agent_lab' },
+        }),
+      }),
+    );
+  });
+
+  it('deletes a saved document using the delete endpoint contract', async () => {
+    fetchWithApiFallback.mockResolvedValue({
+      response: createJsonResponse({
+        id: 'doc-1',
+        title: 'Updated',
+      }),
+      baseUrl: 'http://127.0.0.1:8000',
+    });
+
+    await deleteTrainerKnowledgeDocument({
+      accessToken: 'trainer-token',
+      documentId: 'doc-1',
+    });
+
+    expect(fetchWithApiFallback).toHaveBeenCalledWith(
+      '/api/v1/trainer-knowledge/doc-1',
+      expect.objectContaining({
+        method: 'DELETE',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer trainer-token',
         }),
       }),
     );

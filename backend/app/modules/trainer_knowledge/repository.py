@@ -45,6 +45,17 @@ class TrainerKnowledgeRepository:
         )
         return (response.data or [None])[0] or {}
 
+    def delete_document(self, trainer_id: str, document_id: str) -> list[dict[str, Any]]:
+        response = (
+            self.supabase
+            .table("trainer_knowledge_documents")
+            .delete()
+            .eq("trainer_id", trainer_id)
+            .eq("id", document_id)
+            .execute()
+        )
+        return response.data or []
+
     def list_rules_by_trainer(
         self,
         trainer_id: str,
@@ -110,6 +121,17 @@ class TrainerKnowledgeRepository:
             .execute()
         )
         return (response.data or [None])[0] or {}
+
+    def delete_rules_by_document(self, trainer_id: str, document_id: str) -> list[dict[str, Any]]:
+        response = (
+            self.supabase
+            .table("trainer_rules")
+            .delete()
+            .eq("trainer_id", trainer_id)
+            .eq("document_id", document_id)
+            .execute()
+        )
+        return response.data or []
 
     def create_rule_version(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self.supabase.table("trainer_rule_versions").insert(payload).execute()

@@ -19,8 +19,11 @@ export default function TrainerAssignmentScreen({
   statusLoadFailed,
   isSubmitting,
   errorMessage,
+  isNetworkError,
   errorRequestId,
   errorApiBase,
+  errorAttemptedBases,
+  errorRawNetworkMessage,
   onRetryStatusLoad,
   onAssignTrainer,
   bottomInset = 0,
@@ -29,6 +32,9 @@ export default function TrainerAssignmentScreen({
     ? availableTrainerCount
     : trainers.length;
   const showEmptyState = hasLoadedStatus && resolvedTrainerCount === 0 && !statusLoadFailed;
+  const attemptedBases = Array.isArray(errorAttemptedBases)
+    ? errorAttemptedBases.filter((url) => typeof url === 'string' && url.length > 0)
+    : [];
 
   return (
     <SafeScreen includeTopInset={false} style={styles.screen}>
@@ -52,12 +58,30 @@ export default function TrainerAssignmentScreen({
           <ModeCard variant="surface" style={styles.blockingCard}>
             <ModeText variant="h3">Unable to load coach options</ModeText>
             {errorMessage ? <InlineFeedback type="error" message={errorMessage} /> : null}
+            {isNetworkError ? (
+              <ModeText variant="bodySm" tone="secondary" testID="trainer-assignment-network-help">
+                Backend unreachable. Start the backend with `cd backend && python3 main.py`,
+                confirm EXPO_PUBLIC_API_BASE_URL points to your current laptop LAN IP on port 8000,
+                then restart Expo and retry.
+              </ModeText>
+            ) : null}
+            {attemptedBases.length > 0 ? (
+              <ModeText variant="caption" tone="tertiary" testID="trainer-assignment-attempted-bases">
+                Tried hosts: {attemptedBases.join(', ')}
+              </ModeText>
+            ) : null}
+            {errorRawNetworkMessage ? (
+              <ModeText variant="caption" tone="tertiary" testID="trainer-assignment-network-raw-error">
+                Network detail: {errorRawNetworkMessage}
+              </ModeText>
+            ) : null}
             {errorRequestId ? <ModeText variant="caption" tone="tertiary">Request ID: {errorRequestId}</ModeText> : null}
-            {errorApiBase ? <ModeText variant="caption" tone="tertiary">API Base: {errorApiBase}</ModeText> : null}
+            {errorApiBase ? <ModeText variant="caption" tone="tertiary">Resolved API Base: {errorApiBase}</ModeText> : null}
             <ModeButton
               title={isStatusLoading ? 'Retrying...' : 'Retry'}
               onPress={onRetryStatusLoad}
               disabled={isStatusLoading}
+              testID="trainer-assignment-retry-button"
             />
           </ModeCard>
         ) : null}

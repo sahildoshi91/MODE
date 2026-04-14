@@ -14,8 +14,10 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from app.ai.client import GeminiCompletion, TokenUsage
 from app.core.tenancy import TrainerContext
 from app.modules.conversation.schemas import ChatRequest
-from app.modules.conversation.service import ConversationService
+from app.modules.conversation.service import ConversationProcessingError, ConversationService
 from app.modules.trainer_persona.repository import TrainerPersonaRepository
+from app.modules.trainer_onboarding.repository import TrainerOnboardingStorageUnavailableError
+from app.modules.trainer_onboarding.service import TrainerOnboardingTurnResult
 
 
 class FakeConversationRepository:
@@ -170,6 +172,174 @@ class FakeTrainerPersonaRepository:
         return dict(self.default_persona)
 
 
+class FakeTrainerOnboardingService:
+    def __init__(self):
+        self.calls = []
+        self.launch_calls = []
+
+    def handle_launch(
+        self,
+        trainer_context,
+        *,
+        conversation_id,
+        action,
+        source_message_id=None,
+    ):
+        self.launch_calls.append(
+            {
+                "trainer_context": trainer_context,
+                "conversation_id": conversation_id,
+                "action": action,
+                "source_message_id": source_message_id,
+            }
+        )
+        normalized_action = (action or "continue").strip().lower()
+        if normalized_action == "review":
+            return TrainerOnboardingTurnResult(
+                assistant_message="Current coach settings:\nIdentity: Supportive and direct\nVoice and tone: Warm and direct",
+                quick_replies=["Edit voice", "Edit decision", "Edit boundaries", "Retrain coach"],
+                current_stage="complete",
+                onboarding_complete=True,
+                onboarding_status="completed",
+                onboarding_progress={
+                    "completed_steps": 8,
+                    "total_steps": 8,
+                    "current_step": "complete",
+                    "last_completed_step": "final_calibration",
+                },
+                calibration_pending=False,
+            )
+        if normalized_action == "retrain":
+            return TrainerOnboardingTurnResult(
+                assistant_message="Retraining started.\n\nStep 2 of 8: Coaching Identity\nHow do you want clients to describe your coaching identity?",
+                quick_replies=["Supportive and direct", "High accountability"],
+                current_stage="coaching_identity",
+                onboarding_complete=False,
+                onboarding_status="in_progress",
+                onboarding_progress={
+                    "completed_steps": 1,
+                    "total_steps": 8,
+                    "current_step": "coaching_identity",
+                    "last_completed_step": "welcome",
+                },
+                calibration_pending=False,
+            )
+        return TrainerOnboardingTurnResult(
+            assistant_message="Resumed onboarding.",
+            quick_replies=["Approve all"],
+            current_stage="final_calibration",
+            onboarding_complete=False,
+            onboarding_status="calibration_pending",
+            onboarding_progress={
+                "completed_steps": 7,
+                "total_steps": 8,
+                "current_step": "final_calibration",
+                "last_completed_step": "personal_touch_optional",
+            },
+            calibration_pending=True,
+            profile_patch={
+                "trainer_onboarding": {
+                    "calibration_checklist": {
+                        "approved_count": 0,
+                        "total": 3,
+                        "samples": [],
+                    }
+                }
+            },
+        )
+
+    def process_turn(
+        self,
+        trainer_context,
+        *,
+        conversation_id,
+        user_message,
+        source_message_id,
+        force_restart=False,
+    ):
+        self.calls.append(
+            {
+                "trainer_context": trainer_context,
+                "conversation_id": conversation_id,
+                "user_message": user_message,
+                "source_message_id": source_message_id,
+                "force_restart": force_restart,
+            }
+        )
+        turn = len(self.calls)
+        if turn == 1:
+            return TrainerOnboardingTurnResult(
+                assistant_message="Step 2 of 8: Coaching Identity\nHow do you want clients to describe your coaching identity?",
+                quick_replies=["Supportive and direct", "High accountability"],
+                current_stage="coaching_identity",
+                onboarding_complete=False,
+                onboarding_status="in_progress",
+                onboarding_progress={
+                    "completed_steps": 1,
+                    "total_steps": 8,
+                    "current_step": "coaching_identity",
+                    "last_completed_step": "welcome",
+                },
+                calibration_pending=False,
+                profile_patch={
+                    "trainer_onboarding": {
+                        "step_preview": {
+                            "step_key": "coaching_identity",
+                            "scenario": "Client is anxious before week 1 and afraid of failing again.",
+                            "sample_response": "You are not behind. We will focus on one confident next step today.",
+                            "generation_source": "llm",
+                        }
+                    }
+                },
+            )
+        if turn == 2:
+            return TrainerOnboardingTurnResult(
+                assistant_message="Step 8 of 8: Final Calibration\nReview these coach replies.",
+                quick_replies=["Approve all", "Approve 1", "Reject 1", "Regenerate"],
+                current_stage="final_calibration",
+                onboarding_complete=False,
+                onboarding_status="calibration_pending",
+                onboarding_progress={
+                    "completed_steps": 7,
+                    "total_steps": 8,
+                    "current_step": "final_calibration",
+                    "last_completed_step": "personal_touch_optional",
+                },
+                calibration_pending=True,
+                profile_patch={
+                    "trainer_onboarding": {
+                        "calibration_checklist": {
+                            "approved_count": 1,
+                            "total": 3,
+                            "samples": [
+                                {
+                                    "index": 1,
+                                    "id": "sample_1",
+                                    "scenario": "Client says: I am exhausted and tempted to skip today's session.",
+                                    "response": "Let's protect momentum with a short, high-quality session.",
+                                    "status": "approved",
+                                }
+                            ],
+                        }
+                    }
+                },
+            )
+        return TrainerOnboardingTurnResult(
+            assistant_message="Coaching profile complete.",
+            quick_replies=["Review coach settings", "Retrain coach"],
+            current_stage="complete",
+            onboarding_complete=True,
+            onboarding_status="completed",
+            onboarding_progress={
+                "completed_steps": 8,
+                "total_steps": 8,
+                "current_step": "complete",
+                "last_completed_step": "final_calibration",
+            },
+            calibration_pending=False,
+        )
+
+
 class FakeGeminiClient:
     def __init__(self):
         self.prompts = []
@@ -250,6 +420,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.profile_service = FakeProfileService()
         self.trainer_review_service = FakeTrainerReviewService()
         self.trainer_persona_repository = FakeTrainerPersonaRepository()
+        self.trainer_onboarding_service = FakeTrainerOnboardingService()
         self.trainer_context = TrainerContext(
             tenant_id="tenant-123",
             trainer_id="trainer-123",
@@ -275,6 +446,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
                             self.profile_service,
                             self.trainer_review_service,
                             self.trainer_persona_repository,
+                            trainer_onboarding_service=self.trainer_onboarding_service,
                         )
 
     def _build_service_with_repository(self, repository, anthropic_enabled=False):
@@ -287,6 +459,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
                             self.profile_service,
                             self.trainer_review_service,
                             self.trainer_persona_repository,
+                            trainer_onboarding_service=self.trainer_onboarding_service,
                         )
 
     def test_handle_chat_uses_default_fast_route_with_gemini(self):
@@ -468,27 +641,221 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.repository.history = []
 
         prompts = [
-            "Supportive but direct. I want clients to feel capable.",
-            "They overcomplicate consistency and chase intensity too early.",
-            "Movement quality, sustainable volume, and recovery.",
-            "Time, injuries, equipment, energy, and how stressed they are.",
-            "Let's lower the bar, keep momentum, and win the day with something small.",
+            "Let's start onboarding.",
+            "Approve 1",
+            "Approve all",
         ]
 
         responses = [service.handle_chat("trainer-user-123", trainer_context, ChatRequest(message=prompt)) for prompt in prompts]
 
-        self.assertEqual(responses[0].conversation_state.current_stage, "trainer_onboarding_q2")
-        self.assertIn("What do you believe most people get wrong", responses[0].assistant_message)
+        self.assertEqual(responses[0].conversation_state.current_stage, "trainer_onboarding_coaching_identity")
+        self.assertEqual(responses[1].conversation_state.current_stage, "trainer_onboarding_final_calibration")
+        self.assertTrue(responses[1].conversation_state.calibration_pending)
         self.assertEqual(responses[-1].conversation_state.current_stage, "trainer_onboarding_complete")
         self.assertTrue(responses[-1].conversation_state.onboarding_complete)
-        self.assertIn("Got it - here's how I'll coach like you", responses[-1].assistant_message)
+        self.assertEqual(responses[-1].conversation_state.onboarding_status, "completed")
+        self.assertEqual(responses[-1].conversation_state.onboarding_progress["completed_steps"], 8)
+        self.assertIn("Coaching profile complete", responses[-1].assistant_message)
+        self.assertIn("trainer_onboarding", responses[0].profile_patch)
+        self.assertIn("step_preview", responses[0].profile_patch["trainer_onboarding"])
+        self.assertIn("calibration_checklist", responses[1].profile_patch["trainer_onboarding"])
+        self.assertEqual(responses[0].quick_replies, ["Supportive and direct", "High accountability"])
         self.assertEqual(self.repository.created_conversation["type"], "onboarding")
-        onboarding_preferences = self.trainer_persona_repository.default_persona["onboarding_preferences"]
-        self.assertTrue(onboarding_preferences["trainer_onboarding_completed"])
-        self.assertEqual(
-            onboarding_preferences["trainer_onboarding_answers"]["motivation_response"],
-            prompts[-1],
+        self.assertEqual(self.repository.saved_messages[0]["structured_payload"]["route"]["flow"], "trainer_onboarding_v2")
+
+    def test_trainer_chat_can_restart_completed_onboarding_with_retrain_action(self):
+        service = self._build_service()
+        trainer_context = TrainerContext(
+            tenant_id="tenant-123",
+            trainer_id="trainer-123",
+            trainer_user_id="trainer-user-123",
+            trainer_display_name="Coach Alex",
+            client_id=None,
+            persona_id="persona-123",
+            persona_name="Strength Coach",
+            trainer_onboarding_completed=True,
+            trainer_onboarding_status="completed",
+            trainer_onboarding_completed_steps=8,
+            trainer_onboarding_total_steps=8,
+            trainer_onboarding_last_step="final_calibration",
         )
+
+        response = service.handle_chat(
+            "trainer-user-123",
+            trainer_context,
+            ChatRequest(
+                message="Retrain now.",
+                client_context={
+                    "entrypoint": "trainer_agent_training",
+                    "onboarding_action": "retrain",
+                },
+            ),
+        )
+
+        self.assertEqual(response.conversation_state.current_stage, "trainer_onboarding_coaching_identity")
+        self.assertEqual(response.conversation_state.onboarding_status, "in_progress")
+        self.assertEqual(response.quick_replies, ["Supportive and direct", "High accountability"])
+        self.assertTrue(self.trainer_onboarding_service.calls[0]["force_restart"])
+
+    def test_trainer_chat_does_not_restart_retrain_on_subsequent_turns(self):
+        service = self._build_service()
+        conversation_id = str(uuid4())
+        self.repository.created_conversation["id"] = conversation_id
+        self.repository.created_conversation["client_id"] = None
+        trainer_context = TrainerContext(
+            tenant_id="tenant-123",
+            trainer_id="trainer-123",
+            trainer_user_id="trainer-user-123",
+            trainer_display_name="Coach Alex",
+            client_id=None,
+            persona_id="persona-123",
+            persona_name="Strength Coach",
+            trainer_onboarding_completed=True,
+            trainer_onboarding_status="completed",
+            trainer_onboarding_completed_steps=8,
+            trainer_onboarding_total_steps=8,
+            trainer_onboarding_last_step="final_calibration",
+        )
+
+        response = service.handle_chat(
+            "trainer-user-123",
+            trainer_context,
+            ChatRequest(
+                conversation_id=conversation_id,
+                message="My identity is high-accountability and practical.",
+                client_context={
+                    "entrypoint": "trainer_agent_training",
+                    "onboarding_action": "retrain",
+                },
+            ),
+        )
+
+        self.assertEqual(response.conversation_state.current_stage, "trainer_onboarding_coaching_identity")
+        self.assertEqual(response.conversation_state.onboarding_status, "in_progress")
+        self.assertFalse(self.trainer_onboarding_service.calls[0]["force_restart"])
+
+    def test_trainer_onboarding_bootstrap_review_skips_user_message_and_uses_launch_handler(self):
+        service = self._build_service()
+        trainer_context = TrainerContext(
+            tenant_id="tenant-123",
+            trainer_id="trainer-123",
+            trainer_user_id="trainer-user-123",
+            trainer_display_name="Coach Alex",
+            client_id=None,
+            persona_id="persona-123",
+            persona_name="Strength Coach",
+            trainer_onboarding_completed=True,
+            trainer_onboarding_status="completed",
+            trainer_onboarding_completed_steps=8,
+            trainer_onboarding_total_steps=8,
+            trainer_onboarding_last_step="final_calibration",
+        )
+        self.repository.history = []
+
+        response = service.handle_chat(
+            "trainer-user-123",
+            trainer_context,
+            ChatRequest(
+                message="__onboarding_bootstrap__",
+                client_context={
+                    "entrypoint": "trainer_agent_training",
+                    "onboarding_action": "review",
+                    "onboarding_bootstrap": True,
+                },
+            ),
+        )
+
+        self.assertIn("Current coach settings", response.assistant_message)
+        self.assertEqual(response.conversation_state.current_stage, "trainer_onboarding_complete")
+        self.assertEqual(response.conversation_state.onboarding_status, "completed")
+        self.assertEqual(len(self.trainer_onboarding_service.launch_calls), 1)
+        self.assertEqual(self.trainer_onboarding_service.launch_calls[0]["action"], "review")
+        self.assertEqual(len(self.trainer_onboarding_service.calls), 0)
+        self.assertEqual(len(self.repository.saved_messages), 1)
+        self.assertEqual(self.repository.saved_messages[0]["role"], "assistant")
+        self.assertEqual(
+            self.repository.saved_messages[0]["structured_payload"]["route"]["response_mode"],
+            "bootstrap",
+        )
+
+    def test_trainer_onboarding_bootstrap_retrain_starts_questionnaire_without_user_capture(self):
+        service = self._build_service()
+        trainer_context = TrainerContext(
+            tenant_id="tenant-123",
+            trainer_id="trainer-123",
+            trainer_user_id="trainer-user-123",
+            trainer_display_name="Coach Alex",
+            client_id=None,
+            persona_id="persona-123",
+            persona_name="Strength Coach",
+            trainer_onboarding_completed=True,
+            trainer_onboarding_status="completed",
+            trainer_onboarding_completed_steps=8,
+            trainer_onboarding_total_steps=8,
+            trainer_onboarding_last_step="final_calibration",
+        )
+        self.repository.history = []
+
+        response = service.handle_chat(
+            "trainer-user-123",
+            trainer_context,
+            ChatRequest(
+                message="__onboarding_bootstrap__",
+                client_context={
+                    "entrypoint": "trainer_agent_training",
+                    "onboarding_action": "retrain",
+                    "onboarding_bootstrap": True,
+                },
+            ),
+        )
+
+        self.assertEqual(response.conversation_state.current_stage, "trainer_onboarding_coaching_identity")
+        self.assertEqual(response.conversation_state.onboarding_status, "in_progress")
+        self.assertEqual(response.quick_replies, ["Supportive and direct", "High accountability"])
+        self.assertEqual(len(self.trainer_onboarding_service.launch_calls), 1)
+        self.assertEqual(self.trainer_onboarding_service.launch_calls[0]["action"], "retrain")
+        self.assertEqual(len(self.trainer_onboarding_service.calls), 0)
+        self.assertEqual(len(self.repository.saved_messages), 1)
+        self.assertEqual(self.repository.saved_messages[0]["role"], "assistant")
+
+    def test_trainer_onboarding_bootstrap_surfaces_explicit_storage_unavailable_error(self):
+        service = self._build_service()
+        trainer_context = TrainerContext(
+            tenant_id="tenant-123",
+            trainer_id="trainer-123",
+            trainer_user_id="trainer-user-123",
+            trainer_display_name="Coach Alex",
+            client_id=None,
+            persona_id="persona-123",
+            persona_name="Strength Coach",
+            trainer_onboarding_completed=True,
+            trainer_onboarding_status="completed",
+            trainer_onboarding_completed_steps=8,
+            trainer_onboarding_total_steps=8,
+            trainer_onboarding_last_step="final_calibration",
+        )
+
+        def raise_storage_error(*_args, **_kwargs):
+            raise TrainerOnboardingStorageUnavailableError("missing onboarding tables")
+
+        self.trainer_onboarding_service.handle_launch = raise_storage_error
+
+        with self.assertRaisesRegex(
+            ConversationProcessingError,
+            "Trainer onboarding storage is not available",
+        ):
+            service.handle_chat(
+                "trainer-user-123",
+                trainer_context,
+                ChatRequest(
+                    message="__onboarding_bootstrap__",
+                    client_context={
+                        "entrypoint": "trainer_agent_training",
+                        "onboarding_action": "review",
+                        "onboarding_bootstrap": True,
+                    },
+                ),
+            )
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ class FakeTrainerKnowledgeService:
     def __init__(self):
         self.last_create = None
         self.last_update = None
+        self.last_delete_document_id = None
         self.documents = [
             {
                 "id": "doc-1",
@@ -132,6 +133,17 @@ class FakeTrainerKnowledgeService:
                 "rules_created": len(self.rules),
             },
         }
+
+    def delete_document(self, trainer_context, document_id):
+        del trainer_context
+        target = next((doc for doc in self.documents if doc["id"] == document_id), None)
+        if not target:
+            raise ValueError("Document not found")
+
+        self.last_delete_document_id = document_id
+        self.documents = [doc for doc in self.documents if doc["id"] != document_id]
+        self.rules = [rule for rule in self.rules if rule.get("document_id") != document_id]
+        return target
 
     def list_rules(self, trainer_id: str, include_archived=False, category=None):
         del trainer_id
@@ -279,6 +291,30 @@ class TrainerKnowledgeApiTests(unittest.TestCase):
         self.assertEqual(payload["document"]["title"], "Updated Methodology")
         self.assertEqual(payload["extraction"]["rules_created"], 1)
         self.assertEqual(self.fake_service.last_update["document_id"], "doc-1")
+
+    def test_delete_document_removes_saved_knowledge(self):
+        response = self.client.delete(
+            "/api/v1/trainer-knowledge/doc-1",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["id"], "doc-1")
+        self.assertEqual(self.fake_service.last_delete_document_id, "doc-1")
+
+    def test_delete_document_options_preflight_allows_delete(self):
+        response = self.client.options(
+            "/api/v1/trainer-knowledge/doc-1",
+            headers={
+                "Origin": "http://localhost:19006",
+                "Access-Control-Request-Method": "DELETE",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        allow_methods = (response.headers.get("access-control-allow-methods") or "").upper()
+        self.assertIn("DELETE", allow_methods)
 
     def test_trainer_only_access_rejects_non_trainer_actor(self):
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(

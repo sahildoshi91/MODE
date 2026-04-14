@@ -31,11 +31,16 @@ from app.modules.conversation.routing import (
 from app.modules.conversation.schemas import ChatRequest, ChatResponse, ConversationState, ConversationUsage, RouteDebug, TokenUsage
 from app.modules.profile.service import ProfileService
 from app.modules.trainer_intelligence.service import TrainerIntelligenceService
+from app.modules.trainer_onboarding.service import TrainerOnboardingService
+from app.modules.trainer_onboarding.repository import TrainerOnboardingStorageUnavailableError
 from app.modules.trainer_persona.repository import TrainerPersonaRepository
 from app.modules.trainer_review.service import TrainerReviewService
 
 
 logger = logging.getLogger(__name__)
+TRAINER_ONBOARDING_STORAGE_UNAVAILABLE_DETAIL = (
+    "Trainer onboarding storage is not available. Apply onboarding migrations and retry."
+)
 
 
 @dataclass
@@ -58,18 +63,6 @@ class ConversationProcessingError(RuntimeError):
 class ConversationService:
     DEFAULT_CONVERSATION_TYPE = "chat"
     FAILED_CONVERSATION_STAGE = "response_failed"
-    TRAINER_ONBOARDING_STAGE_PREFIX = "trainer_onboarding_q"
-    TRAINER_ONBOARDING_COMPLETE_STAGE = "trainer_onboarding_complete"
-    TRAINER_ONBOARDING_QUESTIONS = (
-        "Hey - let's quickly set up your AI coaching assistant.\n"
-        "This helps it sound like you and coach like you.\n\n"
-        "Just a few quick questions.\n\n"
-        "In one or two sentences, how would you describe your coaching style?",
-        "What do you believe most people get wrong about fitness or training?",
-        "When you build a program, what are the 2-3 things you focus on most?",
-        "What do you always consider when adjusting a workout for a client? For example: time, injuries, equipment, energy, or schedule.",
-        "A client says: \"I don't feel motivated today and might skip my workout.\"\n\nWhat would you say to them?",
-    )
 
     def __init__(
         self,
@@ -77,6 +70,7 @@ class ConversationService:
         profile_service: ProfileService,
         trainer_review_service: TrainerReviewService,
         trainer_persona_repository: TrainerPersonaRepository,
+        trainer_onboarding_service: TrainerOnboardingService | None = None,
         ai_feedback_logger_service: AIFeedbackService | None = None,
         trainer_intelligence_service: TrainerIntelligenceService | None = None,
     ):
@@ -84,6 +78,7 @@ class ConversationService:
         self.profile_service = profile_service
         self.trainer_review_service = trainer_review_service
         self.trainer_persona_repository = trainer_persona_repository
+        self.trainer_onboarding_service = trainer_onboarding_service
         self.ai_feedback_logger_service = ai_feedback_logger_service
         self.trainer_intelligence_service = trainer_intelligence_service
         self.router = ConversationRouter()
@@ -149,6 +144,12 @@ class ConversationService:
         )
 
     def _get_or_create_conversation(self, trainer_context: TrainerContext, request: ChatRequest) -> dict:
+        should_run_onboarding = self._should_run_trainer_onboarding(trainer_context, request)
+        preferred_types = [
+            "onboarding" if should_run_onboarding else self.DEFAULT_CONVERSATION_TYPE,
+        ]
+        # For trainer-only contexts we keep onboarding/chat threads separate to avoid state mixing.
+        fallback_to_any = not self._is_trainer_only_context(trainer_context)
         conversation = None
         if request.conversation_id:
             try:
@@ -173,6 +174,14 @@ class ConversationService:
                 conversation = self.repository.find_active_conversation(
                     trainer_context.client_id,
                     trainer_context.trainer_id,
+                    preferred_types=preferred_types,
+                    fallback_to_any=fallback_to_any,
+                )
+            except TypeError:
+                # Backward compatibility for test fakes that do not support the new signature.
+                conversation = self.repository.find_active_conversation(
+                    trainer_context.client_id,
+                    trainer_context.trainer_id,
                 )
             except Exception as exc:
                 self._log_preparation_failure(
@@ -187,8 +196,8 @@ class ConversationService:
                 conversation = self.repository.create_conversation(
                     trainer_context.trainer_id,
                     trainer_context.client_id,
-                    "onboarding" if self._should_run_trainer_onboarding(trainer_context) else self.DEFAULT_CONVERSATION_TYPE,
-                    self._initial_conversation_stage(trainer_context),
+                    "onboarding" if should_run_onboarding else self.DEFAULT_CONVERSATION_TYPE,
+                    self._initial_conversation_stage(trainer_context, request),
                 )
             except Exception as exc:
                 self._log_preparation_failure(
@@ -200,16 +209,39 @@ class ConversationService:
                 raise
         return conversation
 
-    def _initial_conversation_stage(self, trainer_context: TrainerContext) -> str:
-        if self._should_run_trainer_onboarding(trainer_context):
-            return f"{self.TRAINER_ONBOARDING_STAGE_PREFIX}1"
+    def _initial_conversation_stage(self, trainer_context: TrainerContext, request: ChatRequest) -> str:
+        if self._should_run_trainer_onboarding(trainer_context, request):
+            return "trainer_onboarding_welcome"
         return "router_initialized"
 
     def _is_trainer_only_context(self, trainer_context: TrainerContext) -> bool:
         return bool(trainer_context.trainer_id and not trainer_context.client_id)
 
-    def _should_run_trainer_onboarding(self, trainer_context: TrainerContext) -> bool:
-        return self._is_trainer_only_context(trainer_context) and not trainer_context.trainer_onboarding_completed
+    def _trainer_onboarding_action(self, request: ChatRequest) -> str | None:
+        client_context = request.client_context if isinstance(request.client_context, dict) else {}
+        raw_action = client_context.get("onboarding_action")
+        if not isinstance(raw_action, str):
+            return None
+        action = raw_action.strip().lower()
+        return action or None
+
+    def _is_onboarding_bootstrap(self, request: ChatRequest) -> bool:
+        client_context = request.client_context if isinstance(request.client_context, dict) else {}
+        return bool(client_context.get("onboarding_bootstrap"))
+
+    def _is_explicit_trainer_onboarding_launch(self, request: ChatRequest) -> bool:
+        client_context = request.client_context if isinstance(request.client_context, dict) else {}
+        entrypoint = str(client_context.get("entrypoint") or "").strip().lower()
+        if entrypoint != "trainer_agent_training":
+            return False
+        return self._trainer_onboarding_action(request) in {"continue", "resume", "review", "retrain"}
+
+    def _should_run_trainer_onboarding(self, trainer_context: TrainerContext, request: ChatRequest) -> bool:
+        if not self._is_trainer_only_context(trainer_context):
+            return False
+        if not trainer_context.trainer_onboarding_completed:
+            return True
+        return self._is_explicit_trainer_onboarding_launch(request)
 
     def _build_prompt(
         self,
@@ -405,102 +437,44 @@ class ConversationService:
             )
             raise ConversationProcessingError("Chat response could not be completed") from exc
 
-    def _list_user_messages(self, conversation_id: str) -> list[dict[str, Any]]:
-        return [message for message in self.repository.list_messages(conversation_id, limit=50) if message.get("role") == "user"]
-
-    def _trainer_onboarding_state(self, conversation_id: str) -> tuple[int, bool, list[dict[str, Any]]]:
-        answers = self._list_user_messages(conversation_id)
-        question_count = len(self.TRAINER_ONBOARDING_QUESTIONS)
-        completed = len(answers) >= question_count
-        next_index = min(len(answers), question_count - 1)
-        return next_index, completed, answers
-
-    def _build_trainer_onboarding_summary(
-        self,
-        trainer_context: TrainerContext,
-        answers: list[dict[str, Any]],
-    ) -> str:
-        answer_text = [answer.get("message_text", "").strip() for answer in answers[: len(self.TRAINER_ONBOARDING_QUESTIONS)]]
-        while len(answer_text) < len(self.TRAINER_ONBOARDING_QUESTIONS):
-            answer_text.append("")
-        return (
-            "Got it - here's how I'll coach like you:\n\n"
-            f"Style: {answer_text[0] or 'Still taking shape.'}\n"
-            f"Belief: {answer_text[1] or 'Still taking shape.'}\n"
-            f"Programming focus: {answer_text[2] or 'Still taking shape.'}\n"
-            f"Adjustment logic: {answer_text[3] or 'Still taking shape.'}\n"
-            f"Motivation style: {answer_text[4] or 'Still taking shape.'}\n\n"
-            "You can tweak this anytime. I'll use this as the starting point for your MODE coaching assistant."
+    def _trainer_onboarding_progress_from_context(self, trainer_context: TrainerContext) -> dict[str, Any]:
+        total_steps = max(1, int(trainer_context.trainer_onboarding_total_steps or 8))
+        completed_steps = max(0, min(total_steps, int(trainer_context.trainer_onboarding_completed_steps or 0)))
+        current_step = "complete" if trainer_context.trainer_onboarding_completed else (
+            trainer_context.trainer_onboarding_last_step or "welcome"
         )
-
-    def _upsert_trainer_onboarding_persona(
-        self,
-        trainer_context: TrainerContext,
-        answers: list[dict[str, Any]],
-    ) -> None:
-        if not trainer_context.trainer_id:
-            return
-        answer_text = [answer.get("message_text", "").strip() for answer in answers[: len(self.TRAINER_ONBOARDING_QUESTIONS)]]
-        while len(answer_text) < len(self.TRAINER_ONBOARDING_QUESTIONS):
-            answer_text.append("")
-
-        existing = self.trainer_persona_repository.get_default_by_trainer(trainer_context.trainer_id)
-        payload = {
-            "persona_name": (existing or {}).get("persona_name") or trainer_context.persona_name or "Default Coach",
-            "tone_description": answer_text[0] or (existing or {}).get("tone_description"),
-            "coaching_philosophy": answer_text[1] or (existing or {}).get("coaching_philosophy"),
-            "communication_rules": {
-                **(((existing or {}).get("communication_rules")) or {}),
-                "programming_priorities": answer_text[2],
-                "motivation_response_example": answer_text[4],
-            },
-            "onboarding_preferences": {
-                **(((existing or {}).get("onboarding_preferences")) or {}),
-                "trainer_onboarding_completed": True,
-                "trainer_onboarding_version": "v1_lightweight",
-                "trainer_onboarding_answers": {
-                    "coaching_style": answer_text[0],
-                    "fitness_misconception": answer_text[1],
-                    "programming_focus": answer_text[2],
-                    "adjustment_factors": answer_text[3],
-                    "motivation_response": answer_text[4],
-                },
-            },
-            "fallback_behavior": {
-                **(((existing or {}).get("fallback_behavior")) or {}),
-                "adjustment_factors": answer_text[3],
-            },
-            "is_default": True,
+        return {
+            "completed_steps": completed_steps,
+            "total_steps": total_steps,
+            "current_step": current_step,
+            "last_completed_step": trainer_context.trainer_onboarding_last_step,
         }
-
-        if existing:
-            self.trainer_persona_repository.update(existing["id"], payload)
-            return
-
-        self.trainer_persona_repository.create(
-            {
-                "trainer_id": trainer_context.trainer_id,
-                **payload,
-            }
-        )
 
     def _build_onboarding_chat_response(
         self,
         conversation_id: str,
         trainer_context: TrainerContext,
         assistant_message: str,
+        quick_replies: list[str],
         stage: str,
         onboarding_complete: bool,
+        onboarding_status: str,
+        onboarding_progress: dict[str, Any],
+        calibration_pending: bool,
+        profile_patch: dict[str, Any] | None = None,
     ) -> ChatResponse:
         return ChatResponse(
             conversation_id=conversation_id,
             assistant_message=assistant_message,
-            quick_replies=[],
+            quick_replies=quick_replies,
             conversation_state=ConversationState(
                 current_stage=stage,
                 onboarding_complete=onboarding_complete,
+                onboarding_status=onboarding_status,
+                onboarding_progress=onboarding_progress,
+                calibration_pending=calibration_pending,
             ),
-            profile_patch={},
+            profile_patch=profile_patch or {},
             trainer_context={
                 "tenant_id": trainer_context.tenant_id,
                 "trainer_id": trainer_context.trainer_id,
@@ -519,58 +493,96 @@ class ConversationService:
         trainer_context: TrainerContext,
         request: ChatRequest,
     ) -> ChatResponse:
-        conversation = self._get_or_create_conversation(trainer_context, request)
-        user_message = self.repository.save_message(
-            conversation["id"],
-            "user",
-            request.message,
-            {
-                "client_context": request.client_context,
-                "route": {
-                    "flow": "trainer_onboarding",
-                    "reason": "trainer_setup",
-                    "task_type": "trainer_onboarding",
-                    "response_mode": "guided_question",
-                    "provider": "system",
-                    "model": "trainer-onboarding-v1",
-                },
-            },
-        )
-        del user_message
-        next_index, completed, answers = self._trainer_onboarding_state(conversation["id"])
-        if completed:
-            assistant_message = self._build_trainer_onboarding_summary(trainer_context, answers)
-            self._upsert_trainer_onboarding_persona(trainer_context, answers)
-            stage = self.TRAINER_ONBOARDING_COMPLETE_STAGE
-        else:
-            assistant_message = self.TRAINER_ONBOARDING_QUESTIONS[next_index]
-            stage = f"{self.TRAINER_ONBOARDING_STAGE_PREFIX}{next_index + 1}"
+        if not self.trainer_onboarding_service:
+            raise ConversationProcessingError("Chat response could not be completed")
+        try:
+            conversation = self._get_or_create_conversation(trainer_context, request)
+            onboarding_action = self._trainer_onboarding_action(request)
+            is_bootstrap = self._is_onboarding_bootstrap(request)
+
+            if is_bootstrap:
+                onboarding_turn = self.trainer_onboarding_service.handle_launch(
+                    trainer_context,
+                    conversation_id=conversation["id"],
+                    action=onboarding_action,
+                    source_message_id=None,
+                )
+            else:
+                user_message = self.repository.save_message(
+                    conversation["id"],
+                    "user",
+                    request.message,
+                    {
+                        "client_context": request.client_context,
+                        "route": {
+                            "flow": "trainer_onboarding_v2",
+                            "reason": "trainer_setup",
+                            "task_type": "trainer_onboarding",
+                            "response_mode": "state_machine",
+                            "provider": "system",
+                            "model": "trainer-onboarding-v2",
+                        },
+                    },
+                )
+                should_force_restart = bool(
+                    onboarding_action == "retrain"
+                    and request.conversation_id is None
+                )
+                onboarding_turn = self.trainer_onboarding_service.process_turn(
+                    trainer_context,
+                    conversation_id=conversation["id"],
+                    user_message=request.message,
+                    source_message_id=user_message.get("id"),
+                    force_restart=should_force_restart,
+                )
+        except TrainerOnboardingStorageUnavailableError as exc:
+            logger.warning(
+                "Trainer onboarding storage unavailable trainer_id=%s client_id=%s",
+                trainer_context.trainer_id,
+                trainer_context.client_id,
+                exc_info=True,
+            )
+            raise ConversationProcessingError(TRAINER_ONBOARDING_STORAGE_UNAVAILABLE_DETAIL) from exc
+
+        assistant_message = onboarding_turn.assistant_message
+        stage = f"trainer_onboarding_{onboarding_turn.current_stage}"
         self.repository.save_message(
             conversation["id"],
             "assistant",
             assistant_message,
             {
                 "provider": "system",
-                "model": "trainer-onboarding-v1",
+                "model": "trainer-onboarding-v2",
                 "route": {
-                    "flow": "trainer_onboarding",
+                    "flow": "trainer_onboarding_v2",
                     "reason": "trainer_setup",
                     "task_type": "trainer_onboarding",
-                    "response_mode": "guided_question" if not completed else "summary",
+                    "response_mode": "bootstrap" if is_bootstrap else "state_machine",
+                },
+                "onboarding_state": {
+                    "status": onboarding_turn.onboarding_status,
+                    "progress": onboarding_turn.onboarding_progress,
+                    "calibration_pending": onboarding_turn.calibration_pending,
+                    "current_stage": onboarding_turn.current_stage,
                 },
             },
         )
         self.repository.update_conversation_state(
             conversation["id"],
             stage,
-            completed,
+            onboarding_turn.onboarding_complete,
         )
         return self._build_onboarding_chat_response(
             conversation["id"],
             trainer_context,
             assistant_message,
+            onboarding_turn.quick_replies,
             stage,
-            completed,
+            onboarding_turn.onboarding_complete,
+            onboarding_turn.onboarding_status,
+            onboarding_turn.onboarding_progress,
+            onboarding_turn.calibration_pending,
+            onboarding_turn.profile_patch,
         )
 
     def _serialize_route_metadata(
@@ -870,13 +882,29 @@ class ConversationService:
         route_debug: RouteDebug,
         conversation_usage: ConversationUsage,
     ) -> ChatResponse:
+        is_trainer_only = self._is_trainer_only_context(trainer_context)
+        onboarding_status = (
+            str(trainer_context.trainer_onboarding_status or "not_started")
+            if is_trainer_only
+            else None
+        )
+        onboarding_progress = (
+            self._trainer_onboarding_progress_from_context(trainer_context)
+            if is_trainer_only
+            else None
+        )
         return ChatResponse(
             conversation_id=conversation_id,
             assistant_message=assistant_message,
             quick_replies=[],
             conversation_state=ConversationState(
                 current_stage=route.flow,
-                onboarding_complete=False,
+                onboarding_complete=bool(trainer_context.trainer_onboarding_completed) if is_trainer_only else False,
+                onboarding_status=onboarding_status,
+                onboarding_progress=onboarding_progress,
+                calibration_pending=bool(
+                    onboarding_status == "calibration_pending"
+                ) if is_trainer_only else False,
             ),
             profile_patch={},
             trainer_context={
@@ -908,10 +936,12 @@ class ConversationService:
             if request.conversation_id:
                 raise ValueError("Conversation not found")
             raise ValueError("User is not assigned to an active trainer context")
-        if self._should_run_trainer_onboarding(trainer_context):
+        if self._should_run_trainer_onboarding(trainer_context, request):
             try:
                 response = self._handle_trainer_onboarding(trainer_context, request)
             except ValueError:
+                raise
+            except ConversationProcessingError:
                 raise
             except Exception as exc:
                 raise ConversationProcessingError("Chat response could not be completed") from exc
@@ -1130,10 +1160,12 @@ class ConversationService:
             if request.conversation_id:
                 raise ValueError("Conversation not found")
             raise ValueError("User is not assigned to an active trainer context")
-        if self._should_run_trainer_onboarding(trainer_context):
+        if self._should_run_trainer_onboarding(trainer_context, request):
             try:
                 return self._handle_trainer_onboarding(trainer_context, request)
             except ValueError:
+                raise
+            except ConversationProcessingError:
                 raise
             except Exception as exc:
                 raise ConversationProcessingError("Chat response could not be completed") from exc

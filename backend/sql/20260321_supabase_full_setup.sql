@@ -204,6 +204,48 @@ CREATE TABLE IF NOT EXISTS public.trainer_response_approvals (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS public.trainer_onboarding_profiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+  trainer_id UUID NOT NULL REFERENCES public.trainers(id) ON DELETE CASCADE,
+  onboarding_status TEXT NOT NULL DEFAULT 'not_started' CHECK (
+    onboarding_status IN ('not_started', 'in_progress', 'calibration_pending', 'completed')
+  ),
+  onboarding_progress JSONB NOT NULL DEFAULT '{"completed_steps":0,"total_steps":8,"current_step":"welcome"}'::jsonb,
+  last_completed_step TEXT,
+  identity JSONB NOT NULL DEFAULT '{}'::jsonb,
+  tone JSONB NOT NULL DEFAULT '{}'::jsonb,
+  communication_preferences JSONB NOT NULL DEFAULT '{}'::jsonb,
+  coaching_examples JSONB NOT NULL DEFAULT '[]'::jsonb,
+  decision_weights JSONB NOT NULL DEFAULT '{}'::jsonb,
+  scenario_rules JSONB NOT NULL DEFAULT '[]'::jsonb,
+  philosophy JSONB NOT NULL DEFAULT '{}'::jsonb,
+  non_negotiables JSONB NOT NULL DEFAULT '[]'::jsonb,
+  boundaries JSONB NOT NULL DEFAULT '{}'::jsonb,
+  media_assets JSONB NOT NULL DEFAULT '[]'::jsonb,
+  calibration_examples JSONB NOT NULL DEFAULT '[]'::jsonb,
+  retrain_draft JSONB,
+  retrain_started_at TIMESTAMPTZ,
+  version INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (trainer_id)
+);
+
+CREATE TABLE IF NOT EXISTS public.trainer_onboarding_events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id UUID NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+  trainer_id UUID NOT NULL REFERENCES public.trainers(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES public.conversations(id) ON DELETE SET NULL,
+  source_message_id UUID REFERENCES public.conversation_messages(id) ON DELETE SET NULL,
+  step_key TEXT NOT NULL,
+  action_type TEXT NOT NULL CHECK (action_type IN ('captured', 'clarified', 'edited', 'skipped', 'approved', 'rejected')),
+  extracted_patch JSONB NOT NULL DEFAULT '{}'::jsonb,
+  confidence_score NUMERIC(4, 3),
+  actor_role TEXT NOT NULL CHECK (actor_role IN ('trainer', 'assistant', 'system')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_workout_plans_user_id ON public.workout_plans (user_id);
 CREATE INDEX IF NOT EXISTS idx_workouts_user_id ON public.workouts (user_id);
 CREATE INDEX IF NOT EXISTS idx_workouts_plan_id ON public.workouts (plan_id);
@@ -231,6 +273,13 @@ CREATE INDEX IF NOT EXISTS idx_unanswered_question_queue_trainer_id ON public.un
 CREATE INDEX IF NOT EXISTS idx_unanswered_question_queue_status ON public.unanswered_question_queue (status);
 CREATE INDEX IF NOT EXISTS idx_trainer_response_approvals_queue_id ON public.trainer_response_approvals (queue_id);
 CREATE INDEX IF NOT EXISTS idx_trainer_response_approvals_trainer_id ON public.trainer_response_approvals (trainer_id);
+CREATE INDEX IF NOT EXISTS idx_trainer_onboarding_profiles_tenant_trainer ON public.trainer_onboarding_profiles (tenant_id, trainer_id);
+CREATE INDEX IF NOT EXISTS idx_trainer_onboarding_profiles_status ON public.trainer_onboarding_profiles (onboarding_status);
+CREATE INDEX IF NOT EXISTS idx_trainer_onboarding_profiles_retrain_started_at
+  ON public.trainer_onboarding_profiles (retrain_started_at DESC)
+  WHERE retrain_started_at IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_trainer_onboarding_events_trainer_time ON public.trainer_onboarding_events (trainer_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_trainer_onboarding_events_conversation ON public.trainer_onboarding_events (conversation_id, created_at DESC);
 
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.workout_plans ENABLE ROW LEVEL SECURITY;
@@ -250,6 +299,8 @@ ALTER TABLE public.onboarding_answers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.coach_memory ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.unanswered_question_queue ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.trainer_response_approvals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.trainer_onboarding_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.trainer_onboarding_events ENABLE ROW LEVEL SECURITY;
 
 ALTER TABLE public.profiles FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.workout_plans FORCE ROW LEVEL SECURITY;
@@ -269,6 +320,8 @@ ALTER TABLE public.onboarding_answers FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.coach_memory FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.unanswered_question_queue FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.trainer_response_approvals FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.trainer_onboarding_profiles FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.trainer_onboarding_events FORCE ROW LEVEL SECURITY;
 
 GRANT SELECT, INSERT, UPDATE ON public.profiles TO authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.workout_plans TO authenticated;
@@ -288,6 +341,8 @@ GRANT SELECT, INSERT, UPDATE ON public.trainer_program_templates TO authenticate
 GRANT SELECT, INSERT, UPDATE ON public.trainer_faq_examples TO authenticated;
 GRANT SELECT, INSERT, UPDATE ON public.unanswered_question_queue TO authenticated;
 GRANT SELECT, INSERT ON public.trainer_response_approvals TO authenticated;
+GRANT SELECT, INSERT, UPDATE ON public.trainer_onboarding_profiles TO authenticated;
+GRANT SELECT, INSERT ON public.trainer_onboarding_events TO authenticated;
 
 DO $$
 BEGIN
@@ -1640,6 +1695,45 @@ CREATE POLICY trainer_response_approvals_trainer_only ON public.trainer_response
 CREATE POLICY trainer_response_approvals_insert_trainer_only ON public.trainer_response_approvals
   FOR INSERT TO authenticated
   WITH CHECK (public.auth_is_trainer_user(trainer_id));
+
+CREATE POLICY trainer_onboarding_profiles_select_own ON public.trainer_onboarding_profiles
+  FOR SELECT TO authenticated
+  USING (
+    public.auth_is_trainer_user(trainer_id)
+    AND public.auth_is_tenant_member(tenant_id)
+  );
+
+CREATE POLICY trainer_onboarding_profiles_insert_own ON public.trainer_onboarding_profiles
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.auth_is_trainer_user(trainer_id)
+    AND public.auth_is_tenant_member(tenant_id)
+  );
+
+CREATE POLICY trainer_onboarding_profiles_update_own ON public.trainer_onboarding_profiles
+  FOR UPDATE TO authenticated
+  USING (
+    public.auth_is_trainer_user(trainer_id)
+    AND public.auth_is_tenant_member(tenant_id)
+  )
+  WITH CHECK (
+    public.auth_is_trainer_user(trainer_id)
+    AND public.auth_is_tenant_member(tenant_id)
+  );
+
+CREATE POLICY trainer_onboarding_events_select_own ON public.trainer_onboarding_events
+  FOR SELECT TO authenticated
+  USING (
+    public.auth_is_trainer_user(trainer_id)
+    AND public.auth_is_tenant_member(tenant_id)
+  );
+
+CREATE POLICY trainer_onboarding_events_insert_own ON public.trainer_onboarding_events
+  FOR INSERT TO authenticated
+  WITH CHECK (
+    public.auth_is_trainer_user(trainer_id)
+    AND public.auth_is_tenant_member(tenant_id)
+  );
 
 COMMIT;
 

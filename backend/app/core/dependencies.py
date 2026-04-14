@@ -22,6 +22,8 @@ from app.modules.trainer_home.repository import TrainerHomeRepository
 from app.modules.trainer_home.service import TrainerHomeService
 from app.modules.trainer_intelligence.repository import TrainerIntelligenceRepository
 from app.modules.trainer_intelligence.service import TrainerIntelligenceService
+from app.modules.trainer_onboarding.repository import TrainerOnboardingRepository
+from app.modules.trainer_onboarding.service import TrainerOnboardingService
 from app.modules.trainer_persona.repository import TrainerPersonaRepository
 from app.modules.trainer_persona.service import TrainerPersonaService
 from app.modules.trainer_review.repository import TrainerReviewRepository
@@ -104,6 +106,22 @@ def get_trainer_persona_service(
     repository: TrainerPersonaRepository = Depends(get_trainer_persona_repository),
 ) -> TrainerPersonaService:
     return TrainerPersonaService(repository)
+
+
+def get_trainer_onboarding_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> TrainerOnboardingRepository:
+    return TrainerOnboardingRepository(supabase)
+
+
+def get_trainer_onboarding_service(
+    repository: TrainerOnboardingRepository = Depends(get_trainer_onboarding_repository),
+    trainer_persona_repository: TrainerPersonaRepository = Depends(get_trainer_persona_repository),
+) -> TrainerOnboardingService:
+    return TrainerOnboardingService(
+        repository=repository,
+        trainer_persona_repository=trainer_persona_repository,
+    )
 
 
 def get_trainer_knowledge_repository(
@@ -195,6 +213,7 @@ def get_conversation_service(
     profile_service: ProfileService = Depends(get_profile_service),
     trainer_review_service: TrainerReviewService = Depends(get_trainer_review_service),
     trainer_persona_repository: TrainerPersonaRepository = Depends(get_trainer_persona_repository),
+    trainer_onboarding_service: TrainerOnboardingService = Depends(get_trainer_onboarding_service),
     ai_feedback_logger_service: AIFeedbackService = Depends(get_ai_feedback_logger_service),
     trainer_intelligence_service: TrainerIntelligenceService = Depends(get_trainer_intelligence_service),
 ) -> ConversationService:
@@ -203,6 +222,7 @@ def get_conversation_service(
         profile_service,
         trainer_review_service,
         trainer_persona_repository,
+        trainer_onboarding_service=trainer_onboarding_service,
         ai_feedback_logger_service=ai_feedback_logger_service,
         trainer_intelligence_service=trainer_intelligence_service,
     )

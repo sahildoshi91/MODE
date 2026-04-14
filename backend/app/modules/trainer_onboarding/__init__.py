@@ -1,0 +1,1 @@
+"""Trainer onboarding domain module."""

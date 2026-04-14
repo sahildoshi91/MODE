@@ -1,8 +1,19 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
 from app.api.v1 import api_router
 from app.api.v1.workouts import router as workout_router
+from app.core.config import settings
 
 app = FastAPI(title="MODE Backend", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_allow_origins_list,
+    allow_credentials=settings.cors_allow_credentials,
+    allow_methods=settings.cors_allow_methods_list,
+    allow_headers=settings.cors_allow_headers_list,
+)
 
 app.include_router(workout_router, prefix="/workouts", tags=["workouts"])
 app.include_router(api_router)

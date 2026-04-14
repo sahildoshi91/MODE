@@ -1,4 +1,5 @@
 import json
+from typing import Literal
 from typing import Any
 from uuid import UUID
 
@@ -9,6 +10,9 @@ from pydantic import field_validator
 class ConversationState(BaseModel):
     current_stage: str = "welcome"
     onboarding_complete: bool = False
+    onboarding_status: Literal["not_started", "in_progress", "calibration_pending", "completed"] | None = None
+    onboarding_progress: dict[str, Any] | None = None
+    calibration_pending: bool = False
 
 
 class ChatRequest(BaseModel):

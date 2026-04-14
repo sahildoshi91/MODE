@@ -1,6 +1,7 @@
 jest.mock('../../services/trainerKnowledgeApi', () => ({
   archiveTrainerRule: jest.fn().mockResolvedValue({}),
   createTrainerKnowledgeDocument: jest.fn().mockResolvedValue({}),
+  deleteTrainerKnowledgeDocument: jest.fn().mockResolvedValue({}),
   ingestTrainerKnowledgeDocument: jest.fn().mockResolvedValue({
     extraction: { rules_created: 0 },
   }),
@@ -26,6 +27,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import TrainerHomeScreen from '../TrainerHomeScreen';
 import {
+  deleteTrainerKnowledgeDocument,
   listTrainerKnowledgeDocuments,
   listTrainerRules,
   saveTrainerKnowledgeDocumentWithFallback,
@@ -39,7 +41,7 @@ async function flushEffects() {
   });
 }
 
-async function renderScreen() {
+async function renderScreen(overrides = {}) {
   let tree;
   await act(async () => {
     tree = renderer.create(
@@ -48,6 +50,7 @@ async function renderScreen() {
           accessToken="trainer-access-token"
           viewerDisplayName="Coach Maya"
           trainerOnboardingCompleted
+          {...overrides}
         />
       </SafeAreaProvider>,
     );
@@ -248,6 +251,94 @@ describe('TrainerHomeScreen smoke', () => {
     expect(listTrainerKnowledgeDocuments).toHaveBeenCalledTimes(2);
   });
 
+  it('shows continue onboarding state when onboarding has not started', async () => {
+    const tree = await renderScreen({
+      trainerOnboardingCompleted: false,
+      trainerOnboardingStatus: 'not_started',
+      trainerOnboardingCompletedSteps: 0,
+      trainerOnboardingTotalSteps: 8,
+    });
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Complete your coaching profile');
+    expect(rendered).toContain('Continue onboarding');
+  });
+
+  it('shows resume onboarding state with progress when onboarding is in progress', async () => {
+    const tree = await renderScreen({
+      trainerOnboardingCompleted: false,
+      trainerOnboardingStatus: 'in_progress',
+      trainerOnboardingCompletedSteps: 3,
+      trainerOnboardingTotalSteps: 8,
+      trainerOnboardingLastStep: 'voice_calibration',
+    });
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Complete your coaching profile');
+    expect(rendered).toContain('3 of 8 steps completed');
+    expect(rendered).toContain('Resume onboarding');
+  });
+
+  it('shows completed onboarding actions when onboarding is complete', async () => {
+    const tree = await renderScreen({
+      trainerOnboardingCompleted: true,
+      trainerOnboardingStatus: 'completed',
+      trainerOnboardingCompletedSteps: 8,
+      trainerOnboardingTotalSteps: 8,
+    });
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Coach Settings');
+    expect(rendered).toContain('Coaching profile complete');
+    expect(rendered).toContain('Review coach settings');
+    expect(rendered).toContain('Retrain coach');
+    expect(rendered).not.toContain('Complete your coaching profile');
+    expect(rendered).not.toContain('Continue onboarding');
+  });
+
+  it('launches coach review action from completed onboarding card', async () => {
+    const onOpenCoachTraining = jest.fn();
+    const tree = await renderScreen({
+      trainerOnboardingCompleted: true,
+      trainerOnboardingStatus: 'completed',
+      trainerOnboardingCompletedSteps: 8,
+      trainerOnboardingTotalSteps: 8,
+      onOpenCoachTraining,
+    });
+    const reviewButton = tree.root.findByProps({
+      testID: 'trainer-home-onboarding-review',
+    });
+
+    await act(async () => {
+      reviewButton.props.onPress();
+    });
+
+    expect(onOpenCoachTraining).toHaveBeenCalledWith({
+      entrypoint: 'trainer_agent_training',
+      onboarding_action: 'review',
+    });
+  });
+
+  it('launches coach retrain action from completed onboarding card', async () => {
+    const onOpenCoachTraining = jest.fn();
+    const tree = await renderScreen({
+      trainerOnboardingCompleted: true,
+      trainerOnboardingStatus: 'completed',
+      trainerOnboardingCompletedSteps: 8,
+      trainerOnboardingTotalSteps: 8,
+      onOpenCoachTraining,
+    });
+    const retrainButton = tree.root.findByProps({
+      testID: 'trainer-home-onboarding-retrain',
+    });
+
+    await act(async () => {
+      retrainButton.props.onPress();
+    });
+
+    expect(onOpenCoachTraining).toHaveBeenCalledWith({
+      entrypoint: 'trainer_agent_training',
+      onboarding_action: 'retrain',
+    });
+  });
+
   it('opens, edits, and resaves a saved knowledge document', async () => {
     updateTrainerKnowledgeDocument.mockResolvedValueOnce({
       document: {
@@ -310,6 +401,48 @@ describe('TrainerHomeScreen smoke', () => {
 
     const rendered = JSON.stringify(tree.toJSON());
     expect(rendered).toContain('Saved changes.');
+  });
+
+  it('deletes a saved knowledge document on first press', async () => {
+    listTrainerKnowledgeDocuments
+      .mockResolvedValueOnce([
+        {
+          id: 'doc-1',
+          title: 'Progression Notes',
+          document_type: 'text',
+          raw_text: 'Start with movement quality before adding load.',
+          created_at: '2026-04-11T10:00:00+00:00',
+        },
+      ])
+      .mockResolvedValueOnce([]);
+
+    const tree = await renderScreen();
+    const openDocButton = tree.root.findByProps({
+      testID: 'trainer-home-open-saved-doc-doc-1',
+    });
+
+    await act(async () => {
+      openDocButton.props.onPress();
+    });
+
+    const deleteButton = tree.root.findByProps({
+      testID: 'trainer-home-delete-saved-doc',
+    });
+
+    await act(async () => {
+      await deleteButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(deleteTrainerKnowledgeDocument).toHaveBeenCalledWith({
+      accessToken: 'trainer-access-token',
+      documentId: 'doc-1',
+    });
+    expect(deleteTrainerKnowledgeDocument).toHaveBeenCalledTimes(1);
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).not.toContain('Knowledge Document');
+    expect(rendered).toContain('No training notes yet. Save your first coaching document above.');
   });
 
   it('shows a refreshing state while Saved Knowledge is refreshing', async () => {

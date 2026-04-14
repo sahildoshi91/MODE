@@ -81,16 +81,40 @@ export function getApiBaseUrls() {
   const loopbackBaseUrls = buildLoopbackBaseUrls();
   const preferAutoDetectedBaseUrls = isLocalNetworkUrl(configuredBaseUrl) && !shouldSuppressLoopbackFallbacks(configuredBaseUrl);
   const includeLoopbackBaseUrls = !shouldSuppressLoopbackFallbacks(configuredBaseUrl);
-  const candidates = [
-    preferredApiBaseUrl,
-    ...(shouldSuppressLoopbackFallbacks(configuredBaseUrl) ? [configuredBaseUrl] : []),
-    ...(preferAutoDetectedBaseUrls ? autoDetectedBaseUrls : []),
-    ...(shouldSuppressLoopbackFallbacks(configuredBaseUrl) ? [] : [configuredBaseUrl]),
-    ...(preferAutoDetectedBaseUrls ? [] : autoDetectedBaseUrls),
-    ...(includeLoopbackBaseUrls ? loopbackBaseUrls : []),
-  ].filter(Boolean);
+  const prioritizeConfiguredFirst = Boolean(
+    Constants.isDevice && isLocalNetworkUrl(configuredBaseUrl) && !isLoopbackUrl(configuredBaseUrl),
+  );
+  const candidates = [];
+  const pushCandidate = (url) => {
+    if (!url || candidates.includes(url)) {
+      return;
+    }
+    candidates.push(url);
+  };
 
-  return [...new Set(candidates)];
+  if (prioritizeConfiguredFirst) {
+    pushCandidate(configuredBaseUrl);
+    autoDetectedBaseUrls.forEach(pushCandidate);
+    return candidates;
+  }
+
+  pushCandidate(preferredApiBaseUrl);
+  if (shouldSuppressLoopbackFallbacks(configuredBaseUrl)) {
+    pushCandidate(configuredBaseUrl);
+  } else {
+    if (preferAutoDetectedBaseUrls) {
+      autoDetectedBaseUrls.forEach(pushCandidate);
+    }
+    pushCandidate(configuredBaseUrl);
+    if (!preferAutoDetectedBaseUrls) {
+      autoDetectedBaseUrls.forEach(pushCandidate);
+    }
+  }
+  if (includeLoopbackBaseUrls) {
+    loopbackBaseUrls.forEach(pushCandidate);
+  }
+
+  return candidates;
 }
 
 export function rememberApiBaseUrl(baseUrl) {

@@ -18,22 +18,47 @@ class ConversationRepository:
         )
         return response.data[0] if response.data else None
 
-    def find_active_conversation(self, client_id: str | None, trainer_id: str | None) -> dict[str, Any] | None:
+    def find_active_conversation(
+        self,
+        client_id: str | None,
+        trainer_id: str | None,
+        preferred_types: list[str] | None = None,
+        fallback_to_any: bool = True,
+    ) -> dict[str, Any] | None:
         if not trainer_id:
             return None
-        query = (
-            self.supabase
-            .table("conversations")
-            .select("*")
-            .eq("status", "active")
-            .eq("trainer_id", trainer_id)
-        )
-        if client_id:
-            query = query.eq("client_id", client_id)
-        else:
-            query = query.is_("client_id", "null")
-        response = query.limit(1).execute()
-        return response.data[0] if response.data else None
+
+        def query_active(conversation_type: str | None = None) -> dict[str, Any] | None:
+            query = (
+                self.supabase
+                .table("conversations")
+                .select("*")
+                .eq("status", "active")
+                .eq("trainer_id", trainer_id)
+            )
+            if client_id:
+                query = query.eq("client_id", client_id)
+            else:
+                query = query.is_("client_id", "null")
+            if conversation_type:
+                query = query.eq("type", conversation_type)
+            response = (
+                query
+                .order("updated_at", desc=True)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return response.data[0] if response.data else None
+
+        for conversation_type in preferred_types or []:
+            candidate = query_active(conversation_type)
+            if candidate:
+                return candidate
+
+        if fallback_to_any:
+            return query_active()
+        return None
 
     def create_conversation(
         self,

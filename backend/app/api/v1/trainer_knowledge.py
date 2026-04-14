@@ -70,6 +70,22 @@ async def update_document(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.delete("/{document_id}", response_model=TrainerKnowledgeDocument)
+async def delete_document(
+    document_id: str,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerKnowledgeService = Depends(get_trainer_knowledge_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.delete_document(trainer_context, document_id)
+    except ValueError as exc:
+        if str(exc).lower() == "document not found":
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/rules", response_model=list[TrainerRule])
 async def list_rules(
     include_archived: bool = Query(default=False),

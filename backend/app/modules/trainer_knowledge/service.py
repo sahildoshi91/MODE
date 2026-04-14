@@ -125,6 +125,23 @@ class TrainerKnowledgeService:
             extraction=extraction_summary,
         )
 
+    def delete_document(
+        self,
+        trainer_context: TrainerContext,
+        document_id: str,
+    ) -> TrainerKnowledgeDocument:
+        trainer_id = trainer_context.trainer_id
+        if not trainer_id:
+            raise ValueError("No trainer context found")
+
+        existing = self.repository.get_document(trainer_id, document_id)
+        if not existing:
+            raise ValueError("Document not found")
+
+        self.repository.delete_rules_by_document(trainer_id, document_id)
+        self.repository.delete_document(trainer_id, document_id)
+        return TrainerKnowledgeDocument(**existing)
+
     def list_rules(
         self,
         trainer_id: str,

@@ -132,6 +132,16 @@ export function updateTrainerKnowledgeDocument({
   });
 }
 
+export function deleteTrainerKnowledgeDocument({
+  accessToken,
+  documentId,
+}) {
+  return requestTrainerKnowledge(`/api/v1/trainer-knowledge/${encodeURIComponent(documentId)}`, {
+    accessToken,
+    method: 'DELETE',
+  });
+}
+
 export async function saveTrainerKnowledgeDocumentWithFallback({
   accessToken,
   title,

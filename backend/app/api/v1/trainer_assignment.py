@@ -24,6 +24,15 @@ class TrainerAssignmentStatus(BaseModel):
     viewer_role: Literal["trainer", "client", "unassigned"] = "unassigned"
     viewer_display_name: str | None = None
     trainer_onboarding_completed: bool = False
+    trainer_onboarding_status: Literal[
+        "not_started",
+        "in_progress",
+        "calibration_pending",
+        "completed",
+    ] = "not_started"
+    trainer_onboarding_completed_steps: int = 0
+    trainer_onboarding_total_steps: int = 8
+    trainer_onboarding_last_step: str | None = None
     available_trainers: list[TrainerOption] = Field(default_factory=list)
     available_trainers_count: int = 0
     scope: Literal["tenant", "global_fallback"] = "global_fallback"
@@ -88,6 +97,17 @@ def _build_status_response(
     needs_assignment = not trainer_context.trainer_id
     scoped_trainers = (available_trainers or []) if needs_assignment else []
     viewer_role = _resolve_viewer_role(trainer_context=trainer_context, user=user)
+    total_steps = max(1, int(trainer_context.trainer_onboarding_total_steps or 8))
+    completed_steps = max(0, int(trainer_context.trainer_onboarding_completed_steps or 0))
+    onboarding_status = str(
+        trainer_context.trainer_onboarding_status
+        or ("completed" if trainer_context.trainer_onboarding_completed else "not_started")
+    )
+    if onboarding_status not in {"not_started", "in_progress", "calibration_pending", "completed"}:
+        onboarding_status = "completed" if trainer_context.trainer_onboarding_completed else "not_started"
+    if trainer_context.trainer_onboarding_completed:
+        onboarding_status = "completed"
+        completed_steps = max(completed_steps, total_steps)
     return TrainerAssignmentStatus(
         needs_assignment=needs_assignment,
         assigned_trainer_id=trainer_context.trainer_id,
@@ -99,6 +119,10 @@ def _build_status_response(
             viewer_role=viewer_role,
         ),
         trainer_onboarding_completed=bool(trainer_context.trainer_onboarding_completed),
+        trainer_onboarding_status=onboarding_status,
+        trainer_onboarding_completed_steps=min(total_steps, completed_steps),
+        trainer_onboarding_total_steps=total_steps,
+        trainer_onboarding_last_step=trainer_context.trainer_onboarding_last_step,
         available_trainers=[
             TrainerOption(id=trainer["id"], display_name=trainer["display_name"])
             for trainer in scoped_trainers

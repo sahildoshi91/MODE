@@ -9,9 +9,12 @@ export function buildApiNetworkError(error, path, options = {}) {
     ? error.attemptedBaseUrls
     : getApiBaseUrls();
   const resolvedApiBaseUrl = resolveApiBaseUrl();
+  const normalizedAttemptedBaseUrls = attemptedBaseUrls.length > 0
+    ? attemptedBaseUrls
+    : (resolvedApiBaseUrl ? [resolvedApiBaseUrl] : []);
   const requestDebugState = getApiRequestDebugState();
-  const attemptedHosts = attemptedBaseUrls.length > 0
-    ? ` Tried: ${attemptedBaseUrls.join(', ')}.`
+  const attemptedHosts = normalizedAttemptedBaseUrls.length > 0
+    ? ` Tried: ${normalizedAttemptedBaseUrls.join(', ')}.`
     : '';
   const appendAttemptedHosts = (message) => {
     if (!attemptedHosts) {
@@ -33,7 +36,7 @@ export function buildApiNetworkError(error, path, options = {}) {
   networkError.hint = null;
   networkError.request_id = null;
   networkError.resolved_api_base_url = resolvedApiBaseUrl;
-  networkError.attempted_base_urls = attemptedBaseUrls;
+  networkError.attempted_base_urls = normalizedAttemptedBaseUrls;
   networkError.last_successful_base_url = requestDebugState.lastSuccessfulBaseUrl || null;
   networkError.raw_error_message = errorMessage;
   return networkError;

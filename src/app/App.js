@@ -24,6 +24,7 @@ const FLOATING_NAV_PILL_HEIGHT = 62;
 const COACH_CHAT_NAV_GAP = 2;
 const COACH_CHAT_DOCK_CLEARANCE =
   FLOATING_NAV_BOTTOM_OFFSET + FLOATING_NAV_PILL_HEIGHT + COACH_CHAT_NAV_GAP;
+const ASSIGNMENT_STATUS_AUTO_RETRY_DELAY_MS = 900;
 const VIEWER_ROLE = {
   TRAINER: 'trainer',
   CLIENT: 'client',
@@ -34,8 +35,11 @@ function formatAssignmentError(error, fallbackMessage) {
   const message = error?.message || fallbackMessage;
   return {
     message,
+    isNetworkError: error?.stage === 'network',
     requestId: error?.request_id || null,
     apiBase: error?.api_base_url || error?.resolved_api_base_url || null,
+    attemptedBases: Array.isArray(error?.attempted_base_urls) ? error.attempted_base_urls : [],
+    rawNetworkMessage: error?.raw_error_message || null,
   };
 }
 
@@ -56,6 +60,7 @@ function AppShell() {
   const [insightsOrigin, setInsightsOrigin] = useState('progress');
   const tabOpacity = useRef(new Animated.Value(1)).current;
   const tabTranslateY = useRef(new Animated.Value(0)).current;
+  const assignmentStatusAutoRetryUsedRef = useRef(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -99,11 +104,12 @@ function AppShell() {
   }, []);
 
   const loadAssignmentStatus = useCallback(
-    async ({ accessTokenOverride } = {}) => {
+    async ({ accessTokenOverride, allowAutoRetry = false } = {}) => {
       const accessToken = accessTokenOverride || session?.access_token;
       if (!accessToken) {
         setAssignmentStatus(null);
         setAssignmentStatusError(null);
+        assignmentStatusAutoRetryUsedRef.current = false;
         return null;
       }
 
@@ -113,8 +119,19 @@ function AppShell() {
       try {
         const status = await getTrainerAssignmentStatus({ accessToken });
         setAssignmentStatus(status);
+        assignmentStatusAutoRetryUsedRef.current = false;
         return status;
       } catch (error) {
+        const shouldAutoRetry = Boolean(
+          allowAutoRetry
+            && !assignmentStatusAutoRetryUsedRef.current
+            && error?.stage === 'network',
+        );
+        if (shouldAutoRetry) {
+          assignmentStatusAutoRetryUsedRef.current = true;
+          await new Promise((resolve) => setTimeout(resolve, ASSIGNMENT_STATUS_AUTO_RETRY_DELAY_MS));
+          return loadAssignmentStatus({ accessTokenOverride: accessToken, allowAutoRetry: false });
+        }
         setAssignmentStatus(null);
         setAssignmentStatusError(
           formatAssignmentError(error, 'Unable to load trainer assignment status.'),
@@ -132,9 +149,11 @@ function AppShell() {
       setAssignmentStatus(null);
       setAssignmentStatusError(null);
       setAssignTrainerError(null);
+      assignmentStatusAutoRetryUsedRef.current = false;
       return;
     }
-    loadAssignmentStatus({ accessTokenOverride: session.access_token });
+    assignmentStatusAutoRetryUsedRef.current = false;
+    loadAssignmentStatus({ accessTokenOverride: session.access_token, allowAutoRetry: true });
   }, [session?.access_token, loadAssignmentStatus]);
 
   useEffect(() => {
@@ -159,6 +178,7 @@ function AppShell() {
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
+    assignmentStatusAutoRetryUsedRef.current = false;
     setSession(null);
     setAssignmentStatus(null);
     setAssignmentStatusError(null);
@@ -210,14 +230,67 @@ function AppShell() {
     setActiveTab('coach');
   };
 
-  const handleOpenTrainerCoach = () => {
+  const handleOpenTrainerCoach = (launchContext = null) => {
+    const normalizedLaunchContext = launchContext && typeof launchContext === 'object'
+      ? launchContext
+      : {};
+    const normalizedOnboardingStatus = typeof assignmentStatus?.trainer_onboarding_status === 'string'
+      ? assignmentStatus.trainer_onboarding_status.trim().toLowerCase()
+      : 'not_started';
+    const onboardingComplete = Boolean(
+      assignmentStatus?.trainer_onboarding_completed || normalizedOnboardingStatus === 'completed',
+    );
+    const onboardingInProgress = !onboardingComplete && (
+      normalizedOnboardingStatus === 'in_progress'
+      || normalizedOnboardingStatus === 'calibration_pending'
+      || Number(assignmentStatus?.trainer_onboarding_completed_steps ?? 0) > 0
+    );
+    const hasExplicitOnboardingAction = typeof normalizedLaunchContext.onboarding_action === 'string'
+      && normalizedLaunchContext.onboarding_action.trim().length > 0;
+    const fallbackOnboardingAction = onboardingComplete
+      ? null
+      : (onboardingInProgress ? 'resume' : 'continue');
     setCoachOverlayContext(null);
-    setChatLaunchContext({ entrypoint: 'trainer_agent_training' });
+    setChatLaunchContext({
+      entrypoint: 'trainer_agent_training',
+      ...normalizedLaunchContext,
+      ...(!hasExplicitOnboardingAction && fallbackOnboardingAction
+        ? { onboarding_action: fallbackOnboardingAction }
+        : {}),
+    });
     setActiveTab('coach');
   };
 
   const viewerRole = assignmentStatus?.viewer_role || VIEWER_ROLE.UNASSIGNED;
   const isTrainerViewer = viewerRole === VIEWER_ROLE.TRAINER;
+  const normalizedTrainerOnboardingStatus = typeof assignmentStatus?.trainer_onboarding_status === 'string'
+    ? assignmentStatus.trainer_onboarding_status.trim().toLowerCase()
+    : 'not_started';
+  const trainerOnboardingComplete = Boolean(
+    assignmentStatus?.trainer_onboarding_completed || normalizedTrainerOnboardingStatus === 'completed',
+  );
+  const trainerOnboardingInProgress = !trainerOnboardingComplete && (
+    normalizedTrainerOnboardingStatus === 'in_progress'
+    || normalizedTrainerOnboardingStatus === 'calibration_pending'
+    || Number(assignmentStatus?.trainer_onboarding_completed_steps ?? 0) > 0
+  );
+  const resolvedTrainerCoachLaunchContext = (
+    !isTrainerViewer
+      || (chatLaunchContext && typeof chatLaunchContext === 'object')
+      || trainerOnboardingComplete
+  )
+    ? chatLaunchContext
+    : {
+      entrypoint: 'trainer_agent_training',
+      onboarding_action: trainerOnboardingInProgress ? 'resume' : 'continue',
+    };
+
+  useEffect(() => {
+    if (!session?.access_token || !isTrainerViewer || activeTab !== 'home') {
+      return;
+    }
+    loadAssignmentStatus({ accessTokenOverride: session.access_token });
+  }, [activeTab, isTrainerViewer, loadAssignmentStatus, session?.access_token]);
 
   useEffect(() => {
     if (isTrainerViewer && activeTab === 'progress') {
@@ -330,8 +403,11 @@ function AppShell() {
             statusLoadFailed={isBlockingStatusError}
             isSubmitting={isAssigningTrainer}
             errorMessage={assignmentError?.message || null}
+            isNetworkError={Boolean(assignmentError?.isNetworkError)}
             errorRequestId={assignmentError?.requestId || null}
             errorApiBase={assignmentError?.apiBase || null}
+            errorAttemptedBases={assignmentError?.attemptedBases || []}
+            errorRawNetworkMessage={assignmentError?.rawNetworkMessage || null}
             onRetryStatusLoad={loadAssignmentStatus}
             onAssignTrainer={handleAssignTrainer}
             bottomInset={contentBottomInset}
@@ -368,6 +444,10 @@ function AppShell() {
                 bottomInset={contentBottomInset}
                 viewerDisplayName={assignmentStatus?.viewer_display_name || null}
                 trainerOnboardingCompleted={Boolean(assignmentStatus?.trainer_onboarding_completed)}
+                trainerOnboardingStatus={assignmentStatus?.trainer_onboarding_status || 'not_started'}
+                trainerOnboardingCompletedSteps={assignmentStatus?.trainer_onboarding_completed_steps ?? 0}
+                trainerOnboardingTotalSteps={assignmentStatus?.trainer_onboarding_total_steps ?? 8}
+                trainerOnboardingLastStep={assignmentStatus?.trainer_onboarding_last_step || null}
                 onOpenCoachTraining={handleOpenTrainerCoach}
               />
             ) : null}
@@ -375,7 +455,7 @@ function AppShell() {
             {!showAssignmentGate && activeTab === 'coach' ? (
               <CoachChatScreen
                 accessToken={session.access_token}
-                launchContext={chatLaunchContext}
+                launchContext={resolvedTrainerCoachLaunchContext}
                 bottomInset={coachChatBottomInset}
               />
             ) : null}

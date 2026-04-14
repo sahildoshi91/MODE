@@ -108,6 +108,10 @@ class TrainerAssignmentApiTests(unittest.TestCase):
         self.assertEqual(response.json()["viewer_role"], "unassigned")
         self.assertEqual(response.json()["viewer_display_name"], "user")
         self.assertFalse(response.json()["trainer_onboarding_completed"])
+        self.assertEqual(response.json()["trainer_onboarding_status"], "not_started")
+        self.assertEqual(response.json()["trainer_onboarding_completed_steps"], 0)
+        self.assertEqual(response.json()["trainer_onboarding_total_steps"], 8)
+        self.assertIsNone(response.json()["trainer_onboarding_last_step"])
 
     def test_status_scopes_trainers_to_existing_client_tenant(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
@@ -187,6 +191,8 @@ class TrainerAssignmentApiTests(unittest.TestCase):
         self.assertEqual(response.json()["viewer_role"], "trainer")
         self.assertEqual(response.json()["viewer_display_name"], "Coach Maya")
         self.assertTrue(response.json()["trainer_onboarding_completed"])
+        self.assertEqual(response.json()["trainer_onboarding_status"], "completed")
+        self.assertEqual(response.json()["trainer_onboarding_completed_steps"], 8)
 
     def test_assign_trainer_uses_rpc_for_unassigned_user(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(

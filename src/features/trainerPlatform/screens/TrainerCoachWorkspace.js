@@ -54,8 +54,34 @@ export default function TrainerCoachWorkspace({
   accessToken,
   chatLaunchContext,
   coachChatBottomInset,
+  trainerOnboardingCompleted = false,
+  trainerOnboardingStatus = 'not_started',
+  trainerOnboardingCompletedSteps = 0,
 }) {
   const [activeSubview, setActiveSubview] = useState(COACH_SUBVIEW.CHAT);
+  const normalizedOnboardingStatus = typeof trainerOnboardingStatus === 'string'
+    ? trainerOnboardingStatus.trim().toLowerCase()
+    : 'not_started';
+  const onboardingComplete = Boolean(
+    trainerOnboardingCompleted || normalizedOnboardingStatus === 'completed',
+  );
+  const onboardingInProgress = !onboardingComplete && (
+    normalizedOnboardingStatus === 'in_progress'
+    || normalizedOnboardingStatus === 'calibration_pending'
+    || Number(trainerOnboardingCompletedSteps) > 0
+  );
+  const resolvedChatLaunchContext = useMemo(() => {
+    if (chatLaunchContext && typeof chatLaunchContext === 'object') {
+      return chatLaunchContext;
+    }
+    if (onboardingComplete) {
+      return chatLaunchContext;
+    }
+    return {
+      entrypoint: 'trainer_agent_training',
+      onboarding_action: onboardingInProgress ? 'resume' : 'continue',
+    };
+  }, [chatLaunchContext, onboardingComplete, onboardingInProgress]);
   const toolbar = (
     <CoachSubviewSwitcher
       activeSubview={activeSubview}
@@ -76,7 +102,7 @@ export default function TrainerCoachWorkspace({
   return (
     <CoachChatScreen
       accessToken={accessToken}
-      launchContext={chatLaunchContext}
+      launchContext={resolvedChatLaunchContext}
       bottomInset={coachChatBottomInset}
       topToolbar={toolbar}
     />

@@ -23,6 +23,10 @@ export default function TrainerRouteHost({
         bottomInset={contentBottomInset}
         viewerDisplayName={assignmentStatus?.viewer_display_name || null}
         trainerOnboardingCompleted={Boolean(assignmentStatus?.trainer_onboarding_completed)}
+        trainerOnboardingStatus={assignmentStatus?.trainer_onboarding_status || 'not_started'}
+        trainerOnboardingCompletedSteps={assignmentStatus?.trainer_onboarding_completed_steps ?? 0}
+        trainerOnboardingTotalSteps={assignmentStatus?.trainer_onboarding_total_steps ?? 8}
+        trainerOnboardingLastStep={assignmentStatus?.trainer_onboarding_last_step || null}
         onOpenCoachTraining={onOpenTrainerCoach}
       />
     );
@@ -34,6 +38,9 @@ export default function TrainerRouteHost({
         accessToken={accessToken}
         chatLaunchContext={chatLaunchContext}
         coachChatBottomInset={coachChatBottomInset}
+        trainerOnboardingCompleted={Boolean(assignmentStatus?.trainer_onboarding_completed)}
+        trainerOnboardingStatus={assignmentStatus?.trainer_onboarding_status || 'not_started'}
+        trainerOnboardingCompletedSteps={assignmentStatus?.trainer_onboarding_completed_steps ?? 0}
       />
     );
   }
@@ -64,6 +71,10 @@ export default function TrainerRouteHost({
       bottomInset={contentBottomInset}
       viewerDisplayName={assignmentStatus?.viewer_display_name || null}
       trainerOnboardingCompleted={Boolean(assignmentStatus?.trainer_onboarding_completed)}
+      trainerOnboardingStatus={assignmentStatus?.trainer_onboarding_status || 'not_started'}
+      trainerOnboardingCompletedSteps={assignmentStatus?.trainer_onboarding_completed_steps ?? 0}
+      trainerOnboardingTotalSteps={assignmentStatus?.trainer_onboarding_total_steps ?? 8}
+      trainerOnboardingLastStep={assignmentStatus?.trainer_onboarding_last_step || null}
       onOpenCoachTraining={onOpenTrainerCoach}
     />
   );

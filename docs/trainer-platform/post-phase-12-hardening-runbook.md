@@ -36,6 +36,26 @@ Expected outcome:
 
 If `404` appears on trainer routes, treat it as a stale runtime mismatch and restart/redeploy backend from current repo code before continuing.
 
+## 2.1) Trainer onboarding storage preflight
+Before trainer onboarding QA (`Review coach settings` / `Retrain coach`), verify onboarding storage tables are reachable:
+
+```bash
+cd backend
+./venv/bin/python - <<'PY'
+from app.modules.trainer_onboarding.diagnostics import run_trainer_onboarding_storage_preflight
+print(run_trainer_onboarding_storage_preflight())
+PY
+```
+
+Expected outcome:
+- `healthy: True`
+- `missing_tables: []`
+- `errors: {}`
+
+If `missing_tables` contains onboarding tables, apply:
+- `backend/sql/20260413_create_trainer_onboarding_profiles_and_events.sql`
+- `backend/sql/20260413b_add_retrain_draft_to_trainer_onboarding_profiles.sql`
+
 ## 3) Guarded staging rollout (orchestration off -> on)
 Keep orchestration off for baseline:
 

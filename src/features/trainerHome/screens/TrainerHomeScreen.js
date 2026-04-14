@@ -14,6 +14,7 @@ import { TRAINER_AGENT_LAB_ENABLED } from '../../../config/featureFlags';
 import {
   archiveTrainerRule,
   createTrainerKnowledgeDocument,
+  deleteTrainerKnowledgeDocument,
   listTrainerKnowledgeDocuments,
   listTrainerRules,
   saveTrainerKnowledgeDocumentWithFallback,
@@ -65,6 +66,10 @@ export default function TrainerHomeScreen({
   bottomInset = 0,
   viewerDisplayName = null,
   trainerOnboardingCompleted = false,
+  trainerOnboardingStatus = 'not_started',
+  trainerOnboardingCompletedSteps = 0,
+  trainerOnboardingTotalSteps = 8,
+  trainerOnboardingLastStep = null,
   onOpenCoachTraining = null,
 }) {
   const [documents, setDocuments] = useState([]);
@@ -85,6 +90,7 @@ export default function TrainerHomeScreen({
   const [selectedDocumentRawText, setSelectedDocumentRawText] = useState('');
   const [isEditingSelectedDocument, setIsEditingSelectedDocument] = useState(false);
   const [isSavingSelectedDocument, setIsSavingSelectedDocument] = useState(false);
+  const [isDeletingSelectedDocument, setIsDeletingSelectedDocument] = useState(false);
   const [selectedDocumentError, setSelectedDocumentError] = useState(null);
   const [selectedDocumentSuccess, setSelectedDocumentSuccess] = useState(null);
   const [selectedDocumentNote, setSelectedDocumentNote] = useState(null);
@@ -102,6 +108,24 @@ export default function TrainerHomeScreen({
     () => viewerDisplayName || 'Trainer',
     [viewerDisplayName],
   );
+  const onboardingTotalSteps = Math.max(1, Number.isFinite(Number(trainerOnboardingTotalSteps)) ? Number(trainerOnboardingTotalSteps) : 8);
+  const onboardingCompletedSteps = Math.max(
+    0,
+    Math.min(
+      onboardingTotalSteps,
+      Number.isFinite(Number(trainerOnboardingCompletedSteps)) ? Number(trainerOnboardingCompletedSteps) : 0,
+    ),
+  );
+  const normalizedOnboardingStatus = typeof trainerOnboardingStatus === 'string'
+    ? trainerOnboardingStatus.trim().toLowerCase()
+    : 'not_started';
+  const onboardingComplete = Boolean(trainerOnboardingCompleted || normalizedOnboardingStatus === 'completed');
+  const onboardingInProgress = !onboardingComplete && (
+    normalizedOnboardingStatus === 'in_progress'
+    || normalizedOnboardingStatus === 'calibration_pending'
+    || onboardingCompletedSteps > 0
+  );
+  const onboardingPrimaryAction = onboardingInProgress ? 'resume' : 'continue';
 
   const groupedRules = useMemo(() => {
     const visible = (Array.isArray(rules) ? rules : []).filter((rule) => !rule?.is_archived);
@@ -513,6 +537,29 @@ export default function TrainerHomeScreen({
     }
   };
 
+  const handleDeleteSelectedDocument = async () => {
+    if (!accessToken || !selectedDocument?.id || isSavingSelectedDocument || isDeletingSelectedDocument) {
+      return;
+    }
+
+    setIsDeletingSelectedDocument(true);
+    setSelectedDocumentError(null);
+    setSelectedDocumentSuccess(null);
+    setSelectedDocumentNote(null);
+    try {
+      await deleteTrainerKnowledgeDocument({
+        accessToken,
+        documentId: selectedDocument.id,
+      });
+      handleCloseDocument();
+      await refreshAll({ refreshDocuments: true });
+    } catch (error) {
+      setSelectedDocumentError(error?.message || 'Unable to delete document.');
+    } finally {
+      setIsDeletingSelectedDocument(false);
+    }
+  };
+
   return (
     <SafeScreen includeTopInset={false} style={styles.screen}>
       <HeaderBar
@@ -526,20 +573,33 @@ export default function TrainerHomeScreen({
           { paddingBottom: theme.spacing[4] + bottomInset },
         ]}
       >
-        <ModeCard variant="tinted">
-          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Profile</ModeText>
-          <ModeText variant="bodySm">
-            {trainerOnboardingCompleted
-              ? 'Trainer onboarding is complete. Agent Lab now expands and operationalizes your coaching system.'
-              : 'Trainer onboarding is still in progress. Use Coach to finish training your assistant voice.'}
-          </ModeText>
-          <ModeButton
-            title="Open Coach to train agent"
-            variant="secondary"
-            onPress={onOpenCoachTraining}
-            style={styles.actionButton}
-          />
-        </ModeCard>
+        {!onboardingComplete ? (
+          <ModeCard variant="tinted">
+            <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Coach Profile</ModeText>
+            <ModeText variant="bodySm" style={styles.onboardingTitle}>
+              Complete your coaching profile
+            </ModeText>
+            <ModeText variant="bodySm" tone="secondary">
+              Train your AI coach to sound and think like you.
+            </ModeText>
+            {onboardingInProgress ? (
+              <ModeText variant="caption" tone="tertiary" style={styles.onboardingProgress}>
+                {`${onboardingCompletedSteps} of ${onboardingTotalSteps} steps completed`}
+                {trainerOnboardingLastStep ? ` · Last: ${String(trainerOnboardingLastStep).replace(/_/g, ' ')}` : ''}
+              </ModeText>
+            ) : null}
+            <ModeButton
+              title={onboardingInProgress ? 'Resume onboarding' : 'Continue onboarding'}
+              variant="secondary"
+              onPress={() => onOpenCoachTraining?.({
+                entrypoint: 'trainer_agent_training',
+                onboarding_action: onboardingPrimaryAction,
+              })}
+              style={styles.actionButton}
+              testID="trainer-home-onboarding-continue"
+            />
+          </ModeCard>
+        ) : null}
 
         <ModeCard variant="surface">
           <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Quick Capture</ModeText>
@@ -614,6 +674,40 @@ export default function TrainerHomeScreen({
             testID="trainer-home-save-methodology"
           />
         </ModeCard>
+
+        {onboardingComplete ? (
+          <ModeCard variant="surface">
+            <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Coach Settings</ModeText>
+            <ModeText variant="bodySm" style={styles.onboardingTitle}>
+              Coaching profile complete
+            </ModeText>
+            <ModeText variant="bodySm" tone="secondary">
+              Your coach voice and decision system are calibrated.
+            </ModeText>
+            <View style={styles.onboardingActionRow}>
+              <ModeButton
+                title="Review coach settings"
+                variant="ghost"
+                onPress={() => onOpenCoachTraining?.({
+                  entrypoint: 'trainer_agent_training',
+                  onboarding_action: 'review',
+                })}
+                style={styles.onboardingSecondaryAction}
+                testID="trainer-home-onboarding-review"
+              />
+              <ModeButton
+                title="Retrain coach"
+                variant="secondary"
+                onPress={() => onOpenCoachTraining?.({
+                  entrypoint: 'trainer_agent_training',
+                  onboarding_action: 'retrain',
+                })}
+                style={styles.onboardingSecondaryAction}
+                testID="trainer-home-onboarding-retrain"
+              />
+            </View>
+          </ModeCard>
+        ) : null}
 
         <ModeCard variant="surface">
           <View style={styles.listHeader}>
@@ -699,7 +793,20 @@ export default function TrainerHomeScreen({
                     title="Edit document"
                     variant="secondary"
                     onPress={handleBeginDocumentEdit}
+                    disabled={isDeletingSelectedDocument}
                     testID="trainer-home-edit-saved-doc"
+                  />
+                  <ModeButton
+                    title={
+                      isDeletingSelectedDocument
+                        ? 'Deleting...'
+                        : 'Delete document'
+                    }
+                    variant="destructive"
+                    onPress={handleDeleteSelectedDocument}
+                    disabled={isDeletingSelectedDocument}
+                    style={styles.selectedDocumentDeleteButton}
+                    testID="trainer-home-delete-saved-doc"
                   />
                 </View>
               ) : (
@@ -864,6 +971,21 @@ const styles = StyleSheet.create({
   actionButton: {
     marginTop: theme.spacing[2],
   },
+  onboardingTitle: {
+    fontWeight: '600',
+  },
+  onboardingProgress: {
+    marginTop: theme.spacing[1],
+  },
+  onboardingActionRow: {
+    marginTop: theme.spacing[2],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing[1],
+  },
+  onboardingSecondaryAction: {
+    flex: 1,
+  },
   quickCaptureInput: {
     minHeight: 90,
   },
@@ -936,6 +1058,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing[1],
+  },
+  selectedDocumentDeleteButton: {
+    marginTop: theme.spacing[1],
   },
   inlineError: {
     marginTop: theme.spacing[1],

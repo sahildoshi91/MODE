@@ -25,6 +25,8 @@ class FakeTrainerKnowledgeRepository:
         self.created_rule_versions = []
         self.updated_documents = []
         self.updated_rules = []
+        self.deleted_documents = []
+        self.deleted_rule_documents = []
         self.documents = {
             "doc-1": {
                 "id": "doc-1",
@@ -89,6 +91,13 @@ class FakeTrainerKnowledgeRepository:
         self.updated_documents.append({"document_id": document_id, "payload": payload})
         return {**updated}
 
+    def delete_document(self, trainer_id, document_id):
+        existing = self.get_document(trainer_id, document_id)
+        if existing:
+            self.deleted_documents.append(document_id)
+            self.documents.pop(document_id, None)
+        return [existing] if existing else []
+
     def list_rules_by_document(self, trainer_id, document_id, include_archived=False):
         rules = [
             {**rule}
@@ -112,6 +121,16 @@ class FakeTrainerKnowledgeRepository:
                 self.updated_rules.append({"document_id": doc_id, "rule_id": rule_id, "payload": payload})
                 return {**updated}
         return {}
+
+    def delete_rules_by_document(self, trainer_id, document_id):
+        rules = [
+            {**rule}
+            for rule in self.document_rules.get(document_id, [])
+            if rule.get("trainer_id") == trainer_id
+        ]
+        self.deleted_rule_documents.append(document_id)
+        self.document_rules[document_id] = []
+        return rules
 
     def create_rule(self, payload):
         if self.fail_create_rule:
@@ -313,6 +332,18 @@ class TrainerKnowledgeServiceTests(unittest.TestCase):
         with self.assertRaises(ValueError) as context:
             service.update_document(self.trainer_context, "doc-missing", request)
         self.assertEqual(str(context.exception), "Document not found")
+
+    def test_delete_document_removes_document_and_linked_rules(self):
+        repository = FakeTrainerKnowledgeRepository()
+        service = TrainerKnowledgeService(repository=repository, extractor=ReturningExtractor())
+
+        deleted = service.delete_document(self.trainer_context, "doc-1")
+
+        self.assertEqual(deleted.id, "doc-1")
+        self.assertIn("doc-1", repository.deleted_documents)
+        self.assertIn("doc-1", repository.deleted_rule_documents)
+        self.assertIsNone(repository.get_document("trainer-1", "doc-1"))
+        self.assertEqual(repository.list_rules_by_document("trainer-1", "doc-1"), [])
 
 
 if __name__ == "__main__":
