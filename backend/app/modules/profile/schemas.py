@@ -17,7 +17,12 @@ class FitnessProfile(BaseModel):
     experience_level: str | None = None
     preferred_session_length: int | None = None
     current_mode: str | None = None
+    training_location: str | None = None
+    minimum_win: str | None = None
+    weekly_availability: int | None = None
     onboarding_status: str = "not_started"
+    onboarding_completed_at: str | None = None
+    onboarding_last_step: str | None = None
     profile_version: int = 1
 
 

@@ -10,6 +10,10 @@ from app.modules.conversation.repository import ConversationRepository
 from app.modules.conversation.service import ConversationService
 from app.modules.daily_checkins.repository import DailyCheckinRepository
 from app.modules.daily_checkins.service import DailyCheckinService
+from app.modules.mobile_analytics.repository import MobileAnalyticsRepository
+from app.modules.mobile_analytics.service import MobileAnalyticsService
+from app.modules.onboarding.repository import OnboardingRepository
+from app.modules.onboarding.service import OnboardingService
 from app.modules.plan.repository import PlanRepository
 from app.modules.plan.service import PlanService
 from app.modules.profile.repository import ProfileRepository
@@ -62,6 +66,26 @@ def get_profile_repository(
     supabase: Client = Depends(get_request_scoped_supabase_client),
 ) -> ProfileRepository:
     return ProfileRepository(supabase)
+
+
+def get_onboarding_repository() -> OnboardingRepository:
+    return OnboardingRepository(get_supabase_admin_client())
+
+
+def get_onboarding_service(
+    repository: OnboardingRepository = Depends(get_onboarding_repository),
+) -> OnboardingService:
+    return OnboardingService(repository)
+
+
+def get_mobile_analytics_repository() -> MobileAnalyticsRepository:
+    return MobileAnalyticsRepository(get_supabase_admin_client())
+
+
+def get_mobile_analytics_service(
+    repository: MobileAnalyticsRepository = Depends(get_mobile_analytics_repository),
+) -> MobileAnalyticsService:
+    return MobileAnalyticsService(repository)
 
 
 def get_profile_service(

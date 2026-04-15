@@ -14,15 +14,20 @@
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
+    "@react-native-async-storage/async-storage": "^2.2.0",
     "@supabase/supabase-js": "^2.99.3",
     "expo": "~54.0.0",
     "expo-asset": "~12.0.12",
+    "expo-auth-session": "~7.0.8",
     "expo-blur": "~15.0.8",
     "expo-clipboard": "~8.0.8",
     "expo-constants": "~18.0.13",
+    "expo-linking": "~8.0.8",
+    "expo-web-browser": "~15.0.8",
     "lucide-react-native": "^1.8.0",
     "react": "19.1.0",
     "react-native": "0.81.5",
+    "react-native-url-polyfill": "^2.0.0",
     "react-native-safe-area-context": "~5.6.0"
   },
   "devDependencies": {

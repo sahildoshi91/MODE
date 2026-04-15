@@ -13,6 +13,14 @@ function parseBooleanFlag(value, defaultValue = false) {
 }
 
 export const SHOW_DEV_CONNECTION_DEBUG = false;
+export const AUTH_SOCIAL_ENABLED = parseBooleanFlag(
+  process.env.EXPO_PUBLIC_AUTH_SOCIAL_ENABLED,
+  false,
+);
+export const AUTH_PASSWORD_ENABLED = parseBooleanFlag(
+  process.env.EXPO_PUBLIC_AUTH_PASSWORD_ENABLED,
+  false,
+);
 export const TRAINER_ROUTE_FOUNDATION_ENABLED = parseBooleanFlag(
   process.env.EXPO_PUBLIC_TRAINER_ROUTE_FOUNDATION_ENABLED,
   true,

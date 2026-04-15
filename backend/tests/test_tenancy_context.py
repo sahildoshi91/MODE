@@ -162,6 +162,49 @@ class TrainerContextResolutionTests(unittest.TestCase):
         self.assertEqual(trainer_context.client_user_id, "client-user-321")
         self.assertEqual(trainer_context.trainer_id, "trainer-321")
 
+    def test_resolve_trainer_context_prefers_assigned_client_when_multiple_client_rows_exist(self):
+        supabase = FakeSupabase(
+            {
+                "clients": [
+                    {
+                        "id": "client-self-guided",
+                        "tenant_id": "tenant-self-guided",
+                        "user_id": "client-user-777",
+                        "assigned_trainer_id": None,
+                        "created_at": "2026-04-01T00:00:00+00:00",
+                    },
+                    {
+                        "id": "client-attached",
+                        "tenant_id": "tenant-777",
+                        "user_id": "client-user-777",
+                        "assigned_trainer_id": "trainer-777",
+                        "created_at": "2026-03-01T00:00:00+00:00",
+                    },
+                ],
+                "trainers": [
+                    {
+                        "id": "trainer-777",
+                        "tenant_id": "tenant-777",
+                        "user_id": "trainer-user-777",
+                        "display_name": "Coach Jordan",
+                    }
+                ],
+                "trainer_personas": [
+                    {
+                        "id": "persona-777",
+                        "trainer_id": "trainer-777",
+                        "persona_name": "Performance Coach",
+                        "is_default": True,
+                    }
+                ],
+            }
+        )
+
+        trainer_context = resolve_trainer_context(supabase, "client-user-777")
+
+        self.assertEqual(trainer_context.client_id, "client-attached")
+        self.assertEqual(trainer_context.trainer_id, "trainer-777")
+
 
 class ChatRequestValidationTests(unittest.TestCase):
     def test_chat_request_strips_whitespace(self):

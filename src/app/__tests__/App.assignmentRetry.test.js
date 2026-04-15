@@ -6,7 +6,6 @@ const mockOnAuthStateChange = jest.fn();
 const mockSignOut = jest.fn();
 const mockGetTrainerAssignmentStatus = jest.fn();
 const mockAssignTrainer = jest.fn();
-const mockTrainerAssignmentScreen = jest.fn();
 
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react');
@@ -33,6 +32,8 @@ jest.mock('../../features/trainerAssignment/services/trainerAssignmentApi', () =
 }));
 
 jest.mock('../../config/featureFlags', () => ({
+  AUTH_PASSWORD_ENABLED: false,
+  AUTH_SOCIAL_ENABLED: false,
   TRAINER_ROUTE_FOUNDATION_ENABLED: false,
 }));
 
@@ -100,14 +101,6 @@ jest.mock('../../features/trainerPlatform/routes/TrainerRouteHost', () => {
   const React = require('react');
   return function MockTrainerRouteHost(props) {
     return React.createElement('MockTrainerRouteHost', props);
-  };
-});
-
-jest.mock('../../features/trainerAssignment/screens/TrainerAssignmentScreen', () => {
-  const React = require('react');
-  return function MockTrainerAssignmentScreen(props) {
-    mockTrainerAssignmentScreen(props);
-    return React.createElement('MockTrainerAssignmentScreen', props);
   };
 });
 
@@ -188,7 +181,7 @@ describe('App assignment status retry behavior', () => {
     });
   });
 
-  it('keeps manual retry available after auto-retry is exhausted', async () => {
+  it('does not keep retrying indefinitely after auto-retry is exhausted', async () => {
     mockGetTrainerAssignmentStatus
       .mockRejectedValueOnce(createNetworkError())
       .mockRejectedValueOnce(createNetworkError())
@@ -207,12 +200,11 @@ describe('App assignment status retry behavior', () => {
 
     expect(mockGetTrainerAssignmentStatus).toHaveBeenCalledTimes(2);
 
-    const latestProps = mockTrainerAssignmentScreen.mock.calls.at(-1)?.[0];
     await act(async () => {
-      await latestProps.onRetryStatusLoad();
+      jest.advanceTimersByTime(3000);
     });
 
-    expect(mockGetTrainerAssignmentStatus).toHaveBeenCalledTimes(3);
+    expect(mockGetTrainerAssignmentStatus).toHaveBeenCalledTimes(2);
     await act(async () => {
       tree.unmount();
     });

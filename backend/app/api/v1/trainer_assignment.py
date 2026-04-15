@@ -4,9 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.core.auth import AuthenticatedUser, CurrentUser
-from app.core.dependencies import get_trainer_context
-from app.core.tenancy import TrainerContext
+from app.core.dependencies import get_onboarding_service, get_trainer_context
+from app.core.tenancy import TrainerContext, resolve_trainer_context
 from app.db.client import get_supabase_client
+from app.modules.onboarding.service import OnboardingService, OnboardingServiceError
 
 
 router = APIRouter()
@@ -40,6 +41,10 @@ class TrainerAssignmentStatus(BaseModel):
 
 class TrainerAssignmentRequest(BaseModel):
     trainer_id: str
+
+
+class TrainerInviteCodeAssignmentRequest(BaseModel):
+    invite_code: str = Field(min_length=3, max_length=64)
 
 
 def _resolve_scope(trainer_context: TrainerContext) -> Literal["tenant", "global_fallback"]:
@@ -181,19 +186,32 @@ async def assign_trainer(
         .execute()
     ).data or []
 
-    if len(existing_clients) > 1:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User has multiple client records and cannot self-assign automatically",
-        )
-
-    existing_client = existing_clients[0] if existing_clients else None
-    if existing_client and existing_client.get("assigned_trainer_id"):
+    assigned_to_other_trainer = [
+        client for client in existing_clients
+        if client.get("assigned_trainer_id") and client.get("assigned_trainer_id") != request.trainer_id
+    ]
+    if assigned_to_other_trainer:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="User is already assigned to an active trainer context",
         )
-    if existing_client and existing_client.get("tenant_id") != selected_trainer.get("tenant_id"):
+    already_assigned = next(
+        (
+            client for client in existing_clients
+            if client.get("assigned_trainer_id") == request.trainer_id
+        ),
+        None,
+    )
+    if already_assigned:
+        updated_context = resolve_trainer_context(admin_client, user.id)
+        return _build_status_response(updated_context, user)
+
+    tenant_mismatch_assigned = [
+        client for client in existing_clients
+        if client.get("assigned_trainer_id")
+        and client.get("tenant_id") != selected_trainer.get("tenant_id")
+    ]
+    if tenant_mismatch_assigned:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="User is already linked to a different tenant and cannot self-assign to this trainer",
@@ -207,11 +225,42 @@ async def assign_trainer(
         },
     ).execute()
 
-    updated_context = TrainerContext(
-        tenant_id=selected_trainer.get("tenant_id"),
-        trainer_id=selected_trainer["id"],
-        trainer_user_id=None,
-        trainer_display_name=selected_trainer["display_name"],
-        client_id=existing_client.get("id") if existing_client else None,
-    )
+    try:
+        updated_context = resolve_trainer_context(admin_client, user.id)
+    except Exception:
+        fallback_client = next(
+            (
+                client for client in existing_clients
+                if client.get("tenant_id") == selected_trainer.get("tenant_id")
+            ),
+            None,
+        )
+        updated_context = TrainerContext(
+            tenant_id=selected_trainer.get("tenant_id"),
+            trainer_id=selected_trainer["id"],
+            trainer_user_id=None,
+            trainer_display_name=selected_trainer["display_name"],
+            client_id=fallback_client.get("id") if fallback_client else None,
+        )
+    return _build_status_response(updated_context, user)
+
+
+@router.post("/assign-by-invite", response_model=TrainerAssignmentStatus)
+async def assign_trainer_by_invite(
+    request: TrainerInviteCodeAssignmentRequest,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    onboarding_service: OnboardingService = Depends(get_onboarding_service),
+):
+    if trainer_context.trainer_id and not trainer_context.client_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trainer accounts cannot self-assign to a trainer",
+        )
+    try:
+        onboarding_service.assign_by_invite(user=user, invite_code=request.invite_code)
+    except OnboardingServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    updated_context = resolve_trainer_context(get_supabase_client(), user.id)
     return _build_status_response(updated_context, user)

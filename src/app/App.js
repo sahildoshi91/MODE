@@ -1,8 +1,8 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Easing, StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, Easing, Linking, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ModeCard, ModeText } from '../../lib/components';
+import { ModeButton, ModeCard, ModeText } from '../../lib/components';
 import { theme } from '../../lib/theme';
 import Login from '../features/auth/screens/Login';
 import OnboardingLandingScreen from '../features/auth/screens/OnboardingLandingScreen';
@@ -10,14 +10,27 @@ import CoachChatScreen from '../features/chat/screens/CoachChatScreen';
 import DailyCheckinScreen from '../features/dailyCheckin/screens/DailyCheckinScreen';
 import CoachInsightsScreen from '../features/insights/screens/CoachInsightsScreen';
 import LiquidBottomNav from '../features/navigation/components/LiquidBottomNav';
+import CoachTabGuardScreen from '../features/onboarding/screens/CoachTabGuardScreen';
+import ClientOnboardingFlowScreen from '../features/onboarding/screens/ClientOnboardingFlowScreen';
+import ProductPreviewScreen from '../features/onboarding/screens/ProductPreviewScreen';
+import RoleSelectionScreen from '../features/onboarding/screens/RoleSelectionScreen';
+import TrainerStubScreen from '../features/onboarding/screens/TrainerStubScreen';
+import {
+  getOnboardingBootstrap,
+  ingestMobileEvents,
+  setOnboardingRole,
+} from '../features/onboarding/services/onboardingApi';
 import ProfileScreen from '../features/profile/screens/ProfileScreen';
 import ProgressScreen from '../features/progress/screens/ProgressScreen';
 import TrainerClientsScreen from '../features/trainerClients/screens/TrainerClientsScreen';
-import TrainerAssignmentScreen from '../features/trainerAssignment/screens/TrainerAssignmentScreen';
 import TrainerHomeScreen from '../features/trainerHome/screens/TrainerHomeScreen';
 import TrainerRouteHost from '../features/trainerPlatform/routes/TrainerRouteHost';
-import { assignTrainer, getTrainerAssignmentStatus } from '../features/trainerAssignment/services/trainerAssignmentApi';
-import { TRAINER_ROUTE_FOUNDATION_ENABLED } from '../config/featureFlags';
+import { getTrainerAssignmentStatus } from '../features/trainerAssignment/services/trainerAssignmentApi';
+import {
+  AUTH_PASSWORD_ENABLED,
+  AUTH_SOCIAL_ENABLED,
+  TRAINER_ROUTE_FOUNDATION_ENABLED,
+} from '../config/featureFlags';
 import { supabase } from '../services/supabaseClient';
 
 const FLOATING_NAV_BOTTOM_OFFSET = 12;
@@ -29,8 +42,19 @@ const ASSIGNMENT_STATUS_AUTO_RETRY_DELAY_MS = 900;
 const VIEWER_ROLE = {
   TRAINER: 'trainer',
   CLIENT: 'client',
-  UNASSIGNED: 'unassigned',
 };
+const APP_STATE = {
+  SIGNED_OUT: 'signed_out',
+  AUTHENTICATED_ROLE_UNKNOWN: 'authenticated_role_unknown',
+  CLIENT_ONBOARDING: 'client_onboarding',
+  ONBOARDING_PARTIAL: 'onboarding_partial',
+  CLIENT_ACTIVE: 'client_active',
+  TRAINER_STUB: 'trainer_stub',
+};
+
+function resolveOAuthRedirectUrl() {
+  return process.env.EXPO_PUBLIC_SUPABASE_REDIRECT_URL || 'mode://auth/callback';
+}
 
 function ShellLoadingState({ title, subtitle }) {
   return (
@@ -43,6 +67,22 @@ function ShellLoadingState({ title, subtitle }) {
         <ModeText variant="bodySm" tone="secondary" style={styles.loadingSubtitle}>
           {subtitle}
         </ModeText>
+      </ModeCard>
+    </View>
+  );
+}
+
+function ShellErrorState({ title, subtitle, actionTitle, onPress }) {
+  return (
+    <View style={styles.loadingScreen}>
+      <ModeCard variant="tinted" noShadow style={styles.loadingCard}>
+        <ModeText variant="h3" tone="primary" style={styles.loadingTitle}>
+          {title}
+        </ModeText>
+        <ModeText variant="bodySm" tone="secondary" style={styles.loadingSubtitle}>
+          {subtitle}
+        </ModeText>
+        <ModeButton title={actionTitle} onPress={onPress} style={styles.errorActionButton} />
       </ModeCard>
     </View>
   );
@@ -63,21 +103,94 @@ function formatAssignmentError(error, fallbackMessage) {
 function AppShell() {
   const insets = useSafeAreaInsets();
   const [session, setSession] = useState(null);
-  const [authStage, setAuthStage] = useState('intro');
+  const [authStage, setAuthStage] = useState('welcome');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authUiError, setAuthUiError] = useState(null);
+  const [authUiInfo, setAuthUiInfo] = useState(null);
+  const [isAuthUiSubmitting, setIsAuthUiSubmitting] = useState(false);
+  const [isSignInMode, setIsSignInMode] = useState(false);
+
   const [isSessionLoading, setIsSessionLoading] = useState(true);
+  const [isBootstrapLoading, setIsBootstrapLoading] = useState(false);
+  const [bootstrap, setBootstrap] = useState(null);
+  const [bootstrapError, setBootstrapError] = useState(null);
+  const [isRoleSubmitting, setIsRoleSubmitting] = useState(false);
+
   const [isAssignmentStatusLoading, setIsAssignmentStatusLoading] = useState(false);
   const [assignmentStatus, setAssignmentStatus] = useState(null);
   const [assignmentStatusError, setAssignmentStatusError] = useState(null);
-  const [assignTrainerError, setAssignTrainerError] = useState(null);
-  const [isAssigningTrainer, setIsAssigningTrainer] = useState(false);
+
   const [activeTab, setActiveTab] = useState('home');
   const [chatLaunchContext, setChatLaunchContext] = useState(null);
   const [coachOverlayContext, setCoachOverlayContext] = useState(null);
   const [progressRoute, setProgressRoute] = useState('progress');
   const [insightsOrigin, setInsightsOrigin] = useState('progress');
+
   const tabOpacity = useRef(new Animated.Value(1)).current;
   const tabTranslateY = useRef(new Animated.Value(0)).current;
   const assignmentStatusAutoRetryUsedRef = useRef(false);
+  const hasTrackedWelcomeViewRef = useRef(false);
+  const wasAuthenticatedRef = useRef(false);
+  const analyticsQueueRef = useRef([]);
+  const isFlushingAnalyticsRef = useRef(false);
+
+  const flushAnalyticsQueue = useCallback(async (accessToken) => {
+    if (!accessToken || isFlushingAnalyticsRef.current) {
+      return;
+    }
+    if (!analyticsQueueRef.current.length) {
+      return;
+    }
+
+    isFlushingAnalyticsRef.current = true;
+    const queueSnapshot = [...analyticsQueueRef.current];
+    try {
+      await ingestMobileEvents({ accessToken, events: queueSnapshot });
+      const queueHash = JSON.stringify(queueSnapshot);
+      if (JSON.stringify(analyticsQueueRef.current.slice(0, queueSnapshot.length)) === queueHash) {
+        analyticsQueueRef.current = analyticsQueueRef.current.slice(queueSnapshot.length);
+      }
+    } catch (_error) {
+      // Non-blocking analytics flush; keep events queued for later.
+    } finally {
+      isFlushingAnalyticsRef.current = false;
+    }
+  }, []);
+
+  const trackEvent = useCallback((name, properties = {}) => {
+    if (!name || typeof name !== 'string') {
+      return;
+    }
+    analyticsQueueRef.current.push({
+      name,
+      event_timestamp: new Date().toISOString(),
+      properties,
+    });
+    if (session?.access_token) {
+      flushAnalyticsQueue(session.access_token);
+    }
+  }, [flushAnalyticsQueue, session?.access_token]);
+
+  const loadBootstrap = useCallback(async ({ accessToken }) => {
+    if (!accessToken) {
+      setBootstrap(null);
+      setBootstrapError(null);
+      return null;
+    }
+    setIsBootstrapLoading(true);
+    setBootstrapError(null);
+    try {
+      const response = await getOnboardingBootstrap({ accessToken });
+      setBootstrap(response);
+      return response;
+    } catch (error) {
+      setBootstrapError(error?.message || 'Unable to load onboarding bootstrap.');
+      return null;
+    } finally {
+      setIsBootstrapLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -89,7 +202,7 @@ function AppShell() {
       }
       setSession(data.session || null);
       if (!data.session) {
-        setAuthStage('intro');
+        setAuthStage('welcome');
       }
       setIsSessionLoading(false);
     };
@@ -109,7 +222,8 @@ function AppShell() {
       setChatLaunchContext(null);
       setCoachOverlayContext(null);
       if (!nextSession) {
-        setAuthStage('intro');
+        setAuthStage('welcome');
+        setBootstrap(null);
       }
       setIsSessionLoading(false);
     });
@@ -119,6 +233,76 @@ function AppShell() {
       subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    const handleUrlAuthCallback = async (url) => {
+      if (!url || typeof url !== 'string') {
+        return;
+      }
+      let parsed;
+      try {
+        parsed = new URL(url);
+      } catch (_error) {
+        return;
+      }
+      const code = parsed.searchParams.get('code');
+      if (!code) {
+        return;
+      }
+      setIsAuthUiSubmitting(true);
+      setAuthUiError(null);
+      try {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) {
+          throw error;
+        }
+      } catch (error) {
+        setAuthUiError(error?.message || 'Unable to complete sign-in.');
+      } finally {
+        setIsAuthUiSubmitting(false);
+      }
+    };
+
+    const subscription = Linking.addEventListener('url', ({ url }) => {
+      handleUrlAuthCallback(url);
+    });
+
+    Linking.getInitialURL().then((url) => {
+      if (url) {
+        handleUrlAuthCallback(url);
+      }
+    });
+
+    return () => {
+      if (typeof subscription?.remove === 'function') {
+        subscription.remove();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!session?.access_token) {
+      setBootstrap(null);
+      setBootstrapError(null);
+      return;
+    }
+    loadBootstrap({ accessToken: session.access_token });
+  }, [session?.access_token, loadBootstrap]);
+
+  useEffect(() => {
+    if (session?.access_token) {
+      flushAnalyticsQueue(session.access_token);
+    }
+  }, [session?.access_token, flushAnalyticsQueue, bootstrap]);
+
+  useEffect(() => {
+    if (session?.access_token && !wasAuthenticatedRef.current) {
+      trackEvent('auth_completed', {
+        method: 'session',
+      });
+    }
+    wasAuthenticatedRef.current = Boolean(session?.access_token);
+  }, [session?.access_token, trackEvent]);
 
   const loadAssignmentStatus = useCallback(
     async ({ accessTokenOverride, allowAutoRetry = false } = {}) => {
@@ -165,7 +349,6 @@ function AppShell() {
     if (!session?.access_token) {
       setAssignmentStatus(null);
       setAssignmentStatusError(null);
-      setAssignTrainerError(null);
       assignmentStatusAutoRetryUsedRef.current = false;
       return;
     }
@@ -196,42 +379,23 @@ function AppShell() {
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     assignmentStatusAutoRetryUsedRef.current = false;
+    analyticsQueueRef.current = [];
     setSession(null);
-    setAssignmentStatus(null);
-    setAssignmentStatusError(null);
-    setAssignTrainerError(null);
-    setIsAssigningTrainer(false);
+    setBootstrap(null);
+    setBootstrapError(null);
+    setAuthStage('welcome');
+    setAuthEmail('');
+    setAuthPassword('');
+    setAuthUiError(null);
+    setAuthUiInfo(null);
+    setIsAuthUiSubmitting(false);
     setActiveTab('home');
     setProgressRoute('progress');
     setInsightsOrigin('progress');
     setChatLaunchContext(null);
     setCoachOverlayContext(null);
-    setAuthStage('intro');
-  };
-
-  const handleAssignTrainer = async (trainerId) => {
-    if (!session?.access_token || isAssigningTrainer) {
-      return;
-    }
-
-    try {
-      setIsAssigningTrainer(true);
-      setAssignTrainerError(null);
-      setAssignmentStatusError(null);
-      await assignTrainer({
-        accessToken: session.access_token,
-        trainerId,
-      });
-      await loadAssignmentStatus();
-      setActiveTab('home');
-      setInsightsOrigin('progress');
-      setChatLaunchContext(null);
-      setCoachOverlayContext(null);
-    } catch (error) {
-      setAssignTrainerError(formatAssignmentError(error, 'Unable to assign trainer.'));
-    } finally {
-      setIsAssigningTrainer(false);
-    }
+    setAssignmentStatus(null);
+    setAssignmentStatusError(null);
   };
 
   const handleOpenChat = (launchContext = null) => {
@@ -278,7 +442,33 @@ function AppShell() {
     setActiveTab('coach');
   };
 
-  const viewerRole = assignmentStatus?.viewer_role || VIEWER_ROLE.UNASSIGNED;
+  const appState = useMemo(() => {
+    if (!session?.access_token) {
+      return APP_STATE.SIGNED_OUT;
+    }
+    if (!bootstrap?.role) {
+      return APP_STATE.AUTHENTICATED_ROLE_UNKNOWN;
+    }
+    if (bootstrap.role === 'trainer' && !bootstrap.is_legacy_trainer) {
+      return APP_STATE.TRAINER_STUB;
+    }
+    if (bootstrap.role === 'client') {
+      if (bootstrap.onboarding_complete) {
+        return APP_STATE.CLIENT_ACTIVE;
+      }
+      if (bootstrap.onboarding_status === 'in_progress') {
+        return APP_STATE.ONBOARDING_PARTIAL;
+      }
+      return APP_STATE.CLIENT_ONBOARDING;
+    }
+    return APP_STATE.CLIENT_ACTIVE;
+  }, [session?.access_token, bootstrap]);
+
+  const viewerRole = assignmentStatus?.viewer_role || (
+    bootstrap?.role === 'trainer' && bootstrap?.is_legacy_trainer
+      ? VIEWER_ROLE.TRAINER
+      : VIEWER_ROLE.CLIENT
+  );
   const isTrainerViewer = viewerRole === VIEWER_ROLE.TRAINER;
   const normalizedTrainerOnboardingStatus = typeof assignmentStatus?.trainer_onboarding_status === 'string'
     ? assignmentStatus.trainer_onboarding_status.trim().toLowerCase()
@@ -360,6 +550,165 @@ function AppShell() {
     setProgressRoute('progress');
   };
 
+  const handleContinueWithProvider = async (provider) => {
+    if (isAuthUiSubmitting) {
+      return;
+    }
+    setIsAuthUiSubmitting(true);
+    setAuthUiError(null);
+    setAuthUiInfo(null);
+    trackEvent('auth_started', { provider });
+    try {
+      const redirectTo = resolveOAuthRedirectUrl();
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: {
+          redirectTo,
+          skipBrowserRedirect: true,
+        },
+      });
+      if (error) {
+        throw error;
+      }
+      if (data?.url) {
+        await Linking.openURL(data.url);
+        setAuthUiInfo('Continue in your browser and return to MODE.');
+      }
+    } catch (error) {
+      setAuthUiError(error?.message || 'Unable to start OAuth sign-in.');
+    } finally {
+      setIsAuthUiSubmitting(false);
+    }
+  };
+
+  const handleContinueWithEmail = async () => {
+    if (isAuthUiSubmitting) {
+      return;
+    }
+    const normalizedEmail = authEmail.trim().toLowerCase();
+    if (!normalizedEmail) {
+      setAuthUiError('Enter your email to continue.');
+      return;
+    }
+    setIsAuthUiSubmitting(true);
+    setAuthUiError(null);
+    setAuthUiInfo(null);
+    trackEvent('auth_started', { provider: 'email_otp' });
+    try {
+      const redirectTo = resolveOAuthRedirectUrl();
+      const { error } = await supabase.auth.signInWithOtp({
+        email: normalizedEmail,
+        options: {
+          shouldCreateUser: !isSignInMode,
+          emailRedirectTo: redirectTo,
+        },
+      });
+      if (error) {
+        throw error;
+      }
+      setAuthUiInfo('Check your email for the secure sign-in link.');
+    } catch (error) {
+      setAuthUiError(error?.message || 'Unable to send sign-in link.');
+    } finally {
+      setIsAuthUiSubmitting(false);
+    }
+  };
+
+  const handleContinueWithPassword = async () => {
+    if (isAuthUiSubmitting) {
+      return;
+    }
+    const normalizedEmail = authEmail.trim().toLowerCase();
+    if (!normalizedEmail) {
+      setAuthUiError('Enter your email to continue.');
+      return;
+    }
+    if (!authPassword) {
+      setAuthUiError('Enter your password to continue.');
+      return;
+    }
+
+    setIsAuthUiSubmitting(true);
+    setAuthUiError(null);
+    setAuthUiInfo(null);
+    trackEvent('auth_started', {
+      provider: 'email_password',
+      mode: isSignInMode ? 'sign_in' : 'sign_up',
+    });
+
+    try {
+      if (isSignInMode) {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: normalizedEmail,
+          password: authPassword,
+        });
+        if (error) {
+          throw error;
+        }
+        setAuthUiInfo('Signed in successfully.');
+      } else {
+        const redirectTo = resolveOAuthRedirectUrl();
+        const { data, error } = await supabase.auth.signUp({
+          email: normalizedEmail,
+          password: authPassword,
+          options: {
+            emailRedirectTo: redirectTo,
+          },
+        });
+        if (error) {
+          throw error;
+        }
+        if (data?.session?.access_token) {
+          setAuthUiInfo('Account created and signed in.');
+        } else {
+          setAuthUiInfo('Account created. Check your email if verification is required.');
+        }
+      }
+    } catch (error) {
+      setAuthUiError(error?.message || 'Unable to continue with password.');
+    } finally {
+      setIsAuthUiSubmitting(false);
+    }
+  };
+
+  const handleSelectRole = async (role) => {
+    if (!session?.access_token || isRoleSubmitting) {
+      return;
+    }
+    setIsRoleSubmitting(true);
+    setBootstrapError(null);
+    trackEvent('role_selected', { role });
+    try {
+      const updated = await setOnboardingRole({
+        accessToken: session.access_token,
+        role,
+      });
+      setBootstrap(updated);
+      setActiveTab('home');
+    } catch (error) {
+      setBootstrapError(error?.message || 'Unable to save your role right now.');
+    } finally {
+      setIsRoleSubmitting(false);
+    }
+  };
+
+  const handleRefreshBootstrapAndStatus = useCallback(async () => {
+    if (!session?.access_token) {
+      return;
+    }
+    await Promise.all([
+      loadBootstrap({ accessToken: session.access_token }),
+      loadAssignmentStatus({ accessTokenOverride: session.access_token }),
+    ]);
+  }, [loadAssignmentStatus, loadBootstrap, session?.access_token]);
+
+  useEffect(() => {
+    if (authStage === 'welcome' && !hasTrackedWelcomeViewRef.current) {
+      hasTrackedWelcomeViewRef.current = true;
+      trackEvent('welcome_viewed', {});
+    }
+  }, [authStage, trackEvent]);
+
   if (isSessionLoading) {
     return (
       <ShellLoadingState
@@ -370,28 +719,105 @@ function AppShell() {
   }
 
   if (!session?.access_token) {
-    if (authStage === 'intro') {
-      return <OnboardingLandingScreen onContinue={() => setAuthStage('login')} />;
+    if (authStage === 'welcome') {
+      return <OnboardingLandingScreen onGetStarted={() => setAuthStage('preview')} onContinue={() => setAuthStage('preview')} />;
     }
-    return <Login onBackToIntro={() => setAuthStage('intro')} />;
+    if (authStage === 'preview') {
+      return (
+        <ProductPreviewScreen
+          onBack={() => setAuthStage('welcome')}
+          onContinue={() => setAuthStage('auth')}
+        />
+      );
+    }
+    return (
+      <Login
+        onBackToIntro={() => setAuthStage('preview')}
+        email={authEmail}
+        onEmailChange={setAuthEmail}
+        password={authPassword}
+        onPasswordChange={setAuthPassword}
+        showSocialAuth={AUTH_SOCIAL_ENABLED}
+        showPasswordAuth={AUTH_PASSWORD_ENABLED}
+        onContinueWithApple={() => handleContinueWithProvider('apple')}
+        onContinueWithGoogle={() => handleContinueWithProvider('google')}
+        onContinueWithEmail={handleContinueWithEmail}
+        onContinueWithPassword={handleContinueWithPassword}
+        isSubmitting={isAuthUiSubmitting}
+        isSignInMode={isSignInMode}
+        onToggleSignInMode={() => setIsSignInMode((current) => !current)}
+        infoMessage={authUiInfo}
+        errorMessage={authUiError}
+      />
+    );
+  }
+
+  if (isBootstrapLoading) {
+    return (
+      <ShellLoadingState
+        title="Preparing MODE"
+        subtitle="Loading your role and onboarding state."
+      />
+    );
+  }
+
+  if (!bootstrap) {
+    return (
+      <ShellErrorState
+        title="We couldn't load your setup"
+        subtitle={bootstrapError || 'Unable to reach onboarding services right now.'}
+        actionTitle="Retry"
+        onPress={() => loadBootstrap({ accessToken: session.access_token })}
+      />
+    );
+  }
+
+  if (appState === APP_STATE.AUTHENTICATED_ROLE_UNKNOWN) {
+    return (
+      <RoleSelectionScreen
+        onSelectClient={() => handleSelectRole('client')}
+        onSelectTrainer={() => handleSelectRole('trainer')}
+        isSubmitting={isRoleSubmitting}
+        errorMessage={bootstrapError}
+      />
+    );
+  }
+
+  if (appState === APP_STATE.CLIENT_ONBOARDING || appState === APP_STATE.ONBOARDING_PARTIAL) {
+    return (
+      <ClientOnboardingFlowScreen
+        accessToken={session.access_token}
+        bootstrap={bootstrap}
+        onBootstrapUpdate={setBootstrap}
+        onFinished={() => {
+          setActiveTab('home');
+        }}
+        onTrackEvent={trackEvent}
+      />
+    );
+  }
+
+  if (appState === APP_STATE.TRAINER_STUB) {
+    return (
+      <TrainerStubScreen
+        accessToken={session.access_token}
+        bootstrap={bootstrap}
+        onBootstrapUpdate={setBootstrap}
+        onSignOut={handleSignOut}
+      />
+    );
   }
 
   const navBottomInset = insets.bottom;
   const floatingNavClearance = navBottomInset + FLOATING_NAV_BOTTOM_OFFSET + FLOATING_NAV_PILL_HEIGHT;
   const contentBottomInset = navBottomInset + 108;
   const coachChatBottomInset = navBottomInset + COACH_CHAT_DOCK_CLEARANCE;
-  const isBlockingStatusError = Boolean(assignmentStatusError);
-  const assignmentError = assignTrainerError || assignmentStatusError;
-  const needsAssignment = Boolean(assignmentStatus?.needs_assignment);
-  const showAssignmentGate = Boolean(
-    !isTrainerViewer && (needsAssignment || isBlockingStatusError) && activeTab !== 'profile',
-  );
-  const isBlockingAssignmentLoad = isAssignmentStatusLoading && !assignmentStatus && !assignmentStatusError;
+  const isBlockingAssignmentLoad = isAssignmentStatusLoading && isTrainerViewer && !assignmentStatus && !assignmentStatusError;
   const shouldUseTrainerRouteFoundation = Boolean(
     TRAINER_ROUTE_FOUNDATION_ENABLED
-      && !showAssignmentGate
       && isTrainerViewer,
   );
+  const hasAssignedTrainer = Boolean(assignmentStatus?.assigned_trainer_id || bootstrap?.assigned_trainer_id);
 
   if (isBlockingAssignmentLoad) {
     return (
@@ -413,26 +839,6 @@ function AppShell() {
           },
         ]}
       >
-        {showAssignmentGate ? (
-          <TrainerAssignmentScreen
-            trainers={assignmentStatus?.available_trainers || []}
-            availableTrainerCount={assignmentStatus?.available_trainers_count}
-            hasLoadedStatus={Boolean(assignmentStatus)}
-            isStatusLoading={isAssignmentStatusLoading}
-            statusLoadFailed={isBlockingStatusError}
-            isSubmitting={isAssigningTrainer}
-            errorMessage={assignmentError?.message || null}
-            isNetworkError={Boolean(assignmentError?.isNetworkError)}
-            errorRequestId={assignmentError?.requestId || null}
-            errorApiBase={assignmentError?.apiBase || null}
-            errorAttemptedBases={assignmentError?.attemptedBases || []}
-            errorRawNetworkMessage={assignmentError?.rawNetworkMessage || null}
-            onRetryStatusLoad={loadAssignmentStatus}
-            onAssignTrainer={handleAssignTrainer}
-            bottomInset={contentBottomInset}
-          />
-        ) : null}
-
         {shouldUseTrainerRouteFoundation ? (
           <TrainerRouteHost
             activeTab={activeTab}
@@ -447,7 +853,7 @@ function AppShell() {
           />
         ) : (
           <>
-            {!showAssignmentGate && !isTrainerViewer && activeTab === 'home' ? (
+            {!isTrainerViewer && activeTab === 'home' ? (
               <DailyCheckinScreen
                 accessToken={session.access_token}
                 bottomInset={contentBottomInset}
@@ -457,7 +863,7 @@ function AppShell() {
               />
             ) : null}
 
-            {!showAssignmentGate && isTrainerViewer && activeTab === 'home' ? (
+            {isTrainerViewer && activeTab === 'home' ? (
               <TrainerHomeScreen
                 accessToken={session.access_token}
                 bottomInset={contentBottomInset}
@@ -471,7 +877,7 @@ function AppShell() {
               />
             ) : null}
 
-            {!showAssignmentGate && activeTab === 'coach' ? (
+            {activeTab === 'coach' && hasAssignedTrainer ? (
               <CoachChatScreen
                 accessToken={session.access_token}
                 launchContext={resolvedTrainerCoachLaunchContext}
@@ -479,7 +885,16 @@ function AppShell() {
               />
             ) : null}
 
-            {!showAssignmentGate && !isTrainerViewer && activeTab === 'progress' && progressRoute === 'progress' ? (
+            {activeTab === 'coach' && !hasAssignedTrainer && !isTrainerViewer ? (
+              <CoachTabGuardScreen
+                accessToken={session.access_token}
+                bottomInset={contentBottomInset}
+                onAttached={handleRefreshBootstrapAndStatus}
+                onBackHome={() => setActiveTab('home')}
+              />
+            ) : null}
+
+            {!isTrainerViewer && activeTab === 'progress' && progressRoute === 'progress' ? (
               <ProgressScreen
                 accessToken={session.access_token}
                 bottomInset={contentBottomInset}
@@ -488,7 +903,7 @@ function AppShell() {
               />
             ) : null}
 
-            {!showAssignmentGate && !isTrainerViewer && activeTab === 'progress' && progressRoute === 'insights' ? (
+            {!isTrainerViewer && activeTab === 'progress' && progressRoute === 'insights' ? (
               <CoachInsightsScreen
                 accessToken={session.access_token}
                 onBack={handleBackFromInsights}
@@ -496,7 +911,7 @@ function AppShell() {
               />
             ) : null}
 
-            {!showAssignmentGate && isTrainerViewer && activeTab === 'clients' ? (
+            {isTrainerViewer && activeTab === 'clients' ? (
               <TrainerClientsScreen
                 accessToken={session.access_token}
                 bottomInset={contentBottomInset}
@@ -582,5 +997,9 @@ const styles = StyleSheet.create({
   loadingSubtitle: {
     marginTop: theme.spacing[1],
     textAlign: 'center',
+  },
+  errorActionButton: {
+    marginTop: theme.spacing[2],
+    width: '100%',
   },
 });
