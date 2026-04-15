@@ -133,7 +133,7 @@ export default function ProgressScreen({
           <RefreshControl
             refreshing={isRefreshing}
             onRefresh={() => loadProgress({ refresh: true })}
-            tintColor={theme.colors.brand.progressCore}
+            tintColor={theme.colors.accent.primary}
           />
         )}
       >
@@ -157,7 +157,7 @@ export default function ProgressScreen({
 
         {isLoading ? (
           <ModeCard variant="tinted" style={styles.centerCard}>
-            <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
+            <ActivityIndicator size="small" color={theme.colors.accent.primary} />
             <ModeText variant="bodySm" tone="secondary">Loading your trend signals...</ModeText>
           </ModeCard>
         ) : null}
@@ -184,8 +184,8 @@ export default function ProgressScreen({
                   </ModeText>
                   <ProgressBar
                     progress={consistencyRatio}
-                    trackColor="#EFEDE6"
-                    fillColor={theme.colors.brand.progressCore}
+                    trackColor={theme.colors.surface.base}
+                    fillColor={theme.colors.accent.primary}
                     style={styles.progressBar}
                   />
                 </View>
@@ -291,7 +291,7 @@ export default function ProgressScreen({
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: theme.colors.surface.canvas,
+    backgroundColor: theme.colors.background.app,
   },
   content: {
     paddingHorizontal: theme.spacing[3],
@@ -361,14 +361,14 @@ const styles = StyleSheet.create({
     maxWidth: 24,
     height: 72,
     borderRadius: 12,
-    backgroundColor: '#EFEDE6',
+    backgroundColor: theme.colors.surface.base,
     justifyContent: 'flex-end',
     overflow: 'hidden',
   },
   chartBarFill: {
     width: '100%',
     borderRadius: 12,
-    backgroundColor: theme.colors.brand.progressCore,
+    backgroundColor: theme.colors.accent.primary,
   },
   chartFooter: {
     marginTop: theme.spacing[2],
@@ -392,8 +392,8 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   habitRowDone: {
-    borderColor: 'rgba(76, 175, 125, 0.42)',
-    backgroundColor: 'rgba(76, 175, 125, 0.1)',
+    borderColor: theme.colors.state.buildBorder,
+    backgroundColor: theme.colors.state.buildFill,
   },
   habitToggle: {
     width: 18,
@@ -404,7 +404,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surface.subtle,
   },
   habitToggleDone: {
-    borderColor: theme.colors.brand.progressSuccess,
-    backgroundColor: theme.colors.brand.progressSuccess,
+    borderColor: theme.colors.accent.primary,
+    backgroundColor: theme.colors.accent.primary,
   },
 });

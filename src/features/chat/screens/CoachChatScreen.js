@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
   Keyboard,
@@ -12,6 +12,7 @@ import * as Clipboard from 'expo-clipboard';
 
 import {
   HeaderBar,
+  ModeCard,
   ModeText,
   SafeScreen,
 } from '../../../../lib/components';
@@ -25,6 +26,36 @@ import { useChatConversation } from '../hooks/useChatConversation';
 const KEYBOARD_OPEN_DOCK_PADDING = theme.spacing[2];
 const COPY_FEEDBACK_TIMEOUT_MS = 2200;
 const NEAR_BOTTOM_THRESHOLD_PX = 120;
+
+function resolveSessionIntro(launchContext) {
+  const entrypoint = String(launchContext?.entrypoint || '').trim().toLowerCase();
+  if (entrypoint === 'trainer_agent_training') {
+    return {
+      eyebrow: 'Coach Calibration',
+      title: 'Refine Your Coaching Voice',
+      body: 'Review and approve sample responses so every client interaction sounds like you.',
+    };
+  }
+  if (entrypoint === 'generated_workout') {
+    return {
+      eyebrow: 'Workout Coach',
+      title: 'Plan Loaded',
+      body: 'Use this thread to adapt intensity, swap movements, or adjust volume before training.',
+    };
+  }
+  if (entrypoint === 'generated_nutrition') {
+    return {
+      eyebrow: 'Nutrition Coach',
+      title: 'Fuel Plan Loaded',
+      body: 'Ask for substitutions, macro adjustments, and adherence strategy for today.',
+    };
+  }
+  return {
+    eyebrow: 'Coach Channel',
+    title: 'High-Intent Conversation',
+    body: 'Use this space for direct, disciplined coaching aligned to your goals.',
+  };
+}
 
 function withFallback(value) {
   if (value === null || value === undefined || value === '') {
@@ -89,6 +120,7 @@ export default function CoachChatScreen({
   });
   const keyboardOffsetShiftRef = useRef(0);
   const dockAnchorInset = Math.max(bottomInset, 0);
+  const sessionIntro = useMemo(() => resolveSessionIntro(launchContext), [launchContext]);
   const backAccessibilityLabel =
     launchContext?.entrypoint === 'generated_nutrition'
       ? 'Back to generated nutrition plan'
@@ -319,7 +351,7 @@ export default function CoachChatScreen({
             onLayout={(event) => {
               updateScrollMetrics({ layoutHeight: event?.nativeEvent?.layout?.height });
             }}
-            renderItem={({ item }) => {
+            renderItem={({ item, index }) => {
               const trainerOnboardingPatch = item?.profilePatch?.trainer_onboarding
                 && typeof item.profilePatch.trainer_onboarding === 'object'
                 ? item.profilePatch.trainer_onboarding
@@ -339,6 +371,8 @@ export default function CoachChatScreen({
               const totalCount = Number.isFinite(Number(checklist?.total))
                 ? Number(checklist.total)
                 : samples.length;
+              const previousRole = index > 0 ? messages[index - 1]?.role : null;
+              const showSpeakerLabel = index === 0 || previousRole !== item.role;
               return (
                 <View style={styles.messageItem}>
                   <ChatBubble
@@ -346,6 +380,7 @@ export default function CoachChatScreen({
                     text={item.text}
                     isError={item.isError}
                     fallbackTriggered={item.fallbackTriggered}
+                    showSpeakerLabel={showSpeakerLabel}
                   />
                   {stepPreview ? (
                     <View style={styles.previewCard}>
@@ -388,7 +423,8 @@ export default function CoachChatScreen({
                                 style={({ pressed }) => [
                                   styles.checklistActionButton,
                                   styles.checklistApproveButton,
-                                  (isSending || isApproved || pressed) && styles.checklistActionButtonMuted,
+                                  pressed && !isSending && !isApproved && styles.checklistActionButtonPressed,
+                                  (isSending || isApproved) && styles.checklistActionButtonMuted,
                                 ]}
                               >
                                 <ModeText variant="caption" tone="accent">
@@ -402,7 +438,8 @@ export default function CoachChatScreen({
                                 disabled={isSending}
                                 style={({ pressed }) => [
                                   styles.checklistActionButton,
-                                  (isSending || pressed) && styles.checklistActionButtonMuted,
+                                  pressed && !isSending && styles.checklistActionButtonPressed,
+                                  isSending && styles.checklistActionButtonMuted,
                                 ]}
                               >
                                 <ModeText variant="caption" tone="secondary">Regenerate</ModeText>
@@ -418,7 +455,8 @@ export default function CoachChatScreen({
                         disabled={isSending}
                         style={({ pressed }) => [
                           styles.checklistApproveAllButton,
-                          (isSending || pressed) && styles.checklistActionButtonMuted,
+                          pressed && !isSending && styles.checklistActionButtonPressed,
+                          isSending && styles.checklistActionButtonMuted,
                         ]}
                       >
                         <ModeText variant="caption" tone="accent">Approve all</ModeText>
@@ -433,6 +471,19 @@ export default function CoachChatScreen({
               styles.messages,
               { paddingBottom: dockHeight + theme.spacing[2] },
             ]}
+            ListHeaderComponent={(
+              <ModeCard variant="tinted" style={styles.sessionIntroCard} noShadow>
+                <ModeText variant="caption" tone="tertiary" style={styles.sessionIntroEyebrow}>
+                  {sessionIntro.eyebrow}
+                </ModeText>
+                <ModeText variant="h3" style={styles.sessionIntroTitle}>
+                  {sessionIntro.title}
+                </ModeText>
+                <ModeText variant="bodySm" tone="secondary" style={styles.sessionIntroBody}>
+                  {sessionIntro.body}
+                </ModeText>
+              </ModeCard>
+            )}
             ListFooterComponent={isSending ? <TypingIndicator /> : <View style={styles.threadSpacer} />}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
@@ -489,7 +540,8 @@ export default function CoachChatScreen({
                     disabled={isSending}
                     style={({ pressed }) => [
                       styles.retryButton,
-                      (isSending || pressed) && styles.retryButtonMuted,
+                      pressed && !isSending && styles.retryButtonPressed,
+                      isSending && styles.retryButtonMuted,
                     ]}
                   >
                     <ModeText variant="label" tone="accent">
@@ -503,7 +555,8 @@ export default function CoachChatScreen({
                     disabled={isSending}
                     style={({ pressed }) => [
                       styles.retryButton,
-                      (isSending || pressed) && styles.retryButtonMuted,
+                      pressed && !isSending && styles.retryButtonPressed,
+                      isSending && styles.retryButtonMuted,
                     ]}
                   >
                     <ModeText variant="label" tone="secondary">Copy error</ModeText>
@@ -519,6 +572,11 @@ export default function CoachChatScreen({
               style={styles.quickReplies}
               contentContainerStyle={styles.quickRepliesContent}
             />
+            {quickReplies?.length ? (
+              <ModeText variant="caption" tone="tertiary" style={styles.quickRepliesLabel}>
+                Coach shortcuts
+              </ModeText>
+            ) : null}
 
             <CoachComposer
               value={draft}
@@ -535,7 +593,7 @@ export default function CoachChatScreen({
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: theme.colors.surface.canvas,
+    backgroundColor: theme.colors.background.app,
   },
   content: {
     flex: 1,
@@ -555,8 +613,25 @@ const styles = StyleSheet.create({
     paddingTop: theme.spacing[2],
     paddingHorizontal: theme.spacing[3],
   },
+  sessionIntroCard: {
+    marginBottom: theme.spacing[2],
+    borderColor: theme.colors.border.default,
+    backgroundColor: theme.colors.surface.elevated,
+  },
+  sessionIntroEyebrow: {
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  sessionIntroTitle: {
+    marginTop: 2,
+  },
+  sessionIntroBody: {
+    marginTop: theme.spacing[1],
+    maxWidth: 520,
+  },
   messageItem: {
     width: '100%',
+    marginBottom: 2,
   },
   threadSpacer: {
     height: theme.spacing[1],
@@ -569,15 +644,15 @@ const styles = StyleSheet.create({
     paddingTop: theme.spacing[1],
     paddingHorizontal: theme.spacing[3],
     borderTopWidth: 1,
-    borderTopColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.canvas,
+    borderTopColor: theme.colors.border.default,
+    backgroundColor: theme.colors.surface.glass,
   },
   errorRow: {
     marginBottom: theme.spacing[1],
     borderRadius: theme.radii.s,
     borderWidth: 1,
-    borderColor: 'rgba(196, 138, 138, 0.45)',
-    backgroundColor: 'rgba(232, 207, 207, 0.35)',
+    borderColor: theme.colors.feedback.errorBorder,
+    backgroundColor: theme.colors.feedback.errorBg,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     flexDirection: 'row',
@@ -601,11 +676,19 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   retryButton: {
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+    borderColor: theme.colors.border.subtle,
+    backgroundColor: theme.colors.surface.base,
     paddingVertical: theme.spacing[1] - 2,
-    paddingHorizontal: theme.spacing[1],
+    paddingHorizontal: theme.spacing[2],
+  },
+  retryButtonPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
   },
   retryButtonMuted: {
-    opacity: 0.65,
+    opacity: theme.interaction.disabledOpacity,
   },
   previewCard: {
     alignSelf: 'flex-start',
@@ -615,8 +698,8 @@ const styles = StyleSheet.create({
     marginLeft: theme.spacing[1],
     borderRadius: theme.radii.m,
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.base,
+    borderColor: theme.colors.border.default,
+    backgroundColor: theme.colors.surface.elevated,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     gap: 4,
@@ -634,8 +717,8 @@ const styles = StyleSheet.create({
     marginLeft: theme.spacing[1],
     borderRadius: theme.radii.m,
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.base,
+    borderColor: theme.colors.border.default,
+    backgroundColor: theme.colors.surface.elevated,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[2],
     gap: theme.spacing[1],
@@ -649,7 +732,8 @@ const styles = StyleSheet.create({
   checklistItem: {
     borderRadius: theme.radii.s,
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
+    borderColor: theme.colors.border.subtle,
+    backgroundColor: theme.colors.surface.base,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     gap: 6,
@@ -668,23 +752,28 @@ const styles = StyleSheet.create({
   checklistActionButton: {
     borderRadius: theme.radii.pill,
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
+    borderColor: theme.colors.border.default,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: 4,
-    backgroundColor: theme.colors.surface.subtle,
+    backgroundColor: theme.colors.surface.base,
   },
   checklistApproveButton: {
-    borderColor: theme.colors.brand.progressCore,
+    borderColor: theme.colors.accent.primary,
+    backgroundColor: theme.colors.accent.soft,
   },
   checklistActionButtonMuted: {
-    opacity: 0.6,
+    opacity: theme.interaction.disabledOpacity,
+  },
+  checklistActionButtonPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
   },
   checklistApproveAllButton: {
     alignSelf: 'flex-start',
     borderRadius: theme.radii.pill,
     borderWidth: 1,
-    borderColor: theme.colors.brand.progressCore,
-    backgroundColor: theme.colors.surface.subtle,
+    borderColor: theme.colors.accent.primary,
+    backgroundColor: theme.colors.accent.soft,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: 5,
     marginTop: 2,
@@ -694,5 +783,10 @@ const styles = StyleSheet.create({
   },
   quickRepliesContent: {
     paddingHorizontal: 0,
+  },
+  quickRepliesLabel: {
+    marginTop: -2,
+    marginBottom: theme.spacing[1] - 2,
+    paddingHorizontal: theme.spacing[1],
   },
 });

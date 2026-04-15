@@ -14,10 +14,10 @@ export default function TypingIndicator() {
 const styles = StyleSheet.create({
   wrap: {
     alignSelf: 'flex-start',
-    backgroundColor: theme.colors.surface.raised,
+    backgroundColor: theme.colors.surface.elevated,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
+    borderColor: theme.colors.border.default,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     marginBottom: theme.spacing[1],

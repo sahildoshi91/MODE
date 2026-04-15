@@ -21,7 +21,14 @@ function valueOrFallback(value, fallback = 'Not available') {
 
 function SettingToggle({ label, description, enabled, onToggle }) {
   return (
-    <Pressable style={[styles.toggleRow, enabled && styles.toggleRowEnabled]} onPress={onToggle}>
+    <Pressable
+      onPress={onToggle}
+      style={({ pressed }) => [
+        styles.toggleRow,
+        enabled && styles.toggleRowEnabled,
+        pressed && styles.toggleRowPressed,
+      ]}
+    >
       <View style={styles.toggleCopy}>
         <ModeText variant="bodySm">{label}</ModeText>
         <ModeText variant="caption" tone="secondary">{description}</ModeText>
@@ -116,7 +123,7 @@ export default function ProfileScreen({ session, assignmentStatus, onSignOut, bo
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: theme.colors.surface.canvas,
+    backgroundColor: theme.colors.background.app,
   },
   content: {
     paddingHorizontal: theme.spacing[3],
@@ -158,8 +165,11 @@ const styles = StyleSheet.create({
     gap: theme.spacing[2],
   },
   toggleRowEnabled: {
-    borderColor: 'rgba(76, 175, 125, 0.42)',
-    backgroundColor: 'rgba(76, 175, 125, 0.1)',
+    borderColor: theme.colors.state.buildBorder,
+    backgroundColor: theme.colors.state.buildFill,
+  },
+  toggleRowPressed: {
+    opacity: theme.interaction.pressedOpacity,
   },
   toggleCopy: {
     flex: 1,
@@ -168,18 +178,21 @@ const styles = StyleSheet.create({
     width: 42,
     height: 24,
     borderRadius: 12,
-    backgroundColor: '#D9D9D9',
+    backgroundColor: theme.colors.surface.base,
+    borderWidth: 1,
+    borderColor: theme.colors.border.subtle,
     padding: 2,
     justifyContent: 'center',
   },
   toggleTrackEnabled: {
-    backgroundColor: 'rgba(76, 175, 125, 0.52)',
+    backgroundColor: theme.colors.accent.primary,
+    borderColor: theme.colors.accent.primary,
   },
   toggleThumb: {
     width: 20,
     height: 20,
     borderRadius: 10,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: theme.colors.text.primary,
   },
   toggleThumbEnabled: {
     alignSelf: 'flex-end',

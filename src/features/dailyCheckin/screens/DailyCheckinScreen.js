@@ -55,7 +55,7 @@ const QUESTIONS = [
     icon: { family: 'material', name: 'weather-night' },
     question: 'How well did you sleep?',
     subtitle: 'Quality rest is the foundation of performance',
-    color: '#6F8F7B',
+    color: theme.colors.status.info,
     options: [
       { score: 1, label: 'Barely slept', sublabel: 'Under 4 hours' },
       { score: 2, label: 'Poor sleep', sublabel: 'Restless night' },
@@ -70,7 +70,7 @@ const QUESTIONS = [
     icon: { family: 'feather', name: 'wind' },
     question: 'How heavy is your stress today?',
     subtitle: 'Calm systems recover and perform better',
-    color: '#4CAF7D',
+    color: theme.colors.accent.primary,
     options: [
       { score: 1, label: 'Maxed out', sublabel: 'I feel overloaded' },
       { score: 2, label: 'High stress', sublabel: 'Hard to settle' },
@@ -85,7 +85,7 @@ const QUESTIONS = [
     icon: { family: 'material', name: 'arm-flex' },
     question: 'How is your body feeling?',
     subtitle: 'Soreness changes how hard you should push',
-    color: '#A8C1B3',
+    color: theme.colors.status.success,
     options: [
       { score: 1, label: 'Very sore', sublabel: 'Movement feels heavy' },
       { score: 2, label: 'Pretty sore', sublabel: 'A lot of stiffness today' },
@@ -100,7 +100,7 @@ const QUESTIONS = [
     icon: { family: 'material', name: 'food-apple-outline' },
     question: 'How well have you fueled yourself?',
     subtitle: 'Nutrition sets the ceiling for recovery and output',
-    color: '#6F8F7B',
+    color: theme.colors.status.info,
     options: [
       { score: 1, label: 'Way off', sublabel: 'Little structure today' },
       { score: 2, label: 'Below target', sublabel: 'Missed a lot of basics' },
@@ -115,7 +115,7 @@ const QUESTIONS = [
     icon: { family: 'feather', name: 'zap' },
     question: 'How motivated do you feel?',
     subtitle: 'Honest effort starts with honest readiness',
-    color: '#1F3D36',
+    color: theme.colors.accent.primary,
     options: [
       { score: 1, label: 'Running on empty', sublabel: 'I do not want to do this' },
       { score: 2, label: 'Low motivation', sublabel: 'Willpower feels thin' },
@@ -128,19 +128,19 @@ const QUESTIONS = [
 
 const MODE_THEME = {
   BEAST: {
-    accent: '#1F3D36',
+    accent: theme.colors.accent.primary,
     badge: 'Overdrive readiness',
   },
   BUILD: {
-    accent: '#4CAF7D',
+    accent: theme.colors.accent.primary,
     badge: 'Build momentum',
   },
   RECOVER: {
-    accent: '#6F8F7B',
+    accent: theme.colors.status.info,
     badge: 'Base recovery',
   },
   REST: {
-    accent: '#6F8F7B',
+    accent: theme.colors.text.secondary,
     badge: 'Reset support',
   },
 };
@@ -748,7 +748,7 @@ function ResultCard({
             icon="dumbbell"
             title="Build me a training routine"
             subtitle={`Tailored to your ${result?.mode || 'BUILD'} mode today`}
-            accent={theme.colors.brand.progressSuccess}
+            accent={theme.colors.status.success}
             onPress={onBuildTraining}
             style={styles.bundleActionCard}
             testID="build-training-routine-action"
@@ -764,7 +764,7 @@ function ResultCard({
             icon="food-apple-outline"
             title="Build me a nutrition plan"
             subtitle="Meals optimized for your readiness"
-            accent={theme.colors.brand.progressCore}
+            accent={theme.colors.accent.primary}
             onPress={onBuildNutrition}
             style={styles.bundleActionCard}
           />
@@ -845,7 +845,7 @@ function HomeOverviewCard({ result, isModeInfoOpen, onToggleModeInfo, onOpenInsi
         <ModeText variant="caption" tone="tertiary">Readiness score {result.score}/25</ModeText>
         <ProgressBar
           progress={scoreProgress}
-          trackColor="#EFEDE6"
+          trackColor={theme.colors.surface.base}
           fillColor={modeTheme.accent}
           style={styles.homeOverviewProgress}
         />
@@ -922,7 +922,7 @@ function QuestionScreen({
         <View style={styles.progressRow}>
           {QUESTIONS.map((item, index) => {
             const backgroundColor = index < questionIndex
-              ? theme.colors.brand.progressSuccess
+              ? theme.colors.status.success
               : index === questionIndex
                 ? question.color
                 : theme.colors.surface.subtle;
@@ -1018,7 +1018,7 @@ function PreviousContextToggle({ previousCheckin, isLoadingPreviousCheckin, incl
   if (isLoadingPreviousCheckin) {
     return (
       <View style={styles.previousCard}>
-        <ActivityIndicator size="small" color={theme.colors.accent} />
+        <ActivityIndicator size="small" color={theme.colors.accent.primary} />
         <Text style={styles.previousLoadingText}>Looking up yesterday&apos;s check-in…</Text>
       </View>
     );
@@ -1031,7 +1031,7 @@ function PreviousContextToggle({ previousCheckin, isLoadingPreviousCheckin, incl
   return (
     <Pressable onPress={() => onToggle(!includeYesterdayContext)} style={styles.previousCard}>
       <View style={styles.previousLeft}>
-        <MaterialCommunityIcons name="calendar-sync" size={18} color={theme.colors.accent} />
+        <MaterialCommunityIcons name="calendar-sync" size={18} color={theme.colors.accent.primary} />
         <View style={styles.previousCopyWrap}>
           <Text style={styles.previousTitle}>Use Yesterday&apos;s Data</Text>
           <Text style={styles.previousMeta}>{previousCheckin.mode} • {previousCheckin.score}/25</Text>
@@ -1047,9 +1047,9 @@ function PreviousContextToggle({ previousCheckin, isLoadingPreviousCheckin, incl
 function TrainingIconBadge({
   Icon,
   icon,
-  color = theme.colors.brand.progressCore,
-  backgroundColor = withAlpha(theme.colors.brand.progressCore, 0.14),
-  borderColor = withAlpha(theme.colors.brand.progressCore, 0.22),
+  color = theme.colors.accent.primary,
+  backgroundColor = withAlpha(theme.colors.accent.primary, 0.14),
+  borderColor = withAlpha(theme.colors.accent.primary, 0.22),
   size = 18,
   style,
   testID,
@@ -2022,7 +2022,7 @@ export default function DailyCheckinScreen({
 
       {(isLoading || step === 'loading') ? (
         <View style={styles.loadingScreen}>
-          <ActivityIndicator size="large" color={theme.colors.accent} />
+          <ActivityIndicator size="large" color={theme.colors.accent.primary} />
           <Text style={styles.loadingTitle}>Loading your check-in</Text>
           <Text style={styles.loadingBody}>Pulling today&apos;s status and preparing your flow.</Text>
         </View>
@@ -2306,7 +2306,7 @@ export default function DailyCheckinScreen({
 
               {planLoading ? (
                 <View style={styles.planLoadingWrap}>
-                  <ActivityIndicator size="large" color={theme.colors.primary} />
+                  <ActivityIndicator size="large" color={theme.colors.accent.primary} />
                   <Text style={styles.planLoadingText}>Coach {coachName} is building your workout...</Text>
                   <View style={styles.typingDotsRow}>
                     <View style={styles.typingDot} />
@@ -2424,7 +2424,7 @@ export default function DailyCheckinScreen({
 
               {planLoading ? (
                 <View style={styles.planLoadingWrap}>
-                  <ActivityIndicator size="large" color={theme.colors.primary} />
+                  <ActivityIndicator size="large" color={theme.colors.accent.primary} />
                   <Text style={styles.planLoadingText}>
                     Coach {coachName} is building your nutrition plan...
                   </Text>
@@ -2592,7 +2592,7 @@ export default function DailyCheckinScreen({
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: theme.colors.bg.primary,
+    backgroundColor: theme.colors.background.app,
   },
   centerStage: {
     flex: 1,
@@ -2605,7 +2605,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.bg.primary,
+    backgroundColor: theme.colors.background.app,
     paddingHorizontal: theme.spacing[3],
   },
   phoneFrame: {
@@ -2772,7 +2772,7 @@ const styles = StyleSheet.create({
     marginBottom: theme.spacing[1],
   },
   bundleMeta: {
-    color: theme.colors.accent,
+    color: theme.colors.accent.primary,
     ...theme.typography.body2,
     fontFamily: theme.typography.fontFamily,
   },
@@ -2786,7 +2786,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   resultsEyebrow: {
-    color: theme.colors.accent,
+    color: theme.colors.accent.primary,
     ...theme.typography.label,
     fontFamily: theme.typography.fontFamily,
     textTransform: 'uppercase',
@@ -2905,7 +2905,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   copyFeedbackSuccess: {
-    color: theme.colors.accent,
+    color: theme.colors.accent.primary,
   },
   copyFeedbackError: {
     color: theme.colors.warning,
@@ -3038,8 +3038,8 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing[3],
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: withAlpha(theme.colors.accent, 0.35),
-    backgroundColor: withAlpha(theme.colors.accent, 0.1),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.35),
+    backgroundColor: withAlpha(theme.colors.accent.primary, 0.1),
     padding: theme.spacing[2],
     flexDirection: 'row',
     alignItems: 'center',
@@ -3082,7 +3082,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   toggleTrackOn: {
-    backgroundColor: withAlpha(theme.colors.accent, 0.4),
+    backgroundColor: withAlpha(theme.colors.accent.primary, 0.4),
   },
   toggleThumb: {
     width: 20,
@@ -3120,8 +3120,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   environmentCardSelected: {
-    borderColor: withAlpha(theme.colors.primary, 0.5),
-    backgroundColor: withAlpha(theme.colors.primary, 0.12),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.5),
+    backgroundColor: withAlpha(theme.colors.accent.primary, 0.12),
   },
   environmentCardPressed: {
     transform: [{ scale: 0.99 }],
@@ -3138,8 +3138,8 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   environmentIconBadgeSelected: {
-    backgroundColor: withAlpha(theme.colors.primary, 0.16),
-    borderColor: withAlpha(theme.colors.primary, 0.26),
+    backgroundColor: withAlpha(theme.colors.accent.primary, 0.16),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.26),
   },
   environmentLabel: {
     color: theme.colors.textHigh,
@@ -3197,8 +3197,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   timePillSelected: {
-    backgroundColor: withAlpha(theme.colors.primary, 0.1),
-    borderColor: withAlpha(theme.colors.primary, 0.4),
+    backgroundColor: withAlpha(theme.colors.accent.primary, 0.1),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.4),
   },
   timePillText: {
     color: theme.colors.textMedium,
@@ -3207,7 +3207,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   timePillTextSelected: {
-    color: theme.colors.primary,
+    color: theme.colors.accent.primary,
   },
   dayTypeList: {
     gap: 10,
@@ -3220,8 +3220,8 @@ const styles = StyleSheet.create({
     padding: theme.spacing[2],
   },
   dayTypeCardSelected: {
-    borderColor: withAlpha(theme.colors.primary, 0.5),
-    backgroundColor: withAlpha(theme.colors.primary, 0.12),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.5),
+    backgroundColor: withAlpha(theme.colors.accent.primary, 0.12),
   },
   dayTypeTitle: {
     color: theme.colors.textHigh,
@@ -3248,7 +3248,7 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   generateButton: {
-    backgroundColor: theme.colors.brand.progressCore,
+    backgroundColor: theme.colors.accent.primary,
   },
   planStepWrap: {
     flex: 1,
@@ -3300,7 +3300,7 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: withAlpha(theme.colors.primary, 0.4),
+    backgroundColor: withAlpha(theme.colors.accent.primary, 0.4),
   },
   planErrorCard: {
     marginHorizontal: theme.spacing[3],
@@ -3365,9 +3365,9 @@ const styles = StyleSheet.create({
   },
   trainingHeaderCard: {
     borderRadius: 20,
-    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.22),
+    backgroundColor: withAlpha(theme.colors.status.info, 0.22),
     borderWidth: 1,
-    borderColor: withAlpha(theme.colors.brand.progressCore, 0.34),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.34),
     padding: theme.spacing[3],
   },
   trainingHeaderRow: {
@@ -3404,9 +3404,9 @@ const styles = StyleSheet.create({
     color: theme.colors.textHigh,
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
-    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.24),
+    backgroundColor: withAlpha(theme.colors.status.info, 0.24),
     borderWidth: 1,
-    borderColor: withAlpha(theme.colors.brand.progressCore, 0.35),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.35),
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
@@ -3551,8 +3551,8 @@ const styles = StyleSheet.create({
   coachTipBox: {
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: withAlpha(theme.colors.brand.progressCore, 0.42),
-    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.25),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.42),
+    backgroundColor: withAlpha(theme.colors.status.info, 0.25),
     padding: 8,
   },
   coachTipText: {
@@ -3579,8 +3579,8 @@ const styles = StyleSheet.create({
   coachNoteCard: {
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: withAlpha(theme.colors.accent, 0.35),
-    backgroundColor: withAlpha(theme.colors.accent, 0.12),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.35),
+    backgroundColor: withAlpha(theme.colors.accent.primary, 0.12),
     padding: theme.spacing[2],
   },
   coachNoteText: {
@@ -3592,8 +3592,8 @@ const styles = StyleSheet.create({
   guidedHeroCard: {
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: withAlpha(theme.colors.brand.progressCore, 0.38),
-    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.24),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.38),
+    backgroundColor: withAlpha(theme.colors.status.info, 0.24),
     padding: theme.spacing[3],
     alignItems: 'center',
   },
@@ -3611,7 +3611,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   guidedTimer: {
-    color: theme.colors.brand.progressCore,
+    color: theme.colors.accent.primary,
     fontSize: 42,
     fontWeight: '700',
     marginTop: 10,
@@ -3651,8 +3651,8 @@ const styles = StyleSheet.create({
     minHeight: 46,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: withAlpha(theme.colors.brand.progressCore, 0.16),
-    backgroundColor: theme.colors.brand.progressCore,
+    borderColor: withAlpha(theme.colors.accent.primary, 0.16),
+    backgroundColor: theme.colors.accent.primary,
     paddingHorizontal: 14,
     paddingVertical: 10,
     flexDirection: 'row',
@@ -3694,7 +3694,7 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   guidedButtonPrimary: {
-    backgroundColor: theme.colors.brand.progressCore,
+    backgroundColor: theme.colors.accent.primary,
   },
   splitRow: {
     flexDirection: 'row',
@@ -3711,7 +3711,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.warning,
   },
   endButton: {
-    backgroundColor: theme.colors.brand.progressSuccess,
+    backgroundColor: theme.colors.status.success,
   },
   splitButtonText: {
     color: theme.colors.text.primary,
@@ -3720,7 +3720,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   logFeedback: {
-    color: theme.colors.accent,
+    color: theme.colors.accent.primary,
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
     marginTop: 8,
@@ -3728,9 +3728,9 @@ const styles = StyleSheet.create({
   },
   nutritionHeaderCard: {
     borderRadius: 20,
-    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.2),
+    backgroundColor: withAlpha(theme.colors.status.info, 0.2),
     borderWidth: 1,
-    borderColor: withAlpha(theme.colors.brand.progressCore, 0.35),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.35),
     padding: theme.spacing[3],
   },
   nutritionCoachNote: {
@@ -3772,7 +3772,7 @@ const styles = StyleSheet.create({
   },
   logOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(31, 61, 54, 0.24)',
+    backgroundColor: theme.colors.surface.scrim,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: theme.spacing[3],
@@ -3809,8 +3809,8 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surface.subtle,
   },
   ratingPillSelected: {
-    borderColor: withAlpha(theme.colors.brand.progressCore, 0.52),
-    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.32),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.52),
+    backgroundColor: withAlpha(theme.colors.status.info, 0.32),
   },
   ratingPillText: {
     color: theme.colors.textMedium,
@@ -3819,7 +3819,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   ratingPillTextSelected: {
-    color: theme.colors.brand.progressDeep,
+    color: theme.colors.accent.primary,
   },
   logActionRow: {
     flexDirection: 'row',

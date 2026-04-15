@@ -153,24 +153,24 @@ const SECTION_DEFAULT_KEYS = {
 
 const SECTION_BADGE_COLORS = {
   [TRAINING_ITEM_SECTIONS.WARMUP]: {
-    color: theme.colors.emotional.warmGold,
-    backgroundColor: withAlpha(theme.colors.emotional.warmGold, 0.14),
-    borderColor: withAlpha(theme.colors.emotional.warmGold, 0.24),
+    color: theme.colors.status.warning,
+    backgroundColor: withAlpha(theme.colors.status.warning, 0.14),
+    borderColor: withAlpha(theme.colors.status.warning, 0.28),
   },
   [TRAINING_ITEM_SECTIONS.MAIN]: {
-    color: theme.colors.brand.progressCore,
-    backgroundColor: withAlpha(theme.colors.brand.progressCore, 0.14),
-    borderColor: withAlpha(theme.colors.brand.progressCore, 0.22),
+    color: theme.colors.accent.primary,
+    backgroundColor: withAlpha(theme.colors.accent.primary, 0.14),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.22),
   },
   [TRAINING_ITEM_SECTIONS.GUIDED]: {
-    color: theme.colors.brand.progressCore,
-    backgroundColor: withAlpha(theme.colors.brand.progressCore, 0.14),
-    borderColor: withAlpha(theme.colors.brand.progressCore, 0.22),
+    color: theme.colors.accent.primary,
+    backgroundColor: withAlpha(theme.colors.accent.primary, 0.14),
+    borderColor: withAlpha(theme.colors.accent.primary, 0.22),
   },
   [TRAINING_ITEM_SECTIONS.COOLDOWN]: {
-    color: theme.colors.brand.progressCore,
-    backgroundColor: withAlpha(theme.colors.brand.progressSoft, 0.24),
-    borderColor: withAlpha(theme.colors.brand.progressCore, 0.2),
+    color: theme.colors.status.info,
+    backgroundColor: withAlpha(theme.colors.status.info, 0.2),
+    borderColor: withAlpha(theme.colors.status.info, 0.32),
   },
 };
 

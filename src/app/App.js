@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, Easing, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ModeCard, ModeText } from '../../lib/components';
 import { theme } from '../../lib/theme';
 import Login from '../features/auth/screens/Login';
 import OnboardingLandingScreen from '../features/auth/screens/OnboardingLandingScreen';
@@ -30,6 +31,22 @@ const VIEWER_ROLE = {
   CLIENT: 'client',
   UNASSIGNED: 'unassigned',
 };
+
+function ShellLoadingState({ title, subtitle }) {
+  return (
+    <View style={styles.loadingScreen}>
+      <ModeCard variant="tinted" noShadow style={styles.loadingCard}>
+        <ActivityIndicator size="small" color={theme.colors.accent.primary} style={styles.loadingSpinner} />
+        <ModeText variant="h3" tone="primary" style={styles.loadingTitle}>
+          {title}
+        </ModeText>
+        <ModeText variant="bodySm" tone="secondary" style={styles.loadingSubtitle}>
+          {subtitle}
+        </ModeText>
+      </ModeCard>
+    </View>
+  );
+}
 
 function formatAssignmentError(error, fallbackMessage) {
   const message = error?.message || fallbackMessage;
@@ -345,9 +362,10 @@ function AppShell() {
 
   if (isSessionLoading) {
     return (
-      <View style={styles.loadingScreen}>
-        <ActivityIndicator size="large" color={theme.colors.brand.progressCore} />
-      </View>
+      <ShellLoadingState
+        title="Preparing MODE"
+        subtitle="Checking your session and loading your training workspace."
+      />
     );
   }
 
@@ -377,9 +395,10 @@ function AppShell() {
 
   if (isBlockingAssignmentLoad) {
     return (
-      <View style={styles.loadingScreen}>
-        <ActivityIndicator size="large" color={theme.colors.brand.progressCore} />
-      </View>
+      <ShellLoadingState
+        title="Syncing Your Coach"
+        subtitle="Loading assignment status before we open your dashboard."
+      />
     );
   }
 
@@ -530,7 +549,7 @@ export default function App() {
 const styles = StyleSheet.create({
   shell: {
     flex: 1,
-    backgroundColor: theme.colors.surface.canvas,
+    backgroundColor: theme.colors.background.app,
   },
   screenContainer: {
     flex: 1,
@@ -543,6 +562,25 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.surface.canvas,
+    backgroundColor: theme.colors.background.app,
+    paddingHorizontal: theme.spacing[3],
+  },
+  loadingCard: {
+    width: '100%',
+    maxWidth: 360,
+    alignItems: 'center',
+    backgroundColor: theme.colors.surface.glass,
+    borderColor: theme.colors.border.default,
+    marginBottom: 0,
+  },
+  loadingSpinner: {
+    marginBottom: theme.spacing[2],
+  },
+  loadingTitle: {
+    textAlign: 'center',
+  },
+  loadingSubtitle: {
+    marginTop: theme.spacing[1],
+    textAlign: 'center',
   },
 });

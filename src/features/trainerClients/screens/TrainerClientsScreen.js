@@ -84,29 +84,29 @@ function priorityBadgeStyle(tier) {
   const normalized = String(tier || '').trim().toLowerCase();
   if (normalized === 'critical') {
     return {
-      backgroundColor: theme.colors.emotional.softBlush,
-      borderColor: theme.colors.emotional.dustyRose,
+      backgroundColor: theme.colors.feedback.errorBg,
+      borderColor: theme.colors.feedback.errorBorder,
       tone: 'error',
     };
   }
   if (normalized === 'high') {
     return {
-      backgroundColor: '#FAF0E1',
-      borderColor: theme.colors.emotional.warmGold,
+      backgroundColor: theme.colors.feedback.warningBg,
+      borderColor: theme.colors.feedback.warningBorder,
       tone: 'warning',
     };
   }
   if (normalized === 'medium') {
     return {
-      backgroundColor: theme.colors.surface.subtle,
-      borderColor: theme.colors.border.soft,
+      backgroundColor: theme.colors.surface.elevated,
+      borderColor: theme.colors.border.default,
       tone: 'secondary',
     };
   }
   return {
-    backgroundColor: '#E9F3EC',
-    borderColor: theme.colors.brand.progressSoft,
-    tone: 'secondary',
+    backgroundColor: theme.colors.feedback.successBg,
+    borderColor: theme.colors.feedback.successBorder,
+    tone: 'info',
   };
 }
 
@@ -465,7 +465,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
 
           {isLoadingDetail ? (
             <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color={theme.colors.brand.progressCore} />
+              <ActivityIndicator size="large" color={theme.colors.accent.primary} />
               <ModeText variant="bodySm" tone="secondary">Loading client detail...</ModeText>
             </View>
           ) : null}
@@ -772,7 +772,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
 
         {isLoadingCommandCenter ? (
           <View style={styles.loadingContainer}>
-            <ActivityIndicator size="large" color={theme.colors.brand.progressCore} />
+            <ActivityIndicator size="large" color={theme.colors.accent.primary} />
             <ModeText variant="bodySm" tone="secondary">Loading Command Center...</ModeText>
           </View>
         ) : null}
@@ -887,7 +887,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
 
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: theme.colors.surface.canvas,
+    backgroundColor: theme.colors.background.app,
   },
   content: {
     paddingHorizontal: theme.spacing[3],
@@ -953,16 +953,16 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing[2],
   },
   riskChipHigh: {
-    borderColor: theme.colors.emotional.dustyRose,
-    backgroundColor: theme.colors.emotional.softBlush,
+    borderColor: theme.colors.feedback.errorBorder,
+    backgroundColor: theme.colors.feedback.errorBg,
   },
   riskChipMedium: {
-    borderColor: theme.colors.emotional.warmGold,
-    backgroundColor: '#FAF0E1',
+    borderColor: theme.colors.feedback.warningBorder,
+    backgroundColor: theme.colors.feedback.warningBg,
   },
   riskChipLow: {
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.subtle,
+    borderColor: theme.colors.border.default,
+    backgroundColor: theme.colors.surface.elevated,
   },
   summaryBlock: {
     marginTop: theme.spacing[2],

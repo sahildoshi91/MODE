@@ -1,6 +1,7 @@
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
+import { ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 
 export default function ChatBubble({
@@ -8,23 +9,49 @@ export default function ChatBubble({
   text,
   isError = false,
   fallbackTriggered = false,
+  showSpeakerLabel = true,
+  speakerLabel,
 }) {
   const isUser = role === 'user';
+  const resolvedSpeakerLabel = speakerLabel || (isUser ? 'You' : 'Coach');
 
   return (
     <View style={[styles.row, isUser ? styles.userRow : styles.assistantRow]}>
-      <View
-        style={[
-          styles.bubble,
-          isUser ? styles.userBubble : styles.assistantBubble,
-          isError && styles.errorBubble,
-        ]}
-      >
-        <Text style={[styles.text, isUser && styles.userText]}>{text}</Text>
-        {fallbackTriggered ? (
-          <Text style={[styles.metaText, isUser && styles.userMetaText]}>Flagged for trainer review</Text>
+      {showSpeakerLabel ? (
+        <ModeText
+          variant="caption"
+          tone={isUser ? 'muted' : 'secondary'}
+          style={[styles.speakerLabel, isUser && styles.userSpeakerLabel]}
+        >
+          {resolvedSpeakerLabel}
+        </ModeText>
+      ) : null}
+
+      <View style={[styles.bubbleWrap, isUser ? styles.userBubbleWrap : styles.assistantBubbleWrap]}>
+        {!isUser ? (
+          <View style={[styles.assistantEdge, isError && styles.assistantEdgeError]} />
         ) : null}
+
+        <View
+          style={[
+            styles.bubble,
+            isUser ? styles.userBubble : styles.assistantBubble,
+            isError && styles.errorBubble,
+          ]}
+        >
+          <ModeText variant="body" tone={isUser ? 'inverse' : 'primary'} style={styles.text}>
+            {text}
+          </ModeText>
+        </View>
       </View>
+
+      {fallbackTriggered ? (
+        <View style={[styles.fallbackTag, isUser && styles.userFallbackTag]}>
+          <ModeText variant="caption" tone={isUser ? 'inverse' : 'secondary'} style={styles.metaText}>
+            Flagged for trainer review
+          </ModeText>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -32,7 +59,8 @@ export default function ChatBubble({
 const styles = StyleSheet.create({
   row: {
     width: '100%',
-    marginBottom: theme.spacing[1],
+    marginBottom: theme.spacing[2],
+    gap: theme.spacing[1] - 2,
   },
   assistantRow: {
     alignItems: 'flex-start',
@@ -40,42 +68,75 @@ const styles = StyleSheet.create({
   userRow: {
     alignItems: 'flex-end',
   },
+  speakerLabel: {
+    paddingHorizontal: theme.spacing[1],
+    textTransform: 'uppercase',
+    letterSpacing: 0.45,
+    fontWeight: '700',
+  },
+  userSpeakerLabel: {
+    textAlign: 'right',
+  },
+  bubbleWrap: {
+    maxWidth: '87%',
+    flexDirection: 'row',
+    alignItems: 'stretch',
+  },
+  assistantBubbleWrap: {
+    alignSelf: 'flex-start',
+  },
+  userBubbleWrap: {
+    alignSelf: 'flex-end',
+  },
+  assistantEdge: {
+    width: 4,
+    borderRadius: theme.radii.pill,
+    marginRight: 6,
+    backgroundColor: theme.colors.accent.primary,
+    opacity: 0.9,
+  },
+  assistantEdgeError: {
+    backgroundColor: theme.colors.status.error,
+  },
   bubble: {
-    maxWidth: '84%',
+    flexShrink: 1,
     borderRadius: 20,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1] + 2,
     borderWidth: 1,
   },
   assistantBubble: {
-    backgroundColor: theme.colors.surface.raised,
-    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.elevated,
+    borderColor: theme.colors.border.default,
+    borderTopLeftRadius: 14,
   },
   userBubble: {
-    backgroundColor: theme.colors.brand.progressCore,
-    borderColor: theme.colors.brand.progressCore,
+    backgroundColor: theme.colors.cta.primaryBg,
+    borderColor: theme.colors.cta.primaryBorder,
+    borderTopRightRadius: 14,
   },
   errorBubble: {
-    borderColor: theme.colors.status.error,
-    backgroundColor: 'rgba(196, 138, 138, 0.1)',
+    borderColor: theme.colors.feedback.errorBorder,
+    backgroundColor: theme.colors.feedback.errorBg,
   },
   text: {
-    color: theme.colors.text.primary,
-    ...theme.typography.body1,
     fontFamily: theme.typography.fontFamily,
   },
-  userText: {
-    color: theme.colors.text.inverse,
+  fallbackTag: {
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+    borderColor: theme.colors.border.subtle,
+    backgroundColor: theme.colors.surface.base,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 4,
+    alignSelf: 'flex-start',
+  },
+  userFallbackTag: {
+    alignSelf: 'flex-end',
+    borderColor: theme.colors.border.inverse,
+    backgroundColor: theme.colors.cta.primaryBg,
   },
   metaText: {
-    marginTop: theme.spacing[1] - 2,
-    color: theme.colors.text.tertiary,
-    ...theme.typography.body3,
-    fontFamily: theme.typography.fontFamily,
     fontWeight: '600',
-  },
-  userMetaText: {
-    color: theme.colors.text.inverse,
-    opacity: 0.92,
   },
 });

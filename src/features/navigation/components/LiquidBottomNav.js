@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Pressable, StyleSheet, View } from 'react-native';
+import { Animated, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { BarChart3, Dumbbell, Home, User, Users } from 'lucide-react-native';
 
@@ -20,6 +20,9 @@ const TRAINER_TABS = [
   { key: 'profile', label: 'Settings', Icon: User },
 ];
 
+const NAV_BOTTOM_OFFSET = 10;
+const INDICATOR_EDGE_INSET = 6;
+
 export default function LiquidBottomNav({
   activeTab,
   onTabChange,
@@ -37,20 +40,22 @@ export default function LiquidBottomNav({
   }, [activeTab, tabs]);
 
   const tabWidth = containerWidth > 0 ? containerWidth / tabs.length : 0;
-  const indicatorWidth = Math.max(0, tabWidth - 10);
+  const indicatorWidth = Math.max(0, tabWidth - (INDICATOR_EDGE_INSET * 2));
 
   useEffect(() => {
-    const fallbackX = tabWidth * activeIndex + 5;
+    const fallbackX = tabWidth * activeIndex + INDICATOR_EDGE_INSET;
     const measuredCenter = iconCenters[activeTab];
-    const measuredX = typeof measuredCenter === 'number' ? measuredCenter - indicatorWidth / 2 : fallbackX;
-    const maxX = Math.max(5, containerWidth - indicatorWidth - 5);
-    const targetX = Math.min(Math.max(measuredX, 5), maxX);
+    const measuredX = typeof measuredCenter === 'number'
+      ? measuredCenter - (indicatorWidth / 2)
+      : fallbackX;
+    const maxX = Math.max(INDICATOR_EDGE_INSET, containerWidth - indicatorWidth - INDICATOR_EDGE_INSET);
+    const targetX = Math.min(Math.max(measuredX, INDICATOR_EDGE_INSET), maxX);
 
     Animated.spring(indicatorX, {
       toValue: targetX,
       damping: 16,
-      mass: 0.9,
-      stiffness: 170,
+      mass: 0.95,
+      stiffness: 180,
       useNativeDriver: true,
     }).start();
   }, [activeIndex, activeTab, containerWidth, iconCenters, indicatorWidth, indicatorX, tabWidth]);
@@ -58,14 +63,17 @@ export default function LiquidBottomNav({
   return (
     <View
       pointerEvents="box-none"
-      style={[styles.wrapper, { bottom: Math.max(bottomInset, 0) + 12 }]}
+      style={[styles.wrapper, { bottom: Math.max(bottomInset, 0) + NAV_BOTTOM_OFFSET }]}
     >
       <View
         onLayout={(event) => setContainerWidth(event.nativeEvent.layout.width)}
         style={styles.pill}
       >
-        <View pointerEvents="none" style={styles.lightFallback} />
-        <BlurView intensity={24} tint="light" style={StyleSheet.absoluteFill} />
+        <View pointerEvents="none" style={styles.backdrop} />
+        {Platform.OS === 'ios' ? (
+          <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
+        ) : null}
+
         <Animated.View
           pointerEvents="none"
           style={[
@@ -85,12 +93,14 @@ export default function LiquidBottomNav({
               onPress={() => onTabChange(key)}
               accessibilityRole="button"
               accessibilityState={{ selected }}
+              hitSlop={8}
+              android_ripple={{ color: theme.colors.accent.soft }}
               style={({ pressed }) => [
                 styles.tabButton,
                 pressed && styles.tabButtonPressed,
               ]}
               onLayout={(event) => {
-                const centerX = event.nativeEvent.layout.x + event.nativeEvent.layout.width / 2;
+                const centerX = event.nativeEvent.layout.x + (event.nativeEvent.layout.width / 2);
                 setIconCenters((prev) => {
                   if (prev[key] === centerX) {
                     return prev;
@@ -104,13 +114,13 @@ export default function LiquidBottomNav({
             >
               <Icon
                 size={18}
-                color={selected ? theme.colors.brand.progressDeep : theme.colors.text.tertiary}
+                color={selected ? theme.colors.nav.activeIcon : theme.colors.nav.inactiveIcon}
                 strokeWidth={2.2}
               />
               <ModeText
                 variant="caption"
-                tone={selected ? 'accent' : 'tertiary'}
-                style={selected ? styles.tabLabelActive : null}
+                tone="primary"
+                style={selected ? styles.tabLabelActive : styles.tabLabelInactive}
               >
                 {label}
               </ModeText>
@@ -138,25 +148,25 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 5,
-    backgroundColor: theme.colors.surface.overlay,
+    padding: INDICATOR_EDGE_INSET,
+    backgroundColor: theme.colors.surface.glass,
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
+    borderColor: theme.colors.border.default,
     ...theme.shadows.medium,
   },
-  lightFallback: {
+  backdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: theme.colors.surface.base,
-    opacity: 0.94,
+    opacity: 0.84,
   },
   activePill: {
     position: 'absolute',
-    top: 5,
-    bottom: 5,
+    top: INDICATOR_EDGE_INSET,
+    bottom: INDICATOR_EDGE_INSET,
     borderRadius: theme.radii.pill,
-    backgroundColor: 'rgba(111, 143, 123, 0.18)',
+    backgroundColor: theme.colors.nav.activeBg,
     borderWidth: 1,
-    borderColor: 'rgba(111, 143, 123, 0.42)',
+    borderColor: theme.colors.nav.activeBorder,
   },
   tabButton: {
     flex: 1,
@@ -167,9 +177,15 @@ const styles = StyleSheet.create({
     borderRadius: theme.radii.pill,
   },
   tabButtonPressed: {
-    transform: [{ scale: 0.96 }],
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
   },
   tabLabelActive: {
+    color: theme.colors.nav.activeLabel,
     fontWeight: '700',
+  },
+  tabLabelInactive: {
+    color: theme.colors.nav.inactiveLabel,
+    fontWeight: '600',
   },
 });
