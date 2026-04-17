@@ -14,11 +14,13 @@ export default function Login({
   onContinueWithGoogle = () => {},
   onContinueWithEmail = () => {},
   onContinueWithPassword = () => {},
+  onForgotPassword = null,
   isSubmitting = false,
   isSignInMode = false,
   onToggleSignInMode = () => {},
   infoMessage = null,
   errorMessage = null,
+  layoutMode = 'full',
 }) {
   return (
     <AuthChoiceScreen
@@ -32,12 +34,14 @@ export default function Login({
       onContinueWithGoogle={onContinueWithGoogle}
       onContinueWithEmail={onContinueWithEmail}
       onContinueWithPassword={onContinueWithPassword}
+      onForgotPassword={onForgotPassword}
       isSubmitting={isSubmitting}
       isSignInMode={isSignInMode}
       onToggleSignInMode={onToggleSignInMode}
       onBack={onBackToIntro}
       infoMessage={infoMessage}
       errorMessage={errorMessage}
+      layoutMode={layoutMode}
     />
   );
 }

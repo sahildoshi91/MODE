@@ -34,12 +34,12 @@ describe('AuthChoiceScreen password mode', () => {
     const tree = createScreen({ showPasswordAuth: false });
     const rendered = JSON.stringify(tree.toJSON());
 
-    expect(rendered).not.toContain('Continue with Password');
-    expect(rendered).not.toContain('Use password or email link to continue.');
+    expect(rendered).not.toContain('Password');
     expect(rendered).toContain('Continue with Email');
+    expect(rendered).not.toContain('Continue with Email Link');
   });
 
-  it('shows password controls and keeps email fallback when showPasswordAuth is true', () => {
+  it('shows password controls and keeps email-link fallback when showPasswordAuth is true', () => {
     const tree = createScreen({
       showPasswordAuth: true,
       password: 'password123',
@@ -48,8 +48,62 @@ describe('AuthChoiceScreen password mode', () => {
     });
     const rendered = JSON.stringify(tree.toJSON());
 
-    expect(rendered).toContain('Use password or email link to continue.');
-    expect(rendered).toContain('Continue with Password');
-    expect(rendered).toContain('Continue with Email');
+    expect(rendered).toContain('Password');
+    expect(rendered).toContain('Continue Training');
+    expect(rendered).toContain('Continue with Email Link');
+  });
+
+  it('shows forgot-password action only in password sign-in mode', () => {
+    const forgotPassword = jest.fn();
+    const signInTree = createScreen({
+      showPasswordAuth: true,
+      isSignInMode: true,
+      onForgotPassword: forgotPassword,
+    });
+    const signInForgotActions = signInTree.root.findAll((node) => (
+      node.props?.testID === 'auth-forgot-password'
+      && typeof node.props?.onPress === 'function'
+    ));
+    expect(signInForgotActions).toHaveLength(1);
+
+    const signUpTree = createScreen({
+      showPasswordAuth: true,
+      isSignInMode: false,
+      onForgotPassword: forgotPassword,
+    });
+    const signUpForgotActions = signUpTree.root.findAll((node) => (
+      node.props?.testID === 'auth-forgot-password'
+      && typeof node.props?.onPress === 'function'
+    ));
+    expect(signUpForgotActions).toHaveLength(0);
+  });
+
+  it('invokes onForgotPassword when forgot-password action is pressed', () => {
+    const forgotPassword = jest.fn();
+    const tree = createScreen({
+      showPasswordAuth: true,
+      isSignInMode: true,
+      onForgotPassword: forgotPassword,
+    });
+    const forgotButton = tree.root.find((node) => (
+      node.props?.testID === 'auth-forgot-password'
+      && typeof node.props?.onPress === 'function'
+    ));
+
+    act(() => {
+      forgotButton.props.onPress();
+    });
+
+    expect(forgotPassword).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides back action when rendered in inline mode', () => {
+    const tree = createScreen({
+      layoutMode: 'inline',
+      showPasswordAuth: true,
+    });
+    const rendered = JSON.stringify(tree.toJSON());
+
+    expect(rendered).not.toContain('Back');
   });
 });

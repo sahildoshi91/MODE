@@ -2,9 +2,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Animated, Easing, Linking, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { ModeButton, ModeCard, ModeText } from '../../lib/components';
+import {
+  ModeButton,
+  ModeCard,
+  ModeText,
+  SafeScreen,
+} from '../../lib/components';
 import { theme } from '../../lib/theme';
-import Login from '../features/auth/screens/Login';
 import OnboardingLandingScreen from '../features/auth/screens/OnboardingLandingScreen';
 import CoachChatScreen from '../features/chat/screens/CoachChatScreen';
 import DailyCheckinScreen from '../features/dailyCheckin/screens/DailyCheckinScreen';
@@ -58,7 +62,7 @@ function resolveOAuthRedirectUrl() {
 
 function ShellLoadingState({ title, subtitle }) {
   return (
-    <View style={styles.loadingScreen}>
+    <SafeScreen style={styles.loadingScreen}>
       <ModeCard variant="tinted" noShadow style={styles.loadingCard}>
         <ActivityIndicator size="small" color={theme.colors.accent.primary} style={styles.loadingSpinner} />
         <ModeText variant="h3" tone="primary" style={styles.loadingTitle}>
@@ -68,13 +72,13 @@ function ShellLoadingState({ title, subtitle }) {
           {subtitle}
         </ModeText>
       </ModeCard>
-    </View>
+    </SafeScreen>
   );
 }
 
 function ShellErrorState({ title, subtitle, actionTitle, onPress }) {
   return (
-    <View style={styles.loadingScreen}>
+    <SafeScreen style={styles.loadingScreen}>
       <ModeCard variant="tinted" noShadow style={styles.loadingCard}>
         <ModeText variant="h3" tone="primary" style={styles.loadingTitle}>
           {title}
@@ -84,7 +88,7 @@ function ShellErrorState({ title, subtitle, actionTitle, onPress }) {
         </ModeText>
         <ModeButton title={actionTitle} onPress={onPress} style={styles.errorActionButton} />
       </ModeCard>
-    </View>
+    </SafeScreen>
   );
 }
 
@@ -109,7 +113,7 @@ function AppShell() {
   const [authUiError, setAuthUiError] = useState(null);
   const [authUiInfo, setAuthUiInfo] = useState(null);
   const [isAuthUiSubmitting, setIsAuthUiSubmitting] = useState(false);
-  const [isSignInMode, setIsSignInMode] = useState(false);
+  const [isSignInMode, setIsSignInMode] = useState(true);
 
   const [isSessionLoading, setIsSessionLoading] = useState(true);
   const [isBootstrapLoading, setIsBootstrapLoading] = useState(false);
@@ -389,6 +393,7 @@ function AppShell() {
     setAuthUiError(null);
     setAuthUiInfo(null);
     setIsAuthUiSubmitting(false);
+    setIsSignInMode(true);
     setActiveTab('home');
     setProgressRoute('progress');
     setInsightsOrigin('progress');
@@ -671,6 +676,39 @@ function AppShell() {
     }
   };
 
+  const handleForgotPassword = async () => {
+    if (isAuthUiSubmitting) {
+      return;
+    }
+    const normalizedEmail = authEmail.trim().toLowerCase();
+    if (!normalizedEmail) {
+      setAuthUiError('Enter your email first so we know where to send reset instructions.');
+      return;
+    }
+
+    setIsAuthUiSubmitting(true);
+    setAuthUiError(null);
+    setAuthUiInfo(null);
+    trackEvent('auth_password_reset_requested', {
+      mode: isSignInMode ? 'sign_in' : 'sign_up',
+    });
+
+    try {
+      const redirectTo = resolveOAuthRedirectUrl();
+      const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+        redirectTo,
+      });
+      if (error) {
+        throw error;
+      }
+      setAuthUiInfo('Password reset link sent. Check your email to continue.');
+    } catch (error) {
+      setAuthUiError(error?.message || 'Unable to send password reset instructions.');
+    } finally {
+      setIsAuthUiSubmitting(false);
+    }
+  };
+
   const handleSelectRole = async (role) => {
     if (!session?.access_token || isRoleSubmitting) {
       return;
@@ -719,35 +757,37 @@ function AppShell() {
   }
 
   if (!session?.access_token) {
-    if (authStage === 'welcome') {
-      return <OnboardingLandingScreen onGetStarted={() => setAuthStage('preview')} onContinue={() => setAuthStage('preview')} />;
-    }
     if (authStage === 'preview') {
       return (
         <ProductPreviewScreen
           onBack={() => setAuthStage('welcome')}
-          onContinue={() => setAuthStage('auth')}
+          onContinue={() => setAuthStage('welcome')}
         />
       );
     }
+
     return (
-      <Login
-        onBackToIntro={() => setAuthStage('preview')}
-        email={authEmail}
-        onEmailChange={setAuthEmail}
-        password={authPassword}
-        onPasswordChange={setAuthPassword}
-        showSocialAuth={AUTH_SOCIAL_ENABLED}
-        showPasswordAuth={AUTH_PASSWORD_ENABLED}
-        onContinueWithApple={() => handleContinueWithProvider('apple')}
-        onContinueWithGoogle={() => handleContinueWithProvider('google')}
-        onContinueWithEmail={handleContinueWithEmail}
-        onContinueWithPassword={handleContinueWithPassword}
-        isSubmitting={isAuthUiSubmitting}
-        isSignInMode={isSignInMode}
-        onToggleSignInMode={() => setIsSignInMode((current) => !current)}
-        infoMessage={authUiInfo}
-        errorMessage={authUiError}
+      <OnboardingLandingScreen
+        onOpenPreview={() => setAuthStage('preview')}
+        authProps={{
+          email: authEmail,
+          onEmailChange: setAuthEmail,
+          password: authPassword,
+          onPasswordChange: setAuthPassword,
+          showSocialAuth: AUTH_SOCIAL_ENABLED,
+          showPasswordAuth: AUTH_PASSWORD_ENABLED,
+          onContinueWithApple: () => handleContinueWithProvider('apple'),
+          onContinueWithGoogle: () => handleContinueWithProvider('google'),
+          onContinueWithEmail: handleContinueWithEmail,
+          onContinueWithPassword: handleContinueWithPassword,
+          onForgotPassword: handleForgotPassword,
+          isSubmitting: isAuthUiSubmitting,
+          isSignInMode,
+          onToggleSignInMode: () => setIsSignInMode((current) => !current),
+          infoMessage: authUiInfo,
+          errorMessage: authUiError,
+          layoutMode: 'inline',
+        }}
       />
     );
   }

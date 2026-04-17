@@ -6,6 +6,9 @@ const mockOnAuthStateChange = jest.fn();
 const mockSignOut = jest.fn();
 const mockGetTrainerAssignmentStatus = jest.fn();
 const mockAssignTrainer = jest.fn();
+const mockGetOnboardingBootstrap = jest.fn();
+const mockIngestMobileEvents = jest.fn();
+const mockSetOnboardingRole = jest.fn();
 
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react');
@@ -31,6 +34,12 @@ jest.mock('../../features/trainerAssignment/services/trainerAssignmentApi', () =
   assignTrainer: (...args) => mockAssignTrainer(...args),
 }));
 
+jest.mock('../../features/onboarding/services/onboardingApi', () => ({
+  getOnboardingBootstrap: (...args) => mockGetOnboardingBootstrap(...args),
+  ingestMobileEvents: (...args) => mockIngestMobileEvents(...args),
+  setOnboardingRole: (...args) => mockSetOnboardingRole(...args),
+}));
+
 jest.mock('../../config/featureFlags', () => ({
   AUTH_PASSWORD_ENABLED: false,
   AUTH_SOCIAL_ENABLED: false,
@@ -47,6 +56,12 @@ jest.mock('../../features/auth/screens/OnboardingLandingScreen', () => {
   const React = require('react');
   return function MockOnboardingLandingScreen(props) {
     return React.createElement('MockOnboardingLandingScreen', props);
+  };
+});
+jest.mock('../../features/onboarding/screens/ProductPreviewScreen', () => {
+  const React = require('react');
+  return function MockProductPreviewScreen(props) {
+    return React.createElement('MockProductPreviewScreen', props);
   };
 });
 jest.mock('../../features/chat/screens/CoachChatScreen', () => {
@@ -151,6 +166,15 @@ describe('App assignment status retry behavior', () => {
       },
     });
     mockAssignTrainer.mockResolvedValue({});
+    mockGetOnboardingBootstrap.mockResolvedValue({
+      role: 'client',
+      onboarding_complete: true,
+      onboarding_status: 'completed',
+      is_legacy_trainer: false,
+      assigned_trainer_id: null,
+    });
+    mockIngestMobileEvents.mockResolvedValue({});
+    mockSetOnboardingRole.mockResolvedValue({});
   });
 
   afterEach(() => {
@@ -225,6 +249,65 @@ describe('App assignment status retry behavior', () => {
     await flushEffects();
 
     expect(mockGetTrainerAssignmentStatus).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('renders welcome-first auth for signed-out users and does not force preview', async () => {
+    mockGetSession.mockResolvedValueOnce({
+      data: {
+        session: null,
+      },
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const welcome = tree.root.findByType('MockOnboardingLandingScreen');
+    expect(typeof welcome.props.authProps).toBe('object');
+    expect(welcome.props.authProps.layoutMode).toBe('inline');
+    expect(typeof welcome.props.authProps.onContinueWithEmail).toBe('function');
+    expect(typeof welcome.props.onOpenPreview).toBe('function');
+    expect(mockGetTrainerAssignmentStatus).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('opens preview as an optional branch and returns to welcome auth', async () => {
+    mockGetSession.mockResolvedValueOnce({
+      data: {
+        session: null,
+      },
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const welcomeBeforePreview = tree.root.findByType('MockOnboardingLandingScreen');
+    await act(async () => {
+      welcomeBeforePreview.props.onOpenPreview();
+    });
+
+    const preview = tree.root.findByType('MockProductPreviewScreen');
+    expect(typeof preview.props.onBack).toBe('function');
+    expect(typeof preview.props.onContinue).toBe('function');
+
+    await act(async () => {
+      preview.props.onContinue();
+    });
+
+    const welcomeAfterPreview = tree.root.findByType('MockOnboardingLandingScreen');
+    expect(welcomeAfterPreview).toBeTruthy();
+
     await act(async () => {
       tree.unmount();
     });
