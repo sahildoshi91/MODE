@@ -18,6 +18,14 @@ class FakeCommandCenterRepository:
     def __init__(self):
         self.cache = {}
         self.upsert_calls = []
+        self.trainer_settings = {
+            "id": "trainer-1",
+            "display_name": "Coach Maya",
+            "default_meeting_location": "Main Gym",
+            "auto_fill_meeting_location": True,
+        }
+        self.schedule_preference_rows = []
+        self.schedule_exception_rows = []
 
     def list_clients_for_trainer(self, trainer_id):
         del trainer_id
@@ -26,8 +34,14 @@ class FakeCommandCenterRepository:
             {"id": "client-2", "tenant_id": "tenant-1", "user_id": "client-user-2", "client_name": "Jordan"},
         ]
 
+    def get_trainer_settings(self, trainer_id):
+        del trainer_id
+        return self.trainer_settings
+
     def list_schedule_for_day(self, trainer_id, session_date):
-        del trainer_id, session_date
+        del trainer_id
+        if session_date.isoformat() != "2026-04-11":
+            return []
         return [
             {
                 "id": "schedule-1",
@@ -37,8 +51,27 @@ class FakeCommandCenterRepository:
                 "session_start_at": "2026-04-11T17:00:00+00:00",
                 "session_end_at": "2026-04-11T18:00:00+00:00",
                 "session_type": "strength",
+                "meeting_location": "Downtown Performance Lab",
                 "status": "scheduled",
             }
+        ]
+
+    def list_schedule_preferences_for_clients(self, trainer_id, client_ids):
+        del trainer_id
+        allowed_ids = set(client_ids)
+        return [
+            row for row in self.schedule_preference_rows
+            if row.get("client_id") in allowed_ids
+        ]
+
+    def list_schedule_exceptions_between(self, trainer_id, start_date, end_date, client_ids=None):
+        del trainer_id, start_date, end_date
+        allowed_ids = set(client_ids or [])
+        if not allowed_ids:
+            return self.schedule_exception_rows
+        return [
+            row for row in self.schedule_exception_rows
+            if row.get("client_id") in allowed_ids
         ]
 
     def list_schedule_between(self, trainer_id, start_date, end_date):
@@ -127,6 +160,7 @@ class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
         self.assertEqual(first_client.priority_tier, "critical")
         self.assertEqual(second_client.client_id, "client-1")
         self.assertEqual(second_client.priority_tier, "low")
+        self.assertEqual(second_client.meeting_location, "Downtown Performance Lab")
 
         self.assertEqual(len(first_client.talking_points.points), 3)
         self.assertEqual(len(second_client.talking_points.points), 3)
@@ -178,6 +212,71 @@ class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
             self.assertTrue(client.talking_points.cache_hit)
             self.assertTrue(client.talking_points.generation_strategy.startswith("cache:"))
             self.assertEqual(len(client.talking_points.points), 3)
+
+    def test_build_command_center_applies_recurring_and_add_exception(self):
+        repository = FakeCommandCenterRepository()
+        repository.schedule_preference_rows = [
+            {
+                "trainer_id": "trainer-1",
+                "client_id": "client-2",
+                "recurring_weekdays": [],
+                "preferred_meeting_location": None,
+                "auto_use_trainer_default_location": True,
+            }
+        ]
+        repository.schedule_exception_rows = [
+            {
+                "trainer_id": "trainer-1",
+                "client_id": "client-2",
+                "session_date": "2026-04-11",
+                "exception_type": "add",
+                "meeting_location_override": "Satellite Studio",
+            }
+        ]
+        service = TrainerHomeService(repository, openai_client=False)
+        trainer_context = TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id=None,
+        )
+
+        response = service.build_command_center(trainer_context, date(2026, 4, 11))
+        jordan = next(item for item in response.clients if item.client_id == "client-2")
+
+        self.assertEqual(response.totals.scheduled_today, 2)
+        self.assertTrue(jordan.scheduled_today)
+        self.assertEqual(jordan.session_status, "scheduled")
+        self.assertEqual(jordan.meeting_location, "Satellite Studio")
+
+    def test_build_command_center_includes_recurring_schedule_for_tomorrow(self):
+        repository = FakeCommandCenterRepository()
+        repository.schedule_preference_rows = [
+            {
+                "trainer_id": "trainer-1",
+                "client_id": "client-2",
+                "recurring_weekdays": [7],
+                "preferred_meeting_location": None,
+                "auto_use_trainer_default_location": True,
+            }
+        ]
+        service = TrainerHomeService(repository, openai_client=False)
+        trainer_context = TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id=None,
+        )
+
+        response = service.build_command_center(trainer_context, date(2026, 4, 12))
+        taylor = next(item for item in response.clients if item.client_id == "client-1")
+        jordan = next(item for item in response.clients if item.client_id == "client-2")
+
+        self.assertEqual(response.totals.scheduled_today, 1)
+        self.assertFalse(taylor.scheduled_today)
+        self.assertTrue(jordan.scheduled_today)
 
 
 if __name__ == "__main__":

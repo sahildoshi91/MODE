@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 TrainerMemoryType = Literal["note", "preference", "constraint"]
 TrainerMemoryVisibility = Literal["internal_only", "ai_usable"]
+TrainerScheduleExceptionType = Literal["skip", "add"]
 
 
 class TrainerClientIdentity(BaseModel):
@@ -30,6 +31,7 @@ class TrainerClientActivitySummary(BaseModel):
     session_type: str | None = None
     session_start_at: datetime | None = None
     session_end_at: datetime | None = None
+    meeting_location: str | None = None
 
 
 class TrainerMemoryCounts(BaseModel):
@@ -39,11 +41,37 @@ class TrainerMemoryCounts(BaseModel):
     archived: int = 0
 
 
+class TrainerScheduleExceptionRecord(BaseModel):
+    id: str | None = None
+    trainer_id: str | None = None
+    client_id: str
+    session_date: date
+    exception_type: TrainerScheduleExceptionType
+    meeting_location_override: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class TrainerSchedulePreferencesRecord(BaseModel):
+    trainer_id: str | None = None
+    client_id: str
+    recurring_weekdays: list[int] = Field(default_factory=list)
+    preferred_meeting_location: str | None = None
+    auto_use_trainer_default_location: bool = True
+    trainer_default_meeting_location: str | None = None
+    trainer_auto_fill_meeting_location: bool = True
+    selected_date: date | None = None
+    selected_date_exception_type: TrainerScheduleExceptionType | None = None
+    selected_date_meeting_location_override: str | None = None
+    upcoming_exceptions: list[TrainerScheduleExceptionRecord] = Field(default_factory=list)
+
+
 class TrainerClientDetailResponse(BaseModel):
     client: TrainerClientIdentity
     profile_snapshot: dict[str, Any] = Field(default_factory=dict)
     activity_summary: TrainerClientActivitySummary
     memory_counts: TrainerMemoryCounts
+    schedule_preferences: TrainerSchedulePreferencesRecord | None = None
 
 
 class TrainerMemoryRecord(BaseModel):
@@ -81,6 +109,30 @@ class TrainerMemoryUpdateRequest(BaseModel):
     is_archived: bool | None = None
 
 
+class TrainerMeetingLocationUpdateRequest(BaseModel):
+    session_date: date
+    meeting_location: str | None = None
+
+
+class TrainerMeetingLocationRecord(BaseModel):
+    schedule_id: str
+    client_id: str
+    session_date: date
+    meeting_location: str | None = None
+
+
+class TrainerSchedulePreferencesUpdateRequest(BaseModel):
+    recurring_weekdays: list[int] | None = None
+    preferred_meeting_location: str | None = None
+    auto_use_trainer_default_location: bool | None = None
+
+
+class TrainerScheduleExceptionCreateRequest(BaseModel):
+    session_date: date
+    exception_type: TrainerScheduleExceptionType
+    meeting_location_override: str | None = None
+
+
 class TrainerRuleSummaryItem(BaseModel):
     category: str
     rule_count: int
@@ -102,3 +154,12 @@ class TrainerAIContextResponse(BaseModel):
     profile_snapshot: dict[str, Any] = Field(default_factory=dict)
     trainer_rule_summary: list[TrainerRuleSummaryItem] = Field(default_factory=list)
     context_preview_text: str
+
+
+class ClientTrainerScheduleResponse(BaseModel):
+    client_id: str
+    trainer_id: str | None = None
+    trainer_display_name: str | None = None
+    recurring_weekdays: list[int] = Field(default_factory=list)
+    upcoming_exceptions: list[TrainerScheduleExceptionRecord] = Field(default_factory=list)
+    resolved_default_meeting_location: str | None = None

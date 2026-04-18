@@ -59,6 +59,7 @@ export default function TrainerRouteHost({
       <ProfileScreen
         session={session}
         assignmentStatus={assignmentStatus}
+        accessToken={accessToken}
         onSignOut={onSignOut}
         bottomInset={contentBottomInset}
       />

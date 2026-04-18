@@ -60,6 +60,8 @@ async function requestTrainerApi(path, { accessToken, method = 'GET', body } = {
       && (
         path.startsWith('/api/v1/trainer-home/command-center')
         || path.startsWith('/api/v1/trainer-clients/')
+        || path.startsWith('/api/v1/trainer-settings/')
+        || path.startsWith('/api/v1/profiles/me/trainer-schedule')
       )
     );
     throw error;
@@ -200,4 +202,123 @@ export async function getTrainerClientAIContext({
 }) {
   const encodedClientId = encodeURIComponent(clientId);
   return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}/ai-context`, { accessToken });
+}
+
+export async function updateTrainerClientMeetingLocation({
+  accessToken,
+  clientId,
+  sessionDate,
+  meetingLocation,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}/meeting-location`, {
+    accessToken,
+    method: 'PATCH',
+    body: {
+      session_date: sessionDate,
+      meeting_location: meetingLocation,
+    },
+  });
+}
+
+export async function getTrainerSettingsMe({ accessToken }) {
+  return requestTrainerApi('/api/v1/trainer-settings/me', { accessToken });
+}
+
+export async function patchTrainerSettingsMe({
+  accessToken,
+  defaultMeetingLocation,
+  autoFillMeetingLocation,
+} = {}) {
+  const body = {};
+  if (typeof defaultMeetingLocation !== 'undefined') {
+    body.default_meeting_location = defaultMeetingLocation;
+  }
+  if (typeof autoFillMeetingLocation !== 'undefined') {
+    body.auto_fill_meeting_location = autoFillMeetingLocation;
+  }
+  return requestTrainerApi('/api/v1/trainer-settings/me', {
+    accessToken,
+    method: 'PATCH',
+    body,
+  });
+}
+
+export async function getTrainerClientSchedulePreferences({
+  accessToken,
+  clientId,
+  date = null,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  const suffix = date ? `?date=${encodeURIComponent(date)}` : '';
+  return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}/schedule-preferences${suffix}`, {
+    accessToken,
+  });
+}
+
+export async function patchTrainerClientSchedulePreferences({
+  accessToken,
+  clientId,
+  recurringWeekdays,
+  preferredMeetingLocation,
+  autoUseTrainerDefaultLocation,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  const body = {};
+  if (typeof recurringWeekdays !== 'undefined') {
+    body.recurring_weekdays = recurringWeekdays;
+  }
+  if (typeof preferredMeetingLocation !== 'undefined') {
+    body.preferred_meeting_location = preferredMeetingLocation;
+  }
+  if (typeof autoUseTrainerDefaultLocation !== 'undefined') {
+    body.auto_use_trainer_default_location = autoUseTrainerDefaultLocation;
+  }
+  return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}/schedule-preferences`, {
+    accessToken,
+    method: 'PATCH',
+    body,
+  });
+}
+
+export async function createTrainerClientScheduleException({
+  accessToken,
+  clientId,
+  sessionDate,
+  exceptionType,
+  meetingLocationOverride,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  const body = {
+    session_date: sessionDate,
+    exception_type: exceptionType,
+  };
+  if (typeof meetingLocationOverride !== 'undefined') {
+    body.meeting_location_override = meetingLocationOverride;
+  }
+  return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}/schedule-exceptions`, {
+    accessToken,
+    method: 'POST',
+    body,
+  });
+}
+
+export async function deleteTrainerClientScheduleException({
+  accessToken,
+  clientId,
+  sessionDate,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  const encodedSessionDate = encodeURIComponent(sessionDate);
+  return requestTrainerApi(
+    `/api/v1/trainer-clients/${encodedClientId}/schedule-exceptions/${encodedSessionDate}`,
+    {
+      accessToken,
+      method: 'DELETE',
+    },
+  );
+}
+
+export async function getMyTrainerSchedule({ accessToken }) {
+  return requestTrainerApi('/api/v1/profiles/me/trainer-schedule', { accessToken });
 }

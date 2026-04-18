@@ -23,6 +23,7 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 GEMINI_MODEL = "gemini-2.5-flash"
+GEMINI_FLASH_LITE_MODEL = "gemini-2.5-flash-lite"
 GPT_5_4_MINI_MODEL = "gpt-5.4-mini"
 ANTHROPIC_SONNET_MODEL = "claude-sonnet-4-20250514"
 
@@ -190,9 +191,9 @@ class GeminiClient:
 
         self.client = genai.Client(api_key=api_key)
 
-    def stream_chat_completion(self, prompt: str) -> Iterator[str]:
+    def stream_chat_completion(self, prompt: str, *, model: str = GEMINI_MODEL) -> Iterator[str]:
         stream = self.client.models.generate_content_stream(
-            model=GEMINI_MODEL,
+            model=model,
             contents=prompt,
             config=types.GenerateContentConfig(
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
@@ -204,9 +205,9 @@ class GeminiClient:
             if text:
                 yield text
 
-    def create_chat_completion(self, prompt: str) -> GeminiCompletion:
+    def create_chat_completion(self, prompt: str, *, model: str = GEMINI_MODEL) -> GeminiCompletion:
         response = self.client.models.generate_content(
-            model=GEMINI_MODEL,
+            model=model,
             contents=prompt,
             config=types.GenerateContentConfig(
                 thinking_config=types.ThinkingConfig(thinking_budget=0),

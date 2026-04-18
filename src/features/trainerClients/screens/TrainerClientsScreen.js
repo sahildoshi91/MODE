@@ -13,13 +13,22 @@ import {
 import { theme } from '../../../../lib/theme';
 import {
   archiveTrainerClientMemory,
+  createTrainerClientScheduleException,
   createTrainerClientMemory,
+  deleteTrainerClientScheduleException,
   getTrainerClientAIContext,
   getTrainerClientDetail,
   getTrainerCommandCenter,
   listTrainerClientMemory,
+  patchTrainerClientSchedulePreferences,
   updateTrainerClientMemory,
 } from '../services/trainerHomeApi';
+import {
+  formatIsoWeekdaySummary,
+  ISO_WEEKDAY_OPTIONS,
+  resolveClientScheduledForFilter,
+  toggleIsoWeekday,
+} from '../utils/scheduleResolver';
 
 const VIEW_MODE = {
   COMMAND_CENTER: 'command_center',
@@ -31,6 +40,16 @@ const PRIORITY_FILTERS = [
   { key: 'critical', label: 'Critical' },
   { key: 'high', label: 'High' },
   { key: 'watch', label: 'Watchlist' },
+];
+
+const DAY_FILTERS = [
+  { key: 'today', label: 'Today', offsetDays: 0 },
+  { key: 'tomorrow', label: 'Tomorrow', offsetDays: 1 },
+];
+
+const SESSION_FILTERS = [
+  { key: 'scheduled', label: 'Scheduled' },
+  { key: 'all', label: 'All Clients' },
 ];
 
 const MEMORY_TYPES = [
@@ -46,7 +65,7 @@ const MEMORY_VISIBILITY = [
 
 function formatSessionWindow(startAt, endAt) {
   if (!startAt && !endAt) {
-    return 'No session scheduled today';
+    return 'No session scheduled';
   }
   const start = startAt ? new Date(startAt) : null;
   const end = endAt ? new Date(endAt) : null;
@@ -148,6 +167,57 @@ function formatDateLabel(value) {
   });
 }
 
+function toLocalIsoDate(value) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function buildPlannerDateByOffset(offsetDays = 0) {
+  const next = new Date();
+  next.setHours(0, 0, 0, 0);
+  next.setDate(next.getDate() + offsetDays);
+  return toLocalIsoDate(next);
+}
+
+function formatPlannerDateLabel(value) {
+  if (!value) {
+    return '';
+  }
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return '';
+  }
+  return parsed.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function buildClientScheduleDraft(client) {
+  return {
+    recurringWeekdays: Array.isArray(client?.recurring_weekdays) ? client.recurring_weekdays : [],
+    preferredMeetingLocation: String(client?.preferred_meeting_location || ''),
+    autoUseTrainerDefaultLocation: client?.auto_use_trainer_default_location !== false,
+    exceptionType: client?.selected_date_exception_type || null,
+    exceptionLocationOverride: String(client?.selected_date_meeting_location_override || ''),
+  };
+}
+
+function buildDetailScheduleDraft(schedulePreferences) {
+  return {
+    recurringWeekdays: Array.isArray(schedulePreferences?.recurring_weekdays)
+      ? schedulePreferences.recurring_weekdays
+      : [],
+    preferredMeetingLocation: String(schedulePreferences?.preferred_meeting_location || ''),
+    autoUseTrainerDefaultLocation: schedulePreferences?.auto_use_trainer_default_location !== false,
+    exceptionType: schedulePreferences?.selected_date_exception_type || null,
+    exceptionLocationOverride: String(schedulePreferences?.selected_date_meeting_location_override || ''),
+  };
+}
+
 function buildTrainerRouteError(error, fallbackMessage) {
   const message = String(error?.message || fallbackMessage);
   const status = typeof error?.status === 'number' ? error.status : null;
@@ -180,12 +250,18 @@ function buildTrainerRouteError(error, fallbackMessage) {
 
 export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   const [viewMode, setViewMode] = useState(VIEW_MODE.COMMAND_CENTER);
+  const [dayFilter, setDayFilter] = useState('today');
+  const [sessionFilter, setSessionFilter] = useState('scheduled');
   const [priorityFilter, setPriorityFilter] = useState('all');
   const [commandCenterPayload, setCommandCenterPayload] = useState(null);
   const [isLoadingCommandCenter, setIsLoadingCommandCenter] = useState(true);
   const [hasLoadedCommandCenter, setHasLoadedCommandCenter] = useState(false);
   const [isRefreshingTalkingPoints, setIsRefreshingTalkingPoints] = useState(false);
   const [commandCenterError, setCommandCenterError] = useState(null);
+  const [scheduleMutationError, setScheduleMutationError] = useState(null);
+  const [scheduleMutationSuccess, setScheduleMutationSuccess] = useState(null);
+  const [scheduleDraftByClient, setScheduleDraftByClient] = useState({});
+  const [savingScheduleClientId, setSavingScheduleClientId] = useState(null);
 
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [detailPayload, setDetailPayload] = useState(null);
@@ -193,6 +269,10 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   const [aiContextPayload, setAiContextPayload] = useState(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState(null);
+  const [detailScheduleDraft, setDetailScheduleDraft] = useState(null);
+  const [isSavingDetailSchedule, setIsSavingDetailSchedule] = useState(false);
+  const [detailScheduleError, setDetailScheduleError] = useState(null);
+  const [detailScheduleSuccess, setDetailScheduleSuccess] = useState(null);
 
   const [newMemoryType, setNewMemoryType] = useState('note');
   const [newMemoryVisibility, setNewMemoryVisibility] = useState('internal_only');
@@ -207,6 +287,15 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   const [editingVisibility, setEditingVisibility] = useState('internal_only');
   const [editingTagsText, setEditingTagsText] = useState('');
 
+  const selectedDayConfig = useMemo(
+    () => DAY_FILTERS.find((option) => option.key === dayFilter) || DAY_FILTERS[0],
+    [dayFilter],
+  );
+  const plannerDate = useMemo(
+    () => buildPlannerDateByOffset(selectedDayConfig.offsetDays),
+    [selectedDayConfig.offsetDays],
+  );
+
   const clientItems = useMemo(() => (
     Array.isArray(commandCenterPayload?.clients)
       ? commandCenterPayload.clients
@@ -219,20 +308,23 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   );
 
   const visibleClientItems = useMemo(() => {
+    const baseItems = sessionFilter === 'scheduled'
+      ? clientItems.filter((item) => resolveClientScheduledForFilter(item, plannerDate))
+      : clientItems;
     if (priorityFilter === 'all') {
-      return clientItems;
+      return baseItems;
     }
     if (priorityFilter === 'critical') {
-      return clientItems.filter((item) => item.priority_tier === 'critical');
+      return baseItems.filter((item) => item.priority_tier === 'critical');
     }
     if (priorityFilter === 'high') {
-      return clientItems.filter((item) => item.priority_tier === 'high');
+      return baseItems.filter((item) => item.priority_tier === 'high');
     }
     if (priorityFilter === 'watch') {
-      return clientItems.filter((item) => item.priority_tier === 'medium');
+      return baseItems.filter((item) => item.priority_tier === 'medium');
     }
-    return clientItems;
-  }, [clientItems, priorityFilter]);
+    return baseItems;
+  }, [clientItems, plannerDate, priorityFilter, sessionFilter]);
 
   const loadCommandCenter = useCallback(async ({
     refreshTalkingPoints = false,
@@ -254,6 +346,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     try {
       const payload = await getTrainerCommandCenter({
         accessToken,
+        date: plannerDate,
         refreshTalkingPoints,
       });
       setCommandCenterPayload(payload);
@@ -268,7 +361,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         setIsRefreshingTalkingPoints(false);
       }
     }
-  }, [accessToken]);
+  }, [accessToken, plannerDate]);
 
   const loadClientDetailView = useCallback(async (clientId) => {
     if (!accessToken || !clientId) {
@@ -280,7 +373,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     setMemoryMutationSuccess(null);
     try {
       const [detail, memory, aiContext] = await Promise.all([
-        getTrainerClientDetail({ accessToken, clientId }),
+        getTrainerClientDetail({ accessToken, clientId, date: plannerDate }),
         listTrainerClientMemory({ accessToken, clientId }),
         getTrainerClientAIContext({ accessToken, clientId }),
       ]);
@@ -292,15 +385,43 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     } finally {
       setIsLoadingDetail(false);
     }
-  }, [accessToken]);
+  }, [accessToken, plannerDate]);
 
   useEffect(() => {
     loadCommandCenter();
   }, [loadCommandCenter]);
 
+  useEffect(() => {
+    const nextDrafts = {};
+    clientItems.forEach((item) => {
+      const clientId = item?.client_id;
+      if (!clientId) {
+        return;
+      }
+      nextDrafts[clientId] = buildClientScheduleDraft(item);
+    });
+    setScheduleDraftByClient(nextDrafts);
+  }, [clientItems]);
+
+  useEffect(() => {
+    setScheduleMutationError(null);
+    setScheduleMutationSuccess(null);
+  }, [dayFilter, sessionFilter]);
+
+  useEffect(() => {
+    const nextSchedulePreferences = detailPayload?.schedule_preferences;
+    if (!nextSchedulePreferences) {
+      setDetailScheduleDraft(null);
+      return;
+    }
+    setDetailScheduleDraft(buildDetailScheduleDraft(nextSchedulePreferences));
+  }, [detailPayload?.schedule_preferences]);
+
   const handleOpenClientDetail = async (clientId) => {
     setSelectedClientId(clientId);
     setViewMode(VIEW_MODE.CLIENT_DETAIL);
+    setDetailScheduleError(null);
+    setDetailScheduleSuccess(null);
     await loadClientDetailView(clientId);
   };
 
@@ -309,6 +430,8 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     setDetailError(null);
     setMemoryMutationError(null);
     setMemoryMutationSuccess(null);
+    setDetailScheduleError(null);
+    setDetailScheduleSuccess(null);
   };
 
   const resetNewMemoryForm = () => {
@@ -424,6 +547,215 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     }
   };
 
+  const handleScheduleDraftPatch = (clientId, nextFields) => {
+    setScheduleDraftByClient((previous) => ({
+      ...previous,
+      [clientId]: {
+        ...buildClientScheduleDraft(clientItems.find((item) => item.client_id === clientId)),
+        ...(previous[clientId] || {}),
+        ...nextFields,
+      },
+    }));
+  };
+
+  const handleToggleClientWeekday = (clientId, weekday) => {
+    const current = scheduleDraftByClient[clientId] || buildClientScheduleDraft(
+      clientItems.find((item) => item.client_id === clientId),
+    );
+    handleScheduleDraftPatch(clientId, {
+      recurringWeekdays: toggleIsoWeekday(current.recurringWeekdays, weekday),
+    });
+  };
+
+  const saveClientSchedulePreferences = async (clientId) => {
+    if (!accessToken || !clientId || savingScheduleClientId) {
+      return;
+    }
+    const draft = scheduleDraftByClient[clientId] || buildClientScheduleDraft(
+      clientItems.find((item) => item.client_id === clientId),
+    );
+    setSavingScheduleClientId(clientId);
+    setScheduleMutationError(null);
+    setScheduleMutationSuccess(null);
+    try {
+      const preferredMeetingLocation = String(draft.preferredMeetingLocation || '').trim();
+      await patchTrainerClientSchedulePreferences({
+        accessToken,
+        clientId,
+        recurringWeekdays: draft.recurringWeekdays,
+        preferredMeetingLocation: preferredMeetingLocation || null,
+        autoUseTrainerDefaultLocation: Boolean(draft.autoUseTrainerDefaultLocation),
+      });
+      await loadCommandCenter({ silent: true });
+      setScheduleMutationSuccess('Client schedule template saved.');
+    } catch (error) {
+      setScheduleMutationError(error?.message || 'Unable to save client schedule template.');
+    } finally {
+      setSavingScheduleClientId(null);
+    }
+  };
+
+  const applyClientDateException = async (clientId, exceptionType) => {
+    if (!accessToken || !clientId || savingScheduleClientId) {
+      return;
+    }
+    const draft = scheduleDraftByClient[clientId] || {};
+    setSavingScheduleClientId(clientId);
+    setScheduleMutationError(null);
+    setScheduleMutationSuccess(null);
+    try {
+      const exceptionLocationOverride = String(draft.exceptionLocationOverride || '').trim();
+      await createTrainerClientScheduleException({
+        accessToken,
+        clientId,
+        sessionDate: plannerDate,
+        exceptionType,
+        meetingLocationOverride: exceptionLocationOverride || null,
+      });
+      await loadCommandCenter({ silent: true });
+      if (selectedClientId === clientId) {
+        await loadClientDetailView(clientId);
+      }
+      setScheduleMutationSuccess(
+        exceptionType === 'skip'
+          ? `Marked ${plannerDayLabel} as skipped.`
+          : `Added one-off session for ${plannerDayLabel}.`,
+      );
+    } catch (error) {
+      setScheduleMutationError(error?.message || 'Unable to save schedule exception.');
+    } finally {
+      setSavingScheduleClientId(null);
+    }
+  };
+
+  const clearClientDateException = async (clientId) => {
+    if (!accessToken || !clientId || savingScheduleClientId) {
+      return;
+    }
+    setSavingScheduleClientId(clientId);
+    setScheduleMutationError(null);
+    setScheduleMutationSuccess(null);
+    try {
+      await deleteTrainerClientScheduleException({
+        accessToken,
+        clientId,
+        sessionDate: plannerDate,
+      });
+      await loadCommandCenter({ silent: true });
+      if (selectedClientId === clientId) {
+        await loadClientDetailView(clientId);
+      }
+      setScheduleMutationSuccess('Date override cleared.');
+    } catch (error) {
+      if (String(error?.message || '').toLowerCase() === 'schedule exception not found') {
+        setScheduleMutationSuccess('No date override was set.');
+      } else {
+        setScheduleMutationError(error?.message || 'Unable to clear schedule exception.');
+      }
+    } finally {
+      setSavingScheduleClientId(null);
+    }
+  };
+
+  const patchDetailScheduleDraft = (nextFields) => {
+    setDetailScheduleDraft((previous) => ({
+      ...(previous || buildDetailScheduleDraft(detailPayload?.schedule_preferences)),
+      ...nextFields,
+    }));
+  };
+
+  const handleToggleDetailWeekday = (weekday) => {
+    const currentWeekdays = Array.isArray(detailScheduleDraft?.recurringWeekdays)
+      ? detailScheduleDraft.recurringWeekdays
+      : [];
+    patchDetailScheduleDraft({
+      recurringWeekdays: toggleIsoWeekday(currentWeekdays, weekday),
+    });
+  };
+
+  const saveDetailScheduleTemplate = async () => {
+    if (!accessToken || !selectedClientId || isSavingDetailSchedule || !detailScheduleDraft) {
+      return;
+    }
+    setIsSavingDetailSchedule(true);
+    setDetailScheduleError(null);
+    setDetailScheduleSuccess(null);
+    try {
+      const preferredMeetingLocation = String(detailScheduleDraft.preferredMeetingLocation || '').trim();
+      await patchTrainerClientSchedulePreferences({
+        accessToken,
+        clientId: selectedClientId,
+        recurringWeekdays: detailScheduleDraft.recurringWeekdays,
+        preferredMeetingLocation: preferredMeetingLocation || null,
+        autoUseTrainerDefaultLocation: Boolean(detailScheduleDraft.autoUseTrainerDefaultLocation),
+      });
+      await loadClientDetailView(selectedClientId);
+      await loadCommandCenter({ silent: true });
+      setDetailScheduleSuccess('Schedule template saved.');
+    } catch (error) {
+      setDetailScheduleError(error?.message || 'Unable to save schedule template.');
+    } finally {
+      setIsSavingDetailSchedule(false);
+    }
+  };
+
+  const setDetailDateException = async (exceptionType) => {
+    if (!accessToken || !selectedClientId || isSavingDetailSchedule || !detailScheduleDraft) {
+      return;
+    }
+    setIsSavingDetailSchedule(true);
+    setDetailScheduleError(null);
+    setDetailScheduleSuccess(null);
+    try {
+      const meetingLocationOverride = String(detailScheduleDraft.exceptionLocationOverride || '').trim();
+      await createTrainerClientScheduleException({
+        accessToken,
+        clientId: selectedClientId,
+        sessionDate: plannerDate,
+        exceptionType,
+        meetingLocationOverride: meetingLocationOverride || null,
+      });
+      await loadClientDetailView(selectedClientId);
+      await loadCommandCenter({ silent: true });
+      setDetailScheduleSuccess(
+        exceptionType === 'skip'
+          ? `Marked ${plannerDayLabel} as skipped.`
+          : `Added one-off session for ${plannerDayLabel}.`,
+      );
+    } catch (error) {
+      setDetailScheduleError(error?.message || 'Unable to save date exception.');
+    } finally {
+      setIsSavingDetailSchedule(false);
+    }
+  };
+
+  const clearDetailDateException = async () => {
+    if (!accessToken || !selectedClientId || isSavingDetailSchedule) {
+      return;
+    }
+    setIsSavingDetailSchedule(true);
+    setDetailScheduleError(null);
+    setDetailScheduleSuccess(null);
+    try {
+      await deleteTrainerClientScheduleException({
+        accessToken,
+        clientId: selectedClientId,
+        sessionDate: plannerDate,
+      });
+      await loadClientDetailView(selectedClientId);
+      await loadCommandCenter({ silent: true });
+      setDetailScheduleSuccess('Date override cleared.');
+    } catch (error) {
+      if (String(error?.message || '').toLowerCase() === 'schedule exception not found') {
+        setDetailScheduleSuccess('No date override was set.');
+      } else {
+        setDetailScheduleError(error?.message || 'Unable to clear date override.');
+      }
+    } finally {
+      setIsSavingDetailSchedule(false);
+    }
+  };
+
   const totals = commandCenterPayload?.totals || {
     assigned_clients: 0,
     scheduled_today: 0,
@@ -431,6 +763,8 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     high_priority_clients: 0,
     critical_priority_clients: 0,
   };
+  const plannerDayLabel = selectedDayConfig.label;
+  const plannerDateLabel = formatPlannerDateLabel(commandCenterPayload?.date || plannerDate);
 
   if (viewMode === VIEW_MODE.CLIENT_DETAIL) {
     const detailClientName = detailPayload?.client?.client_name
@@ -438,6 +772,10 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
       || 'Client Detail';
     const activity = detailPayload?.activity_summary || {};
     const profile = detailPayload?.profile_snapshot || {};
+    const schedulePreferences = detailPayload?.schedule_preferences || null;
+    const upcomingExceptions = Array.isArray(schedulePreferences?.upcoming_exceptions)
+      ? schedulePreferences.upcoming_exceptions
+      : [];
     const aiUsableMemory = Array.isArray(aiContextPayload?.applied_ai_usable_memory)
       ? aiContextPayload.applied_ai_usable_memory
       : [];
@@ -524,9 +862,121 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
                   {activity.workouts_completed_7d || 0} workouts completed · latest check-in {formatDateLabel(activity.latest_checkin_date)}
                 </ModeText>
                 <ModeText variant="bodySm" tone="secondary">
-                  Today: {formatSessionWindow(activity.session_start_at, activity.session_end_at)} · {activity.session_status || 'no session'}
+                  {plannerDayLabel}: {formatSessionWindow(activity.session_start_at, activity.session_end_at)} · {activity.session_status || 'no session'}
+                </ModeText>
+                <ModeText variant="bodySm" tone="secondary">
+                  Meeting location: {activity.meeting_location || 'Not set'}
                 </ModeText>
               </ModeCard>
+
+              <ModeCard variant="surface">
+                <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Schedule Template</ModeText>
+                <ModeText variant="bodySm" tone="secondary">
+                  Weekly recurring days plus one-off add/skip overrides for {plannerDayLabel.toLowerCase()}.
+                </ModeText>
+
+                <View style={styles.weekdayChipRow}>
+                  {ISO_WEEKDAY_OPTIONS.map((option) => (
+                    <ModeChip
+                      key={`detail-weekday-${option.value}`}
+                      label={option.label}
+                      selected={Array.isArray(detailScheduleDraft?.recurringWeekdays) && detailScheduleDraft.recurringWeekdays.includes(option.value)}
+                      onPress={() => handleToggleDetailWeekday(option.value)}
+                    />
+                  ))}
+                </View>
+
+                <ModeInput
+                  value={detailScheduleDraft?.preferredMeetingLocation || ''}
+                  onChangeText={(value) => patchDetailScheduleDraft({ preferredMeetingLocation: value })}
+                  placeholder="Preferred meeting location (optional)"
+                />
+
+                <View style={styles.inlineChipRow}>
+                  <ModeChip
+                    label={detailScheduleDraft?.autoUseTrainerDefaultLocation ? 'Uses Trainer Default' : 'Default Disabled'}
+                    selected={Boolean(detailScheduleDraft?.autoUseTrainerDefaultLocation)}
+                    onPress={() => patchDetailScheduleDraft({
+                      autoUseTrainerDefaultLocation: !detailScheduleDraft?.autoUseTrainerDefaultLocation,
+                    })}
+                  />
+                </View>
+
+                <ModeInput
+                  value={detailScheduleDraft?.exceptionLocationOverride || ''}
+                  onChangeText={(value) => patchDetailScheduleDraft({ exceptionLocationOverride: value })}
+                  placeholder={`${plannerDayLabel} location override (optional)`}
+                />
+
+                <View style={styles.scheduleActionRow}>
+                  <ModeButton
+                    title={isSavingDetailSchedule ? 'Saving...' : 'Save Template'}
+                    variant="secondary"
+                    disabled={isSavingDetailSchedule}
+                    onPress={saveDetailScheduleTemplate}
+                    style={styles.scheduleActionButton}
+                  />
+                  <ModeButton
+                    title={`Skip ${plannerDayLabel}`}
+                    variant="ghost"
+                    disabled={isSavingDetailSchedule}
+                    onPress={() => setDetailDateException('skip')}
+                    style={styles.scheduleActionButton}
+                  />
+                </View>
+                <View style={styles.scheduleActionRow}>
+                  <ModeButton
+                    title={`Add ${plannerDayLabel}`}
+                    variant="ghost"
+                    disabled={isSavingDetailSchedule}
+                    onPress={() => setDetailDateException('add')}
+                    style={styles.scheduleActionButton}
+                  />
+                  <ModeButton
+                    title="Clear Override"
+                    variant="ghost"
+                    disabled={isSavingDetailSchedule}
+                    onPress={clearDetailDateException}
+                    style={styles.scheduleActionButton}
+                  />
+                </View>
+
+                <ModeText variant="caption" tone="secondary">
+                  Selected date override: {schedulePreferences?.selected_date_exception_type || 'none'}
+                </ModeText>
+                <ModeText variant="caption" tone="secondary">
+                  Weekly template: {formatIsoWeekdaySummary(detailScheduleDraft?.recurringWeekdays)}
+                </ModeText>
+
+                {upcomingExceptions.length > 0 ? (
+                  <View style={styles.scheduleExceptionList}>
+                    {upcomingExceptions.map((exception) => (
+                      <ModeText
+                        key={`${exception.client_id || selectedClientId}-${exception.session_date}`}
+                        variant="caption"
+                        tone="secondary"
+                      >
+                        • {exception.session_date}: {exception.exception_type}
+                        {exception.meeting_location_override ? ` @ ${exception.meeting_location_override}` : ''}
+                      </ModeText>
+                    ))}
+                  </View>
+                ) : (
+                  <ModeText variant="caption" tone="secondary">No upcoming date exceptions.</ModeText>
+                )}
+              </ModeCard>
+
+              {detailScheduleError ? (
+                <ModeCard variant="surface">
+                  <ModeText variant="bodySm" tone="error">{detailScheduleError}</ModeText>
+                </ModeCard>
+              ) : null}
+
+              {detailScheduleSuccess ? (
+                <ModeCard variant="surface">
+                  <ModeText variant="bodySm" tone="secondary">{detailScheduleSuccess}</ModeText>
+                </ModeCard>
+              ) : null}
 
               <ModeCard variant="surface">
                 <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Add Memory</ModeText>
@@ -732,12 +1182,14 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         ]}
       >
         <ModeCard variant="tinted">
-          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Today</ModeText>
+          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>
+            {plannerDayLabel}{plannerDateLabel ? ` · ${plannerDateLabel}` : ''}
+          </ModeText>
           <ModeText variant="bodySm">
-            {totals.assigned_clients} assigned clients · {totals.scheduled_today} scheduled today
+            {totals.assigned_clients} assigned clients · {totals.scheduled_today} scheduled {plannerDayLabel.toLowerCase()}
           </ModeText>
           <ModeText variant="bodySm" tone="secondary">
-            {totals.checkins_completed_today} check-ins completed today · {totals.high_priority_clients} high-priority
+            {totals.checkins_completed_today} check-ins completed {plannerDayLabel.toLowerCase()} · {totals.high_priority_clients} high-priority
           </ModeText>
           <ModeText variant="bodySm" tone="secondary">
             {totals.critical_priority_clients} critical priority
@@ -760,6 +1212,28 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         </ModeCard>
 
         <View style={styles.filterRow}>
+          {DAY_FILTERS.map((option) => (
+            <ModeChip
+              key={option.key}
+              label={option.label}
+              selected={dayFilter === option.key}
+              onPress={() => setDayFilter(option.key)}
+            />
+          ))}
+        </View>
+
+        <View style={styles.filterRow}>
+          {SESSION_FILTERS.map((option) => (
+            <ModeChip
+              key={option.key}
+              label={option.label}
+              selected={sessionFilter === option.key}
+              onPress={() => setSessionFilter(option.key)}
+            />
+          ))}
+        </View>
+
+        <View style={styles.filterRow}>
           {PRIORITY_FILTERS.map((option) => (
             <ModeChip
               key={option.key}
@@ -769,6 +1243,18 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
             />
           ))}
         </View>
+
+        {scheduleMutationError ? (
+          <ModeCard variant="surface">
+            <ModeText variant="bodySm" tone="error">{scheduleMutationError}</ModeText>
+          </ModeCard>
+        ) : null}
+
+        {scheduleMutationSuccess ? (
+          <ModeCard variant="surface">
+            <ModeText variant="bodySm" tone="secondary">{scheduleMutationSuccess}</ModeText>
+          </ModeCard>
+        ) : null}
 
         {isLoadingCommandCenter ? (
           <View style={styles.loadingContainer}>
@@ -821,6 +1307,9 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
           <View style={styles.clientList}>
             {visibleClientItems.map((client) => {
               const badgeVisual = priorityBadgeStyle(client.priority_tier);
+              const isScheduledForSelectedDay = resolveClientScheduledForFilter(client, plannerDate);
+              const isSavingSchedule = savingScheduleClientId === client.client_id;
+              const scheduleDraft = scheduleDraftByClient[client.client_id] || buildClientScheduleDraft(client);
               return (
                 <ModeCard key={client.client_id} variant="surface">
                   <View style={styles.clientHeaderRow}>
@@ -836,6 +1325,82 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
                   <ModeText variant="bodySm" tone="secondary">
                     Score {typeof client.priority_score === 'number' ? client.priority_score.toFixed(1) : '0.0'} · {client.week_summary?.checkins_completed_7d || 0} check-ins · avg {formatAvgScore(client.week_summary?.avg_score_7d)} · {client.week_summary?.workouts_completed_7d || 0} workouts
                   </ModeText>
+
+                  <View style={styles.scheduleEditorBlock}>
+                    <ModeText variant="caption" tone="tertiary">
+                      Weekly Template: {formatIsoWeekdaySummary(client.recurring_weekdays)}
+                    </ModeText>
+                    <View style={styles.weekdayChipRow}>
+                      {ISO_WEEKDAY_OPTIONS.map((option) => (
+                        <ModeChip
+                          key={`${client.client_id}-weekday-${option.value}`}
+                          label={option.label}
+                          selected={Array.isArray(scheduleDraft.recurringWeekdays) && scheduleDraft.recurringWeekdays.includes(option.value)}
+                          onPress={() => handleToggleClientWeekday(client.client_id, option.value)}
+                        />
+                      ))}
+                    </View>
+
+                    <ModeInput
+                      value={scheduleDraft.preferredMeetingLocation}
+                      onChangeText={(value) => handleScheduleDraftPatch(client.client_id, { preferredMeetingLocation: value })}
+                      placeholder="Preferred meeting location (optional)"
+                    />
+
+                    <View style={styles.inlineChipRow}>
+                      <ModeChip
+                        label={scheduleDraft.autoUseTrainerDefaultLocation ? 'Uses Trainer Default' : 'Default Disabled'}
+                        selected={Boolean(scheduleDraft.autoUseTrainerDefaultLocation)}
+                        onPress={() => handleScheduleDraftPatch(client.client_id, {
+                          autoUseTrainerDefaultLocation: !scheduleDraft.autoUseTrainerDefaultLocation,
+                        })}
+                      />
+                    </View>
+
+                    <ModeInput
+                      value={scheduleDraft.exceptionLocationOverride}
+                      onChangeText={(value) => handleScheduleDraftPatch(client.client_id, { exceptionLocationOverride: value })}
+                      placeholder={`${plannerDayLabel} location override (optional)`}
+                    />
+
+                    <View style={styles.scheduleActionRow}>
+                      <ModeButton
+                        title={isSavingSchedule ? 'Saving...' : 'Save Template'}
+                        variant="secondary"
+                        disabled={Boolean(savingScheduleClientId)}
+                        onPress={() => saveClientSchedulePreferences(client.client_id)}
+                        style={styles.scheduleActionButton}
+                      />
+                      <ModeButton
+                        title={`Skip ${plannerDayLabel}`}
+                        variant="ghost"
+                        disabled={Boolean(savingScheduleClientId)}
+                        onPress={() => applyClientDateException(client.client_id, 'skip')}
+                        style={styles.scheduleActionButton}
+                      />
+                    </View>
+                    <View style={styles.scheduleActionRow}>
+                      <ModeButton
+                        title={`Add ${plannerDayLabel}`}
+                        variant="ghost"
+                        disabled={Boolean(savingScheduleClientId)}
+                        onPress={() => applyClientDateException(client.client_id, 'add')}
+                        style={styles.scheduleActionButton}
+                      />
+                      <ModeButton
+                        title="Clear Override"
+                        variant="ghost"
+                        disabled={Boolean(savingScheduleClientId)}
+                        onPress={() => clearClientDateException(client.client_id)}
+                        style={styles.scheduleActionButton}
+                      />
+                    </View>
+                    <ModeText variant="caption" tone="secondary">
+                      {isScheduledForSelectedDay
+                        ? `${plannerDayLabel} is currently scheduled.`
+                        : `${plannerDayLabel} is currently not scheduled.`}
+                    </ModeText>
+                  </View>
 
                   <View style={styles.riskFlagRow}>
                     {Array.isArray(client.risk_flags) && client.risk_flags.length > 0 ? (
@@ -945,6 +1510,35 @@ const styles = StyleSheet.create({
   },
   metaLine: {
     marginTop: theme.spacing[1] - 2,
+  },
+  scheduleEditorBlock: {
+    marginTop: theme.spacing[2],
+    gap: theme.spacing[1] - 2,
+  },
+  weekdayChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing[1],
+    marginTop: theme.spacing[1] - 2,
+  },
+  inlineChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing[1],
+    marginTop: theme.spacing[1] - 2,
+    marginBottom: theme.spacing[1] - 2,
+  },
+  scheduleActionRow: {
+    flexDirection: 'row',
+    gap: theme.spacing[1],
+    marginTop: theme.spacing[1] - 2,
+  },
+  scheduleActionButton: {
+    flex: 1,
+  },
+  scheduleExceptionList: {
+    marginTop: theme.spacing[1],
+    gap: theme.spacing[1] - 4,
   },
   riskFlagRow: {
     flexDirection: 'row',

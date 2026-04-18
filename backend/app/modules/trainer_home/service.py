@@ -119,6 +119,7 @@ class TrainerHomeService:
                     session_start_at=self._coerce_datetime(row.get("session_start_at")),
                     session_end_at=self._coerce_datetime(row.get("session_end_at")),
                     session_type=row.get("session_type"),
+                    meeting_location=self._normalize_meeting_location(row.get("meeting_location")),
                     notes=row.get("notes"),
                     status=row.get("status") or "scheduled",
                     week_summary=week_summary,
@@ -183,6 +184,27 @@ class TrainerHomeService:
 
         schedule_today_rows = self.repository.list_schedule_for_day(trainer_id, target_date)
         schedule_today_by_client = self._map_preferred_schedule_rows(schedule_today_rows)
+        trainer_settings = self.repository.get_trainer_settings(trainer_id) or {}
+        trainer_default_meeting_location = self._normalize_meeting_location(trainer_settings.get("default_meeting_location"))
+        trainer_auto_fill_meeting_location = bool(trainer_settings.get("auto_fill_meeting_location", True))
+
+        schedule_preference_rows = self.repository.list_schedule_preferences_for_clients(trainer_id, client_ids)
+        schedule_preference_by_client = {
+            str(row.get("client_id")): row
+            for row in schedule_preference_rows
+            if row.get("client_id")
+        }
+        schedule_exception_rows = self.repository.list_schedule_exceptions_between(
+            trainer_id,
+            start_date=target_date,
+            end_date=target_date,
+            client_ids=client_ids,
+        )
+        schedule_exception_by_client = {
+            str(row.get("client_id")): row
+            for row in schedule_exception_rows
+            if row.get("client_id")
+        }
 
         schedule_history_rows = self.repository.list_schedule_between(
             trainer_id,
@@ -225,7 +247,30 @@ class TrainerHomeService:
             client_row = client_map.get(client_id) or {}
             client_checkins = checkins_by_client.get(client_id, [])
             client_schedule_today = schedule_today_by_client.get(client_id)
+            client_schedule_preferences = schedule_preference_by_client.get(client_id) or {}
+            client_selected_exception = schedule_exception_by_client.get(client_id) or {}
             client_schedule_history = schedule_history_by_client.get(client_id, [])
+
+            recurring_weekdays = self._normalize_weekdays(client_schedule_preferences.get("recurring_weekdays"))
+            preferred_meeting_location = self._normalize_meeting_location(client_schedule_preferences.get("preferred_meeting_location"))
+            auto_use_trainer_default_location = bool(
+                client_schedule_preferences.get("auto_use_trainer_default_location", True)
+            )
+            selected_exception_type = self._normalize_exception_type(client_selected_exception.get("exception_type"))
+            selected_exception_location = self._normalize_meeting_location(
+                client_selected_exception.get("meeting_location_override")
+            )
+            resolved_schedule = self._resolve_schedule_for_day(
+                target_date=target_date,
+                concrete_schedule=client_schedule_today,
+                recurring_weekdays=recurring_weekdays,
+                selected_date_exception_type=selected_exception_type if client_selected_exception else None,
+                selected_date_exception_location=selected_exception_location,
+                preferred_meeting_location=preferred_meeting_location,
+                auto_use_trainer_default_location=auto_use_trainer_default_location,
+                trainer_default_meeting_location=trainer_default_meeting_location,
+                trainer_auto_fill_meeting_location=trainer_auto_fill_meeting_location,
+            )
 
             workouts_completed_7d = workouts_by_user.get(client_row.get("user_id"), 0)
             week_summary = self._build_week_summary(
@@ -238,14 +283,14 @@ class TrainerHomeService:
             status_counts = self._schedule_status_counts(client_schedule_history)
             risk_flags = self._build_risk_flags(
                 week_summary=week_summary,
-                scheduled_today=bool(client_schedule_today),
-                schedule_status=(client_schedule_today or {}).get("status"),
+                scheduled_today=bool(resolved_schedule["scheduled"]),
+                schedule_status=resolved_schedule["session_status"],
                 status_counts=status_counts,
                 days_since_last_checkin=days_since_last_checkin,
             )
             priority_score = self._priority_score(
                 week_summary=week_summary,
-                scheduled_today=bool(client_schedule_today),
+                scheduled_today=bool(resolved_schedule["scheduled"]),
                 status_counts=status_counts,
                 days_since_last_checkin=days_since_last_checkin,
             )
@@ -264,11 +309,19 @@ class TrainerHomeService:
                     client_name=self._client_name(client_row, client_id),
                     priority_score=round(priority_score, 2),
                     priority_tier=self._priority_tier(priority_score),
-                    scheduled_today=bool(client_schedule_today),
-                    session_start_at=self._coerce_datetime((client_schedule_today or {}).get("session_start_at")),
-                    session_end_at=self._coerce_datetime((client_schedule_today or {}).get("session_end_at")),
-                    session_type=(client_schedule_today or {}).get("session_type"),
-                    session_status=(client_schedule_today or {}).get("status"),
+                    scheduled_today=bool(resolved_schedule["scheduled"]),
+                    session_start_at=resolved_schedule["session_start_at"],
+                    session_end_at=resolved_schedule["session_end_at"],
+                    session_type=resolved_schedule["session_type"],
+                    session_status=resolved_schedule["session_status"],
+                    meeting_location=resolved_schedule["meeting_location"],
+                    recurring_weekdays=recurring_weekdays,
+                    preferred_meeting_location=preferred_meeting_location,
+                    auto_use_trainer_default_location=auto_use_trainer_default_location,
+                    selected_date_exception_type=(
+                        selected_exception_type if client_selected_exception else None
+                    ),
+                    selected_date_meeting_location_override=selected_exception_location,
                     week_summary=week_summary,
                     risk_flags=risk_flags,
                     talking_points=talking_points,
@@ -550,6 +603,84 @@ class TrainerHomeService:
             if tag:
                 tags.append(tag)
         return tags
+
+    def _normalize_meeting_location(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        return text or None
+
+    def _normalize_weekdays(self, value: Any) -> list[int]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[int] = []
+        for item in value:
+            try:
+                day = int(item)
+            except (TypeError, ValueError):
+                continue
+            if day < 1 or day > 7:
+                continue
+            if day not in normalized:
+                normalized.append(day)
+        normalized.sort()
+        return normalized
+
+    def _normalize_exception_type(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"skip", "add"}:
+            return "skip"
+        return normalized
+
+    def _resolve_schedule_for_day(
+        self,
+        *,
+        target_date: date,
+        concrete_schedule: dict[str, Any] | None,
+        recurring_weekdays: list[int],
+        selected_date_exception_type: str | None,
+        selected_date_exception_location: str | None,
+        preferred_meeting_location: str | None,
+        auto_use_trainer_default_location: bool,
+        trainer_default_meeting_location: str | None,
+        trainer_auto_fill_meeting_location: bool,
+    ) -> dict[str, Any]:
+        if concrete_schedule:
+            return {
+                "scheduled": True,
+                "session_status": (concrete_schedule or {}).get("status"),
+                "session_type": (concrete_schedule or {}).get("session_type"),
+                "session_start_at": self._coerce_datetime((concrete_schedule or {}).get("session_start_at")),
+                "session_end_at": self._coerce_datetime((concrete_schedule or {}).get("session_end_at")),
+                "meeting_location": self._normalize_meeting_location((concrete_schedule or {}).get("meeting_location")),
+            }
+
+        scheduled_from_recurring = target_date.isoweekday() in set(recurring_weekdays)
+        normalized_exception_type = str(selected_date_exception_type or "").strip().lower()
+        if normalized_exception_type == "skip":
+            scheduled = False
+        elif normalized_exception_type == "add":
+            scheduled = True
+        else:
+            scheduled = scheduled_from_recurring
+
+        resolved_meeting_location = None
+        if scheduled:
+            if self._normalize_meeting_location(selected_date_exception_location):
+                resolved_meeting_location = self._normalize_meeting_location(selected_date_exception_location)
+            elif preferred_meeting_location:
+                resolved_meeting_location = preferred_meeting_location
+            elif auto_use_trainer_default_location and trainer_auto_fill_meeting_location:
+                resolved_meeting_location = trainer_default_meeting_location
+
+        return {
+            "scheduled": scheduled,
+            "session_status": "scheduled" if scheduled else None,
+            "session_type": None,
+            "session_start_at": None,
+            "session_end_at": None,
+            "meeting_location": resolved_meeting_location,
+        }
 
     def _command_center_sort_key(self, item: TrainerHomeCommandCenterClientItem) -> tuple[Any, ...]:
         scheduled_weight = 0 if item.scheduled_today else 1

@@ -32,6 +32,10 @@ from app.modules.trainer_persona.repository import TrainerPersonaRepository
 from app.modules.trainer_persona.service import TrainerPersonaService
 from app.modules.trainer_review.repository import TrainerReviewRepository
 from app.modules.trainer_review.service import TrainerReviewService
+from app.modules.trainer_assistant.repository import TrainerAssistantRepository
+from app.modules.trainer_assistant.service import TrainerAssistantService
+from app.modules.trainer_settings.repository import TrainerSettingsRepository
+from app.modules.trainer_settings.service import TrainerSettingsService
 from app.modules.workout.repository import WorkoutRepository
 from app.modules.workout.service import WorkoutService
 
@@ -201,6 +205,16 @@ def get_trainer_client_service(
     return TrainerClientService(repository)
 
 
+def get_trainer_settings_repository() -> TrainerSettingsRepository:
+    return TrainerSettingsRepository(get_supabase_admin_client())
+
+
+def get_trainer_settings_service(
+    repository: TrainerSettingsRepository = Depends(get_trainer_settings_repository),
+) -> TrainerSettingsService:
+    return TrainerSettingsService(repository)
+
+
 def get_trainer_review_repository(
     supabase: Client = Depends(get_request_scoped_supabase_client),
 ) -> TrainerReviewRepository:
@@ -224,6 +238,27 @@ def get_ai_feedback_service(
     repository: AIFeedbackRepository = Depends(get_ai_feedback_repository),
 ) -> AIFeedbackService:
     return AIFeedbackService(repository)
+
+
+def get_trainer_assistant_repository(
+) -> TrainerAssistantRepository:
+    return TrainerAssistantRepository(get_supabase_admin_client())
+
+
+def get_trainer_assistant_service(
+    repository: TrainerAssistantRepository = Depends(get_trainer_assistant_repository),
+    trainer_home_service: TrainerHomeService = Depends(get_trainer_home_service),
+    trainer_client_service: TrainerClientService = Depends(get_trainer_client_service),
+    ai_feedback_service: AIFeedbackService = Depends(get_ai_feedback_service),
+    trainer_intelligence_service: TrainerIntelligenceService = Depends(get_trainer_intelligence_service),
+) -> TrainerAssistantService:
+    return TrainerAssistantService(
+        repository=repository,
+        trainer_home_service=trainer_home_service,
+        trainer_client_service=trainer_client_service,
+        ai_feedback_service=ai_feedback_service,
+        trainer_intelligence_service=trainer_intelligence_service,
+    )
 
 
 def get_conversation_repository(

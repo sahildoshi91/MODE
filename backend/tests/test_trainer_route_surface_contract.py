@@ -21,6 +21,18 @@ class TrainerRouteSurfaceContractTests(unittest.TestCase):
             "/api/v1/trainer-clients/{client_id}/memory",
             "/api/v1/trainer-clients/{client_id}/memory/{memory_id}",
             "/api/v1/trainer-clients/{client_id}/ai-context",
+            "/api/v1/trainer-clients/{client_id}/meeting-location",
+            "/api/v1/trainer-clients/{client_id}/schedule-preferences",
+            "/api/v1/trainer-clients/{client_id}/schedule-exceptions",
+            "/api/v1/trainer-clients/{client_id}/schedule-exceptions/{session_date}",
+            "/api/v1/trainer-settings/me",
+            "/api/v1/profiles/me/trainer-schedule",
+            "/api/v1/trainer-assistant/bootstrap",
+            "/api/v1/trainer-assistant/execute",
+            "/api/v1/trainer-assistant/drafts/{draft_id}/edit",
+            "/api/v1/trainer-assistant/drafts/{draft_id}/approve",
+            "/api/v1/trainer-assistant/drafts/{draft_id}/reject",
+            "/api/v1/trainer-assistant/background/run",
         }
 
         missing_paths = sorted(required_paths.difference(paths.keys()))
@@ -37,6 +49,20 @@ class TrainerRouteSurfaceContractTests(unittest.TestCase):
         self.assertIn("patch", paths["/api/v1/trainer-clients/{client_id}/memory/{memory_id}"])
         self.assertIn("delete", paths["/api/v1/trainer-clients/{client_id}/memory/{memory_id}"])
         self.assertIn("get", paths["/api/v1/trainer-clients/{client_id}/ai-context"])
+        self.assertIn("patch", paths["/api/v1/trainer-clients/{client_id}/meeting-location"])
+        self.assertIn("get", paths["/api/v1/trainer-clients/{client_id}/schedule-preferences"])
+        self.assertIn("patch", paths["/api/v1/trainer-clients/{client_id}/schedule-preferences"])
+        self.assertIn("post", paths["/api/v1/trainer-clients/{client_id}/schedule-exceptions"])
+        self.assertIn("delete", paths["/api/v1/trainer-clients/{client_id}/schedule-exceptions/{session_date}"])
+        self.assertIn("get", paths["/api/v1/trainer-settings/me"])
+        self.assertIn("patch", paths["/api/v1/trainer-settings/me"])
+        self.assertIn("get", paths["/api/v1/profiles/me/trainer-schedule"])
+        self.assertIn("get", paths["/api/v1/trainer-assistant/bootstrap"])
+        self.assertIn("post", paths["/api/v1/trainer-assistant/execute"])
+        self.assertIn("post", paths["/api/v1/trainer-assistant/drafts/{draft_id}/edit"])
+        self.assertIn("post", paths["/api/v1/trainer-assistant/drafts/{draft_id}/approve"])
+        self.assertIn("post", paths["/api/v1/trainer-assistant/drafts/{draft_id}/reject"])
+        self.assertIn("post", paths["/api/v1/trainer-assistant/background/run"])
 
 
 if __name__ == "__main__":

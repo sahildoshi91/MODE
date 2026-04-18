@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 from supabase import Client
@@ -17,6 +17,17 @@ class TrainerClientRepository:
             .select("id, tenant_id, user_id, client_name, assigned_trainer_id")
             .eq("assigned_trainer_id", trainer_id)
             .eq("id", client_id)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def get_trainer_settings(self, trainer_id: str) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("trainers")
+            .select("id, display_name, default_meeting_location, auto_fill_meeting_location")
+            .eq("id", trainer_id)
             .limit(1)
             .execute()
         )
@@ -89,12 +100,156 @@ class TrainerClientRepository:
         response = (
             self.supabase
             .table("trainer_daily_schedule")
-            .select("id, trainer_id, client_id, session_date, session_start_at, session_end_at, session_type, status, notes")
+            .select(
+                "id, trainer_id, client_id, session_date, session_start_at, session_end_at, "
+                "session_type, status, notes, meeting_location"
+            )
             .eq("trainer_id", trainer_id)
             .eq("client_id", client_id)
             .eq("session_date", session_date.isoformat())
             .order("session_start_at")
             .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def get_schedule_preferences(
+        self,
+        trainer_id: str,
+        client_id: str,
+    ) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("trainer_client_schedule_preferences")
+            .select(
+                "id, trainer_id, client_id, recurring_weekdays, preferred_meeting_location, "
+                "auto_use_trainer_default_location, created_at, updated_at"
+            )
+            .eq("trainer_id", trainer_id)
+            .eq("client_id", client_id)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def list_schedule_preferences_for_clients(
+        self,
+        trainer_id: str,
+        client_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        if not client_ids:
+            return []
+        response = (
+            self.supabase
+            .table("trainer_client_schedule_preferences")
+            .select(
+                "id, trainer_id, client_id, recurring_weekdays, preferred_meeting_location, "
+                "auto_use_trainer_default_location, created_at, updated_at"
+            )
+            .eq("trainer_id", trainer_id)
+            .in_("client_id", client_ids)
+            .execute()
+        )
+        return response.data or []
+
+    def upsert_schedule_preferences(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("trainer_client_schedule_preferences")
+            .upsert(payload, on_conflict="trainer_id,client_id")
+            .execute()
+        )
+        return (response.data or [None])[0]
+
+    def get_schedule_exception_for_day(
+        self,
+        trainer_id: str,
+        client_id: str,
+        session_date: date,
+    ) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("trainer_client_schedule_exceptions")
+            .select(
+                "id, trainer_id, client_id, session_date, exception_type, "
+                "meeting_location_override, created_at, updated_at"
+            )
+            .eq("trainer_id", trainer_id)
+            .eq("client_id", client_id)
+            .eq("session_date", session_date.isoformat())
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def list_schedule_exceptions_between(
+        self,
+        trainer_id: str,
+        *,
+        start_date: date,
+        end_date: date,
+        client_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        query = (
+            self.supabase
+            .table("trainer_client_schedule_exceptions")
+            .select(
+                "id, trainer_id, client_id, session_date, exception_type, "
+                "meeting_location_override, created_at, updated_at"
+            )
+            .eq("trainer_id", trainer_id)
+            .gte("session_date", start_date.isoformat())
+            .lte("session_date", end_date.isoformat())
+            .order("session_date")
+            .order("created_at")
+        )
+        if client_ids:
+            query = query.in_("client_id", client_ids)
+        response = query.execute()
+        return response.data or []
+
+    def upsert_schedule_exception(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("trainer_client_schedule_exceptions")
+            .upsert(payload, on_conflict="trainer_id,client_id,session_date")
+            .execute()
+        )
+        return (response.data or [None])[0]
+
+    def delete_schedule_exception_for_day(
+        self,
+        trainer_id: str,
+        client_id: str,
+        session_date: date,
+    ) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("trainer_client_schedule_exceptions")
+            .delete()
+            .eq("trainer_id", trainer_id)
+            .eq("client_id", client_id)
+            .eq("session_date", session_date.isoformat())
+            .execute()
+        )
+        return (response.data or [None])[0]
+
+    def update_schedule_meeting_location(
+        self,
+        schedule_id: str,
+        *,
+        meeting_location: str | None,
+    ) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("trainer_daily_schedule")
+            .update(
+                {
+                    "meeting_location": meeting_location,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            .eq("id", schedule_id)
             .execute()
         )
         return response.data[0] if response.data else None

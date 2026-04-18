@@ -33,3 +33,7 @@ export const TRAINER_REVIEW_ENABLED = parseBooleanFlag(
   process.env.EXPO_PUBLIC_TRAINER_REVIEW_ENABLED,
   true,
 );
+export const TRAINER_ASSISTANT_V1_ENABLED = parseBooleanFlag(
+  process.env.EXPO_PUBLIC_TRAINER_ASSISTANT_V1_ENABLED,
+  true,
+);

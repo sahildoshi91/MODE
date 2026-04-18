@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     expose_route_debug: bool = False
     trainer_intelligence_orchestration_enabled: bool = False
     trainer_ai_review_auto_apply_enabled: bool = True
+    trainer_assistant_v1_enabled: bool = True
     cors_allow_origins: str = (
         "http://localhost:19006,http://127.0.0.1:19006,"
         "http://localhost:8081,http://127.0.0.1:8081,"

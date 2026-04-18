@@ -9,9 +9,15 @@ from app.core.tenancy import TrainerContext
 from app.modules.trainer_clients.schemas import (
     TrainerAIContextResponse,
     TrainerClientDetailResponse,
+    TrainerMeetingLocationRecord,
+    TrainerMeetingLocationUpdateRequest,
     TrainerMemoryCreateRequest,
     TrainerMemoryRecord,
     TrainerMemoryUpdateRequest,
+    TrainerScheduleExceptionCreateRequest,
+    TrainerScheduleExceptionRecord,
+    TrainerSchedulePreferencesRecord,
+    TrainerSchedulePreferencesUpdateRequest,
 )
 from app.modules.trainer_clients.service import TrainerClientService
 
@@ -20,7 +26,12 @@ router = APIRouter()
 
 def _handle_service_value_error(exc: ValueError) -> None:
     detail = str(exc)
-    if detail.lower() in {"client not found for trainer", "memory not found"}:
+    if detail.lower() in {
+        "client not found for trainer",
+        "memory not found",
+        "no scheduled session found for client on requested date",
+        "schedule exception not found",
+    }:
         raise HTTPException(status_code=404, detail=detail) from exc
     raise HTTPException(status_code=400, detail=detail) from exc
 
@@ -120,5 +131,88 @@ async def get_trainer_client_ai_context(
     require_trainer_actor(user, trainer_context)
     try:
         return service.get_ai_context(trainer_context, client_id)
+    except ValueError as exc:
+        _handle_service_value_error(exc)
+
+
+@router.patch("/{client_id}/meeting-location", response_model=TrainerMeetingLocationRecord)
+async def patch_trainer_client_meeting_location(
+    client_id: str,
+    request: TrainerMeetingLocationUpdateRequest,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.update_meeting_location(trainer_context, client_id, request)
+    except ValueError as exc:
+        _handle_service_value_error(exc)
+
+
+@router.get("/{client_id}/schedule-preferences", response_model=TrainerSchedulePreferencesRecord)
+async def get_trainer_client_schedule_preferences(
+    client_id: str,
+    request_date: date | None = Query(default=None, alias="date"),
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.get_schedule_preferences(
+            trainer_context,
+            client_id,
+            selected_date=request_date,
+        )
+    except ValueError as exc:
+        _handle_service_value_error(exc)
+
+
+@router.patch("/{client_id}/schedule-preferences", response_model=TrainerSchedulePreferencesRecord)
+async def patch_trainer_client_schedule_preferences(
+    client_id: str,
+    request: TrainerSchedulePreferencesUpdateRequest,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.update_schedule_preferences(trainer_context, client_id, request)
+    except ValueError as exc:
+        _handle_service_value_error(exc)
+
+
+@router.post("/{client_id}/schedule-exceptions", response_model=TrainerScheduleExceptionRecord)
+async def create_trainer_client_schedule_exception(
+    client_id: str,
+    request: TrainerScheduleExceptionCreateRequest,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.create_schedule_exception(trainer_context, client_id, request)
+    except ValueError as exc:
+        _handle_service_value_error(exc)
+
+
+@router.delete("/{client_id}/schedule-exceptions/{session_date}", response_model=TrainerScheduleExceptionRecord)
+async def delete_trainer_client_schedule_exception(
+    client_id: str,
+    session_date: date,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.delete_schedule_exception(
+            trainer_context,
+            client_id,
+            session_date=session_date,
+        )
     except ValueError as exc:
         _handle_service_value_error(exc)

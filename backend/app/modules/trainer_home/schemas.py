@@ -32,6 +32,7 @@ class TrainerHomeClientItem(BaseModel):
     session_start_at: datetime | None = None
     session_end_at: datetime | None = None
     session_type: str | None = None
+    meeting_location: str | None = None
     notes: str | None = None
     status: str = "scheduled"
     week_summary: TrainerHomeWeekSummary
@@ -70,6 +71,12 @@ class TrainerHomeCommandCenterClientItem(BaseModel):
     session_end_at: datetime | None = None
     session_type: str | None = None
     session_status: str | None = None
+    meeting_location: str | None = None
+    recurring_weekdays: list[int] = Field(default_factory=list)
+    preferred_meeting_location: str | None = None
+    auto_use_trainer_default_location: bool = True
+    selected_date_exception_type: Literal["skip", "add"] | None = None
+    selected_date_meeting_location_override: str | None = None
     week_summary: TrainerHomeWeekSummary
     risk_flags: list[TrainerHomeRiskFlag] = Field(default_factory=list)
     talking_points: TrainerHomeTalkingPointSet = Field(default_factory=TrainerHomeTalkingPointSet)

@@ -7,11 +7,18 @@ from typing import Any
 from app.core.tenancy import TrainerContext
 from app.modules.trainer_clients.repository import TrainerClientRepository
 from app.modules.trainer_clients.schemas import (
+    ClientTrainerScheduleResponse,
     TrainerAIContextMemoryItem,
     TrainerAIContextResponse,
     TrainerClientActivitySummary,
     TrainerClientDetailResponse,
     TrainerClientIdentity,
+    TrainerScheduleExceptionCreateRequest,
+    TrainerScheduleExceptionRecord,
+    TrainerSchedulePreferencesRecord,
+    TrainerSchedulePreferencesUpdateRequest,
+    TrainerMeetingLocationRecord,
+    TrainerMeetingLocationUpdateRequest,
     TrainerMemoryCounts,
     TrainerMemoryCreateRequest,
     TrainerMemoryRecord,
@@ -39,15 +46,26 @@ class TrainerClientService:
         target_date: date | None = None,
     ) -> TrainerClientDetailResponse:
         client_row = self._require_client_assignment(trainer_context, client_id)
+        trainer_id = trainer_context.trainer_id or ""
         resolved_date = target_date or datetime.now(timezone.utc).date()
+        trainer_settings = self.repository.get_trainer_settings(trainer_id) if trainer_id else None
+        schedule_preferences = self._build_schedule_preferences(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            trainer_settings=trainer_settings,
+            selected_date=resolved_date,
+            include_upcoming_exceptions=True,
+        )
         profile_snapshot = self._get_or_create_profile(client_id)
         activity_summary = self._build_activity_summary(
-            trainer_id=trainer_context.trainer_id or "",
+            trainer_id=trainer_id,
             client_row=client_row,
             target_date=resolved_date,
+            trainer_settings=trainer_settings,
+            schedule_preferences=schedule_preferences,
         )
         memory_rows = self.repository.list_memory(
-            trainer_context.trainer_id or "",
+            trainer_id,
             client_id,
             include_archived=True,
         )
@@ -63,6 +81,7 @@ class TrainerClientService:
             profile_snapshot=profile_snapshot,
             activity_summary=activity_summary,
             memory_counts=memory_counts,
+            schedule_preferences=schedule_preferences,
         )
 
     def list_memory(
@@ -233,6 +252,178 @@ class TrainerClientService:
             context_preview_text=context_preview_text,
         )
 
+    def update_meeting_location(
+        self,
+        trainer_context: TrainerContext,
+        client_id: str,
+        request: TrainerMeetingLocationUpdateRequest,
+    ) -> TrainerMeetingLocationRecord:
+        trainer_id = trainer_context.trainer_id or ""
+        self._require_client_assignment(trainer_context, client_id)
+
+        schedule_row = self.repository.get_schedule_for_day(trainer_id, client_id, request.session_date)
+        if not schedule_row:
+            raise ValueError("No scheduled session found for client on requested date")
+
+        schedule_id = str(schedule_row.get("id") or "").strip()
+        if not schedule_id:
+            raise ValueError("No scheduled session found for client on requested date")
+
+        meeting_location = self._normalize_meeting_location_for_write(request.meeting_location)
+        updated = self.repository.update_schedule_meeting_location(
+            schedule_id,
+            meeting_location=meeting_location,
+        )
+        if not updated:
+            raise ValueError("Meeting location update failed")
+
+        return TrainerMeetingLocationRecord(
+            schedule_id=str(updated.get("id") or schedule_id),
+            client_id=str(updated.get("client_id") or client_id),
+            session_date=self._coerce_date(updated.get("session_date"), request.session_date) or request.session_date,
+            meeting_location=self._normalize_meeting_location(updated.get("meeting_location")),
+        )
+
+    def get_schedule_preferences(
+        self,
+        trainer_context: TrainerContext,
+        client_id: str,
+        *,
+        selected_date: date | None = None,
+    ) -> TrainerSchedulePreferencesRecord:
+        trainer_id = trainer_context.trainer_id or ""
+        self._require_client_assignment(trainer_context, client_id)
+        trainer_settings = self.repository.get_trainer_settings(trainer_id) if trainer_id else None
+        return self._build_schedule_preferences(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            trainer_settings=trainer_settings,
+            selected_date=selected_date,
+            include_upcoming_exceptions=True,
+        )
+
+    def update_schedule_preferences(
+        self,
+        trainer_context: TrainerContext,
+        client_id: str,
+        request: TrainerSchedulePreferencesUpdateRequest,
+    ) -> TrainerSchedulePreferencesRecord:
+        trainer_id = trainer_context.trainer_id or ""
+        self._require_client_assignment(trainer_context, client_id)
+
+        existing = self.repository.get_schedule_preferences(trainer_id, client_id) or {}
+        provided_fields = set(getattr(request, "model_fields_set", set()))
+
+        recurring_weekdays = self._normalize_weekdays(existing.get("recurring_weekdays"))
+        if "recurring_weekdays" in provided_fields:
+            recurring_weekdays = self._normalize_weekdays(request.recurring_weekdays)
+
+        preferred_meeting_location = self._normalize_meeting_location(existing.get("preferred_meeting_location"))
+        if "preferred_meeting_location" in provided_fields:
+            preferred_meeting_location = self._normalize_meeting_location_for_write(request.preferred_meeting_location)
+
+        auto_use_default = bool(existing.get("auto_use_trainer_default_location", True))
+        if "auto_use_trainer_default_location" in provided_fields:
+            auto_use_default = bool(request.auto_use_trainer_default_location)
+
+        payload = {
+            "trainer_id": trainer_id,
+            "client_id": client_id,
+            "recurring_weekdays": recurring_weekdays,
+            "preferred_meeting_location": preferred_meeting_location,
+            "auto_use_trainer_default_location": auto_use_default,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        updated = self.repository.upsert_schedule_preferences(payload)
+        if not updated:
+            raise ValueError("Schedule preferences update failed")
+
+        trainer_settings = self.repository.get_trainer_settings(trainer_id) if trainer_id else None
+        return self._build_schedule_preferences(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            trainer_settings=trainer_settings,
+            include_upcoming_exceptions=True,
+        )
+
+    def create_schedule_exception(
+        self,
+        trainer_context: TrainerContext,
+        client_id: str,
+        request: TrainerScheduleExceptionCreateRequest,
+    ) -> TrainerScheduleExceptionRecord:
+        trainer_id = trainer_context.trainer_id or ""
+        self._require_client_assignment(trainer_context, client_id)
+        meeting_location_override = self._normalize_meeting_location_for_write(request.meeting_location_override)
+        payload = {
+            "trainer_id": trainer_id,
+            "client_id": client_id,
+            "session_date": request.session_date.isoformat(),
+            "exception_type": request.exception_type,
+            "meeting_location_override": meeting_location_override,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        upserted = self.repository.upsert_schedule_exception(payload)
+        if not upserted:
+            raise ValueError("Schedule exception save failed")
+        return self._to_schedule_exception_record(upserted, fallback_client_id=client_id)
+
+    def delete_schedule_exception(
+        self,
+        trainer_context: TrainerContext,
+        client_id: str,
+        *,
+        session_date: date,
+    ) -> TrainerScheduleExceptionRecord:
+        trainer_id = trainer_context.trainer_id or ""
+        self._require_client_assignment(trainer_context, client_id)
+        deleted = self.repository.delete_schedule_exception_for_day(trainer_id, client_id, session_date)
+        if not deleted:
+            raise ValueError("Schedule exception not found")
+        return self._to_schedule_exception_record(
+            deleted,
+            fallback_client_id=client_id,
+            fallback_session_date=session_date,
+        )
+
+    def get_client_visible_schedule(
+        self,
+        trainer_context: TrainerContext,
+    ) -> ClientTrainerScheduleResponse:
+        client_id = trainer_context.client_id
+        trainer_id = trainer_context.trainer_id
+        if not client_id:
+            raise ValueError("No client context found")
+        if not trainer_id:
+            return ClientTrainerScheduleResponse(client_id=client_id)
+
+        client_row = self.repository.get_client_for_trainer(trainer_id, client_id)
+        if not client_row:
+            return ClientTrainerScheduleResponse(client_id=client_id)
+
+        trainer_settings = self.repository.get_trainer_settings(trainer_id) if trainer_id else None
+        schedule_preferences = self._build_schedule_preferences(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            trainer_settings=trainer_settings,
+            include_upcoming_exceptions=True,
+        )
+        resolved_default_location = self._resolve_default_meeting_location(
+            preferred_meeting_location=schedule_preferences.preferred_meeting_location,
+            auto_use_trainer_default_location=schedule_preferences.auto_use_trainer_default_location,
+            trainer_default_meeting_location=schedule_preferences.trainer_default_meeting_location,
+            trainer_auto_fill_meeting_location=schedule_preferences.trainer_auto_fill_meeting_location,
+        )
+        trainer_display_name = self._normalize_display_name((trainer_settings or {}).get("display_name"))
+        return ClientTrainerScheduleResponse(
+            client_id=client_id,
+            trainer_id=trainer_id,
+            trainer_display_name=trainer_display_name,
+            recurring_weekdays=schedule_preferences.recurring_weekdays,
+            upcoming_exceptions=schedule_preferences.upcoming_exceptions,
+            resolved_default_meeting_location=resolved_default_location,
+        )
+
     def _require_client_assignment(self, trainer_context: TrainerContext, client_id: str) -> dict[str, Any]:
         trainer_id = trainer_context.trainer_id
         if not trainer_id:
@@ -254,6 +445,8 @@ class TrainerClientService:
         trainer_id: str,
         client_row: dict[str, Any],
         target_date: date,
+        trainer_settings: dict[str, Any] | None,
+        schedule_preferences: TrainerSchedulePreferencesRecord | None,
     ) -> TrainerClientActivitySummary:
         client_id = str(client_row.get("id"))
         week_start = target_date - timedelta(days=6)
@@ -290,6 +483,45 @@ class TrainerClientService:
             workouts_completed_7d = len(workouts)
 
         today_schedule = self.repository.get_schedule_for_day(trainer_id, client_id, target_date)
+        selected_date_exception_type = (
+            schedule_preferences.selected_date_exception_type
+            if schedule_preferences
+            else None
+        )
+        selected_date_exception_location = (
+            schedule_preferences.selected_date_meeting_location_override
+            if schedule_preferences
+            else None
+        )
+        recurring_weekdays = (
+            schedule_preferences.recurring_weekdays
+            if schedule_preferences
+            else []
+        )
+        preferred_meeting_location = (
+            schedule_preferences.preferred_meeting_location
+            if schedule_preferences
+            else None
+        )
+        auto_use_trainer_default_location = (
+            schedule_preferences.auto_use_trainer_default_location
+            if schedule_preferences
+            else True
+        )
+        trainer_default_meeting_location = self._normalize_meeting_location((trainer_settings or {}).get("default_meeting_location"))
+        trainer_auto_fill_meeting_location = bool((trainer_settings or {}).get("auto_fill_meeting_location", True))
+
+        resolved_schedule = self._resolve_schedule_for_day(
+            target_date=target_date,
+            concrete_schedule=today_schedule,
+            recurring_weekdays=recurring_weekdays,
+            selected_date_exception_type=selected_date_exception_type,
+            selected_date_exception_location=selected_date_exception_location,
+            preferred_meeting_location=preferred_meeting_location,
+            auto_use_trainer_default_location=auto_use_trainer_default_location,
+            trainer_default_meeting_location=trainer_default_meeting_location,
+            trainer_auto_fill_meeting_location=trainer_auto_fill_meeting_location,
+        )
         return TrainerClientActivitySummary(
             checkins_completed_7d=len(checkins),
             workouts_completed_7d=workouts_completed_7d,
@@ -298,11 +530,12 @@ class TrainerClientService:
             latest_checkin_date=latest_date,
             latest_mode=latest_mode,
             days_since_last_checkin=days_since_last,
-            scheduled_today=bool(today_schedule),
-            session_status=(today_schedule or {}).get("status"),
-            session_type=(today_schedule or {}).get("session_type"),
-            session_start_at=self._coerce_datetime((today_schedule or {}).get("session_start_at")),
-            session_end_at=self._coerce_datetime((today_schedule or {}).get("session_end_at")),
+            scheduled_today=bool(resolved_schedule["scheduled"]),
+            session_status=resolved_schedule["session_status"],
+            session_type=resolved_schedule["session_type"],
+            session_start_at=resolved_schedule["session_start_at"],
+            session_end_at=resolved_schedule["session_end_at"],
+            meeting_location=resolved_schedule["meeting_location"],
         )
 
     def _memory_counts(self, rows: list[dict[str, Any]]) -> TrainerMemoryCounts:
@@ -319,6 +552,142 @@ class TrainerClientService:
             else:
                 counts.internal_only += 1
         return counts
+
+    def _build_schedule_preferences(
+        self,
+        *,
+        trainer_id: str,
+        client_id: str,
+        trainer_settings: dict[str, Any] | None,
+        selected_date: date | None = None,
+        include_upcoming_exceptions: bool = True,
+    ) -> TrainerSchedulePreferencesRecord:
+        schedule_row = self.repository.get_schedule_preferences(trainer_id, client_id)
+        recurring_weekdays = self._normalize_weekdays((schedule_row or {}).get("recurring_weekdays"))
+        preferred_meeting_location = self._normalize_meeting_location((schedule_row or {}).get("preferred_meeting_location"))
+        auto_use_default = bool((schedule_row or {}).get("auto_use_trainer_default_location", True))
+        trainer_default_meeting_location = self._normalize_meeting_location((trainer_settings or {}).get("default_meeting_location"))
+        trainer_auto_fill = bool((trainer_settings or {}).get("auto_fill_meeting_location", True))
+
+        selected_exception = (
+            self.repository.get_schedule_exception_for_day(trainer_id, client_id, selected_date)
+            if selected_date
+            else None
+        )
+        if include_upcoming_exceptions:
+            start_date = selected_date or datetime.now(timezone.utc).date()
+            end_date = start_date + timedelta(days=45)
+            exception_rows = self.repository.list_schedule_exceptions_between(
+                trainer_id,
+                start_date=start_date,
+                end_date=end_date,
+                client_ids=[client_id],
+            )
+        else:
+            exception_rows = []
+
+        return TrainerSchedulePreferencesRecord(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            recurring_weekdays=recurring_weekdays,
+            preferred_meeting_location=preferred_meeting_location,
+            auto_use_trainer_default_location=auto_use_default,
+            trainer_default_meeting_location=trainer_default_meeting_location,
+            trainer_auto_fill_meeting_location=trainer_auto_fill,
+            selected_date=selected_date,
+            selected_date_exception_type=(
+                self._normalize_exception_type((selected_exception or {}).get("exception_type"))
+                if selected_exception
+                else None
+            ),
+            selected_date_meeting_location_override=self._normalize_meeting_location((selected_exception or {}).get("meeting_location_override")),
+            upcoming_exceptions=[
+                self._to_schedule_exception_record(row, fallback_client_id=client_id)
+                for row in exception_rows
+            ],
+        )
+
+    def _resolve_schedule_for_day(
+        self,
+        *,
+        target_date: date,
+        concrete_schedule: dict[str, Any] | None,
+        recurring_weekdays: list[int],
+        selected_date_exception_type: str | None,
+        selected_date_exception_location: str | None,
+        preferred_meeting_location: str | None,
+        auto_use_trainer_default_location: bool,
+        trainer_default_meeting_location: str | None,
+        trainer_auto_fill_meeting_location: bool,
+    ) -> dict[str, Any]:
+        if concrete_schedule:
+            return {
+                "scheduled": True,
+                "session_status": (concrete_schedule or {}).get("status"),
+                "session_type": (concrete_schedule or {}).get("session_type"),
+                "session_start_at": self._coerce_datetime((concrete_schedule or {}).get("session_start_at")),
+                "session_end_at": self._coerce_datetime((concrete_schedule or {}).get("session_end_at")),
+                "meeting_location": self._normalize_meeting_location((concrete_schedule or {}).get("meeting_location")),
+            }
+
+        scheduled_from_recurring = target_date.isoweekday() in set(recurring_weekdays)
+        normalized_exception_type = str(selected_date_exception_type or "").strip().lower()
+        if normalized_exception_type == "skip":
+            scheduled = False
+        elif normalized_exception_type == "add":
+            scheduled = True
+        else:
+            scheduled = scheduled_from_recurring
+
+        resolved_meeting_location = None
+        if scheduled:
+            if self._normalize_meeting_location(selected_date_exception_location):
+                resolved_meeting_location = self._normalize_meeting_location(selected_date_exception_location)
+            elif preferred_meeting_location:
+                resolved_meeting_location = preferred_meeting_location
+            elif auto_use_trainer_default_location and trainer_auto_fill_meeting_location:
+                resolved_meeting_location = trainer_default_meeting_location
+
+        return {
+            "scheduled": scheduled,
+            "session_status": "scheduled" if scheduled else None,
+            "session_type": None,
+            "session_start_at": None,
+            "session_end_at": None,
+            "meeting_location": resolved_meeting_location,
+        }
+
+    def _resolve_default_meeting_location(
+        self,
+        *,
+        preferred_meeting_location: str | None,
+        auto_use_trainer_default_location: bool,
+        trainer_default_meeting_location: str | None,
+        trainer_auto_fill_meeting_location: bool,
+    ) -> str | None:
+        if preferred_meeting_location:
+            return preferred_meeting_location
+        if auto_use_trainer_default_location and trainer_auto_fill_meeting_location:
+            return trainer_default_meeting_location
+        return None
+
+    def _to_schedule_exception_record(
+        self,
+        row: dict[str, Any],
+        *,
+        fallback_client_id: str,
+        fallback_session_date: date | None = None,
+    ) -> TrainerScheduleExceptionRecord:
+        return TrainerScheduleExceptionRecord(
+            id=str(row.get("id")) if row.get("id") else None,
+            trainer_id=str(row.get("trainer_id")) if row.get("trainer_id") else None,
+            client_id=str(row.get("client_id") or fallback_client_id),
+            session_date=self._coerce_date(row.get("session_date"), fallback_session_date or datetime.now(timezone.utc).date()) or datetime.now(timezone.utc).date(),
+            exception_type=self._normalize_exception_type(row.get("exception_type")),
+            meeting_location_override=self._normalize_meeting_location(row.get("meeting_location_override")),
+            created_at=self._coerce_datetime(row.get("created_at")),
+            updated_at=self._coerce_datetime(row.get("updated_at")),
+        )
 
     def _to_memory_record(self, row: dict[str, Any]) -> TrainerMemoryRecord:
         value_json = row.get("value_json")
@@ -391,6 +760,49 @@ class TrainerClientService:
 
     def _normalize_structured_data(self, value: Any) -> dict[str, Any]:
         return value if isinstance(value, dict) else {}
+
+    def _normalize_weekdays(self, value: Any) -> list[int]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError("Recurring weekdays must be a list")
+
+        normalized: list[int] = []
+        for item in value:
+            try:
+                day = int(item)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("Recurring weekdays must contain integers 1 through 7") from exc
+            if day < 1 or day > 7:
+                raise ValueError("Recurring weekdays must contain integers 1 through 7")
+            if day not in normalized:
+                normalized.append(day)
+        normalized.sort()
+        return normalized
+
+    def _normalize_meeting_location(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    def _normalize_meeting_location_for_write(self, value: Any) -> str | None:
+        normalized = self._normalize_meeting_location(value)
+        if normalized is not None and len(normalized) > 160:
+            raise ValueError("Meeting location must be 160 characters or fewer")
+        return normalized
+
+    def _normalize_exception_type(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"skip", "add"}:
+            return "skip"
+        return normalized
+
+    def _normalize_display_name(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized or None
 
     def _normalize_mode(self, mode: Any) -> str | None:
         if not mode:

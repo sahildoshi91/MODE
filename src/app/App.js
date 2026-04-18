@@ -962,6 +962,7 @@ function AppShell() {
               <ProfileScreen
                 session={session}
                 assignmentStatus={assignmentStatus}
+                accessToken={session.access_token}
                 onSignOut={handleSignOut}
                 bottomInset={contentBottomInset}
               />

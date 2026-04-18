@@ -30,6 +30,7 @@ class FakeTrainerHomeRepository:
                 "session_start_at": "2026-04-10T17:00:00+00:00",
                 "session_end_at": "2026-04-10T18:00:00+00:00",
                 "session_type": "strength",
+                "meeting_location": "Westside Performance",
                 "notes": "Focus on lower body mechanics",
                 "status": "scheduled",
             },
@@ -41,6 +42,7 @@ class FakeTrainerHomeRepository:
                 "session_start_at": "2026-04-10T19:00:00+00:00",
                 "session_end_at": "2026-04-10T19:45:00+00:00",
                 "session_type": "conditioning",
+                "meeting_location": "North Gym Floor",
                 "notes": "",
                 "status": "no_show",
             },
@@ -133,6 +135,7 @@ class TrainerHomeApiTests(unittest.TestCase):
 
         taylor = next(item for item in payload["clients"] if item["client_id"] == "client-1")
         jordan = next(item for item in payload["clients"] if item["client_id"] == "client-2")
+        self.assertEqual(taylor["meeting_location"], "Westside Performance")
         self.assertEqual(taylor["week_summary"]["checkins_completed_7d"], 3)
         self.assertEqual(taylor["week_summary"]["avg_mode_7d"], "BUILD")
         self.assertEqual(taylor["week_summary"]["workouts_completed_7d"], 2)

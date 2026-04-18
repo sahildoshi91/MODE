@@ -60,7 +60,12 @@ async def get_review_outputs(
     if normalized_status and normalized_status not in {"open", "approved", "rejected"}:
         raise HTTPException(status_code=400, detail="Invalid status filter")
     normalized_source_type = source_type.strip().lower() if isinstance(source_type, str) and source_type.strip() else None
-    if normalized_source_type and normalized_source_type not in {"chat", "talking_points", "generated_checkin_plan"}:
+    if normalized_source_type and normalized_source_type not in {
+        "chat",
+        "talking_points",
+        "generated_checkin_plan",
+        "trainer_assistant_draft",
+    }:
         raise HTTPException(status_code=400, detail="Invalid source_type filter")
     return service.list_outputs(
         trainer_id,

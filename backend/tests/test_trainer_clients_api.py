@@ -19,6 +19,19 @@ from app.main import app
 
 class FakeTrainerClientService:
     def __init__(self):
+        self.meeting_locations = {
+            ("client-1", "2026-04-11"): "Downtown Performance Lab",
+        }
+        self.schedule_preferences_by_client = {
+            "client-1": {
+                "recurring_weekdays": [1, 3, 5],
+                "preferred_meeting_location": None,
+                "auto_use_trainer_default_location": True,
+                "trainer_default_meeting_location": "My Gym",
+                "trainer_auto_fill_meeting_location": True,
+            }
+        }
+        self.schedule_exceptions_by_key = {}
         self.memory_rows = [
             {
                 "id": "mem-1",
@@ -66,6 +79,7 @@ class FakeTrainerClientService:
                 "session_type": "strength",
                 "session_start_at": "2026-04-11T17:00:00+00:00",
                 "session_end_at": "2026-04-11T18:00:00+00:00",
+                "meeting_location": self.meeting_locations.get(("client-1", "2026-04-11")),
             },
             "memory_counts": {
                 "total": len(self.memory_rows),
@@ -166,6 +180,123 @@ class FakeTrainerClientService:
             "context_preview_text": "Preview context text",
         }
 
+    def update_meeting_location(self, trainer_context, client_id, request):
+        del trainer_context
+        if client_id != "client-1":
+            raise ValueError("Client not found for trainer")
+        session_date = request.session_date.isoformat()
+        if session_date != "2026-04-11":
+            raise ValueError("No scheduled session found for client on requested date")
+        self.meeting_locations[(client_id, session_date)] = request.meeting_location
+        return {
+            "schedule_id": "schedule-1",
+            "client_id": client_id,
+            "session_date": session_date,
+            "meeting_location": request.meeting_location,
+        }
+
+    def _ensure_client(self, client_id):
+        if client_id != "client-1":
+            raise ValueError("Client not found for trainer")
+
+    def _normalize_weekdays(self, values):
+        if values is None:
+            return []
+        if not isinstance(values, list):
+            raise ValueError("Recurring weekdays must be a list")
+        normalized = []
+        for item in values:
+            day = int(item)
+            if day < 1 or day > 7:
+                raise ValueError("Recurring weekdays must contain integers 1 through 7")
+            if day not in normalized:
+                normalized.append(day)
+        return sorted(normalized)
+
+    def _build_schedule_preferences(self, client_id, selected_date=None):
+        base = self.schedule_preferences_by_client.get(client_id) or {
+            "recurring_weekdays": [],
+            "preferred_meeting_location": None,
+            "auto_use_trainer_default_location": True,
+            "trainer_default_meeting_location": "My Gym",
+            "trainer_auto_fill_meeting_location": True,
+        }
+        selected_key = (client_id, selected_date.isoformat()) if selected_date else None
+        selected_exception = self.schedule_exceptions_by_key.get(selected_key) if selected_key else None
+        upcoming_exceptions = sorted(
+            [
+                exception
+                for (exception_client_id, _session_date), exception in self.schedule_exceptions_by_key.items()
+                if exception_client_id == client_id
+            ],
+            key=lambda row: row["session_date"],
+        )
+        return {
+            "trainer_id": "trainer-123",
+            "client_id": client_id,
+            "recurring_weekdays": list(base["recurring_weekdays"]),
+            "preferred_meeting_location": base["preferred_meeting_location"],
+            "auto_use_trainer_default_location": bool(base["auto_use_trainer_default_location"]),
+            "trainer_default_meeting_location": base["trainer_default_meeting_location"],
+            "trainer_auto_fill_meeting_location": bool(base["trainer_auto_fill_meeting_location"]),
+            "selected_date": selected_date.isoformat() if selected_date else None,
+            "selected_date_exception_type": (selected_exception or {}).get("exception_type"),
+            "selected_date_meeting_location_override": (selected_exception or {}).get("meeting_location_override"),
+            "upcoming_exceptions": upcoming_exceptions,
+        }
+
+    def get_schedule_preferences(self, trainer_context, client_id, selected_date=None):
+        del trainer_context
+        self._ensure_client(client_id)
+        return self._build_schedule_preferences(client_id, selected_date=selected_date)
+
+    def update_schedule_preferences(self, trainer_context, client_id, request):
+        del trainer_context
+        self._ensure_client(client_id)
+        base = self.schedule_preferences_by_client.get(client_id) or {
+            "recurring_weekdays": [],
+            "preferred_meeting_location": None,
+            "auto_use_trainer_default_location": True,
+            "trainer_default_meeting_location": "My Gym",
+            "trainer_auto_fill_meeting_location": True,
+        }
+        provided_fields = set(getattr(request, "model_fields_set", set()))
+        if "recurring_weekdays" in provided_fields:
+            base["recurring_weekdays"] = self._normalize_weekdays(request.recurring_weekdays)
+        if "preferred_meeting_location" in provided_fields:
+            preferred = request.preferred_meeting_location
+            base["preferred_meeting_location"] = preferred.strip() if isinstance(preferred, str) and preferred.strip() else None
+        if "auto_use_trainer_default_location" in provided_fields:
+            base["auto_use_trainer_default_location"] = bool(request.auto_use_trainer_default_location)
+        self.schedule_preferences_by_client[client_id] = base
+        return self._build_schedule_preferences(client_id, selected_date=None)
+
+    def create_schedule_exception(self, trainer_context, client_id, request):
+        del trainer_context
+        self._ensure_client(client_id)
+        session_date = request.session_date.isoformat()
+        key = (client_id, session_date)
+        record = {
+            "id": self.schedule_exceptions_by_key.get(key, {}).get("id", f"ex-{len(self.schedule_exceptions_by_key) + 1}"),
+            "trainer_id": "trainer-123",
+            "client_id": client_id,
+            "session_date": session_date,
+            "exception_type": request.exception_type,
+            "meeting_location_override": request.meeting_location_override,
+        }
+        self.schedule_exceptions_by_key[key] = record
+        return record
+
+    def delete_schedule_exception(self, trainer_context, client_id, session_date):
+        del trainer_context
+        self._ensure_client(client_id)
+        key = (client_id, session_date.isoformat())
+        record = self.schedule_exceptions_by_key.get(key)
+        if not record:
+            raise ValueError("Schedule exception not found")
+        del self.schedule_exceptions_by_key[key]
+        return record
+
 
 class TrainerClientsApiTests(unittest.TestCase):
     def setUp(self):
@@ -195,6 +326,10 @@ class TrainerClientsApiTests(unittest.TestCase):
         )
         self.assertEqual(detail_response.status_code, 200)
         self.assertEqual(detail_response.json()["client"]["client_name"], "Taylor")
+        self.assertEqual(
+            detail_response.json()["activity_summary"]["meeting_location"],
+            "Downtown Performance Lab",
+        )
 
         list_response = self.client.get(
             "/api/v1/trainer-clients/client-1/memory",
@@ -239,6 +374,17 @@ class TrainerClientsApiTests(unittest.TestCase):
         self.assertEqual(context_response.json()["client_id"], "client-1")
         self.assertEqual(context_response.json()["context_preview_text"], "Preview context text")
 
+        location_response = self.client.patch(
+            "/api/v1/trainer-clients/client-1/meeting-location",
+            json={
+                "session_date": "2026-04-11",
+                "meeting_location": "Midtown Strength Studio",
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(location_response.status_code, 200)
+        self.assertEqual(location_response.json()["meeting_location"], "Midtown Strength Studio")
+
     def test_trainer_endpoints_reject_non_trainer_actor(self):
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
             id="not-the-trainer",
@@ -260,6 +406,100 @@ class TrainerClientsApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "Memory not found")
+
+    def test_meeting_location_requires_existing_scheduled_session(self):
+        response = self.client.patch(
+            "/api/v1/trainer-clients/client-1/meeting-location",
+            json={
+                "session_date": "2026-04-12",
+                "meeting_location": "No session gym",
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "No scheduled session found for client on requested date")
+
+    def test_schedule_preferences_and_exceptions_crud_flow(self):
+        get_response = self.client.get(
+            "/api/v1/trainer-clients/client-1/schedule-preferences?date=2026-04-11",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(get_response.json()["recurring_weekdays"], [1, 3, 5])
+        self.assertIsNone(get_response.json()["selected_date_exception_type"])
+
+        patch_response = self.client.patch(
+            "/api/v1/trainer-clients/client-1/schedule-preferences",
+            json={
+                "recurring_weekdays": [2, 4],
+                "preferred_meeting_location": "Client Home",
+                "auto_use_trainer_default_location": False,
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(patch_response.status_code, 200)
+        self.assertEqual(patch_response.json()["recurring_weekdays"], [2, 4])
+        self.assertEqual(patch_response.json()["preferred_meeting_location"], "Client Home")
+        self.assertFalse(patch_response.json()["auto_use_trainer_default_location"])
+
+        post_response = self.client.post(
+            "/api/v1/trainer-clients/client-1/schedule-exceptions",
+            json={
+                "session_date": "2026-04-12",
+                "exception_type": "add",
+                "meeting_location_override": "Downtown Studio",
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(post_response.status_code, 200)
+        self.assertEqual(post_response.json()["exception_type"], "add")
+        self.assertEqual(post_response.json()["meeting_location_override"], "Downtown Studio")
+
+        selected_response = self.client.get(
+            "/api/v1/trainer-clients/client-1/schedule-preferences?date=2026-04-12",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(selected_response.status_code, 200)
+        self.assertEqual(selected_response.json()["selected_date_exception_type"], "add")
+        self.assertEqual(selected_response.json()["selected_date_meeting_location_override"], "Downtown Studio")
+        self.assertEqual(len(selected_response.json()["upcoming_exceptions"]), 1)
+
+        delete_response = self.client.delete(
+            "/api/v1/trainer-clients/client-1/schedule-exceptions/2026-04-12",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(delete_response.json()["exception_type"], "add")
+
+        after_delete_response = self.client.get(
+            "/api/v1/trainer-clients/client-1/schedule-preferences?date=2026-04-12",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(after_delete_response.status_code, 200)
+        self.assertIsNone(after_delete_response.json()["selected_date_exception_type"])
+        self.assertEqual(after_delete_response.json()["upcoming_exceptions"], [])
+
+    def test_schedule_exception_delete_not_found_maps_to_404(self):
+        response = self.client.delete(
+            "/api/v1/trainer-clients/client-1/schedule-exceptions/2026-04-16",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "Schedule exception not found")
+
+    def test_schedule_writes_reject_non_trainer_actor(self):
+        app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
+            id="not-the-trainer",
+            email="trainer@example.com",
+            access_token="token-123",
+        )
+        response = self.client.patch(
+            "/api/v1/trainer-clients/client-1/schedule-preferences",
+            json={"recurring_weekdays": [1, 2]},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"], "Trainer-only endpoint")
 
 
 if __name__ == "__main__":
