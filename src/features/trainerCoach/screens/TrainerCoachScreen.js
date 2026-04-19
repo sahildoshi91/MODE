@@ -34,9 +34,19 @@ export default function TrainerCoachScreen({
   bottomInset = 0,
 }) {
   const [composerValue, setComposerValue] = useState('');
+  const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [composerDockHeight, setComposerDockHeight] = useState(0);
+  const [streamForceScrollSignal, setStreamForceScrollSignal] = useState(0);
   const [copyFeedback, setCopyFeedback] = useState(null);
   const copyFeedbackTimerRef = useRef(null);
+  const streamMetricsRef = useRef({
+    offset: 0,
+    contentHeight: 0,
+    layoutHeight: 0,
+    nearBottom: true,
+  });
+  const previousStreamLengthRef = useRef(0);
   const {
     state,
     actions,
@@ -52,6 +62,9 @@ export default function TrainerCoachScreen({
     : null;
 
   const helperLabel = useMemo(() => {
+    if (isSendingMessage) {
+      return 'Sending...';
+    }
     if (state.sync.replaying) {
       return 'Replaying pending operations...';
     }
@@ -65,7 +78,14 @@ export default function TrainerCoachScreen({
       return state.error;
     }
     return null;
-  }, [state.error, state.hasPendingSync, state.loading, state.sync.replaying, staleRouteError]);
+  }, [
+    isSendingMessage,
+    state.error,
+    state.hasPendingSync,
+    state.loading,
+    state.sync.replaying,
+    staleRouteError,
+  ]);
 
   const showCopyFeedback = useCallback((message) => {
     if (copyFeedbackTimerRef.current) {
@@ -101,6 +121,17 @@ export default function TrainerCoachScreen({
     }
   }, []);
 
+  useEffect(() => {
+    const streamLength = Array.isArray(state.stream) ? state.stream.length : 0;
+    const previousLength = previousStreamLengthRef.current;
+    if (streamLength > 0 && previousLength === 0) {
+      setStreamForceScrollSignal((value) => value + 1);
+    } else if (streamLength > previousLength) {
+      setStreamForceScrollSignal((value) => value + 1);
+    }
+    previousStreamLengthRef.current = streamLength;
+  }, [state.stream]);
+
   const handleSummaryAction = async (summaryAction) => {
     const target = summaryAction?.target;
     if (target === 'queue') {
@@ -127,14 +158,37 @@ export default function TrainerCoachScreen({
 
   const handleSubmitComposer = async () => {
     const submitted = composerValue.trim();
-    if (!submitted) {
+    if (!submitted || state.loading || isSendingMessage) {
       return;
     }
-    const didSend = await actions.sendIntentMessage(submitted);
-    if (didSend) {
-      setComposerValue('');
+    setIsSendingMessage(true);
+    setStreamForceScrollSignal((value) => value + 1);
+    try {
+      const didSend = await actions.sendIntentMessage(submitted);
+      if (didSend) {
+        setComposerValue('');
+      }
+    } finally {
+      setIsSendingMessage(false);
     }
   };
+
+  const handleCommandSelect = useCallback(async (command) => {
+    if (!command || state.loading || isSendingMessage) {
+      return;
+    }
+    setComposerValue(command);
+    setIsSendingMessage(true);
+    setStreamForceScrollSignal((value) => value + 1);
+    try {
+      const didSend = await actions.sendIntentMessage(command);
+      if (didSend) {
+        setComposerValue('');
+      }
+    } finally {
+      setIsSendingMessage(false);
+    }
+  }, [actions, isSendingMessage, state.loading]);
 
   const handleCopyRouteDetails = useCallback(async () => {
     const diagnosticsSource = staleRouteError || workspaceNetworkError;
@@ -161,7 +215,7 @@ export default function TrainerCoachScreen({
       />
       <KeyboardAvoidingView
         style={styles.keyboardWrap}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
       >
         {staleRouteError ? (
@@ -279,44 +333,55 @@ export default function TrainerCoachScreen({
               onOpenDraft={(item) => actions.openPanel('draft_review', { outputId: item.output_id })}
             />
 
-            <CoachStreamList
-              streamItems={state.stream}
-              onScrollDepthChange={(offsetY) => {
-                const shouldCollapseSummary = offsetY > SUMMARY_COLLAPSE_SCROLL_THRESHOLD;
-                const shouldMinimizeQueue = offsetY > QUEUE_MINIMIZE_SCROLL_THRESHOLD;
-                if (shouldCollapseSummary !== state.ui.summaryCollapsed) {
-                  actions.setSummaryCollapsed(shouldCollapseSummary);
+            <View style={styles.streamViewport}>
+              <CoachStreamList
+                streamItems={state.stream}
+                forceScrollSignal={streamForceScrollSignal}
+                contentBottomPadding={composerDockHeight}
+              onScrollMetricsChange={(metrics) => {
+                if (!metrics || typeof metrics !== 'object') {
+                  return;
                 }
-                if (shouldMinimizeQueue !== state.ui.queueMinimized) {
-                  actions.setQueueMinimized(shouldMinimizeQueue);
-                }
+                streamMetricsRef.current = metrics;
               }}
-            />
-
-            <View
-              style={[
-                styles.composerWrap,
-                { paddingBottom: isKeyboardVisible ? theme.spacing[1] : Math.max(bottomInset, 0) },
-              ]}
-            >
-              <CoachComposerWithCommands
-                value={composerValue}
-                onChangeText={setComposerValue}
-                onSubmit={handleSubmitComposer}
-                onCommandSelect={(command) => {
-                  setComposerValue(command);
-                  actions.sendIntentMessage(command);
-                  setComposerValue('');
+                onScrollDepthChange={(offsetY) => {
+                  const shouldCollapseSummary = offsetY > SUMMARY_COLLAPSE_SCROLL_THRESHOLD;
+                  const shouldMinimizeQueue = offsetY > QUEUE_MINIMIZE_SCROLL_THRESHOLD;
+                  if (shouldCollapseSummary !== state.ui.summaryCollapsed) {
+                    actions.setSummaryCollapsed(shouldCollapseSummary);
+                  }
+                  if (shouldMinimizeQueue !== state.ui.queueMinimized) {
+                    actions.setQueueMinimized(shouldMinimizeQueue);
+                  }
                 }}
-                disabled={state.loading}
               />
-              {helperLabel ? (
-                <View style={styles.helperRow}>
-                  <ModeText variant="caption" tone={state.error ? 'error' : 'secondary'}>
-                    {helperLabel}
-                  </ModeText>
-                </View>
-              ) : null}
+
+              <View
+                onLayout={(event) => {
+                  const nextHeight = event?.nativeEvent?.layout?.height || 0;
+                  setComposerDockHeight((current) => (current === nextHeight ? current : nextHeight));
+                }}
+                style={[
+                  styles.composerDock,
+                  { paddingBottom: isKeyboardVisible ? theme.spacing[1] : Math.max(bottomInset, 0) },
+                ]}
+              >
+                <CoachComposerWithCommands
+                  value={composerValue}
+                  onChangeText={setComposerValue}
+                  onSubmit={handleSubmitComposer}
+                  onCommandSelect={handleCommandSelect}
+                  disabled={state.loading || isSendingMessage}
+                  isSubmitting={isSendingMessage}
+                />
+                {helperLabel ? (
+                  <View style={styles.helperRow}>
+                    <ModeText variant="caption" tone={state.error && !isSendingMessage ? 'error' : 'secondary'}>
+                      {helperLabel}
+                    </ModeText>
+                  </View>
+                ) : null}
+              </View>
             </View>
           </View>
         )}
@@ -360,9 +425,20 @@ const styles = StyleSheet.create({
   actionButton: {
     marginTop: theme.spacing[1],
   },
-  composerWrap: {
+  streamViewport: {
+    flex: 1,
+    position: 'relative',
+  },
+  composerDock: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingTop: theme.spacing[1],
     gap: theme.spacing[1],
-    paddingBottom: theme.spacing[2],
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border.default,
+    backgroundColor: theme.colors.surface.glass,
   },
   helperRow: {
     minHeight: 0,

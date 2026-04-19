@@ -1,5 +1,11 @@
 import React, { useMemo } from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  TextInput,
+  View,
+} from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 
 import { ModeText } from '../../../../lib/components';
@@ -20,6 +26,7 @@ export default function CoachComposerWithCommands({
   onSubmit,
   onCommandSelect,
   disabled = false,
+  isSubmitting = false,
 }) {
   const normalized = String(value || '').trim().toLowerCase();
   const commandSuggestions = useMemo(() => {
@@ -28,7 +35,7 @@ export default function CoachComposerWithCommands({
     }
     return COMMANDS.filter((command) => command.startsWith(normalized)).slice(0, 5);
   }, [normalized]);
-  const canSubmit = !disabled && normalized.length > 0;
+  const canSubmit = !disabled && !isSubmitting && normalized.length > 0;
 
   return (
     <View style={styles.wrapper}>
@@ -37,9 +44,16 @@ export default function CoachComposerWithCommands({
           {commandSuggestions.map((command) => (
             <Pressable
               key={command}
-              onPress={() => onCommandSelect?.(command)}
+              onPress={() => {
+                if (disabled || isSubmitting) {
+                  return;
+                }
+                onCommandSelect?.(command);
+              }}
+              disabled={disabled || isSubmitting}
               style={({ pressed }) => [
                 styles.commandChip,
+                (disabled || isSubmitting) && styles.commandChipDisabled,
                 pressed && styles.commandChipPressed,
               ]}
             >
@@ -56,7 +70,7 @@ export default function CoachComposerWithCommands({
           placeholderTextColor={theme.colors.text.tertiary}
           style={styles.input}
           multiline
-          editable={!disabled}
+          editable={!disabled && !isSubmitting}
           maxLength={1400}
           textAlignVertical="top"
         />
@@ -69,11 +83,18 @@ export default function CoachComposerWithCommands({
             pressed && canSubmit && styles.sendButtonPressed,
           ]}
         >
-          <Feather
-            name="arrow-up"
-            size={16}
-            color={canSubmit ? theme.colors.text.inverse : theme.colors.text.disabled}
-          />
+          {isSubmitting ? (
+            <ActivityIndicator
+              size="small"
+              color={theme.colors.text.inverse}
+            />
+          ) : (
+            <Feather
+              name="arrow-up"
+              size={16}
+              color={canSubmit ? theme.colors.text.inverse : theme.colors.text.disabled}
+            />
+          )}
         </Pressable>
       </View>
     </View>
@@ -99,6 +120,9 @@ const styles = StyleSheet.create({
   },
   commandChipPressed: {
     opacity: theme.interaction.pressedOpacity,
+  },
+  commandChipDisabled: {
+    opacity: theme.interaction.disabledOpacity,
   },
   composer: {
     flexDirection: 'row',
@@ -141,4 +165,3 @@ const styles = StyleSheet.create({
     transform: [{ scale: theme.interaction.pressedScale }],
   },
 });
-

@@ -59,6 +59,14 @@ jest.mock('../../components/TodaySummaryBar', () => {
 
 import TrainerCoachScreen from '../TrainerCoachScreen';
 
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function buildWorkspaceSnapshot(overrides = {}) {
   return {
     state: {
@@ -85,7 +93,7 @@ function buildWorkspaceSnapshot(overrides = {}) {
     },
     actions: {
       refreshWorkspace: jest.fn(),
-      sendIntentMessage: jest.fn(),
+      sendIntentMessage: jest.fn().mockResolvedValue(true),
       retryPendingOps: jest.fn(),
       openPanel: jest.fn(),
       closePanel: jest.fn(),
@@ -246,7 +254,176 @@ describe('TrainerCoachScreen', () => {
     expect(JSON.stringify(tree.toJSON())).toContain('Temporary network issue');
 
     const keyboardAvoidingView = tree.root.findByType(KeyboardAvoidingView);
-    expect(keyboardAvoidingView.props.behavior).toBe(Platform.OS === 'ios' ? 'padding' : undefined);
+    expect(keyboardAvoidingView.props.behavior).toBe(Platform.OS === 'ios' ? 'padding' : 'height');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('sets submitting state immediately on send and clears composer only after successful send', async () => {
+    const deferred = createDeferred();
+    const snapshot = buildWorkspaceSnapshot({
+      actions: {
+        ...buildWorkspaceSnapshot().actions,
+        sendIntentMessage: jest.fn(() => deferred.promise),
+      },
+    });
+    mockUseTrainerCoachWorkspace.mockReturnValue(snapshot);
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    let composer = tree.root.findByType('MockCoachComposerWithCommands');
+    act(() => {
+      composer.props.onChangeText('Send this prompt');
+    });
+    composer = tree.root.findByType('MockCoachComposerWithCommands');
+
+    act(() => {
+      composer.props.onSubmit();
+    });
+
+    composer = tree.root.findByType('MockCoachComposerWithCommands');
+    expect(composer.props.isSubmitting).toBe(true);
+    expect(composer.props.disabled).toBe(true);
+    expect(snapshot.actions.sendIntentMessage).toHaveBeenCalledWith('Send this prompt');
+
+    await act(async () => {
+      deferred.resolve(true);
+      await deferred.promise;
+    });
+
+    composer = tree.root.findByType('MockCoachComposerWithCommands');
+    expect(composer.props.isSubmitting).toBe(false);
+    expect(composer.props.value).toBe('');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('keeps composer text when send returns false', async () => {
+    const snapshot = buildWorkspaceSnapshot({
+      actions: {
+        ...buildWorkspaceSnapshot().actions,
+        sendIntentMessage: jest.fn().mockResolvedValue(false),
+      },
+    });
+    mockUseTrainerCoachWorkspace.mockReturnValue(snapshot);
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    let composer = tree.root.findByType('MockCoachComposerWithCommands');
+    act(() => {
+      composer.props.onChangeText('Keep this draft');
+    });
+    composer = tree.root.findByType('MockCoachComposerWithCommands');
+
+    await act(async () => {
+      await composer.props.onSubmit();
+    });
+
+    composer = tree.root.findByType('MockCoachComposerWithCommands');
+    expect(composer.props.value).toBe('Keep this draft');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('increments stream force-scroll signal on send and on incoming stream updates', async () => {
+    const baseState = buildWorkspaceSnapshot().state;
+    const actions = {
+      ...buildWorkspaceSnapshot().actions,
+      sendIntentMessage: jest.fn().mockResolvedValue(true),
+    };
+    let snapshot = buildWorkspaceSnapshot({
+      state: {
+        ...baseState,
+        stream: [
+          {
+            id: 'stream-1',
+            kind: 'system_confirmation',
+            text: 'initial',
+          },
+        ],
+      },
+      actions,
+    });
+    mockUseTrainerCoachWorkspace.mockImplementation(() => snapshot);
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    let streamList = tree.root.findByType('MockCoachStreamList');
+    const initialSignal = streamList.props.forceScrollSignal;
+
+    let composer = tree.root.findByType('MockCoachComposerWithCommands');
+    act(() => {
+      composer.props.onChangeText('Send and scroll');
+    });
+    composer = tree.root.findByType('MockCoachComposerWithCommands');
+    await act(async () => {
+      await composer.props.onSubmit();
+    });
+
+    streamList = tree.root.findByType('MockCoachStreamList');
+    const postSendSignal = streamList.props.forceScrollSignal;
+    expect(postSendSignal).toBeGreaterThan(initialSignal);
+
+    snapshot = buildWorkspaceSnapshot({
+      state: {
+        ...snapshot.state,
+        stream: [
+          ...snapshot.state.stream,
+          {
+            id: 'stream-2',
+            kind: 'internal_ai_private',
+            text: 'incoming response',
+          },
+        ],
+      },
+      actions,
+    });
+
+    await act(async () => {
+      tree.update(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    streamList = tree.root.findByType('MockCoachStreamList');
+    expect(streamList.props.forceScrollSignal).toBeGreaterThan(postSendSignal);
 
     await act(async () => {
       tree.unmount();
