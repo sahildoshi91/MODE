@@ -8,6 +8,7 @@ import {
   ModeChip,
   ModeInput,
   ModeText,
+  PremiumClientCard,
   ProgressBar,
   SafeScreen,
 } from '../../../../lib/components';
@@ -631,6 +632,8 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   useEffect(() => {
     setDraftReviewText(resolveDraftReviewOutputSeed(activeDraft));
     setDraftReviewMutationError(null);
+    // Preserve local edits when queue metadata refreshes for the same output.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDraft?.output_id]);
 
   useEffect(() => {
@@ -1533,7 +1536,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
           { paddingBottom: theme.spacing[4] + bottomInset },
         ]}
       >
-        <ModeCard variant="hero">
+        <ModeCard variant="hero" style={styles.heroTierCard}>
           <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>
             {plannerDayLabel}{plannerDateLabel ? ` · ${plannerDateLabel}` : ''}
           </ModeText>
@@ -1563,7 +1566,11 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
           </View>
         </ModeCard>
 
-        <ModeCard variant="surface" testID="trainer-clients-draft-review-card" style={styles.draftReviewCard}>
+        <ModeCard
+          variant="surface"
+          testID="trainer-clients-draft-review-card"
+          style={[styles.draftReviewCard, styles.actionsTierCard]}
+        >
           <View style={styles.draftReviewHeader}>
             <View>
               <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Draft Review Queue</ModeText>
@@ -1714,38 +1721,47 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
           ) : null}
         </ModeCard>
 
-        <View style={styles.filterRow}>
-          {DAY_FILTERS.map((option) => (
-            <ModeChip
-              key={option.key}
-              label={option.label}
-              selected={dayFilter === option.key}
-              onPress={() => setDayFilter(option.key)}
-            />
-          ))}
-        </View>
+        <ModeCard variant="tinted" style={styles.filterTierCard}>
+          <ModeText variant="label" tone="tertiary" style={styles.filterTierLabel}>Day Window</ModeText>
+          <View style={styles.filterRow}>
+            {DAY_FILTERS.map((option) => (
+              <ModeChip
+                key={option.key}
+                label={option.label}
+                selected={dayFilter === option.key}
+                onPress={() => setDayFilter(option.key)}
+              />
+            ))}
+          </View>
+        </ModeCard>
 
-        <View style={styles.filterRow}>
-          {SESSION_FILTERS.map((option) => (
-            <ModeChip
-              key={option.key}
-              label={option.label}
-              selected={sessionFilter === option.key}
-              onPress={() => setSessionFilter(option.key)}
-            />
-          ))}
-        </View>
+        <ModeCard variant="tinted" style={styles.filterTierCard}>
+          <ModeText variant="label" tone="tertiary" style={styles.filterTierLabel}>Session Scope</ModeText>
+          <View style={styles.filterRow}>
+            {SESSION_FILTERS.map((option) => (
+              <ModeChip
+                key={option.key}
+                label={option.label}
+                selected={sessionFilter === option.key}
+                onPress={() => setSessionFilter(option.key)}
+              />
+            ))}
+          </View>
+        </ModeCard>
 
-        <View style={styles.filterRow}>
-          {PRIORITY_FILTERS.map((option) => (
-            <ModeChip
-              key={option.key}
-              label={option.label}
-              selected={priorityFilter === option.key}
-              onPress={() => setPriorityFilter(option.key)}
-            />
-          ))}
-        </View>
+        <ModeCard variant="tinted" style={styles.filterTierCard}>
+          <ModeText variant="label" tone="tertiary" style={styles.filterTierLabel}>Priority</ModeText>
+          <View style={styles.filterRow}>
+            {PRIORITY_FILTERS.map((option) => (
+              <ModeChip
+                key={option.key}
+                label={option.label}
+                selected={priorityFilter === option.key}
+                onPress={() => setPriorityFilter(option.key)}
+              />
+            ))}
+          </View>
+        </ModeCard>
 
         {scheduleMutationError ? (
           <ModeCard variant="surface">
@@ -1814,7 +1830,11 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
               const isSavingSchedule = savingScheduleClientId === client.client_id;
               const scheduleDraft = scheduleDraftByClient[client.client_id] || buildClientScheduleDraft(client);
               return (
-                <ModeCard key={client.client_id} variant="surface">
+                <PremiumClientCard
+                  key={client.client_id}
+                  emphasis={client.priority_tier === 'critical' ? 'focus' : 'default'}
+                  style={styles.clientOperationalCard}
+                >
                   <View style={styles.clientHeaderRow}>
                     <ModeText variant="h3" style={styles.clientName}>{client.client_name || 'Client'}</ModeText>
                     <View style={[styles.priorityBadge, { backgroundColor: badgeVisual.backgroundColor, borderColor: badgeVisual.borderColor }]}>
@@ -1943,7 +1963,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
                     onPress={() => handleOpenClientDetail(client.client_id)}
                     style={styles.actionButton}
                   />
-                </ModeCard>
+                </PremiumClientCard>
               );
             })}
           </View>
@@ -1964,7 +1984,7 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0.72,
     marginBottom: theme.spacing[1],
   },
   loadingContainer: {
@@ -1980,16 +2000,26 @@ const styles = StyleSheet.create({
   actionButton: {
     marginTop: theme.spacing[2],
   },
+  heroTierCard: {
+    shadowColor: theme.colors.accent.primary,
+    shadowOpacity: 0.14,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 4,
+  },
+  actionsTierCard: {
+    paddingTop: theme.spacing[1],
+  },
   summaryActionRow: {
     flexDirection: 'row',
-    gap: theme.spacing[1],
+    gap: theme.spacing[2],
     marginTop: theme.spacing[2],
   },
   summaryActionButton: {
     flex: 1,
   },
   draftReviewCard: {
-    gap: theme.spacing[1],
+    gap: theme.spacing[2],
   },
   draftReviewHeader: {
     flexDirection: 'row',
@@ -2018,7 +2048,7 @@ const styles = StyleSheet.create({
   },
   draftReviewBody: {
     marginTop: theme.spacing[1] - 2,
-    gap: theme.spacing[1],
+    gap: theme.spacing[2],
   },
   draftReviewDraftTitle: {
     fontWeight: '700',
@@ -2038,8 +2068,19 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: theme.spacing[1],
   },
+  filterTierCard: {
+    marginBottom: 0,
+    paddingTop: theme.spacing[1],
+  },
+  filterTierLabel: {
+    marginBottom: theme.spacing[1],
+    letterSpacing: 0.6,
+  },
   clientList: {
-    gap: theme.spacing[1],
+    gap: theme.spacing[2],
+  },
+  clientOperationalCard: {
+    marginBottom: 0,
   },
   clientHeaderRow: {
     flexDirection: 'row',
@@ -2057,11 +2098,16 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   metaLine: {
-    marginTop: theme.spacing[1] - 2,
+    marginTop: theme.spacing[1],
   },
   scheduleEditorBlock: {
     marginTop: theme.spacing[2],
-    gap: theme.spacing[1] - 2,
+    gap: theme.spacing[1],
+    borderRadius: theme.radii.l,
+    borderWidth: 1,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    padding: theme.spacing[2],
   },
   weekdayChipRow: {
     flexDirection: 'row',
@@ -2079,7 +2125,7 @@ const styles = StyleSheet.create({
   scheduleActionRow: {
     flexDirection: 'row',
     gap: theme.spacing[1],
-    marginTop: theme.spacing[1] - 2,
+    marginTop: theme.spacing[1],
   },
   scheduleActionButton: {
     flex: 1,
@@ -2108,7 +2154,10 @@ const styles = StyleSheet.create({
   },
   summaryBlock: {
     marginTop: theme.spacing[2],
-    gap: theme.spacing[1] - 2,
+    gap: theme.spacing[1],
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.glass.borderSoft,
+    paddingTop: theme.spacing[2],
   },
   pointsList: {
     gap: theme.spacing[1] - 2,

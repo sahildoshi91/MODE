@@ -37,7 +37,7 @@ describe('Glass primitives', () => {
       );
     });
     expect(shell).toBeTruthy();
-    expect(flatten(shell.props.style)?.borderWidth).toBeUndefined();
+    expect(flatten(shell.props.style)?.borderWidth).toBe(1);
 
     act(() => tree.unmount());
   });
@@ -202,8 +202,8 @@ describe('Glass primitives', () => {
     });
     expect(aiShell).toBeTruthy();
     expect(userShell).toBeTruthy();
-    expect(flatten(aiShell.props.style)?.borderWidth).toBeUndefined();
-    expect(flatten(userShell.props.style)?.borderWidth).toBeUndefined();
+    expect(flatten(aiShell.props.style)?.borderWidth).toBe(1);
+    expect(flatten(userShell.props.style)?.borderWidth).toBe(1);
     expect(flatten(aiShell.props.style)?.maxWidth).toBe('74%');
     expect(flatten(userShell.props.style)?.maxWidth).toBe('74%');
 
