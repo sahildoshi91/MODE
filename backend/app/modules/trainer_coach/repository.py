@@ -6,6 +6,8 @@ from supabase import Client
 
 
 class TrainerCoachRepository:
+    _CLIENT_QUEUE_SOURCE_TYPES = ("chat", "generated_checkin_plan")
+
     def __init__(self, supabase: Client):
         self.supabase = supabase
 
@@ -26,6 +28,8 @@ class TrainerCoachRepository:
             )
             .eq("trainer_id", trainer_id)
             .in_("review_status", ["open"])
+            .in_("source_type", self._CLIENT_QUEUE_SOURCE_TYPES)
+            .not_.is_("client_id", None)
             .order("queue_priority", desc=True)
             .order("created_at", desc=True)
             .range(max(0, offset), max(0, offset) + max(1, limit) - 1)
@@ -40,6 +44,8 @@ class TrainerCoachRepository:
             .select("id")
             .eq("trainer_id", trainer_id)
             .eq("review_status", "open")
+            .in_("source_type", self._CLIENT_QUEUE_SOURCE_TYPES)
+            .not_.is_("client_id", None)
             .execute()
         ).data or []
         return len(rows)

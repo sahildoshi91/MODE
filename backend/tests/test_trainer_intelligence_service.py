@@ -87,6 +87,15 @@ class FakeTrainerIntelligenceRepository:
         return [{"id": "workout-1", "created_at": "2026-04-10T09:30:00+00:00"}]
 
 
+class FakeMemoryMatcherRepository:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def list_client_memory(self, trainer_id, client_id, limit):
+        del trainer_id, client_id, limit
+        return list(self.rows)
+
+
 class TrainerIntelligenceServiceTests(unittest.TestCase):
     def test_assemble_prompt_context_layers_and_filters_memory(self):
         service = TrainerIntelligenceService(FakeTrainerIntelligenceRepository())
@@ -113,6 +122,101 @@ class TrainerIntelligenceServiceTests(unittest.TestCase):
         self.assertNotIn("Internal-only note should not be injected.", context.system_appendix)
         self.assertIn("[LAYER_3_DYNAMIC_ANALYTICS]", context.system_appendix)
         self.assertIn("entrypoint: generated_workout", context.system_appendix)
+
+    def test_memory_theme_matcher_returns_true_for_strong_token_overlap(self):
+        service = TrainerIntelligenceService(
+            FakeMemoryMatcherRepository(
+                [
+                    {
+                        "memory_type": "note",
+                        "memory_key": "late_night_snacking_stress",
+                        "updated_at": "2026-04-11T17:00:00+00:00",
+                        "value_json": {
+                            "visibility": "ai_usable",
+                            "is_archived": False,
+                            "text": "Client struggles with late night snacking after stressful workdays and loses consistency.",
+                            "tags": ["nutrition", "stress", "consistency"],
+                        },
+                    }
+                ]
+            )
+        )
+
+        result = service.is_question_covered_by_memory_theme(
+            trainer_id="trainer-1",
+            client_id="client-1",
+            question="Late night snacking after stressful workdays is hurting my consistency.",
+        )
+
+        self.assertTrue(result["covered"])
+        self.assertIn(result["reason"], {"phrase_containment", "token_overlap"})
+
+    def test_memory_theme_matcher_returns_false_for_weak_overlap(self):
+        service = TrainerIntelligenceService(
+            FakeMemoryMatcherRepository(
+                [
+                    {
+                        "memory_type": "note",
+                        "memory_key": "hydration",
+                        "updated_at": "2026-04-11T17:00:00+00:00",
+                        "value_json": {
+                            "visibility": "ai_usable",
+                            "is_archived": False,
+                            "text": "Client forgets hydration during afternoon sessions.",
+                            "tags": ["hydration"],
+                        },
+                    }
+                ]
+            )
+        )
+
+        result = service.is_question_covered_by_memory_theme(
+            trainer_id="trainer-1",
+            client_id="client-1",
+            question="Can I swap barbell back squats for leg press today?",
+        )
+
+        self.assertFalse(result["covered"])
+        self.assertEqual(result["reason"], "no_strong_match")
+
+    def test_memory_theme_matcher_ignores_internal_only_and_archived_memory(self):
+        service = TrainerIntelligenceService(
+            FakeMemoryMatcherRepository(
+                [
+                    {
+                        "memory_type": "note",
+                        "memory_key": "internal_note",
+                        "updated_at": "2026-04-11T17:00:00+00:00",
+                        "value_json": {
+                            "visibility": "internal_only",
+                            "is_archived": False,
+                            "text": "Client struggles with late night snacking after stressful workdays.",
+                            "tags": ["nutrition"],
+                        },
+                    },
+                    {
+                        "memory_type": "note",
+                        "memory_key": "archived_note",
+                        "updated_at": "2026-04-11T16:00:00+00:00",
+                        "value_json": {
+                            "visibility": "ai_usable",
+                            "is_archived": True,
+                            "text": "Client struggles with late night snacking after stressful workdays.",
+                            "tags": ["nutrition"],
+                        },
+                    },
+                ]
+            )
+        )
+
+        result = service.is_question_covered_by_memory_theme(
+            trainer_id="trainer-1",
+            client_id="client-1",
+            question="I keep snacking late at night after stressful workdays and my consistency drops. How should I handle it?",
+        )
+
+        self.assertFalse(result["covered"])
+        self.assertEqual(result["reason"], "no_ai_usable_memory")
 
 
 if __name__ == "__main__":

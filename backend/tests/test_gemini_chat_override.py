@@ -172,6 +172,28 @@ class FakeTrainerPersonaRepository:
         return dict(self.default_persona)
 
 
+class FakeTrainerIntelligenceService:
+    def __init__(self, *, covered: bool = False, reason: str = "no_strong_match", matched_memory_key: str | None = None):
+        self.covered = covered
+        self.reason = reason
+        self.matched_memory_key = matched_memory_key
+        self.calls = []
+
+    def is_question_covered_by_memory_theme(self, *, trainer_id, client_id, question):
+        self.calls.append(
+            {
+                "trainer_id": trainer_id,
+                "client_id": client_id,
+                "question": question,
+            }
+        )
+        return {
+            "covered": self.covered,
+            "reason": self.reason,
+            "matched_memory_key": self.matched_memory_key,
+        }
+
+
 class FakeTrainerOnboardingService:
     def __init__(self):
         self.calls = []
@@ -436,7 +458,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
             client_context={"platform": "ios"},
         )
 
-    def _build_service(self, anthropic_enabled=False):
+    def _build_service(self, anthropic_enabled=False, trainer_intelligence_service=None):
         with patch("app.modules.conversation.service.GeminiClient", return_value=FakeGeminiClient()):
             with patch("app.modules.conversation.service.OpenAIClient", return_value=FakeOpenAIClient()):
                 with patch.object(sys.modules["app.modules.conversation.service"].settings, "anthropic_api_key", "test-anthropic-key" if anthropic_enabled else None):
@@ -447,9 +469,10 @@ class ConversationServiceRoutingTests(unittest.TestCase):
                             self.trainer_review_service,
                             self.trainer_persona_repository,
                             trainer_onboarding_service=self.trainer_onboarding_service,
+                            trainer_intelligence_service=trainer_intelligence_service,
                         )
 
-    def _build_service_with_repository(self, repository, anthropic_enabled=False):
+    def _build_service_with_repository(self, repository, anthropic_enabled=False, trainer_intelligence_service=None):
         with patch("app.modules.conversation.service.GeminiClient", return_value=FakeGeminiClient()):
             with patch("app.modules.conversation.service.OpenAIClient", return_value=FakeOpenAIClient()):
                 with patch.object(sys.modules["app.modules.conversation.service"].settings, "anthropic_api_key", "test-anthropic-key" if anthropic_enabled else None):
@@ -460,6 +483,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
                             self.trainer_review_service,
                             self.trainer_persona_repository,
                             trainer_onboarding_service=self.trainer_onboarding_service,
+                            trainer_intelligence_service=trainer_intelligence_service,
                         )
 
     def test_handle_chat_uses_default_fast_route_with_gemini(self):
@@ -579,6 +603,64 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertEqual(response.route_debug.selected_provider, "anthropic")
         self.assertEqual(response.route_debug.execution_provider, "gemini")
         self.assertEqual(response.conversation_usage.last_execution_provider, "gemini")
+
+    def test_low_confidence_client_question_skips_trainer_review_when_memory_theme_covered(self):
+        intelligence_service = FakeTrainerIntelligenceService(
+            covered=True,
+            reason="token_overlap",
+            matched_memory_key="preference_late_night_snacking",
+        )
+        service = self._build_service(trainer_intelligence_service=intelligence_service)
+        request = ChatRequest(
+            message="Coach, I keep snacking late at night after stressful workdays. Give me the tough-love version.",
+            client_context={"trainer_persona_requested": True, "retrieval_confidence": 0.3},
+        )
+
+        response = service.handle_chat("user-123", self.trainer_context, request)
+
+        self.assertEqual(response.route_debug.flow, "persona_coach")
+        self.assertEqual(len(self.trainer_review_service.queued), 0)
+        self.assertEqual(len(intelligence_service.calls), 1)
+        self.assertEqual(intelligence_service.calls[0]["client_id"], "client-123")
+
+    def test_low_confidence_client_question_queues_when_memory_theme_not_covered(self):
+        intelligence_service = FakeTrainerIntelligenceService(covered=False, reason="no_strong_match")
+        service = self._build_service(trainer_intelligence_service=intelligence_service)
+        request = ChatRequest(
+            message="Coach, I'm feeling guilty and unmotivated. Give me the tough-love version.",
+            client_context={"trainer_persona_requested": True, "retrieval_confidence": 0.3},
+        )
+
+        response = service.handle_chat("user-123", self.trainer_context, request)
+
+        self.assertEqual(response.route_debug.flow, "persona_coach")
+        self.assertEqual(len(self.trainer_review_service.queued), 1)
+        self.assertEqual(len(intelligence_service.calls), 1)
+
+    def test_trainer_only_context_does_not_queue_review_even_when_route_needs_review(self):
+        intelligence_service = FakeTrainerIntelligenceService(covered=False, reason="no_strong_match")
+        service = self._build_service(trainer_intelligence_service=intelligence_service)
+        trainer_only_context = TrainerContext(
+            tenant_id="tenant-123",
+            trainer_id="trainer-123",
+            trainer_user_id="trainer-user-123",
+            trainer_display_name="Coach Alex",
+            client_id=None,
+            persona_id="persona-123",
+            persona_name="Strength Coach",
+            trainer_onboarding_completed=True,
+            trainer_onboarding_status="completed",
+        )
+        request = ChatRequest(
+            message="Coach, I'm feeling guilty and unmotivated. Give me the tough-love version.",
+            client_context={"trainer_persona_requested": True, "retrieval_confidence": 0.3},
+        )
+
+        response = service.handle_chat("user-123", trainer_only_context, request)
+
+        self.assertEqual(response.route_debug.flow, "persona_coach")
+        self.assertEqual(len(self.trainer_review_service.queued), 0)
+        self.assertEqual(len(intelligence_service.calls), 0)
 
     def test_persona_route_uses_anthropic_when_configured(self):
         service = self._build_service(anthropic_enabled=True)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import statistics
 from datetime import datetime
 from typing import Any
@@ -15,6 +16,56 @@ LEGACY_TO_CANONICAL_MODE = {
     "BLUE": "RECOVER",
     "RED": "REST",
 }
+
+MEMORY_THEME_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "any",
+    "are",
+    "as",
+    "at",
+    "be",
+    "but",
+    "by",
+    "for",
+    "from",
+    "how",
+    "i",
+    "if",
+    "in",
+    "into",
+    "is",
+    "it",
+    "me",
+    "my",
+    "of",
+    "on",
+    "or",
+    "our",
+    "so",
+    "that",
+    "the",
+    "their",
+    "them",
+    "there",
+    "they",
+    "this",
+    "to",
+    "up",
+    "we",
+    "what",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "with",
+    "you",
+    "your",
+}
+
+ALPHANUMERIC_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 
 
 class TrainerIntelligenceService:
@@ -113,6 +164,65 @@ class TrainerIntelligenceService:
                 },
             },
         )
+
+    def is_question_covered_by_memory_theme(
+        self,
+        *,
+        trainer_id: str,
+        client_id: str,
+        question: str,
+    ) -> dict[str, Any]:
+        normalized_question_phrase = self._normalize_memory_theme_phrase(question)
+        question_tokens = self._normalize_memory_theme_tokens(question)
+        if not question_tokens:
+            return {
+                "covered": False,
+                "reason": "question_missing_signal",
+            }
+
+        memory_rows = self.repository.list_client_memory(
+            trainer_id,
+            client_id,
+            limit=self.MEMORY_LIMIT * 4,
+        )
+        ai_usable_memory = self._filter_ai_usable_memory(memory_rows)
+        if not ai_usable_memory:
+            return {
+                "covered": False,
+                "reason": "no_ai_usable_memory",
+            }
+
+        for memory in ai_usable_memory:
+            candidate_text = self._memory_theme_candidate_text(memory)
+            candidate_phrase = self._normalize_memory_theme_phrase(candidate_text)
+            candidate_tokens = self._normalize_memory_theme_tokens(candidate_text)
+            if not candidate_tokens:
+                continue
+
+            if self._has_strong_phrase_containment(normalized_question_phrase, candidate_phrase):
+                return {
+                    "covered": True,
+                    "reason": "phrase_containment",
+                    "matched_memory_key": memory.get("memory_key"),
+                }
+
+            overlap_count = len(question_tokens.intersection(candidate_tokens))
+            if overlap_count < 3:
+                continue
+            overlap_ratio = overlap_count / max(1, len(question_tokens))
+            if overlap_ratio >= 0.65:
+                return {
+                    "covered": True,
+                    "reason": "token_overlap",
+                    "matched_memory_key": memory.get("memory_key"),
+                    "overlap_ratio": round(overlap_ratio, 3),
+                    "overlap_count": overlap_count,
+                }
+
+        return {
+            "covered": False,
+            "reason": "no_strong_match",
+        }
 
     def _build_trainer_global_lines(
         self,
@@ -317,3 +427,44 @@ class TrainerIntelligenceService:
         for value in values:
             counts[value] = counts.get(value, 0) + 1
         return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+    def _memory_theme_candidate_text(self, memory: dict[str, Any]) -> str:
+        parts: list[str] = []
+        memory_text = str(memory.get("text") or "").strip()
+        if memory_text:
+            parts.append(memory_text)
+
+        memory_key = str(memory.get("memory_key") or "").strip()
+        if memory_key:
+            parts.append(memory_key)
+
+        tags = memory.get("tags")
+        if isinstance(tags, list):
+            normalized_tags = [str(tag).strip() for tag in tags if str(tag or "").strip()]
+            if normalized_tags:
+                parts.append(" ".join(normalized_tags))
+
+        return " ".join(parts)
+
+    def _normalize_memory_theme_tokens(self, text: str) -> set[str]:
+        tokens = ALPHANUMERIC_TOKEN_PATTERN.findall((text or "").lower())
+        return {
+            token
+            for token in tokens
+            if len(token) >= 3 and token not in MEMORY_THEME_STOPWORDS
+        }
+
+    def _normalize_memory_theme_phrase(self, text: str) -> str:
+        tokens = ALPHANUMERIC_TOKEN_PATTERN.findall((text or "").lower())
+        if not tokens:
+            return ""
+        return " ".join(tokens)
+
+    def _has_strong_phrase_containment(self, left: str, right: str) -> bool:
+        if not left or not right:
+            return False
+        if len(left) >= 24 and left in right:
+            return True
+        if len(right) >= 24 and right in left:
+            return True
+        return False

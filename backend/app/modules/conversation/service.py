@@ -714,17 +714,68 @@ class ConversationService:
         request: ChatRequest,
         assistant_message: str,
     ) -> None:
-        if not route.needs_trainer_review or not trainer_context.trainer_id:
+        trainer_id = trainer_context.trainer_id
+        client_id = trainer_context.client_id
+        if not route.needs_trainer_review or not trainer_id or not client_id:
             return
+
+        covered, reason, matched_memory_key = self._is_question_covered_by_memory_theme(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            question=request.message,
+        )
+        if covered:
+            logger.info(
+                "Skipped trainer review queueing due to memory-theme coverage trainer_id=%s client_id=%s conversation_id=%s reason=%s matched_memory_key=%s",
+                trainer_id,
+                client_id,
+                conversation_id,
+                reason,
+                matched_memory_key,
+            )
+            return
+
         self.trainer_review_service.queue_unanswered_question(
-            trainer_id=trainer_context.trainer_id,
-            client_id=trainer_context.client_id,
+            trainer_id=trainer_id,
+            client_id=client_id,
             conversation_id=conversation_id,
             message_id=user_message_id,
             user_question=request.message,
             model_draft_answer=assistant_message,
             confidence_score=route.retrieval_confidence,
         )
+
+    def _is_question_covered_by_memory_theme(
+        self,
+        *,
+        trainer_id: str,
+        client_id: str,
+        question: str,
+    ) -> tuple[bool, str | None, str | None]:
+        if not self.trainer_intelligence_service:
+            return False, None, None
+
+        try:
+            result = self.trainer_intelligence_service.is_question_covered_by_memory_theme(
+                trainer_id=trainer_id,
+                client_id=client_id,
+                question=question,
+            )
+        except Exception:
+            logger.warning(
+                "Trainer review memory-theme coverage check failed; queueing by default trainer_id=%s client_id=%s",
+                trainer_id,
+                client_id,
+                exc_info=True,
+            )
+            return False, None, None
+
+        covered = bool(result.get("covered"))
+        reason_raw = result.get("reason")
+        reason = str(reason_raw) if reason_raw else None
+        matched_memory_key_raw = result.get("matched_memory_key")
+        matched_memory_key = str(matched_memory_key_raw) if matched_memory_key_raw else None
+        return covered, reason, matched_memory_key
 
     def _queue_trainer_review_safely(
         self,
