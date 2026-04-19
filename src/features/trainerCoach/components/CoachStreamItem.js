@@ -27,7 +27,8 @@ function styleByKind(kind) {
   if (kind === 'trainer_input') {
     return {
       container: styles.trainerInput,
-      textTone: 'inverse',
+      textTone: 'primary',
+      textStyle: styles.trainerInputText,
     };
   }
   if (kind === 'internal_ai_private') {
@@ -51,6 +52,7 @@ function styleByKind(kind) {
   return {
     container: styles.system,
     textTone: 'secondary',
+    textStyle: null,
   };
 }
 
@@ -63,7 +65,9 @@ function CoachStreamItem({ item }) {
         {resolveKindLabel(kind)}
       </ModeText>
       <View style={[styles.bubble, style.container]}>
-        <ModeText variant="bodySm" tone={style.textTone}>{item?.text || ''}</ModeText>
+        <ModeText variant="bodySm" tone={style.textTone} style={style.textStyle}>
+          {item?.text || ''}
+        </ModeText>
       </View>
     </View>
   );
@@ -107,6 +111,9 @@ const styles = StyleSheet.create({
   trainerInput: {
     backgroundColor: theme.colors.cta.primaryBg,
     borderColor: theme.colors.cta.primaryBorder,
+  },
+  trainerInputText: {
+    color: '#FFFFFF',
   },
   internal: {
     backgroundColor: theme.colors.surface.elevated,

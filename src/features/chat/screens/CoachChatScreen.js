@@ -27,6 +27,36 @@ import { useChatConversation } from '../hooks/useChatConversation';
 const KEYBOARD_OPEN_DOCK_PADDING = theme.spacing[2];
 const COPY_FEEDBACK_TIMEOUT_MS = 2200;
 const NEAR_BOTTOM_THRESHOLD_PX = 120;
+const SAME_SENDER_MESSAGE_GAP = 5;
+const DIFFERENT_SENDER_MESSAGE_GAP = 14;
+
+function normalizeMessageRole(role) {
+  if (role === 'user') {
+    return 'user';
+  }
+  if (role === 'assistant') {
+    return 'assistant';
+  }
+  return null;
+}
+
+function resolveMessageGroupPosition(previousRole, currentRole, nextRole) {
+  if (!currentRole) {
+    return 'single';
+  }
+  const sameAsPrevious = previousRole === currentRole;
+  const sameAsNext = nextRole === currentRole;
+  if (!sameAsPrevious && !sameAsNext) {
+    return 'single';
+  }
+  if (!sameAsPrevious && sameAsNext) {
+    return 'start';
+  }
+  if (sameAsPrevious && sameAsNext) {
+    return 'middle';
+  }
+  return 'end';
+}
 
 function resolveSessionIntro(launchContext) {
   const entrypoint = String(launchContext?.entrypoint || '').trim().toLowerCase();
@@ -327,7 +357,12 @@ export default function CoachChatScreen({
   }, []);
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen} atmosphere="chat">
+    <SafeScreen
+      includeTopInset={false}
+      style={styles.screen}
+      atmosphere="chat"
+      atmosphereOverlayStrength={1.08}
+    >
       <HeaderBar
         title="Coach Chat"
         onBack={onBack}
@@ -353,9 +388,19 @@ export default function CoachChatScreen({
               updateScrollMetrics({ layoutHeight: event?.nativeEvent?.layout?.height });
             }}
             renderItem={({ item, index }) => {
+              const previousRole = index > 0 ? normalizeMessageRole(messages[index - 1]?.role) : null;
+              const currentRole = normalizeMessageRole(item?.role);
+              const nextRole = index < messages.length - 1
+                ? normalizeMessageRole(messages[index + 1]?.role)
+                : null;
+              const showSpeakerLabel = previousRole !== currentRole;
+              const groupPosition = resolveMessageGroupPosition(previousRole, currentRole, nextRole);
+              const messageSpacing = nextRole === currentRole
+                ? SAME_SENDER_MESSAGE_GAP
+                : DIFFERENT_SENDER_MESSAGE_GAP;
               if (item?.kind === 'assistant_progress') {
                 return (
-                  <View style={styles.messageItem}>
+                  <View style={[styles.messageItem, { marginBottom: messageSpacing }]}>
                     <TypingIndicator text={item?.text} />
                   </View>
                 );
@@ -379,16 +424,15 @@ export default function CoachChatScreen({
               const totalCount = Number.isFinite(Number(checklist?.total))
                 ? Number(checklist.total)
                 : samples.length;
-              const previousRole = index > 0 ? messages[index - 1]?.role : null;
-              const showSpeakerLabel = index === 0 || previousRole !== item.role;
               return (
-                <View style={styles.messageItem}>
+                <View style={[styles.messageItem, { marginBottom: messageSpacing }]}>
                   <ChatBubble
                     role={item.role}
                     text={item.text}
                     isError={item.isError}
                     fallbackTriggered={item.fallbackTriggered}
                     showSpeakerLabel={showSpeakerLabel}
+                    groupPosition={groupPosition}
                   />
                   {stepPreview ? (
                     <View style={styles.previewCard}>
@@ -634,7 +678,7 @@ const styles = StyleSheet.create({
   },
   messageItem: {
     width: '100%',
-    marginBottom: 2,
+    marginBottom: 0,
   },
   threadSpacer: {
     height: theme.spacing[1],
@@ -693,8 +737,8 @@ const styles = StyleSheet.create({
   previewCard: {
     alignSelf: 'flex-start',
     width: '88%',
-    marginTop: -theme.spacing[1] + 2,
-    marginBottom: theme.spacing[1],
+    marginTop: 6,
+    marginBottom: 0,
     marginLeft: theme.spacing[1],
     borderRadius: theme.radii.m,
     borderWidth: 1,
@@ -712,8 +756,8 @@ const styles = StyleSheet.create({
   },
   checklistCard: {
     width: '92%',
-    marginTop: -theme.spacing[1] + 2,
-    marginBottom: theme.spacing[1],
+    marginTop: 6,
+    marginBottom: 0,
     marginLeft: theme.spacing[1],
     borderRadius: theme.radii.m,
     borderWidth: 1,

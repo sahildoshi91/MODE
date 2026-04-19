@@ -183,6 +183,74 @@ describe('CoachChatScreen', () => {
     });
   });
 
+  it('computes sender grouping metadata and keeps speaker labels on group starts', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        { id: 'assistant-1', role: 'assistant', text: 'Assistant 1' },
+        { id: 'assistant-2', role: 'assistant', text: 'Assistant 2' },
+        { id: 'user-1', role: 'user', text: 'User 1' },
+        { id: 'user-2', role: 'user', text: 'User 2' },
+        { id: 'user-3', role: 'user', text: 'User 3' },
+        { id: 'assistant-3', role: 'assistant', text: 'Assistant 3' },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    let tree;
+    act(() => {
+      tree = renderer.create(
+        <CoachChatScreen
+          accessToken="trainer-token"
+          launchContext={{ entrypoint: 'trainer_agent_training', onboarding_action: 'review' }}
+        />,
+      );
+    });
+
+    const bubbleProps = mockChatBubble.mock.calls.map(([props]) => props);
+    const propsForText = (text) => bubbleProps.find((item) => item?.text === text);
+
+    expect(propsForText('Assistant 1')).toMatchObject({
+      role: 'assistant',
+      groupPosition: 'start',
+      showSpeakerLabel: true,
+    });
+    expect(propsForText('Assistant 2')).toMatchObject({
+      role: 'assistant',
+      groupPosition: 'end',
+      showSpeakerLabel: false,
+    });
+    expect(propsForText('User 1')).toMatchObject({
+      role: 'user',
+      groupPosition: 'start',
+      showSpeakerLabel: true,
+    });
+    expect(propsForText('User 2')).toMatchObject({
+      role: 'user',
+      groupPosition: 'middle',
+      showSpeakerLabel: false,
+    });
+    expect(propsForText('User 3')).toMatchObject({
+      role: 'user',
+      groupPosition: 'end',
+      showSpeakerLabel: false,
+    });
+    expect(propsForText('Assistant 3')).toMatchObject({
+      role: 'assistant',
+      groupPosition: 'single',
+      showSpeakerLabel: true,
+    });
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
   it('copies diagnostics bundle from copy error control', async () => {
     const tree = renderScreen();
 

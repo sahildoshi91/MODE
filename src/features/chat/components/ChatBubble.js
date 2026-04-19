@@ -12,6 +12,7 @@ export default function ChatBubble({
   fallbackTriggered = false,
   showSpeakerLabel = true,
   speakerLabel,
+  groupPosition = 'single',
 }) {
   const isUser = role === 'user';
   const resolvedSpeakerLabel = speakerLabel || (isUser ? 'You' : 'Coach');
@@ -24,6 +25,7 @@ export default function ChatBubble({
           isError={isError}
           showSpeakerLabel={showSpeakerLabel}
           speakerLabel={resolvedSpeakerLabel}
+          groupPosition={groupPosition}
         />
       ) : (
         <ChatBubbleAI
@@ -31,6 +33,7 @@ export default function ChatBubble({
           isError={isError}
           showSpeakerLabel={showSpeakerLabel}
           speakerLabel={resolvedSpeakerLabel}
+          groupPosition={groupPosition}
         />
       )}
 
@@ -48,8 +51,8 @@ export default function ChatBubble({
 const styles = StyleSheet.create({
   row: {
     width: '100%',
-    marginBottom: theme.spacing[1],
-    gap: 0,
+    marginBottom: 0,
+    gap: 4,
   },
   assistantRow: {
     alignItems: 'flex-start',

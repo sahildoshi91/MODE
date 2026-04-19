@@ -1,8 +1,10 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, TextInput, View } from 'react-native';
 
 import {
+  ChatBubbleAI,
+  ChatBubbleUser,
   GlassInputBar,
   GlassPill,
   GlassSlider,
@@ -160,6 +162,107 @@ describe('Glass primitives', () => {
       return style?.width === '40%';
     });
     expect(fill).toBeTruthy();
+
+    act(() => tree.unmount());
+  });
+
+  it('applies differentiated chat bubble contrast tokens and width rhythm', () => {
+    let tree;
+    act(() => {
+      tree = renderer.create(
+        <View>
+          <ChatBubbleAI text="AI bubble text" showSpeakerLabel={false} />
+          <ChatBubbleUser text="User bubble text" showSpeakerLabel={false} />
+        </View>,
+      );
+    });
+
+    const candidates = tree.root.findAll((node) => node.type === View && node.props?.style);
+    const aiShell = candidates.find((node) => {
+      const style = flatten(node.props.style);
+      return (
+        style?.backgroundColor === 'rgba(16, 28, 48, 0.58)'
+        && style?.borderColor === 'rgba(214, 230, 255, 0.24)'
+      );
+    });
+    const userShell = candidates.find((node) => {
+      const style = flatten(node.props.style);
+      return (
+        style?.backgroundColor === 'rgba(95, 145, 236, 0.38)'
+        && style?.borderColor === 'rgba(152, 196, 255, 0.50)'
+      );
+    });
+    expect(aiShell).toBeTruthy();
+    expect(userShell).toBeTruthy();
+    expect(flatten(aiShell.props.style)?.maxWidth).toBe('74%');
+    expect(flatten(userShell.props.style)?.maxWidth).toBe('74%');
+
+    const aiText = tree.root.find((node) => node.type === Text && node.props?.children === 'AI bubble text');
+    const userText = tree.root.find((node) => node.type === Text && node.props?.children === 'User bubble text');
+    expect(flatten(aiText.props.style)?.color).toBe('rgba(255, 255, 255, 0.94)');
+    expect(flatten(userText.props.style)?.color).toBe('#FFFFFF');
+
+    act(() => tree.unmount());
+  });
+
+  it('applies grouped chat bubble corner chaining and padding rhythm', () => {
+    let tree;
+    act(() => {
+      tree = renderer.create(
+        <View>
+          <ChatBubbleAI text="AI grouped" showSpeakerLabel={false} groupPosition="middle" />
+          <ChatBubbleUser text="User grouped" showSpeakerLabel={false} groupPosition="middle" />
+        </View>,
+      );
+    });
+
+    const candidates = tree.root.findAll((node) => node.type === View && node.props?.style);
+    const aiGroupedContent = candidates.find((node) => {
+      const style = flatten(node.props.style);
+      return (
+        style?.paddingHorizontal === 14
+        && style?.paddingVertical === 10
+        && style?.borderTopLeftRadius === 10
+        && style?.borderTopRightRadius === 16
+        && style?.borderBottomLeftRadius === 10
+        && style?.borderBottomRightRadius === 16
+      );
+    });
+    const userGroupedContent = candidates.find((node) => {
+      const style = flatten(node.props.style);
+      return (
+        style?.paddingHorizontal === 14
+        && style?.paddingVertical === 10
+        && style?.borderTopLeftRadius === 16
+        && style?.borderTopRightRadius === 10
+        && style?.borderBottomLeftRadius === 16
+        && style?.borderBottomRightRadius === 10
+      );
+    });
+    expect(aiGroupedContent).toBeTruthy();
+    expect(userGroupedContent).toBeTruthy();
+
+    act(() => tree.unmount());
+  });
+
+  it('uses high-contrast text and placeholder styling in GlassInputBar', () => {
+    let tree;
+    act(() => {
+      tree = renderer.create(
+        <View>
+          <GlassInputBar
+            value="Need a training adjustment"
+            onChangeText={() => {}}
+            onSend={() => {}}
+            placeholder="Tell your coach what you need..."
+          />
+        </View>,
+      );
+    });
+
+    const input = tree.root.findByType(TextInput);
+    expect(input.props.placeholderTextColor).toBe('rgba(255, 255, 255, 0.72)');
+    expect(flatten(input.props.style)?.color).toBe('rgba(255, 255, 255, 0.95)');
 
     act(() => tree.unmount());
   });
