@@ -1,0 +1,2 @@
+"""Trainer coach workspace module."""
+

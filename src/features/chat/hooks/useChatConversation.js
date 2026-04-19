@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
-import { sendChatMessage } from '../services/chatApi';
+import { getChatHistory, sendChatMessage } from '../services/chatApi';
 
 const DEFAULT_WELCOME_MESSAGE = 'I am here to help you make steady progress that fits your day. Share what you need and we will choose the next smart step together.';
 const DEFAULT_QUICK_REPLIES = ['Plan my next best action', 'Adjust today\'s training', 'Help with consistency'];
@@ -44,6 +44,12 @@ const NUTRITION_ADJUSTMENT_QUICK_REPLIES = [
   'Increase the protein',
   'Make this easier to follow',
 ];
+const CHAT_HISTORY_PATH_PREFIX = '/api/v1/chat/history';
+const STALE_CHAT_HISTORY_WARNING_ID = 'assistant-stale-chat-history-route';
+const STALE_CHAT_HISTORY_ROUTE_MESSAGE = (
+  'The running backend is missing chat history route support (/api/v1/chat/history). '
+  + 'Restart or redeploy backend from current repo code, then tap Retry.'
+);
 
 function normalizeOnboardingAction(value) {
   if (typeof value !== 'string') {
@@ -72,6 +78,77 @@ function buildOnboardingBootstrapErrorMessage(rawMessage) {
     return `${message}\n\nBackend onboarding storage is missing or unavailable. Apply onboarding migrations, then tap Retry to launch review or retrain again.`;
   }
   return `${message}\n\nI could not complete the onboarding launch. Tap Retry below to try again.`;
+}
+
+function mapHydratedHistoryMessages(payload) {
+  const historyItems = Array.isArray(payload?.items) ? payload.items : [];
+  if (!historyItems.length) {
+    return [];
+  }
+  return historyItems
+    .filter((item) => typeof item?.message_text === 'string' && item.message_text.trim().length > 0)
+    .map((item) => ({
+      id: String(item?.id || `history-${Date.now()}`),
+      role: item?.role === 'user' ? 'user' : 'assistant',
+      text: item.message_text,
+      kind: typeof item?.kind === 'string' ? item.kind : 'chat_message',
+      visibility: typeof item?.visibility === 'string' ? item.visibility : 'trainer_private',
+      status: typeof item?.status === 'string' ? item.status : 'confirmed',
+      createdAt: item?.created_at || null,
+    }));
+}
+
+function isStaleChatHistoryRouteError(error) {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const status = Number(error?.status);
+  const message = String(error?.message || '').trim().toLowerCase();
+  const requestPath = String(error?.request_path || error?.path || '').trim();
+  return (
+    status === 404
+    && message === 'not found'
+    && requestPath.startsWith(CHAT_HISTORY_PATH_PREFIX)
+  );
+}
+
+function buildStaleChatHistoryRouteErrorDetails(error) {
+  const requestPath = typeof error?.request_path === 'string'
+    ? error.request_path
+    : (typeof error?.path === 'string' ? error.path : CHAT_HISTORY_PATH_PREFIX);
+  return {
+    stage: 'history_hydration',
+    path: requestPath,
+    request_path: requestPath,
+    status: Number(error?.status || 404),
+    resolved_api_base_url: typeof error?.api_base_url === 'string'
+      ? error.api_base_url
+      : (typeof error?.resolved_api_base_url === 'string' ? error.resolved_api_base_url : null),
+    attempted_base_urls: Array.isArray(error?.attempted_base_urls)
+      ? error.attempted_base_urls
+      : [],
+    last_successful_base_url: typeof error?.last_successful_base_url === 'string'
+      ? error.last_successful_base_url
+      : null,
+    raw_error_message: typeof error?.message === 'string' ? error.message : 'Not Found',
+    is_stale_chat_history_route: true,
+  };
+}
+
+function appendStaleChatHistoryWarning(messages) {
+  const existing = Array.isArray(messages) ? messages : [];
+  if (existing.some((item) => item?.id === STALE_CHAT_HISTORY_WARNING_ID)) {
+    return existing;
+  }
+  return [
+    ...existing,
+    {
+      id: STALE_CHAT_HISTORY_WARNING_ID,
+      role: 'assistant',
+      text: STALE_CHAT_HISTORY_ROUTE_MESSAGE,
+      isError: true,
+    },
+  ];
 }
 
 function buildLaunchContextPayload(launchContext) {
@@ -228,6 +305,7 @@ export function useChatConversation(accessToken, launchContext = null) {
   const [quickReplies, setQuickReplies] = useState(() => buildInitialQuickReplies(launchContextPayload));
   const [isSending, setIsSending] = useState(false);
   const [isBootstrapping, setIsBootstrapping] = useState(() => shouldBootstrapTrainerOnboarding);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [error, setError] = useState(null);
   const [errorDetails, setErrorDetails] = useState(null);
   const [failedRequest, setFailedRequest] = useState(null);
@@ -245,7 +323,60 @@ export function useChatConversation(accessToken, launchContext = null) {
     setErrorDetails(null);
     setFailedRequest(null);
     setIsBootstrapping(shouldBootstrapTrainerOnboarding);
+    setIsHistoryLoading(false);
   }, [launchContextPayload, shouldBootstrapTrainerOnboarding]);
+
+  const hydrateHistory = useCallback(async ({ isActive = () => true } = {}) => {
+    try {
+      const payload = await getChatHistory({ accessToken, limit: 120 });
+      if (!isActive()) {
+        return false;
+      }
+
+      const hydratedMessages = mapHydratedHistoryMessages(payload);
+      if (hydratedMessages.length > 0) {
+        setConversationId(payload?.conversation_id || null);
+        setMessages(hydratedMessages);
+        setQuickReplies([]);
+      } else {
+        setMessages((current) => current.filter((item) => item?.id !== STALE_CHAT_HISTORY_WARNING_ID));
+      }
+      setError(null);
+      setErrorDetails(null);
+      setFailedRequest((current) => (current?.type === 'history' ? null : current));
+      return true;
+    } catch (requestError) {
+      if (!isActive()) {
+        return false;
+      }
+      if (isStaleChatHistoryRouteError(requestError)) {
+        setError(STALE_CHAT_HISTORY_ROUTE_MESSAGE);
+        setErrorDetails(buildStaleChatHistoryRouteErrorDetails(requestError));
+        setFailedRequest({ type: 'history' });
+        setMessages((current) => appendStaleChatHistoryWarning(current));
+      }
+      return false;
+    }
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (!accessToken || shouldBootstrapTrainerOnboarding) {
+      setIsHistoryLoading(false);
+      return;
+    }
+    let isActive = true;
+    setIsHistoryLoading(true);
+    hydrateHistory({ isActive: () => isActive })
+      .finally(() => {
+        if (isActive) {
+          setIsHistoryLoading(false);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [accessToken, hydrateHistory, launchContextPayload, shouldBootstrapTrainerOnboarding]);
 
   const requestBootstrap = async () => sendChatMessage({
     accessToken,
@@ -382,6 +513,17 @@ export function useChatConversation(accessToken, launchContext = null) {
     if (!failedRequest || isSending || isBootstrapping) {
       return false;
     }
+    if (failedRequest.type === 'history') {
+      if (!accessToken || shouldBootstrapTrainerOnboarding) {
+        return false;
+      }
+      setIsHistoryLoading(true);
+      try {
+        return await hydrateHistory();
+      } finally {
+        setIsHistoryLoading(false);
+      }
+    }
     if (failedRequest.type === 'bootstrap') {
       return runBootstrap({ includeErrorBubble: true });
     }
@@ -394,7 +536,7 @@ export function useChatConversation(accessToken, launchContext = null) {
   return {
     messages,
     quickReplies,
-    isSending: isSending || isBootstrapping,
+    isSending: isSending || isBootstrapping || isHistoryLoading,
     error,
     errorDetails,
     lastFailedMessage,

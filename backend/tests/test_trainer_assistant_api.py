@@ -12,6 +12,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.api.v1.trainer_assistant import CONTROLLED_TRAINER_ASSISTANT_ERROR_DETAIL  # noqa: E402
 from app.core.auth import AuthenticatedUser, require_user  # noqa: E402
 from app.core.config import settings  # noqa: E402
 from app.core.dependencies import get_trainer_assistant_service, get_trainer_context  # noqa: E402
@@ -228,6 +229,67 @@ class TrainerAssistantApiTests(unittest.TestCase):
             headers={"Authorization": "Bearer ignored-by-override"},
         )
         self.assertEqual(response.status_code, 404)
+
+    def test_execute_maps_unexpected_errors_to_controlled_json_error(self):
+        class _BrokenTrainerAssistantService(FakeTrainerAssistantService):
+            def execute(self, _trainer_context, _request):
+                raise RuntimeError("database exploded")
+
+        app.dependency_overrides[get_trainer_assistant_service] = lambda: _BrokenTrainerAssistantService()
+        response = self.client.post(
+            "/api/v1/trainer-assistant/execute",
+            headers={"Authorization": "Bearer ignored-by-override"},
+            json={
+                "client_id": "client-1",
+                "action_type": "message_client",
+                "message": "Write a quick note.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"], CONTROLLED_TRAINER_ASSISTANT_ERROR_DETAIL)
+        self.assertEqual(response.json()["status"], 502)
+        self.assertEqual(response.json()["request_path"], "/api/v1/trainer-assistant/execute")
+        self.assertIsNone(response.json()["code"])
+        self.assertIsNone(response.json()["hint"])
+
+    def test_execute_maps_source_type_constraint_failures_with_migration_hint(self):
+        class _ConstraintFailureService(FakeTrainerAssistantService):
+            def execute(self, _trainer_context, _request):
+                raise RuntimeError(
+                    {
+                        "code": "23514",
+                        "message": (
+                            'new row for relation "ai_generated_outputs" violates check constraint '
+                            '"ai_generated_outputs_source_type_check"'
+                        ),
+                        "hint": None,
+                        "details": (
+                            "Failing row contains source_type=trainer_assistant_draft and "
+                            "violates ai_generated_outputs_source_type_check."
+                        ),
+                    }
+                )
+
+        app.dependency_overrides[get_trainer_assistant_service] = lambda: _ConstraintFailureService()
+        response = self.client.post(
+            "/api/v1/trainer-assistant/execute",
+            headers={"Authorization": "Bearer ignored-by-override"},
+            json={
+                "client_id": "client-1",
+                "action_type": "message_client",
+                "message": "Write a quick note.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 502)
+        payload = response.json()
+        self.assertEqual(payload["detail"], CONTROLLED_TRAINER_ASSISTANT_ERROR_DETAIL)
+        self.assertEqual(payload["status"], 502)
+        self.assertEqual(payload["request_path"], "/api/v1/trainer-assistant/execute")
+        self.assertEqual(payload["code"], "23514")
+        self.assertIn("20260418c_allow_trainer_assistant_draft_source_type.sql", payload["hint"])
+        self.assertIn("ai_generated_outputs_source_type_check", payload["details"])
 
 
 if __name__ == "__main__":

@@ -679,7 +679,15 @@ class TrainerAssistantService:
             ),
         )
 
-        refined_completion, execution_model = self._execute_model(second_model, refinement_prompt)
+        try:
+            refined_completion, execution_model = self._execute_model(second_model, refinement_prompt)
+        except Exception as exc:
+            logger.warning(
+                "Trainer assistant second-pass refinement unavailable model=%s; using first-pass output (%s)",
+                second_model,
+                exc,
+            )
+            return None
         merged_usage = TokenUsage(
             prompt_tokens=(completion.token_usage.prompt_tokens + refined_completion.token_usage.prompt_tokens),
             completion_tokens=(completion.token_usage.completion_tokens + refined_completion.token_usage.completion_tokens),

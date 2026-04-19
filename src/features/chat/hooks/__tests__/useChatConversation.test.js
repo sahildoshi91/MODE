@@ -3,9 +3,10 @@ import renderer, { act } from 'react-test-renderer';
 
 jest.mock('../../services/chatApi', () => ({
   sendChatMessage: jest.fn(),
+  getChatHistory: jest.fn(),
 }));
 
-import { sendChatMessage } from '../../services/chatApi';
+import { getChatHistory, sendChatMessage } from '../../services/chatApi';
 import { useChatConversation } from '../useChatConversation';
 
 function HookHarness({ accessToken, launchContext, onState }) {
@@ -26,6 +27,10 @@ async function flushEffects() {
 describe('useChatConversation', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    getChatHistory.mockResolvedValue({
+      conversation_id: null,
+      items: [],
+    });
   });
 
   it('creates an assistant error bubble and retryable state when review bootstrap fails', async () => {
@@ -284,5 +289,84 @@ describe('useChatConversation', () => {
         },
       },
     });
+  });
+
+  it('surfaces stale chat history route diagnostics when /api/v1/chat/history returns 404 Not Found', async () => {
+    const staleRouteError = new Error('Not Found');
+    staleRouteError.status = 404;
+    staleRouteError.request_path = '/api/v1/chat/history?limit=120';
+    staleRouteError.api_base_url = 'http://192.168.6.137:8000';
+    getChatHistory.mockRejectedValueOnce(staleRouteError);
+
+    let latestState;
+    const onState = (state) => {
+      latestState = state;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          accessToken="trainer-token"
+          launchContext={null}
+          onState={onState}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expect(latestState.hasRetryableFailure).toBe(true);
+    expect(latestState.error).toContain('/api/v1/chat/history');
+    expect(latestState.errorDetails).toEqual(expect.objectContaining({
+      stage: 'history_hydration',
+      path: '/api/v1/chat/history?limit=120',
+      is_stale_chat_history_route: true,
+    }));
+    const staleWarningMessage = latestState.messages.find((item) => item.id === 'assistant-stale-chat-history-route');
+    expect(staleWarningMessage).toBeTruthy();
+    expect(staleWarningMessage.isError).toBe(true);
+  });
+
+  it('retries stale history hydration and clears stale diagnostics when backend route is restored', async () => {
+    const staleRouteError = new Error('Not Found');
+    staleRouteError.status = 404;
+    staleRouteError.request_path = '/api/v1/chat/history?limit=120';
+    getChatHistory
+      .mockRejectedValueOnce(staleRouteError)
+      .mockResolvedValueOnce({
+        conversation_id: null,
+        items: [],
+      });
+
+    let latestState;
+    const onState = (state) => {
+      latestState = state;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          accessToken="trainer-token"
+          launchContext={null}
+          onState={onState}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expect(latestState.hasRetryableFailure).toBe(true);
+
+    let retryResult = false;
+    await act(async () => {
+      retryResult = await latestState.retryFailedRequest();
+    });
+    await flushEffects();
+
+    expect(retryResult).toBe(true);
+    expect(getChatHistory).toHaveBeenCalledTimes(2);
+    expect(latestState.hasRetryableFailure).toBe(false);
+    expect(latestState.error).toBeNull();
+    expect(latestState.errorDetails).toBeNull();
+    const staleWarningMessage = latestState.messages.find((item) => item.id === 'assistant-stale-chat-history-route');
+    expect(staleWarningMessage).toBeUndefined();
   });
 });

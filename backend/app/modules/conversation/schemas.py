@@ -82,3 +82,23 @@ class ChatResponse(BaseModel):
     token_usage: TokenUsage = Field(default_factory=TokenUsage)
     route_debug: RouteDebug | None = None
     conversation_usage: ConversationUsage | None = None
+
+
+ChatHistoryVisibility = Literal["trainer_private", "system", "client_public"]
+ChatHistoryStatus = Literal["pending", "confirmed", "failed"]
+
+
+class ChatHistoryItem(BaseModel):
+    id: str
+    role: Literal["system", "assistant", "user", "tool"]
+    message_text: str
+    kind: str = "chat_message"
+    visibility: ChatHistoryVisibility = "trainer_private"
+    status: ChatHistoryStatus = "confirmed"
+    structured_payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str | None = None
+
+
+class ChatHistoryResponse(BaseModel):
+    conversation_id: str | None = None
+    items: list[ChatHistoryItem] = Field(default_factory=list)

@@ -167,6 +167,18 @@ class ConversationRepository:
         )
         return response.data or []
 
+    def list_messages_with_payload(self, conversation_id: str, limit: int = 80) -> list[dict[str, Any]]:
+        response = (
+            self.supabase
+            .table("conversation_messages")
+            .select("id, role, message_text, structured_payload, created_at")
+            .eq("conversation_id", conversation_id)
+            .order("created_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        return response.data or []
+
     def update_conversation_state(self, conversation_id: str, stage: str, onboarding_complete: bool) -> None:
         (
             self.supabase

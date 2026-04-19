@@ -1,9 +1,18 @@
 import React from 'react';
 
-import ProfileScreen from '../../profile/screens/ProfileScreen';
 import TrainerClientsScreen from '../../trainerClients/screens/TrainerClientsScreen';
-import TrainerHomeScreen from '../../trainerHome/screens/TrainerHomeScreen';
-import TrainerCoachWorkspace from '../screens/TrainerCoachWorkspace';
+import TrainerCoachScreen from '../../trainerCoach/screens/TrainerCoachScreen';
+import TrainerSystemScreen from '../screens/TrainerSystemScreen';
+
+function resolveTrainerTab(activeTab) {
+  if (activeTab === 'clients') {
+    return 'clients';
+  }
+  if (activeTab === 'system') {
+    return 'system';
+  }
+  return 'coach';
+}
 
 export default function TrainerRouteHost({
   activeTab,
@@ -16,36 +25,19 @@ export default function TrainerRouteHost({
   onOpenTrainerCoach,
   onSignOut,
 }) {
-  if (activeTab === 'home') {
+  const resolvedTab = resolveTrainerTab(activeTab);
+
+  if (resolvedTab === 'coach') {
     return (
-      <TrainerHomeScreen
+      <TrainerCoachScreen
         accessToken={accessToken}
-        bottomInset={contentBottomInset}
-        viewerDisplayName={assignmentStatus?.viewer_display_name || null}
-        trainerOnboardingCompleted={Boolean(assignmentStatus?.trainer_onboarding_completed)}
-        trainerOnboardingStatus={assignmentStatus?.trainer_onboarding_status || 'not_started'}
-        trainerOnboardingCompletedSteps={assignmentStatus?.trainer_onboarding_completed_steps ?? 0}
-        trainerOnboardingTotalSteps={assignmentStatus?.trainer_onboarding_total_steps ?? 8}
-        trainerOnboardingLastStep={assignmentStatus?.trainer_onboarding_last_step || null}
-        onOpenCoachTraining={onOpenTrainerCoach}
+        trainerId={assignmentStatus?.trainer_id || assignmentStatus?.assigned_trainer_id || null}
+        bottomInset={coachChatBottomInset}
       />
     );
   }
 
-  if (activeTab === 'coach') {
-    return (
-      <TrainerCoachWorkspace
-        accessToken={accessToken}
-        chatLaunchContext={chatLaunchContext}
-        coachChatBottomInset={coachChatBottomInset}
-        trainerOnboardingCompleted={Boolean(assignmentStatus?.trainer_onboarding_completed)}
-        trainerOnboardingStatus={assignmentStatus?.trainer_onboarding_status || 'not_started'}
-        trainerOnboardingCompletedSteps={assignmentStatus?.trainer_onboarding_completed_steps ?? 0}
-      />
-    );
-  }
-
-  if (activeTab === 'clients') {
+  if (resolvedTab === 'clients') {
     return (
       <TrainerClientsScreen
         accessToken={accessToken}
@@ -54,29 +46,24 @@ export default function TrainerRouteHost({
     );
   }
 
-  if (activeTab === 'profile') {
+  if (resolvedTab === 'system') {
     return (
-      <ProfileScreen
-        session={session}
-        assignmentStatus={assignmentStatus}
+      <TrainerSystemScreen
         accessToken={accessToken}
-        onSignOut={onSignOut}
         bottomInset={contentBottomInset}
+        assignmentStatus={assignmentStatus}
+        session={session}
+        onSignOut={onSignOut}
+        onOpenTrainerCoach={onOpenTrainerCoach}
       />
     );
   }
 
   return (
-    <TrainerHomeScreen
+    <TrainerCoachScreen
       accessToken={accessToken}
-      bottomInset={contentBottomInset}
-      viewerDisplayName={assignmentStatus?.viewer_display_name || null}
-      trainerOnboardingCompleted={Boolean(assignmentStatus?.trainer_onboarding_completed)}
-      trainerOnboardingStatus={assignmentStatus?.trainer_onboarding_status || 'not_started'}
-      trainerOnboardingCompletedSteps={assignmentStatus?.trainer_onboarding_completed_steps ?? 0}
-      trainerOnboardingTotalSteps={assignmentStatus?.trainer_onboarding_total_steps ?? 8}
-      trainerOnboardingLastStep={assignmentStatus?.trainer_onboarding_last_step || null}
-      onOpenCoachTraining={onOpenTrainerCoach}
+      trainerId={assignmentStatus?.trainer_id || assignmentStatus?.assigned_trainer_id || null}
+      bottomInset={coachChatBottomInset}
     />
   );
 }

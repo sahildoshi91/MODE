@@ -11,7 +11,12 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from app.core.config import settings  # noqa: E402
 from app.ai.client import TextCompletion, TokenUsage  # noqa: E402
-from app.modules.trainer_assistant.routing import GEMINI_2_5_FLASH_LITE_MODEL, GPT_5_4_MINI_MODEL  # noqa: E402
+from app.modules.trainer_assistant.routing import (  # noqa: E402
+    CLAUDE_SONNET_4_6_MODEL,
+    GEMINI_2_5_FLASH_LITE_MODEL,
+    GPT_5_4_MINI_MODEL,
+    GPT_5_4_MODEL,
+)
 from app.modules.trainer_assistant.schemas import (  # noqa: E402
     TrainerAssistantActionType,
     TrainerAssistantComplexity,
@@ -57,6 +62,54 @@ class _BackgroundRetryService(TrainerAssistantService):
         self.attempted_models.append(model)
         if model == GEMINI_2_5_FLASH_LITE_MODEL:
             raise RuntimeError("gemini_unavailable")
+        return (
+            TextCompletion(
+                text='{"format_version":"v1","action_type":"summarize","headline":"ok","summary":"ok","sections":[],"editable_payload":{},"preview_required":true,"client_impacting":false,"confidence":0.8,"next_actions":[]}',  # noqa: E501
+                token_usage=TokenUsage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+            ),
+            model,
+        )
+
+
+class _SecondPassUnavailableService(TrainerAssistantService):
+    def __init__(self):
+        super().__init__(
+            repository=_NoopRepo(),
+            trainer_home_service=_NoopHomeService(),
+            trainer_client_service=_NoopClientService(),
+            ai_feedback_service=_NoopFeedbackService(),
+        )
+        self.attempted_models: list[str] = []
+
+    def _execute_model(self, model, prompt):  # noqa: ANN001
+        del prompt
+        self.attempted_models.append(model)
+        if model == CLAUDE_SONNET_4_6_MODEL:
+            raise RuntimeError("anthropic_client_unavailable")
+        return (
+            TextCompletion(
+                text='{"format_version":"v1","action_type":"message_client","headline":"ok","summary":"ok","sections":[],"editable_payload":{},"preview_required":true,"client_impacting":true,"confidence":0.8,"next_actions":[]}',  # noqa: E501
+                token_usage=TokenUsage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+            ),
+            model,
+        )
+
+
+class _LiveGeminiFallbackService(TrainerAssistantService):
+    def __init__(self):
+        super().__init__(
+            repository=_NoopRepo(),
+            trainer_home_service=_NoopHomeService(),
+            trainer_client_service=_NoopClientService(),
+            ai_feedback_service=_NoopFeedbackService(),
+        )
+        self.attempted_models: list[str] = []
+
+    def _execute_model(self, model, prompt):  # noqa: ANN001
+        del prompt
+        self.attempted_models.append(model)
+        if model != GEMINI_2_5_FLASH_LITE_MODEL:
+            raise RuntimeError(f"{model}_unavailable")
         return (
             TextCompletion(
                 text='{"format_version":"v1","action_type":"summarize","headline":"ok","summary":"ok","sections":[],"editable_payload":{},"preview_required":true,"client_impacting":false,"confidence":0.8,"next_actions":[]}',  # noqa: E501
@@ -164,6 +217,71 @@ class TrainerAssistantOutputContractTests(unittest.TestCase):
         self.assertEqual(result.execution_model, GPT_5_4_MINI_MODEL)
         self.assertTrue(result.fallback_applied)
         self.assertEqual(result.fallback_reason, "gemini_background_retry")
+
+    def test_live_execute_uses_first_pass_when_second_pass_model_unavailable(self):
+        service = _SecondPassUnavailableService()
+        decision = TrainerAssistantRoutingDecision(
+            model=GPT_5_4_MINI_MODEL,
+            fallback_models=[],
+            reason="live_second_pass",
+            escalation_applied=False,
+            second_pass_model=CLAUDE_SONNET_4_6_MODEL,
+            interaction_type=TrainerAssistantInteractionType.LIVE,
+        )
+        routing_input = TrainerAssistantRoutingInput(
+            interaction_type=TrainerAssistantInteractionType.LIVE,
+            stakes=TrainerAssistantStakes.MEDIUM,
+            complexity=TrainerAssistantComplexity.SIMPLE,
+            context_size=TrainerAssistantContextSize.MEDIUM,
+            tone_fidelity_needed=TrainerAssistantToneFidelity.HIGH,
+            previous_pass_confidence=TrainerAssistantPassConfidence.HIGH,
+            action_type=TrainerAssistantActionType.MESSAGE_CLIENT,
+        )
+        result = service._execute_prompt_with_routing(  # noqa: SLF001
+            decision=decision,
+            prompt=_PromptPackage(system_prompt="system", user_prompt="user"),
+            routing_input=routing_input,
+            essential_background_job=False,
+        )
+
+        self.assertEqual(service.attempted_models, [GPT_5_4_MINI_MODEL, CLAUDE_SONNET_4_6_MODEL])
+        self.assertEqual(result.execution_model, GPT_5_4_MINI_MODEL)
+        self.assertFalse(result.second_pass_applied)
+        self.assertFalse(result.fallback_applied)
+
+    def test_live_execute_falls_back_to_gemini_when_primary_models_fail(self):
+        service = _LiveGeminiFallbackService()
+        decision = TrainerAssistantRoutingDecision(
+            model=GPT_5_4_MINI_MODEL,
+            fallback_models=[GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+            reason="default_live",
+            escalation_applied=False,
+            second_pass_model=None,
+            interaction_type=TrainerAssistantInteractionType.LIVE,
+        )
+        routing_input = TrainerAssistantRoutingInput(
+            interaction_type=TrainerAssistantInteractionType.LIVE,
+            stakes=TrainerAssistantStakes.MEDIUM,
+            complexity=TrainerAssistantComplexity.SIMPLE,
+            context_size=TrainerAssistantContextSize.MEDIUM,
+            tone_fidelity_needed=TrainerAssistantToneFidelity.MEDIUM,
+            previous_pass_confidence=TrainerAssistantPassConfidence.HIGH,
+            action_type=TrainerAssistantActionType.SUMMARIZE,
+        )
+        result = service._execute_prompt_with_routing(  # noqa: SLF001
+            decision=decision,
+            prompt=_PromptPackage(system_prompt="system", user_prompt="user"),
+            routing_input=routing_input,
+            essential_background_job=False,
+        )
+
+        self.assertEqual(
+            service.attempted_models,
+            [GPT_5_4_MINI_MODEL, GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+        )
+        self.assertEqual(result.execution_model, GEMINI_2_5_FLASH_LITE_MODEL)
+        self.assertTrue(result.fallback_applied)
+        self.assertEqual(result.fallback_reason, f"model_failed:{GPT_5_4_MINI_MODEL}")
 
 
 if __name__ == "__main__":

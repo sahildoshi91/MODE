@@ -33,6 +33,16 @@ class TrainerRouteSurfaceContractTests(unittest.TestCase):
             "/api/v1/trainer-assistant/drafts/{draft_id}/approve",
             "/api/v1/trainer-assistant/drafts/{draft_id}/reject",
             "/api/v1/trainer-assistant/background/run",
+            "/api/v1/trainer-coach/workspace",
+            "/api/v1/trainer-coach/queue",
+            "/api/v1/trainer-coach/events",
+            "/api/v1/trainer-programs/templates",
+            "/api/v1/trainer-programs/templates/{template_id}",
+            "/api/v1/trainer-programs/templates/{template_id}/archive",
+            "/api/v1/trainer-coach/queue/{output_id}/approve",
+            "/api/v1/trainer-coach/queue/{output_id}/edit",
+            "/api/v1/trainer-coach/queue/{output_id}/reject",
+            "/api/v1/chat/history",
         }
 
         missing_paths = sorted(required_paths.difference(paths.keys()))
@@ -63,6 +73,18 @@ class TrainerRouteSurfaceContractTests(unittest.TestCase):
         self.assertIn("post", paths["/api/v1/trainer-assistant/drafts/{draft_id}/approve"])
         self.assertIn("post", paths["/api/v1/trainer-assistant/drafts/{draft_id}/reject"])
         self.assertIn("post", paths["/api/v1/trainer-assistant/background/run"])
+        self.assertIn("get", paths["/api/v1/trainer-coach/workspace"])
+        self.assertIn("get", paths["/api/v1/trainer-coach/queue"])
+        self.assertIn("get", paths["/api/v1/trainer-coach/events"])
+        self.assertIn("post", paths["/api/v1/trainer-coach/events"])
+        self.assertIn("get", paths["/api/v1/trainer-programs/templates"])
+        self.assertIn("post", paths["/api/v1/trainer-programs/templates"])
+        self.assertIn("patch", paths["/api/v1/trainer-programs/templates/{template_id}"])
+        self.assertIn("post", paths["/api/v1/trainer-programs/templates/{template_id}/archive"])
+        self.assertIn("post", paths["/api/v1/trainer-coach/queue/{output_id}/approve"])
+        self.assertIn("post", paths["/api/v1/trainer-coach/queue/{output_id}/edit"])
+        self.assertIn("post", paths["/api/v1/trainer-coach/queue/{output_id}/reject"])
+        self.assertIn("get", paths["/api/v1/chat/history"])
 
 
 if __name__ == "__main__":

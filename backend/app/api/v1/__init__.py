@@ -11,7 +11,9 @@ from app.api.v1.trainer_clients import router as trainer_clients_router
 from app.api.v1.trainer_home import router as trainer_home_router
 from app.api.v1.trainer_knowledge import router as trainer_knowledge_router
 from app.api.v1.trainer_personas import router as trainer_personas_router
+from app.api.v1.trainer_programs import router as trainer_programs_router
 from app.api.v1.trainer_review import router as trainer_review_router
+from app.api.v1.trainer_coach import router as trainer_coach_router
 from app.api.v1.trainer_assistant import router as trainer_assistant_router
 from app.api.v1.trainer_settings import router as trainer_settings_router
 from app.api.v1.workouts import router as workouts_router
@@ -29,7 +31,9 @@ api_router.include_router(trainer_assignment_router, prefix="/trainer-assignment
 api_router.include_router(trainer_home_router, prefix="/trainer-home", tags=["trainer-home"])
 api_router.include_router(trainer_clients_router, prefix="/trainer-clients", tags=["trainer-clients"])
 api_router.include_router(trainer_personas_router, prefix="/trainer-personas", tags=["trainer-personas"])
+api_router.include_router(trainer_programs_router, prefix="/trainer-programs", tags=["trainer-programs"])
 api_router.include_router(trainer_knowledge_router, prefix="/trainer-knowledge", tags=["trainer-knowledge"])
 api_router.include_router(trainer_review_router, prefix="/trainer-review", tags=["trainer-review"])
+api_router.include_router(trainer_coach_router, prefix="/trainer-coach", tags=["trainer-coach"])
 api_router.include_router(trainer_assistant_router, prefix="/trainer-assistant", tags=["trainer-assistant"])
 api_router.include_router(trainer_settings_router, prefix="/trainer-settings", tags=["trainer-settings"])

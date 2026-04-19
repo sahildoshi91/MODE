@@ -143,8 +143,63 @@ npx expo start --port 8081
 ```bash
 cd backend
 pip install -r requirements.txt
-python main.py
+./venv/bin/python main.py
 ```
+
+### Runtime Route Preflight (Required Before Trainer QA)
+After backend startup, verify the running process matches current repo route surface:
+
+```bash
+cd backend
+./venv/bin/python scripts/preflight_runtime_route_surface.py --base-url http://127.0.0.1:8000
+```
+
+Expected result: `Runtime route surface preflight: PASSED`.
+
+### Trainer Connectivity Triage (Physical Device)
+If trainer assistant/coach surfaces show `Unable to reach backend...`, run this quick triage:
+
+1. Start backend with:
+   ```bash
+   cd backend
+   ./venv/bin/python main.py
+   ```
+2. Verify root `.env` has the current laptop LAN IP:
+   `EXPO_PUBLIC_API_BASE_URL=http://<LAN-IP>:8000`
+3. From your phone browser (same Wi-Fi), open:
+   `http://<LAN-IP>:8000/healthz`
+4. Confirm:
+   - phone and laptop are on the same Wi-Fi network
+   - VPN/proxy is disabled on phone and laptop
+   - local firewall allows inbound connections to Python on port `8000`
+5. After any `.env` change, restart Expo with cache clear (`npx expo start -c`).
+
+### Trainer Assistant Storage Preflight (Required Before Coach Composer QA)
+Verify trainer assistant storage primitives are present before testing trainer coach/trainer assistant draft generation:
+
+```bash
+cd backend
+./venv/bin/python scripts/preflight_trainer_assistant_storage.py
+```
+
+Expected result: `Trainer assistant storage preflight: PASSED`.
+If missing primitives are reported, apply:
+`backend/sql/20260418b_add_trainer_assistant_last_client_and_router_events.sql`.
+
+### Trainer Assistant Execute Smoke (Required Before Coach Composer QA)
+Storage preflight validates `20260418b` primitives only. Also run execute-path smoke to confirm draft persistence support (`20260418c`) is present:
+
+```bash
+cd backend
+MODE_RUN_STAGING_SUPABASE_TESTS=1 ./venv/bin/pytest -q \
+  tests/test_trainer_platform_staging_smoke.py \
+  -k test_trainer_assistant_execute_route_is_non_500_for_owner \
+  -rs
+```
+
+Expected result: `1 passed` with `POST /api/v1/trainer-assistant/execute` returning `200` plus `draft_id`.
+If execute fails with `23514` and `ai_generated_outputs_source_type_check`, apply:
+`backend/sql/20260418c_allow_trainer_assistant_draft_source_type.sql`.
 
 ## Required Environment Variables
 

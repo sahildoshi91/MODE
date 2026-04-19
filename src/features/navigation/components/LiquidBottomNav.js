@@ -13,7 +13,13 @@ const CLIENT_TABS = [
   { key: 'profile', label: 'Settings', Icon: User },
 ];
 
-const TRAINER_TABS = [
+const TRAINER_TABS_COACH_OS = [
+  { key: 'coach', label: 'Coach', Icon: Dumbbell },
+  { key: 'clients', label: 'Clients', Icon: Users },
+  { key: 'system', label: 'System', Icon: User },
+];
+
+const TRAINER_TABS_LEGACY = [
   { key: 'home', label: 'Home', Icon: Home },
   { key: 'coach', label: 'Coach', Icon: Dumbbell },
   { key: 'clients', label: 'Clients', Icon: Users },
@@ -28,11 +34,14 @@ export default function LiquidBottomNav({
   onTabChange,
   bottomInset = 0,
   role = 'client',
+  trainerNavMode = 'coach_os',
 }) {
   const [containerWidth, setContainerWidth] = useState(0);
   const [iconCenters, setIconCenters] = useState({});
   const indicatorX = useRef(new Animated.Value(0)).current;
-  const tabs = role === 'trainer' ? TRAINER_TABS : CLIENT_TABS;
+  const tabs = role === 'trainer'
+    ? (trainerNavMode === 'legacy' ? TRAINER_TABS_LEGACY : TRAINER_TABS_COACH_OS)
+    : CLIENT_TABS;
 
   const activeIndex = useMemo(() => {
     const found = tabs.findIndex((item) => item.key === activeTab);

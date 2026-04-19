@@ -119,10 +119,26 @@ class TrainerAssistantRoutingTests(unittest.TestCase):
 
     def test_fallback_policy_matches_required_order(self):
         policy = default_fallback_policy().model_fallback_order
-        self.assertEqual(policy.get(GPT_5_4_MINI_MODEL), [GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL])
-        self.assertEqual(policy.get(GPT_5_4_MODEL), [CLAUDE_SONNET_4_6_MODEL])
-        self.assertEqual(policy.get(CLAUDE_SONNET_4_6_MODEL), [GPT_5_4_MODEL])
-        self.assertEqual(policy.get(CLAUDE_OPUS_4_7_MODEL), [CLAUDE_SONNET_4_6_MODEL, GPT_5_4_MODEL])
+        self.assertEqual(
+            policy.get(GPT_5_4_MINI_MODEL),
+            [GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+        )
+        self.assertEqual(
+            policy.get(GPT_5_4_MODEL),
+            [CLAUDE_SONNET_4_6_MODEL, GPT_5_4_MINI_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+        )
+        self.assertEqual(
+            policy.get(CLAUDE_SONNET_4_6_MODEL),
+            [GPT_5_4_MODEL, GPT_5_4_MINI_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+        )
+        self.assertEqual(
+            policy.get(CLAUDE_OPUS_4_7_MODEL),
+            [CLAUDE_SONNET_4_6_MODEL, GPT_5_4_MODEL, GPT_5_4_MINI_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+        )
+        self.assertEqual(
+            policy.get(GEMINI_2_5_FLASH_LITE_MODEL),
+            [GPT_5_4_MINI_MODEL, GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL],
+        )
 
 
 if __name__ == "__main__":

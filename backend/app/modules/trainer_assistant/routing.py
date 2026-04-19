@@ -36,11 +36,17 @@ def default_provider_registry() -> ProviderModelRegistry:
 def default_fallback_policy() -> FallbackPolicyConfig:
     return FallbackPolicyConfig(
         model_fallback_order={
-            GPT_5_4_MINI_MODEL: [GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL],
-            GPT_5_4_MODEL: [CLAUDE_SONNET_4_6_MODEL],
-            CLAUDE_SONNET_4_6_MODEL: [GPT_5_4_MODEL],
-            CLAUDE_OPUS_4_7_MODEL: [CLAUDE_SONNET_4_6_MODEL, GPT_5_4_MODEL],
-            GEMINI_2_5_FLASH_LITE_MODEL: [],
+            # Keep cross-provider fallbacks so live execution can survive a single-provider outage.
+            GPT_5_4_MINI_MODEL: [GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+            GPT_5_4_MODEL: [CLAUDE_SONNET_4_6_MODEL, GPT_5_4_MINI_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+            CLAUDE_SONNET_4_6_MODEL: [GPT_5_4_MODEL, GPT_5_4_MINI_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+            CLAUDE_OPUS_4_7_MODEL: [
+                CLAUDE_SONNET_4_6_MODEL,
+                GPT_5_4_MODEL,
+                GPT_5_4_MINI_MODEL,
+                GEMINI_2_5_FLASH_LITE_MODEL,
+            ],
+            GEMINI_2_5_FLASH_LITE_MODEL: [GPT_5_4_MINI_MODEL, GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL],
         }
     )
 

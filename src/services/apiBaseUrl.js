@@ -68,7 +68,7 @@ function isLocalNetworkUrl(url) {
 }
 
 function shouldSuppressLoopbackFallbacks(configuredBaseUrl) {
-  return Boolean(Constants.isDevice) && isLocalNetworkUrl(configuredBaseUrl) && !isLoopbackUrl(configuredBaseUrl);
+  return isLocalNetworkUrl(configuredBaseUrl) && !isLoopbackUrl(configuredBaseUrl);
 }
 
 export function getConfiguredApiBaseUrl() {
@@ -82,7 +82,7 @@ export function getApiBaseUrls() {
   const preferAutoDetectedBaseUrls = isLocalNetworkUrl(configuredBaseUrl) && !shouldSuppressLoopbackFallbacks(configuredBaseUrl);
   const includeLoopbackBaseUrls = !shouldSuppressLoopbackFallbacks(configuredBaseUrl);
   const prioritizeConfiguredFirst = Boolean(
-    Constants.isDevice && isLocalNetworkUrl(configuredBaseUrl) && !isLoopbackUrl(configuredBaseUrl),
+    isLocalNetworkUrl(configuredBaseUrl) && !isLoopbackUrl(configuredBaseUrl),
   );
   const candidates = [];
   const pushCandidate = (url) => {

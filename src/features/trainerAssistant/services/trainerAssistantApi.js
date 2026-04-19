@@ -1,22 +1,126 @@
 import { fetchWithApiFallback } from '../../../services/apiRequest';
 import { buildApiNetworkError } from '../../../services/apiNetworkError';
+import {
+  probeBackendConnectivity,
+  selectRecommendedApiBaseUrl,
+} from '../../trainerPlatform/utils/backendConnectivityProbe';
+
+const DEFAULT_TRAINER_ASSISTANT_TIMEOUT_MS = 10000;
+const EXECUTE_TRAINER_ASSISTANT_TIMEOUT_MS = 60000;
 
 function buildNetworkError(error, path) {
   return buildApiNetworkError(error, path);
 }
 
-async function parseError(response) {
+function resolveTrainerAssistantTimeoutMs(path) {
+  if (path === '/api/v1/trainer-assistant/execute') {
+    return EXECUTE_TRAINER_ASSISTANT_TIMEOUT_MS;
+  }
+  return DEFAULT_TRAINER_ASSISTANT_TIMEOUT_MS;
+}
+
+function shouldAttachConnectivityProbe(path) {
+  return path === '/api/v1/trainer-assistant/execute';
+}
+
+async function attachConnectivityProbe(error, path) {
+  if (!shouldAttachConnectivityProbe(path)) {
+    return;
+  }
   try {
-    const payload = await response.json();
-    return {
-      message: payload?.detail || payload?.message || 'Request failed',
-      code: payload?.code || null,
-      hint: payload?.hint || null,
-      details: payload?.details || null,
-    };
+    const connectivityProbe = await probeBackendConnectivity({
+      endpointPath: '/healthz',
+      timeoutMs: 1800,
+    });
+    const recommendedApiBaseUrl = selectRecommendedApiBaseUrl(connectivityProbe);
+    error.connectivity_probe = connectivityProbe;
+    error.connectivityProbe = connectivityProbe;
+    error.recommended_api_base_url = recommendedApiBaseUrl;
+    error.recommendedApiBaseUrl = recommendedApiBaseUrl;
+  } catch (_probeError) {
+    // Keep original network error behavior if probe cannot run.
+  }
+}
+
+function isTrainerAssistantReadPath(path) {
+  return typeof path === 'string'
+    && path.startsWith('/api/v1/trainer-assistant/bootstrap');
+}
+
+async function parseResponseMessage(response) {
+  if (!response || typeof response.clone !== 'function') {
+    return '';
+  }
+  try {
+    const jsonClone = response.clone();
+    const payload = await jsonClone.json();
+    return String(payload?.detail || payload?.message || '');
+  } catch (_jsonError) {
+    try {
+      const textClone = response.clone();
+      const raw = await textClone.text();
+      return String(raw || '');
+    } catch (_textError) {
+      return '';
+    }
+  }
+}
+
+async function shouldRetryStaleTrainerAssistantRouteResponse(response, path) {
+  if (!isTrainerAssistantReadPath(path) || !response || response.status !== 404) {
+    return false;
+  }
+  const message = await parseResponseMessage(response);
+  return message.trim().toLowerCase() === 'not found'
+    && path.startsWith('/api/v1/trainer-assistant/');
+}
+
+async function parseError(response, path) {
+  const status = typeof response?.status === 'number' ? response.status : null;
+  const requestPath = path || '/api/v1/trainer-assistant';
+  const context = status ? `HTTP ${status} for ${requestPath}` : `Request failed for ${requestPath}`;
+  const withContext = (value) => {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) {
+      return context;
+    }
+    return trimmed.includes(context) ? trimmed : `${trimmed} (${context})`;
+  };
+
+  try {
+    const rawBody = await response.text();
+    if (!rawBody) {
+      return {
+        message: context,
+        raw_message: '',
+        code: null,
+        hint: null,
+        details: null,
+      };
+    }
+
+    try {
+      const payload = JSON.parse(rawBody);
+      return {
+        message: withContext(payload?.detail || payload?.message || rawBody),
+        raw_message: String(payload?.detail || payload?.message || rawBody || '').trim(),
+        code: payload?.code || null,
+        hint: payload?.hint || null,
+        details: payload?.details || null,
+      };
+    } catch (_parseError) {
+      return {
+        message: withContext(rawBody),
+        raw_message: String(rawBody || '').trim(),
+        code: null,
+        hint: null,
+        details: null,
+      };
+    }
   } catch (_error) {
     return {
-      message: 'Request failed',
+      message: context,
+      raw_message: '',
       code: null,
       hint: null,
       details: null,
@@ -27,25 +131,47 @@ async function parseError(response) {
 async function requestTrainerAssistantApi(path, { accessToken, method = 'GET', body } = {}) {
   let response;
   let baseUrl;
+  let attemptedBaseUrls = [];
+  let failoverAttempted = false;
+  let failoverApplied = false;
+  const enableStaleRouteFailover = method === 'GET' && isTrainerAssistantReadPath(path);
 
   try {
-    ({ response, baseUrl } = await fetchWithApiFallback(path, {
+    ({
+      response,
+      baseUrl,
+      attemptedBaseUrls = [],
+      failoverAttempted = false,
+      failoverApplied = false,
+    } = await fetchWithApiFallback(path, {
       method,
       headers: {
         Authorization: `Bearer ${accessToken}`,
         ...(body ? { 'Content-Type': 'application/json' } : {}),
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
-      timeoutMs: 10000,
+      timeoutMs: resolveTrainerAssistantTimeoutMs(path),
+      ...(enableStaleRouteFailover ? {
+        shouldRetryOnResponse: (nextResponse) => shouldRetryStaleTrainerAssistantRouteResponse(nextResponse, path),
+      } : {}),
     }));
   } catch (error) {
     const networkError = buildNetworkError(error, path);
     networkError.request_path = path;
+    networkError.attempted_base_urls = Array.isArray(networkError.attempted_base_urls)
+      ? networkError.attempted_base_urls
+      : (Array.isArray(error?.attemptedBaseUrls) ? error.attemptedBaseUrls : []);
+    networkError.failover_attempted = Boolean(
+      networkError.attempted_base_urls?.length > 1
+      || error?.failoverAttempted,
+    );
+    networkError.failover_applied = Boolean(error?.failoverApplied);
+    await attachConnectivityProbe(networkError, path);
     throw networkError;
   }
 
   if (!response.ok) {
-    const parsed = await parseError(response);
+    const parsed = await parseError(response, path);
     const error = new Error(parsed.message || 'Unable to load trainer assistant.');
     error.status = response.status;
     error.code = parsed.code;
@@ -54,9 +180,12 @@ async function requestTrainerAssistantApi(path, { accessToken, method = 'GET', b
     error.request_id = response.headers.get('x-request-id');
     error.api_base_url = baseUrl;
     error.request_path = path;
+    error.attempted_base_urls = attemptedBaseUrls;
+    error.failover_attempted = failoverAttempted;
+    error.failover_applied = failoverApplied;
     error.is_missing_trainer_route = (
       error.status === 404
-      && String(error.message || '').trim().toLowerCase() === 'not found'
+      && String(parsed.raw_message || error.message || '').trim().toLowerCase() === 'not found'
       && path.startsWith('/api/v1/trainer-assistant/')
     );
     throw error;

@@ -60,7 +60,7 @@ export default function TrainerAssignmentScreen({
             {errorMessage ? <InlineFeedback type="error" message={errorMessage} /> : null}
             {isNetworkError ? (
               <ModeText variant="bodySm" tone="secondary" testID="trainer-assignment-network-help">
-                Backend unreachable. Start the backend with `cd backend && python3 main.py`,
+                Backend unreachable. Start the backend with `cd backend && ./venv/bin/python main.py`,
                 confirm EXPO_PUBLIC_API_BASE_URL points to your current laptop LAN IP on port 8000,
                 then restart Expo and retry.
               </ModeText>

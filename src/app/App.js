@@ -475,6 +475,7 @@ function AppShell() {
       : VIEWER_ROLE.CLIENT
   );
   const isTrainerViewer = viewerRole === VIEWER_ROLE.TRAINER;
+  const useCoachOsTrainerNav = Boolean(isTrainerViewer && TRAINER_ROUTE_FOUNDATION_ENABLED);
   const normalizedTrainerOnboardingStatus = typeof assignmentStatus?.trainer_onboarding_status === 'string'
     ? assignmentStatus.trainer_onboarding_status.trim().toLowerCase()
     : 'not_started';
@@ -498,28 +499,45 @@ function AppShell() {
     };
 
   useEffect(() => {
-    if (!session?.access_token || !isTrainerViewer || activeTab !== 'home') {
+    if (!session?.access_token || !isTrainerViewer) {
       return;
     }
     loadAssignmentStatus({ accessTokenOverride: session.access_token });
-  }, [activeTab, isTrainerViewer, loadAssignmentStatus, session?.access_token]);
+  }, [isTrainerViewer, loadAssignmentStatus, session?.access_token]);
 
   useEffect(() => {
-    if (isTrainerViewer && activeTab === 'progress') {
+    if (isTrainerViewer && useCoachOsTrainerNav) {
+      if (activeTab !== 'coach' && activeTab !== 'clients' && activeTab !== 'system') {
+        setActiveTab('coach');
+      }
+      return;
+    }
+    if (isTrainerViewer && !useCoachOsTrainerNav && activeTab === 'progress') {
       setActiveTab('clients');
       return;
     }
-    if (!isTrainerViewer && activeTab === 'clients') {
+    if (!isTrainerViewer && (activeTab === 'clients' || activeTab === 'system')) {
       setActiveTab('home');
     }
-  }, [isTrainerViewer, activeTab]);
+  }, [activeTab, isTrainerViewer, useCoachOsTrainerNav]);
 
   const handleTabChange = (nextTab) => {
-    if (!isTrainerViewer && nextTab === 'clients') {
+    if (!isTrainerViewer && (nextTab === 'clients' || nextTab === 'system')) {
       return;
     }
-    if (isTrainerViewer && nextTab === 'progress') {
-      return;
+    if (isTrainerViewer) {
+      if (nextTab === 'progress') {
+        return;
+      }
+      if (useCoachOsTrainerNav && nextTab === 'home') {
+        nextTab = 'coach';
+      }
+      if (useCoachOsTrainerNav && nextTab === 'profile') {
+        nextTab = 'system';
+      }
+      if (!useCoachOsTrainerNav && nextTab === 'system') {
+        nextTab = 'profile';
+      }
     }
     setCoachOverlayContext(null);
     setActiveTab(nextTab);
@@ -853,10 +871,7 @@ function AppShell() {
   const contentBottomInset = navBottomInset + 108;
   const coachChatBottomInset = navBottomInset + COACH_CHAT_DOCK_CLEARANCE;
   const isBlockingAssignmentLoad = isAssignmentStatusLoading && isTrainerViewer && !assignmentStatus && !assignmentStatusError;
-  const shouldUseTrainerRouteFoundation = Boolean(
-    TRAINER_ROUTE_FOUNDATION_ENABLED
-      && isTrainerViewer,
-  );
+  const shouldUseTrainerRouteFoundation = useCoachOsTrainerNav;
   const hasAssignedTrainer = Boolean(assignmentStatus?.assigned_trainer_id || bootstrap?.assigned_trainer_id);
 
   if (isBlockingAssignmentLoad) {
@@ -958,7 +973,7 @@ function AppShell() {
               />
             ) : null}
 
-            {activeTab === 'profile' ? (
+            {(activeTab === 'profile' || activeTab === 'system') ? (
               <ProfileScreen
                 session={session}
                 assignmentStatus={assignmentStatus}
@@ -988,6 +1003,7 @@ function AppShell() {
           onTabChange={handleTabChange}
           bottomInset={navBottomInset}
           role={isTrainerViewer ? 'trainer' : 'client'}
+          trainerNavMode={isTrainerViewer && useCoachOsTrainerNav ? 'coach_os' : 'legacy'}
         />
       ) : null}
     </View>

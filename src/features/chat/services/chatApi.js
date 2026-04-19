@@ -5,18 +5,52 @@ async function parseError(response) {
   try {
     const rawBody = await response.text();
     if (!rawBody) {
-      return 'Request failed';
+      return {
+        message: 'Request failed',
+        code: null,
+        hint: null,
+        details: null,
+      };
     }
 
     try {
       const payload = JSON.parse(rawBody);
-      return payload?.detail || payload?.message || rawBody || 'Request failed';
+      return {
+        message: payload?.detail || payload?.message || rawBody || 'Request failed',
+        code: payload?.code || null,
+        hint: payload?.hint || null,
+        details: payload?.details || null,
+      };
     } catch (_parseError) {
-      return rawBody;
+      return {
+        message: rawBody,
+        code: null,
+        hint: null,
+        details: null,
+      };
     }
   } catch (_error) {
-    return 'Request failed';
+    return {
+      message: 'Request failed',
+      code: null,
+      hint: null,
+      details: null,
+    };
   }
+}
+
+async function throwHttpError(response, path, baseUrl) {
+  const parsed = await parseError(response);
+  const error = new Error(parsed.message || 'Request failed');
+  error.status = response?.status || null;
+  error.code = parsed.code;
+  error.hint = parsed.hint;
+  error.details = parsed.details;
+  error.request_id = response?.headers?.get?.('x-request-id') || null;
+  error.api_base_url = baseUrl || null;
+  error.request_path = path;
+  error.path = path;
+  throw error;
 }
 
 export async function sendChatMessage({ accessToken, conversationId, message, clientContext = {} }) {
@@ -44,8 +78,41 @@ export async function sendChatMessage({ accessToken, conversationId, message, cl
   }
 
   if (!response.ok) {
-    throw new Error(await parseError(response));
+    await throwHttpError(response, '/api/v1/chat', baseUrl);
   }
 
+  return response.json();
+}
+
+export async function getChatHistory({ accessToken, conversationId = null, limit = 80 }) {
+  let response;
+  let baseUrl;
+  const query = [];
+  if (conversationId) {
+    query.push(`conversation_id=${encodeURIComponent(conversationId)}`);
+  }
+  if (typeof limit === 'number') {
+    query.push(`limit=${encodeURIComponent(String(limit))}`);
+  }
+  const suffix = query.length > 0 ? `?${query.join('&')}` : '';
+  const path = `/api/v1/chat/history${suffix}`;
+
+  try {
+    ({ response, baseUrl } = await fetchWithApiFallback(path, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    }));
+  } catch (error) {
+    throw buildApiNetworkError(error, path, {
+      timeoutMessage: `Request to ${baseUrl || 'the backend'}${path} timed out.`,
+      unreachableMessage: `Unable to reach the backend at ${path}.`,
+    });
+  }
+
+  if (!response.ok) {
+    await throwHttpError(response, path, baseUrl);
+  }
   return response.json();
 }

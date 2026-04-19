@@ -30,8 +30,12 @@ from app.modules.trainer_onboarding.repository import TrainerOnboardingRepositor
 from app.modules.trainer_onboarding.service import TrainerOnboardingService
 from app.modules.trainer_persona.repository import TrainerPersonaRepository
 from app.modules.trainer_persona.service import TrainerPersonaService
+from app.modules.trainer_programs.repository import TrainerProgramRepository
+from app.modules.trainer_programs.service import TrainerProgramService
 from app.modules.trainer_review.repository import TrainerReviewRepository
 from app.modules.trainer_review.service import TrainerReviewService
+from app.modules.trainer_coach.repository import TrainerCoachRepository
+from app.modules.trainer_coach.service import TrainerCoachService
 from app.modules.trainer_assistant.repository import TrainerAssistantRepository
 from app.modules.trainer_assistant.service import TrainerAssistantService
 from app.modules.trainer_settings.repository import TrainerSettingsRepository
@@ -228,6 +232,24 @@ def get_trainer_review_service(
     return TrainerReviewService(repository, ai_feedback_logger_service=ai_feedback_logger_service)
 
 
+def get_trainer_program_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> TrainerProgramRepository:
+    return TrainerProgramRepository(supabase)
+
+
+def get_trainer_program_service(
+    repository: TrainerProgramRepository = Depends(get_trainer_program_repository),
+) -> TrainerProgramService:
+    return TrainerProgramService(repository)
+
+
+def get_trainer_coach_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> TrainerCoachRepository:
+    return TrainerCoachRepository(supabase)
+
+
 def get_ai_feedback_repository(
     supabase: Client = Depends(get_request_scoped_supabase_client),
 ) -> AIFeedbackRepository:
@@ -238,6 +260,18 @@ def get_ai_feedback_service(
     repository: AIFeedbackRepository = Depends(get_ai_feedback_repository),
 ) -> AIFeedbackService:
     return AIFeedbackService(repository)
+
+
+def get_trainer_coach_service(
+    repository: TrainerCoachRepository = Depends(get_trainer_coach_repository),
+    ai_feedback_service: AIFeedbackService = Depends(get_ai_feedback_service),
+    trainer_home_service: TrainerHomeService = Depends(get_trainer_home_service),
+) -> TrainerCoachService:
+    return TrainerCoachService(
+        repository=repository,
+        ai_feedback_service=ai_feedback_service,
+        trainer_home_service=trainer_home_service,
+    )
 
 
 def get_trainer_assistant_repository(

@@ -28,7 +28,16 @@ from app.modules.conversation.routing import (
     RoutingDecision,
     RoutingContext,
 )
-from app.modules.conversation.schemas import ChatRequest, ChatResponse, ConversationState, ConversationUsage, RouteDebug, TokenUsage
+from app.modules.conversation.schemas import (
+    ChatHistoryItem,
+    ChatHistoryResponse,
+    ChatRequest,
+    ChatResponse,
+    ConversationState,
+    ConversationUsage,
+    RouteDebug,
+    TokenUsage,
+)
 from app.modules.profile.service import ProfileService
 from app.modules.trainer_intelligence.service import TrainerIntelligenceService
 from app.modules.trainer_onboarding.service import TrainerOnboardingService
@@ -923,6 +932,89 @@ class ConversationService:
             ),
             route_debug=route_debug,
             conversation_usage=conversation_usage,
+        )
+
+    def _to_history_item(self, row: dict[str, Any]) -> ChatHistoryItem:
+        payload = row.get("structured_payload")
+        structured_payload = payload if isinstance(payload, dict) else {}
+        kind_candidate = structured_payload.get("kind")
+        if not isinstance(kind_candidate, str) or not kind_candidate.strip():
+            kind_candidate = structured_payload.get("stream_kind")
+        if not isinstance(kind_candidate, str) or not kind_candidate.strip():
+            kind_candidate = "chat_message"
+        kind = kind_candidate.strip()
+
+        visibility_raw = structured_payload.get("visibility")
+        if isinstance(visibility_raw, str) and visibility_raw.strip() in {"trainer_private", "system", "client_public"}:
+            visibility = visibility_raw.strip()
+        elif kind == "client_message_sent":
+            visibility = "client_public"
+        elif row.get("role") == "system":
+            visibility = "system"
+        else:
+            visibility = "trainer_private"
+
+        status_raw = structured_payload.get("status")
+        if isinstance(status_raw, str) and status_raw.strip() in {"pending", "confirmed", "failed"}:
+            status = status_raw.strip()
+        else:
+            status = "confirmed"
+
+        role = str(row.get("role") or "assistant").strip().lower()
+        if role not in {"system", "assistant", "user", "tool"}:
+            role = "assistant"
+
+        message_text = str(row.get("message_text") or "")
+        return ChatHistoryItem(
+            id=str(row.get("id")),
+            role=role,  # type: ignore[arg-type]
+            message_text=message_text,
+            kind=kind,
+            visibility=visibility,  # type: ignore[arg-type]
+            status=status,  # type: ignore[arg-type]
+            structured_payload=structured_payload,
+            created_at=row.get("created_at"),
+        )
+
+    def get_history(
+        self,
+        user_id: str,
+        trainer_context: TrainerContext,
+        *,
+        conversation_id: str | None = None,
+        limit: int = 80,
+    ) -> ChatHistoryResponse:
+        del user_id
+        if not trainer_context.trainer_id:
+            if conversation_id:
+                raise ValueError("Conversation not found")
+            raise ValueError("User is not assigned to an active trainer context")
+
+        conversation = None
+        if conversation_id:
+            conversation = self.repository.get_conversation(str(conversation_id))
+            if not conversation:
+                raise ValueError("Conversation not found")
+            if conversation.get("trainer_id") != trainer_context.trainer_id:
+                raise ValueError("Conversation not found")
+            if trainer_context.client_id and conversation.get("client_id") != trainer_context.client_id:
+                raise ValueError("Conversation not found")
+        else:
+            conversation = self.repository.find_active_conversation(
+                trainer_context.client_id,
+                trainer_context.trainer_id,
+                preferred_types=["chat", "coach", "onboarding", "workout_feedback"],
+                fallback_to_any=True,
+            )
+        if not conversation:
+            return ChatHistoryResponse(conversation_id=None, items=[])
+
+        conversation_id_value = str(conversation.get("id"))
+        rows = self.repository.list_messages_with_payload(conversation_id_value, limit=max(1, min(limit, 200)))
+        items = [self._to_history_item(row) for row in rows]
+        return ChatHistoryResponse(
+            conversation_id=conversation_id_value,
+            items=items,
         )
 
     def stream_chat(

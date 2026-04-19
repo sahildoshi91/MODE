@@ -1,14 +1,14 @@
 import json
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.config import settings
 from app.core.dependencies import get_conversation_service, get_trainer_context
 from app.core.tenancy import TrainerContext
-from app.modules.conversation.schemas import ChatRequest, ChatResponse
+from app.modules.conversation.schemas import ChatHistoryResponse, ChatRequest, ChatResponse
 from app.modules.conversation.service import ConversationProcessingError, ConversationService
 
 
@@ -70,6 +70,40 @@ async def chat(
             trainer_context=trainer_context,
             request=request,
         )
+
+
+@router.get("/history", response_model=ChatHistoryResponse)
+async def chat_history(
+    conversation_id: str | None = Query(default=None),
+    limit: int = Query(default=80, ge=1, le=200),
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: ConversationService = Depends(get_conversation_service),
+):
+    try:
+        return service.get_history(
+            user_id=user.id,
+            trainer_context=trainer_context,
+            conversation_id=conversation_id,
+            limit=limit,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if detail.strip().lower() == "conversation not found":
+            raise HTTPException(status_code=404, detail=detail)
+        raise HTTPException(status_code=400, detail=detail)
+    except ConversationProcessingError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    except Exception as exc:
+        logger.exception(
+            "Unexpected chat history failure user_id=%s trainer_id=%s client_id=%s conversation_id=%s",
+            user.id,
+            trainer_context.trainer_id,
+            trainer_context.client_id,
+            conversation_id,
+            exc_info=exc,
+        )
+        raise HTTPException(status_code=502, detail=CONTROLLED_CHAT_ERROR_DETAIL)
 
 
 @router.post("/stream")

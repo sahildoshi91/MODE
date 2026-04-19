@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 from supabase import create_client
 from supabase.lib.client_options import SyncClientOptions
 
-from app.ai.client import GeminiCompletion, TokenUsage
+from app.ai.client import GeminiCompletion, TextCompletion, TokenUsage
 from app.core.config import settings
 from app.db.client import get_supabase_admin_client, get_supabase_user_client
 from app.main import app
@@ -27,16 +28,26 @@ def _staging_env_ready() -> bool:
 
 
 class FakeLLMClient:
-    def create_chat_completion(self, prompt):
-        del prompt
+    def _build_token_usage(self) -> TokenUsage:
+        return TokenUsage(
+            prompt_tokens=21,
+            completion_tokens=9,
+            total_tokens=30,
+            thoughts_tokens=0,
+        )
+
+    def create_chat_completion(self, *args, **kwargs):
+        del args, kwargs
         return GeminiCompletion(
             text="Trainer platform staging smoke response",
-            token_usage=TokenUsage(
-                prompt_tokens=21,
-                completion_tokens=9,
-                total_tokens=30,
-                thoughts_tokens=0,
-            ),
+            token_usage=self._build_token_usage(),
+        )
+
+    def create_chat_completion_with_usage(self, *args, **kwargs):
+        del args, kwargs
+        return TextCompletion(
+            text='{"headline":"Draft Ready","summary":"Trainer platform staging smoke response","sections":[{"title":"Draft","text":"Trainer platform staging smoke response"}]}',
+            token_usage=self._build_token_usage(),
         )
 
     def stream_chat_completion(self, prompt):
@@ -53,6 +64,8 @@ class FakeLLMClient:
     "Set MODE_RUN_STAGING_SUPABASE_TESTS=1 with real SUPABASE_URL/SUPABASE_ANON_KEY/SUPABASE_SERVICE_ROLE_KEY to run.",
 )
 class TrainerPlatformStagingSmokeTests(unittest.TestCase):
+    RETRY_ATTEMPTS = 4
+
     @classmethod
     def setUpClass(cls):
         cls.admin = get_supabase_admin_client()
@@ -125,12 +138,15 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
 
     @classmethod
     def _create_auth_user(cls, email: str) -> dict[str, str]:
-        response = cls.admin.auth.admin.create_user(
-            {
-                "email": email,
-                "password": cls.password,
-                "email_confirm": True,
-            }
+        response = cls._run_with_retries(
+            lambda: cls.admin.auth.admin.create_user(
+                {
+                    "email": email,
+                    "password": cls.password,
+                    "email_confirm": True,
+                }
+            ),
+            label=f"create_auth_user:{email}",
         )
         user = response.user
         cls.user_ids.append(user.id)
@@ -145,48 +161,105 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
         tenant_slug: str,
         trainer_display_name: str,
     ) -> tuple[str, str]:
-        response = cls.admin.rpc(
-            "bootstrap_trainer_tenant",
-            {
-                "trainer_user_id": trainer_user_id,
-                "tenant_name": tenant_name,
-                "tenant_slug": tenant_slug,
-                "trainer_display_name": trainer_display_name,
-                "default_persona_name": "Staging Coach",
-                "tone_description": "Clear and practical.",
-                "coaching_philosophy": "Protect isolation and consistency.",
-            },
-        ).execute()
+        response = cls._run_with_retries(
+            lambda: cls.admin.rpc(
+                "bootstrap_trainer_tenant",
+                {
+                    "trainer_user_id": trainer_user_id,
+                    "tenant_name": tenant_name,
+                    "tenant_slug": tenant_slug,
+                    "trainer_display_name": trainer_display_name,
+                    "default_persona_name": "Staging Coach",
+                    "tone_description": "Clear and practical.",
+                    "coaching_philosophy": "Protect isolation and consistency.",
+                },
+            ).execute(),
+            label=f"bootstrap_trainer_tenant:{tenant_slug}",
+        )
         row = response.data[0]
         return row["tenant_id"], row["trainer_id"]
 
     @classmethod
     def _assign_client_to_trainer(cls, *, client_user_id: str, trainer_record_id: str) -> str:
-        response = cls.admin.rpc(
-            "assign_client_to_trainer",
-            {
-                "client_user_id": client_user_id,
-                "trainer_record_id": trainer_record_id,
-            },
-        ).execute()
+        response = cls._run_with_retries(
+            lambda: cls.admin.rpc(
+                "assign_client_to_trainer",
+                {
+                    "client_user_id": client_user_id,
+                    "trainer_record_id": trainer_record_id,
+                },
+            ).execute(),
+            label=f"assign_client_to_trainer:{client_user_id}",
+        )
         row = response.data[0]
         return row["client_id"]
 
     @classmethod
     def _sign_in_and_get_access_token(cls, email: str) -> str:
-        response = cls.anon.auth.sign_in_with_password(
-            {
-                "email": email,
-                "password": cls.password,
-            }
+        response = cls._run_with_retries(
+            lambda: cls.anon.auth.sign_in_with_password(
+                {
+                    "email": email,
+                    "password": cls.password,
+                }
+            ),
+            label=f"sign_in_with_password:{email}",
         )
         session = getattr(response, "session", None)
         if not session or not session.access_token:
             raise RuntimeError(f"Failed to sign in staging test user {email}")
         return session.access_token
 
+    @classmethod
+    def _run_with_retries(cls, fn, *, label: str):
+        last_error = None
+        for attempt in range(1, cls.RETRY_ATTEMPTS + 1):
+            try:
+                return fn()
+            except Exception as exc:  # pragma: no cover - staging-only reliability helper
+                last_error = exc
+                if attempt >= cls.RETRY_ATTEMPTS:
+                    raise
+                time.sleep(0.45 * attempt)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"Retry helper exhausted without result for {label}")
+
     def _headers(self, access_token: str) -> dict[str, str]:
         return {"Authorization": f"Bearer {access_token}"}
+
+    def _assert_schedule_schema_preflight(self) -> None:
+        try:
+            self.admin.table("trainer_daily_schedule").select("id, meeting_location").limit(1).execute()
+        except Exception as exc:  # pragma: no cover - only runs in staging integration mode
+            self.fail(
+                "Staging schema preflight failed: trainer_daily_schedule.meeting_location is missing. "
+                "Apply backend/sql/20260417_add_meeting_location_to_trainer_daily_schedule.sql before signoff. "
+                f"Underlying error: {exc}"
+            )
+
+    def _assert_trainer_assistant_storage_preflight(self) -> None:
+        try:
+            self.admin.table("trainers").select("assistant_last_client_id").limit(1).execute()
+            self.admin.table("trainer_assistant_router_events").select("id").limit(1).execute()
+        except Exception as exc:  # pragma: no cover - only runs in staging integration mode
+            self.fail(
+                "Staging schema preflight failed for trainer assistant storage. "
+                "Apply backend/sql/20260418b_add_trainer_assistant_last_client_and_router_events.sql before signoff. "
+                f"Underlying error: {exc}"
+            )
+
+    def _latest_queue_item_for_client(self, trainer_access_token: str, client_id: str) -> dict:
+        queue_response = self.client.get(
+            "/api/v1/trainer-coach/queue?limit=120",
+            headers=self._headers(trainer_access_token),
+        )
+        self.assertEqual(queue_response.status_code, 200, queue_response.text)
+        queue_items = queue_response.json().get("items", [])
+        for item in queue_items:
+            if item.get("client_id") == client_id:
+                return item
+        self.fail(f"Expected at least one queue item for client_id={client_id}.")
 
     def _send_chat(self, access_token: str, message: str) -> dict:
         with (
@@ -205,7 +278,11 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.text)
         return response.json()
 
+    def test_staging_preflight_schedule_schema_has_meeting_location(self):
+        self._assert_schedule_schema_preflight()
+
     def test_trainer_actor_can_access_own_command_center_and_client_detail(self):
+        self._assert_schedule_schema_preflight()
         command_center_response = self.client.get(
             "/api/v1/trainer-home/command-center",
             headers=self._headers(self.trainer_1_access_token),
@@ -218,6 +295,239 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
         )
         self.assertEqual(own_client_response.status_code, 200, own_client_response.text)
         self.assertEqual(own_client_response.json()["client"]["client_id"], self.client_1_id)
+
+    def test_trainer_coach_workspace_and_queue_routes_return_for_owner(self):
+        self._assert_schedule_schema_preflight()
+
+        workspace_response = self.client.get(
+            "/api/v1/trainer-coach/workspace",
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(workspace_response.status_code, 200, workspace_response.text)
+        workspace_payload = workspace_response.json()
+        self.assertIn("summary", workspace_payload)
+        self.assertIn("queue", workspace_payload)
+        self.assertIn("events", workspace_payload)
+        self.assertIn("sync", workspace_payload)
+
+        queue_response = self.client.get(
+            "/api/v1/trainer-coach/queue?limit=50",
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(queue_response.status_code, 200, queue_response.text)
+        queue_payload = queue_response.json()
+        self.assertIn("count", queue_payload)
+        self.assertIn("items", queue_payload)
+
+    def test_trainer_assistant_execute_route_is_non_500_for_owner(self):
+        self._assert_schedule_schema_preflight()
+        self._assert_trainer_assistant_storage_preflight()
+
+        with (
+            patch("app.modules.trainer_assistant.service.GeminiClient", return_value=FakeLLMClient()),
+            patch("app.modules.trainer_assistant.service.OpenAIClient", return_value=FakeLLMClient()),
+            patch("app.modules.trainer_assistant.service.AnthropicClient", return_value=FakeLLMClient()),
+        ):
+            response = self.client.post(
+                "/api/v1/trainer-assistant/execute",
+                json={
+                    "client_id": self.client_1_id,
+                    "action_type": "message_client",
+                    "message": "Draft a short accountability follow-up.",
+                },
+                headers=self._headers(self.trainer_1_access_token),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload.get("draft_id"), response.text)
+        self.assertEqual(payload.get("output", {}).get("action_type"), "message_client")
+
+    def test_trainer_coach_events_are_idempotent_and_trainer_scoped(self):
+        event_key = f"coach-event-smoke-{self.run_id}-{uuid4().hex[:8]}"
+        payload = {
+            "event_key": event_key,
+            "event_type": "rule_updated",
+            "message": "Rule updated from staging smoke",
+            "severity": "success",
+            "visibility": "system",
+            "status": "confirmed",
+            "client_id": self.client_1_id,
+            "payload": {"source": "staging_smoke"},
+        }
+
+        create_response = self.client.post(
+            "/api/v1/trainer-coach/events",
+            json=payload,
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(create_response.status_code, 200, create_response.text)
+        created = create_response.json()
+        self.assertEqual(created.get("event_type"), "rule_updated")
+        self.assertEqual(created.get("client_id"), self.client_1_id)
+
+        replay_response = self.client.post(
+            "/api/v1/trainer-coach/events",
+            json=payload,
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(replay_response.status_code, 200, replay_response.text)
+        replayed = replay_response.json()
+        self.assertEqual(replayed.get("id"), created.get("id"))
+
+        cross_trainer_response = self.client.post(
+            "/api/v1/trainer-coach/events",
+            json=payload,
+            headers=self._headers(self.trainer_2_access_token),
+        )
+        self.assertEqual(cross_trainer_response.status_code, 404, cross_trainer_response.text)
+
+    def test_trainer_program_templates_crud_and_cross_trainer_denied(self):
+        create_response = self.client.post(
+            "/api/v1/trainer-programs/templates",
+            json={
+                "name": f"Stage Template {self.run_id[:8]}",
+                "goal_type": "strength",
+                "experience_level": "intermediate",
+                "equipment_access": "full_gym",
+                "frequency": 3,
+                "template_json": {"blocks": [{"day": 1, "focus": "lower"}]},
+                "metadata": {"source": "staging_smoke"},
+            },
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(create_response.status_code, 200, create_response.text)
+        created_template = create_response.json()
+        template_id = created_template.get("id")
+        self.assertTrue(template_id)
+
+        list_response = self.client.get(
+            "/api/v1/trainer-programs/templates?limit=120",
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(list_response.status_code, 200, list_response.text)
+        listed_ids = [item.get("id") for item in list_response.json().get("items", [])]
+        self.assertIn(template_id, listed_ids)
+
+        patch_response = self.client.patch(
+            f"/api/v1/trainer-programs/templates/{template_id}",
+            json={
+                "name": f"Stage Template Updated {self.run_id[:8]}",
+                "frequency": 4,
+                "metadata": {"source": "staging_smoke_patch"},
+            },
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(patch_response.status_code, 200, patch_response.text)
+        self.assertEqual(patch_response.json().get("frequency"), 4)
+
+        cross_patch_response = self.client.patch(
+            f"/api/v1/trainer-programs/templates/{template_id}",
+            json={"name": "Cross tenant patch should fail"},
+            headers=self._headers(self.trainer_2_access_token),
+        )
+        self.assertEqual(cross_patch_response.status_code, 404, cross_patch_response.text)
+
+        cross_archive_response = self.client.post(
+            f"/api/v1/trainer-programs/templates/{template_id}/archive",
+            headers=self._headers(self.trainer_2_access_token),
+        )
+        self.assertEqual(cross_archive_response.status_code, 404, cross_archive_response.text)
+
+        archive_response = self.client.post(
+            f"/api/v1/trainer-programs/templates/{template_id}/archive",
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(archive_response.status_code, 200, archive_response.text)
+        self.assertTrue(archive_response.json().get("is_archived"))
+
+    def test_trainer_coach_approve_bundle_applies_program_memory_delivery_and_idempotency(self):
+        prompt = f"Adjust plan and outreach for smoke flow {self.run_id[:8]}-{uuid4().hex[:6]}"
+        self._send_chat(self.client_1_access_token, prompt)
+        queue_item = self._latest_queue_item_for_client(self.trainer_1_access_token, self.client_1_id)
+        output_id = queue_item.get("output_id")
+        self.assertTrue(output_id)
+
+        idempotency_key = f"approve-smoke-{self.run_id}-{uuid4().hex[:8]}"
+        approve_payload = {
+            "edited_output_text": f"Approved via staging smoke {self.run_id[:8]}",
+            "edited_output_json": {
+                "summary": f"Approved via staging smoke {self.run_id[:8]}",
+                "action_type": "adjust_plan",
+            },
+            "idempotency_key": idempotency_key,
+            "apply_bundle": {
+                "memory_deltas": [
+                    {
+                        "memory_key": f"smoke_memory_{self.run_id[:8]}",
+                        "text": "Client responds well to concise weekly accountability nudges.",
+                        "memory_type": "note",
+                        "visibility": "ai_usable",
+                        "tags": ["staging", "smoke"],
+                    }
+                ],
+                "program_template": {
+                    "name": f"Program from approve {self.run_id[:8]}",
+                    "goal_type": "fat_loss",
+                    "experience_level": "beginner",
+                    "equipment_access": "minimal",
+                    "frequency": 3,
+                    "template_json": {
+                        "blocks": [
+                            {"day": 1, "focus": "full_body"},
+                            {"day": 3, "focus": "conditioning"},
+                        ]
+                    },
+                    "metadata": {"source": "staging_smoke_approve_bundle"},
+                },
+                "delivery": {
+                    "mode": "send_client_message",
+                    "message_text": "Sharing your updated plan now.",
+                },
+            },
+        }
+
+        approve_response = self.client.post(
+            f"/api/v1/trainer-coach/queue/{output_id}/approve",
+            json=approve_payload,
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(approve_response.status_code, 200, approve_response.text)
+        approve_body = approve_response.json()
+        event_types = {event.get("event_type") for event in approve_body.get("events", [])}
+        self.assertIn("draft_approved", event_types)
+        self.assertIn("memory_saved", event_types)
+        self.assertIn("program_updated", event_types)
+        self.assertIn("client_message_sent", event_types)
+        self.assertEqual(approve_body.get("delivery", {}).get("mode"), "sent")
+        self.assertTrue(approve_body.get("program_template", {}).get("applied"))
+        conversation_id = approve_body.get("delivery", {}).get("conversation_id")
+        message_id = approve_body.get("delivery", {}).get("message_id")
+        self.assertTrue(conversation_id)
+        self.assertTrue(message_id)
+
+        replay_response = self.client.post(
+            f"/api/v1/trainer-coach/queue/{output_id}/approve",
+            json=approve_payload,
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(replay_response.status_code, 200, replay_response.text)
+        replay_body = replay_response.json()
+        self.assertEqual(replay_body.get("delivery", {}).get("conversation_id"), conversation_id)
+        self.assertEqual(replay_body.get("delivery", {}).get("message_id"), message_id)
+
+        history_response = self.client.get(
+            f"/api/v1/chat/history?conversation_id={conversation_id}",
+            headers=self._headers(self.client_1_access_token),
+        )
+        self.assertEqual(history_response.status_code, 200, history_response.text)
+        history_items = history_response.json().get("items", [])
+        self.assertTrue(
+            any(
+                item.get("kind") == "client_message_sent" and item.get("visibility") == "client_public"
+                for item in history_items
+            )
+        )
 
     def test_client_and_outsider_cannot_access_trainer_only_routes(self):
         client_response = self.client.get(

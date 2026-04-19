@@ -1,5 +1,13 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 
 import {
   HeaderBar,
@@ -11,6 +19,7 @@ import {
   SafeScreen,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { buildTrainerRouteDiagnosticsBundle } from '../../trainerPlatform/utils/trainerRouteDiagnostics';
 import {
   approveTrainerAssistantDraft,
   editTrainerAssistantDraft,
@@ -25,6 +34,7 @@ const ACTION_CHIPS = [
   { actionType: 'analyze_client', label: 'Analyze Client' },
   { actionType: 'message_client', label: 'Message Client' },
 ];
+const COPY_FEEDBACK_TIMEOUT_MS = 2200;
 
 function buildDefaultPrompt(actionType, clientName = 'this client') {
   if (actionType === 'build_program') {
@@ -72,6 +82,81 @@ function getClientNameById(clients, clientId) {
   return record?.client_name || 'this client';
 }
 
+function extractConnectivityProbe(error) {
+  const probe = error?.connectivity_probe || error?.connectivityProbe || null;
+  return probe && typeof probe === 'object' ? probe : null;
+}
+
+function resolveRecommendedApiBase(error, connectivityProbe) {
+  if (typeof error?.recommended_api_base_url === 'string' && error.recommended_api_base_url) {
+    return error.recommended_api_base_url;
+  }
+  if (typeof error?.recommendedApiBaseUrl === 'string' && error.recommendedApiBaseUrl) {
+    return error.recommendedApiBaseUrl;
+  }
+  if (typeof connectivityProbe?.first_reachable_base_url === 'string' && connectivityProbe.first_reachable_base_url) {
+    return connectivityProbe.first_reachable_base_url;
+  }
+  const candidates = Array.isArray(connectivityProbe?.candidate_api_base_urls)
+    ? connectivityProbe.candidate_api_base_urls
+    : [];
+  return candidates[0] || null;
+}
+
+function buildTrainerRouteError(error, fallbackMessage) {
+  const message = String(error?.message || fallbackMessage);
+  const stage = typeof error?.stage === 'string' ? error.stage : null;
+  const status = typeof error?.status === 'number' ? error.status : null;
+  const requestPath = typeof error?.request_path === 'string'
+    ? error.request_path
+    : (typeof error?.path === 'string' ? error.path : null);
+  const apiBase = typeof error?.api_base_url === 'string'
+    ? error.api_base_url
+    : (typeof error?.resolved_api_base_url === 'string' ? error.resolved_api_base_url : null);
+  const attemptedBaseUrls = Array.isArray(error?.attempted_base_urls)
+    ? error.attempted_base_urls
+    : (Array.isArray(error?.attemptedBaseUrls) ? error.attemptedBaseUrls : []);
+  const requestId = typeof error?.request_id === 'string' ? error.request_id : null;
+  const code = error?.code ?? null;
+  const hint = error?.hint ?? null;
+  const details = error?.details ?? null;
+  const connectivityProbe = extractConnectivityProbe(error);
+  const recommendedApiBase = resolveRecommendedApiBase(error, connectivityProbe);
+  const failoverAttempted = typeof error?.failover_attempted === 'boolean'
+    ? error.failover_attempted
+    : Boolean(error?.failoverAttempted || attemptedBaseUrls.length > 1);
+  const failoverApplied = typeof error?.failover_applied === 'boolean'
+    ? error.failover_applied
+    : Boolean(error?.failoverApplied);
+  const isStaleBackendRoute = (
+    Boolean(error?.is_missing_trainer_route)
+    || (
+      status === 404
+      && message.trim().toLowerCase() === 'not found'
+      && typeof requestPath === 'string'
+      && requestPath.startsWith('/api/v1/trainer-assistant/')
+    )
+  );
+
+  return {
+    message,
+    stage,
+    status,
+    requestPath,
+    apiBase,
+    attemptedBaseUrls,
+    failoverAttempted,
+    failoverApplied,
+    requestId,
+    code,
+    hint,
+    details,
+    connectivityProbe,
+    recommendedApiBase,
+    isStaleBackendRoute,
+  };
+}
+
 export default function TrainerAssistantScreen({
   accessToken,
   bottomInset = 0,
@@ -83,6 +168,8 @@ export default function TrainerAssistantScreen({
   const [bootstrapPayload, setBootstrapPayload] = useState(null);
   const [isLoadingBootstrap, setIsLoadingBootstrap] = useState(true);
   const [bootstrapError, setBootstrapError] = useState(null);
+  const [copyFeedback, setCopyFeedback] = useState(null);
+  const copyFeedbackTimerRef = useRef(null);
 
   const [selectedClientId, setSelectedClientId] = useState(launchClientId);
   const [selectedActionType, setSelectedActionType] = useState('analyze_client');
@@ -95,6 +182,7 @@ export default function TrainerAssistantScreen({
 
   const [isExecuting, setIsExecuting] = useState(false);
   const [executionError, setExecutionError] = useState(null);
+  const [executionErrorDetails, setExecutionErrorDetails] = useState(null);
 
   const [isMutatingDraft, setIsMutatingDraft] = useState(false);
   const [mutationError, setMutationError] = useState(null);
@@ -125,6 +213,33 @@ export default function TrainerAssistantScreen({
   const activeContextBundle = bootstrapPayload?.context_bundle && typeof bootstrapPayload.context_bundle === 'object'
     ? bootstrapPayload.context_bundle
     : {};
+
+  const showCopyFeedback = useCallback((message) => {
+    if (copyFeedbackTimerRef.current) {
+      clearTimeout(copyFeedbackTimerRef.current);
+    }
+    setCopyFeedback(message);
+    copyFeedbackTimerRef.current = setTimeout(() => {
+      setCopyFeedback(null);
+      copyFeedbackTimerRef.current = null;
+    }, COPY_FEEDBACK_TIMEOUT_MS);
+  }, []);
+
+  const handleCopyExecutionError = useCallback(async () => {
+    if (!executionErrorDetails) {
+      return;
+    }
+    try {
+      const diagnosticsBundle = buildTrainerRouteDiagnosticsBundle({
+        surface: 'Trainer Assistant Execute',
+        errorDetails: executionErrorDetails,
+      });
+      await Clipboard.setStringAsync(diagnosticsBundle);
+      showCopyFeedback('Copied diagnostics');
+    } catch (_error) {
+      showCopyFeedback('Unable to copy diagnostics');
+    }
+  }, [executionErrorDetails, showCopyFeedback]);
 
   const loadBootstrap = useCallback(async ({
     preferredClientId = null,
@@ -161,7 +276,7 @@ export default function TrainerAssistantScreen({
         return defaultPrompt;
       });
     } catch (error) {
-      setBootstrapError(error?.message || 'Unable to load trainer assistant context.');
+      setBootstrapError(buildTrainerRouteError(error, 'Unable to load trainer assistant context.'));
     } finally {
       setIsLoadingBootstrap(false);
     }
@@ -172,6 +287,13 @@ export default function TrainerAssistantScreen({
     // Deliberately tied to entry context changes to avoid re-fetching while editing prompt text.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [launchClientId, accessToken]);
+
+  useEffect(() => () => {
+    if (copyFeedbackTimerRef.current) {
+      clearTimeout(copyFeedbackTimerRef.current);
+      copyFeedbackTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (String(promptInput || '').trim()) {
@@ -191,11 +313,13 @@ export default function TrainerAssistantScreen({
     }
     if (!clientId) {
       setExecutionError('Select a client to generate a draft.');
+      setExecutionErrorDetails(null);
       return;
     }
 
     setIsExecuting(true);
     setExecutionError(null);
+    setExecutionErrorDetails(null);
     setMutationError(null);
     setMutationSuccess(null);
 
@@ -214,11 +338,29 @@ export default function TrainerAssistantScreen({
       setSelectedClientId(clientId);
       await loadBootstrap({ preferredClientId: clientId, keepCurrentPrompt: true });
     } catch (error) {
-      setExecutionError(error?.message || 'Unable to generate trainer assistant draft.');
+      const parsedError = buildTrainerRouteError(error, 'Unable to generate trainer assistant draft.');
+      setExecutionError(parsedError.message || 'Unable to generate trainer assistant draft.');
+      setExecutionErrorDetails(parsedError);
     } finally {
       setIsExecuting(false);
     }
   }, [accessToken, isExecuting, loadBootstrap, promptInput, selectedActionType, selectedClientId]);
+
+  const handleCopyBootstrapError = useCallback(async () => {
+    if (!bootstrapError) {
+      return;
+    }
+    try {
+      const diagnosticsBundle = buildTrainerRouteDiagnosticsBundle({
+        surface: 'Trainer Assistant Bootstrap',
+        errorDetails: bootstrapError,
+      });
+      await Clipboard.setStringAsync(diagnosticsBundle);
+      showCopyFeedback('Copied diagnostics');
+    } catch (_error) {
+      showCopyFeedback('Unable to copy diagnostics');
+    }
+  }, [bootstrapError, showCopyFeedback]);
 
   const handleActionChipPress = (actionType) => {
     setSelectedActionType(actionType);
@@ -353,6 +495,13 @@ export default function TrainerAssistantScreen({
     });
   };
 
+  const executionStaleRoute = Boolean(executionErrorDetails?.isStaleBackendRoute);
+  const executionConnectivityError = Boolean(executionErrorDetails?.stage === 'network' && !executionStaleRoute);
+  const executionRecommendedApiBase = executionErrorDetails?.recommendedApiBase || null;
+  const executionAttemptedHosts = Array.isArray(executionErrorDetails?.attemptedBaseUrls)
+    ? executionErrorDetails.attemptedBaseUrls.filter(Boolean)
+    : [];
+
   const renderEditor = () => {
     const actionType = draftOutput?.action_type;
     const editablePayload = draftOutput?.editable_payload || {};
@@ -452,14 +601,21 @@ export default function TrainerAssistantScreen({
           {topToolbar}
         </View>
       ) : null}
-      <ScrollView
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: Math.max(0, bottomInset) + theme.spacing[3] },
-        ]}
-        showsVerticalScrollIndicator={false}
+      <KeyboardAvoidingView
+        style={styles.keyboardWrap}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={0}
       >
-        <ModeCard style={styles.card}>
+        <ScrollView
+          contentContainerStyle={[
+            styles.content,
+            { paddingBottom: Math.max(0, bottomInset) + theme.spacing[3] },
+          ]}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          showsVerticalScrollIndicator={false}
+        >
+          <ModeCard style={styles.card}>
           <View style={styles.cardHeaderRow}>
             <ModeText variant="label">Client Context</ModeText>
             <ModeButton
@@ -477,7 +633,50 @@ export default function TrainerAssistantScreen({
             </View>
           ) : null}
           {bootstrapError ? (
-            <ModeText variant="caption" tone="error">{bootstrapError}</ModeText>
+            <View testID="trainer-assistant-bootstrap-error" style={styles.routeDiagnosticBlock}>
+              <ModeText variant="caption" tone="error">{bootstrapError.message}</ModeText>
+              {bootstrapError.isStaleBackendRoute ? (
+                <>
+                  <ModeText variant="caption" tone="secondary">
+                    The backend appears stale and is missing trainer assistant routes.
+                  </ModeText>
+                  {bootstrapError.requestPath ? (
+                    <ModeText variant="caption" tone="tertiary">
+                      Missing route: {bootstrapError.requestPath}
+                    </ModeText>
+                  ) : null}
+                  {bootstrapError.apiBase ? (
+                    <ModeText variant="caption" tone="tertiary">
+                      API base: {bootstrapError.apiBase}
+                    </ModeText>
+                  ) : null}
+                  <ModeText variant="caption" tone="tertiary">
+                    Restart or redeploy backend from current repo code, then verify `/openapi.json`.
+                  </ModeText>
+                  <ModeButton
+                    testID="trainer-assistant-bootstrap-retry"
+                    title={isLoadingBootstrap ? 'Retrying...' : 'Retry'}
+                    variant="secondary"
+                    size="md"
+                    onPress={() => loadBootstrap({ preferredClientId: selectedClientId, keepCurrentPrompt: true })}
+                    disabled={isLoadingBootstrap}
+                    style={styles.actionButton}
+                  />
+                  <ModeButton
+                    testID="trainer-assistant-bootstrap-copy"
+                    title="Copy details"
+                    variant="ghost"
+                    size="md"
+                    onPress={handleCopyBootstrapError}
+                    disabled={isLoadingBootstrap}
+                    style={styles.actionButton}
+                  />
+                  {copyFeedback ? (
+                    <ModeText variant="caption" tone="secondary">{copyFeedback}</ModeText>
+                  ) : null}
+                </>
+              ) : null}
+            </View>
           ) : null}
           <View style={styles.chipRow}>
             {clients.map((client) => (
@@ -508,132 +707,198 @@ export default function TrainerAssistantScreen({
               </ModeText>
             </View>
           ) : null}
-        </ModeCard>
+          </ModeCard>
 
-        <ModeCard style={styles.card}>
-          <ModeText variant="label">Pulse</ModeText>
-          <ModeText variant="caption" tone="secondary">
-            Tap any signal to launch a focused action.
-          </ModeText>
-          {pulseInsights.length === 0 ? (
+          <ModeCard style={styles.card}>
+            <ModeText variant="label">Pulse</ModeText>
             <ModeText variant="caption" tone="secondary">
-              No high-priority insights right now.
+              Tap any signal to launch a focused action.
             </ModeText>
-          ) : (
-            <View style={styles.insightList}>
-              {pulseInsights.slice(0, 6).map((insight) => (
-                <ModeCard key={insight.id} variant="tinted" style={styles.insightCard}>
-                  <ModeText variant="label">{insight.label}</ModeText>
-                  <ModeText variant="caption" tone="secondary">{insight.detail}</ModeText>
-                  <ModeButton
-                    title="Use Insight"
-                    variant="secondary"
-                    size="md"
-                    onPress={() => handlePulseInsightPress(insight)}
-                    testID={`trainer-assistant-pulse-${insight.id}`}
-                    style={styles.insightAction}
-                  />
-                </ModeCard>
+            {pulseInsights.length === 0 ? (
+              <ModeText variant="caption" tone="secondary">
+                No high-priority insights right now.
+              </ModeText>
+            ) : (
+              <View style={styles.insightList}>
+                {pulseInsights.slice(0, 6).map((insight) => (
+                  <ModeCard key={insight.id} variant="tinted" style={styles.insightCard}>
+                    <ModeText variant="label">{insight.label}</ModeText>
+                    <ModeText variant="caption" tone="secondary">{insight.detail}</ModeText>
+                    <ModeButton
+                      title="Use Insight"
+                      variant="secondary"
+                      size="md"
+                      onPress={() => handlePulseInsightPress(insight)}
+                      testID={`trainer-assistant-pulse-${insight.id}`}
+                      style={styles.insightAction}
+                    />
+                  </ModeCard>
+                ))}
+              </View>
+            )}
+          </ModeCard>
+
+          <ModeCard style={styles.card}>
+            <ModeText variant="label">Action Chips</ModeText>
+            <View style={styles.chipRow}>
+              {ACTION_CHIPS.map((chip) => (
+                <ModeChip
+                  key={chip.actionType}
+                  testID={`trainer-assistant-action-${chip.actionType}`}
+                  label={chip.label}
+                  selected={selectedActionType === chip.actionType}
+                  onPress={() => handleActionChipPress(chip.actionType)}
+                />
               ))}
             </View>
-          )}
-        </ModeCard>
-
-        <ModeCard style={styles.card}>
-          <ModeText variant="label">Action Chips</ModeText>
-          <View style={styles.chipRow}>
-            {ACTION_CHIPS.map((chip) => (
-              <ModeChip
-                key={chip.actionType}
-                testID={`trainer-assistant-action-${chip.actionType}`}
-                label={chip.label}
-                selected={selectedActionType === chip.actionType}
-                onPress={() => handleActionChipPress(chip.actionType)}
-              />
-            ))}
-          </View>
-          <ModeText variant="caption" tone="secondary">
-            Suggested prompts:
-          </ModeText>
-          <View style={styles.suggestedPromptList}>
-            {suggestedPrompts.map((prompt, index) => (
-              <ModeButton
-                key={`${prompt}-${index}`}
-                title={prompt}
-                variant="ghost"
-                size="md"
-                onPress={() => handleSuggestedPromptPress(prompt)}
-                style={styles.suggestedPromptButton}
-                testID={`trainer-assistant-suggested-${index + 1}`}
-              />
-            ))}
-          </View>
-          <ModeInput
-            testID="trainer-assistant-prompt-input"
-            value={promptInput}
-            onChangeText={setPromptInput}
-            placeholder="Describe what you want the assistant to draft..."
-            multiline
-            style={styles.promptInput}
-          />
-          <ModeButton
-            testID="trainer-assistant-generate"
-            title={isExecuting ? 'Generating...' : 'Generate Draft'}
-            onPress={() => runExecution()}
-            disabled={isExecuting}
-          />
-          {executionError ? (
-            <ModeText variant="caption" tone="error">{executionError}</ModeText>
-          ) : null}
-        </ModeCard>
-
-        {draftOutput ? (
-          <ModeCard testID="trainer-assistant-preview-card" style={styles.card}>
-            <ModeText variant="h3">{draftOutput.headline || 'Draft Preview'}</ModeText>
-            <ModeText variant="bodySm" tone="secondary">{draftOutput.summary}</ModeText>
-            <ModeText variant="caption" tone="tertiary">
-              {`Status: ${draftStatus} · Route: ${routeSummary?.reason || 'n/a'}`}
-            </ModeText>
-            {renderSections()}
-            <ModeText variant="label">Preview & Edit</ModeText>
-            {renderEditor()}
-            {mutationError ? (
-              <ModeText variant="caption" tone="error">{mutationError}</ModeText>
-            ) : null}
-            {mutationSuccess ? (
-              <ModeText variant="caption" tone="success">{mutationSuccess}</ModeText>
-            ) : null}
-            <View style={styles.previewActionRow}>
-              <ModeButton
-                testID="trainer-assistant-edit"
-                title={isMutatingDraft ? 'Saving...' : 'Save Edit'}
-                variant="secondary"
-                onPress={() => runDraftMutation('edit')}
-                disabled={isMutatingDraft}
-                style={styles.previewAction}
-              />
-              <ModeButton
-                testID="trainer-assistant-approve"
-                title={isMutatingDraft ? 'Approving...' : 'Approve'}
-                onPress={() => runDraftMutation('approve')}
-                disabled={isMutatingDraft}
-                style={styles.previewAction}
-              />
-              <ModeButton
-                testID="trainer-assistant-reject"
-                title={isMutatingDraft ? 'Rejecting...' : 'Reject'}
-                variant="ghost"
-                onPress={() => runDraftMutation('reject')}
-                disabled={isMutatingDraft}
-                style={styles.previewAction}
-              />
-            </View>
             <ModeText variant="caption" tone="secondary">
-              Approve only persists a reviewed draft artifact. No client-impacting auto-publish occurs in V1.
+              Suggested prompts:
             </ModeText>
+            <View style={styles.suggestedPromptList}>
+              {suggestedPrompts.map((prompt, index) => (
+                <ModeButton
+                  key={`${prompt}-${index}`}
+                  title={prompt}
+                  variant="ghost"
+                  size="md"
+                  onPress={() => handleSuggestedPromptPress(prompt)}
+                  style={styles.suggestedPromptButton}
+                  testID={`trainer-assistant-suggested-${index + 1}`}
+                />
+              ))}
+            </View>
+            <ModeInput
+              testID="trainer-assistant-prompt-input"
+              value={promptInput}
+              onChangeText={setPromptInput}
+              placeholder="Describe what you want the assistant to draft..."
+              multiline
+              style={styles.promptInput}
+            />
+            <ModeButton
+              testID="trainer-assistant-generate"
+              title={isExecuting ? 'Generating...' : 'Generate Draft'}
+              onPress={() => runExecution()}
+              disabled={isExecuting}
+            />
+            {executionError && executionStaleRoute ? (
+              <View style={styles.routeDiagnosticBlock}>
+                <ModeText variant="caption" tone="error">{executionError}</ModeText>
+                <ModeText variant="caption" tone="secondary">
+                  The backend appears stale and is missing trainer assistant routes.
+                </ModeText>
+                {executionErrorDetails?.requestPath ? (
+                  <ModeText variant="caption" tone="tertiary">
+                    Missing route: {executionErrorDetails.requestPath}
+                  </ModeText>
+                ) : null}
+                {executionErrorDetails?.apiBase ? (
+                  <ModeText variant="caption" tone="tertiary">
+                    API base: {executionErrorDetails.apiBase}
+                  </ModeText>
+                ) : null}
+                <ModeText variant="caption" tone="tertiary">
+                  Restart or redeploy backend from current repo code, then verify `/openapi.json`.
+                </ModeText>
+              </View>
+            ) : null}
+            {executionError && executionConnectivityError ? (
+              <View testID="trainer-assistant-execution-connectivity" style={styles.routeDiagnosticBlock}>
+                <ModeText variant="caption" tone="error">{executionError}</ModeText>
+                <ModeText variant="caption" tone="secondary">
+                  Connectivity check: trainer assistant could not reach FastAPI from this device path.
+                </ModeText>
+                {executionErrorDetails?.apiBase ? (
+                  <ModeText variant="caption" tone="tertiary">
+                    Resolved API base: {executionErrorDetails.apiBase}
+                  </ModeText>
+                ) : null}
+                {executionAttemptedHosts.length > 0 ? (
+                  <ModeText variant="caption" tone="tertiary">
+                    Attempted hosts: {executionAttemptedHosts.join(', ')}
+                  </ModeText>
+                ) : null}
+                {executionRecommendedApiBase ? (
+                  <ModeText variant="caption" tone="tertiary">
+                    Recommended API base: {executionRecommendedApiBase}
+                  </ModeText>
+                ) : null}
+                <ModeText variant="caption" tone="tertiary">
+                  Start backend with `cd backend && ./venv/bin/python main.py`.
+                </ModeText>
+                <ModeText variant="caption" tone="tertiary">
+                  On your phone browser, open `{`${executionRecommendedApiBase || executionErrorDetails?.apiBase || 'http://<LAN-IP>:8000'}/healthz`}`.
+                </ModeText>
+                <ModeText variant="caption" tone="tertiary">
+                  Confirm same Wi-Fi, disable VPN/proxy, allow Python inbound firewall, then restart Expo with cache clear.
+                </ModeText>
+                <ModeButton
+                  testID="trainer-assistant-execution-copy"
+                  title="Copy details"
+                  variant="ghost"
+                  size="md"
+                  onPress={handleCopyExecutionError}
+                  disabled={isExecuting}
+                  style={styles.actionButton}
+                />
+                {copyFeedback ? (
+                  <ModeText variant="caption" tone="secondary">{copyFeedback}</ModeText>
+                ) : null}
+              </View>
+            ) : null}
+            {executionError && !executionStaleRoute && !executionConnectivityError ? (
+              <ModeText variant="caption" tone="error">{executionError}</ModeText>
+            ) : null}
           </ModeCard>
-        ) : null}
-      </ScrollView>
+
+          {draftOutput ? (
+            <ModeCard testID="trainer-assistant-preview-card" style={styles.card}>
+              <ModeText variant="h3">{draftOutput.headline || 'Draft Preview'}</ModeText>
+              <ModeText variant="bodySm" tone="secondary">{draftOutput.summary}</ModeText>
+              <ModeText variant="caption" tone="tertiary">
+                {`Status: ${draftStatus} · Route: ${routeSummary?.reason || 'n/a'}`}
+              </ModeText>
+              {renderSections()}
+              <ModeText variant="label">Preview & Edit</ModeText>
+              {renderEditor()}
+              {mutationError ? (
+                <ModeText variant="caption" tone="error">{mutationError}</ModeText>
+              ) : null}
+              {mutationSuccess ? (
+                <ModeText variant="caption" tone="success">{mutationSuccess}</ModeText>
+              ) : null}
+              <View style={styles.previewActionRow}>
+                <ModeButton
+                  testID="trainer-assistant-edit"
+                  title={isMutatingDraft ? 'Saving...' : 'Save Edit'}
+                  variant="secondary"
+                  onPress={() => runDraftMutation('edit')}
+                  disabled={isMutatingDraft}
+                  style={styles.previewAction}
+                />
+                <ModeButton
+                  testID="trainer-assistant-approve"
+                  title={isMutatingDraft ? 'Approving...' : 'Approve'}
+                  onPress={() => runDraftMutation('approve')}
+                  disabled={isMutatingDraft}
+                  style={styles.previewAction}
+                />
+                <ModeButton
+                  testID="trainer-assistant-reject"
+                  title={isMutatingDraft ? 'Rejecting...' : 'Reject'}
+                  variant="ghost"
+                  onPress={() => runDraftMutation('reject')}
+                  disabled={isMutatingDraft}
+                  style={styles.previewAction}
+                />
+              </View>
+              <ModeText variant="caption" tone="secondary">
+                Approve only persists a reviewed draft artifact. No client-impacting auto-publish occurs in V1.
+              </ModeText>
+            </ModeCard>
+          ) : null}
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeScreen>
   );
 }
@@ -641,6 +906,9 @@ export default function TrainerAssistantScreen({
 const styles = StyleSheet.create({
   screen: {
     backgroundColor: theme.colors.surface.canvas,
+  },
+  keyboardWrap: {
+    flex: 1,
   },
   toolbarContainer: {
     paddingHorizontal: theme.spacing[3],
@@ -663,6 +931,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing[2],
+  },
+  routeDiagnosticBlock: {
+    gap: theme.spacing[1],
+  },
+  actionButton: {
+    alignSelf: 'flex-start',
   },
   chipRow: {
     flexDirection: 'row',

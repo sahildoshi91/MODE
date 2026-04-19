@@ -17,6 +17,8 @@ jest.mock('react-native-safe-area-context', () => {
 
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
+import { KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 
 import TrainerAssistantScreen from '../TrainerAssistantScreen';
 import {
@@ -24,6 +26,10 @@ import {
   executeTrainerAssistantAction,
   getTrainerAssistantBootstrap,
 } from '../../services/trainerAssistantApi';
+
+jest.mock('expo-clipboard', () => ({
+  setStringAsync: jest.fn(),
+}));
 
 function buildBootstrapPayload(overrides = {}) {
   return {
@@ -105,6 +111,8 @@ async function flushEffects() {
   });
 }
 
+let mountedTree = null;
+
 async function renderScreen(overrides = {}) {
   let tree;
   await act(async () => {
@@ -116,12 +124,14 @@ async function renderScreen(overrides = {}) {
     );
   });
   await flushEffects();
+  mountedTree = tree;
   return tree;
 }
 
 describe('TrainerAssistantScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    Clipboard.setStringAsync.mockResolvedValue(undefined);
     getTrainerAssistantBootstrap.mockResolvedValue(buildBootstrapPayload());
     executeTrainerAssistantAction.mockResolvedValue(buildExecutePayload('adjust_plan'));
     approveTrainerAssistantDraft.mockResolvedValue({
@@ -129,6 +139,15 @@ describe('TrainerAssistantScreen', () => {
       review_status: 'approved',
       output: buildExecutePayload('message_client').output,
     });
+  });
+
+  afterEach(async () => {
+    if (mountedTree) {
+      await act(async () => {
+        mountedTree.unmount();
+      });
+      mountedTree = null;
+    }
   });
 
   it('loads bootstrap with auto-selected client and suggestions', async () => {
@@ -205,5 +224,89 @@ describe('TrainerAssistantScreen', () => {
         draftId: 'draft-1',
       }),
     );
+  });
+
+  it('renders stale-backend recovery guidance for bootstrap not-found route errors', async () => {
+    getTrainerAssistantBootstrap.mockRejectedValueOnce({
+      message: 'Not found',
+      status: 404,
+      request_path: '/api/v1/trainer-assistant/bootstrap',
+      api_base_url: 'http://127.0.0.1:8000',
+      attempted_base_urls: ['http://127.0.0.1:8000', 'http://192.168.6.137:8000'],
+      failover_attempted: true,
+      failover_applied: true,
+      is_missing_trainer_route: true,
+    });
+    getTrainerAssistantBootstrap.mockResolvedValueOnce(buildBootstrapPayload());
+
+    const tree = await renderScreen();
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('The backend appears stale and is missing trainer assistant routes.');
+    expect(rendered).toContain('Missing route:');
+    expect(rendered).toContain('/api/v1/trainer-assistant/bootstrap');
+
+    const retryButton = tree.root.findByProps({ testID: 'trainer-assistant-bootstrap-retry' });
+    const copyButton = tree.root.findByProps({ testID: 'trainer-assistant-bootstrap-copy' });
+    await act(async () => {
+      await copyButton.props.onPress();
+    });
+    await act(async () => {
+      retryButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(Clipboard.setStringAsync).toHaveBeenCalledTimes(1);
+    expect(Clipboard.setStringAsync.mock.calls[0][0]).toContain('MODE Trainer Route Diagnostics');
+    expect(Clipboard.setStringAsync.mock.calls[0][0]).toContain('/api/v1/trainer-assistant/bootstrap');
+    expect(getTrainerAssistantBootstrap).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders execution connectivity diagnostics and supports copy', async () => {
+    executeTrainerAssistantAction.mockRejectedValueOnce({
+      message: 'Unable to reach the backend for /api/v1/trainer-assistant/execute.',
+      stage: 'network',
+      path: '/api/v1/trainer-assistant/execute',
+      request_path: '/api/v1/trainer-assistant/execute',
+      resolved_api_base_url: 'http://192.168.6.137:8000',
+      attempted_base_urls: ['http://192.168.6.137:8000', 'http://192.168.6.144:8000'],
+      failover_attempted: true,
+      failover_applied: false,
+      recommended_api_base_url: 'http://192.168.6.144:8000',
+      connectivity_probe: {
+        endpoint_path: '/healthz',
+        first_reachable_base_url: 'http://192.168.6.144:8000',
+        candidate_api_base_urls: ['http://192.168.6.137:8000', 'http://192.168.6.144:8000'],
+        attempts: [],
+      },
+    });
+
+    const tree = await renderScreen();
+    const generateButton = tree.root.findByProps({ testID: 'trainer-assistant-generate' });
+
+    await act(async () => {
+      await generateButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(() => tree.root.findByProps({ testID: 'trainer-assistant-execution-connectivity' })).not.toThrow();
+    const copyButton = tree.root.findByProps({ testID: 'trainer-assistant-execution-copy' });
+
+    await act(async () => {
+      await copyButton.props.onPress();
+    });
+
+    expect(Clipboard.setStringAsync).toHaveBeenCalledTimes(1);
+    expect(Clipboard.setStringAsync.mock.calls[0][0]).toContain('Connectivity Probe');
+    expect(Clipboard.setStringAsync.mock.calls[0][0]).toContain('Recommended API Base: http://192.168.6.144:8000');
+  });
+
+  it('configures keyboard handling props for assistant coach surfaces', async () => {
+    const tree = await renderScreen();
+    const keyboardAvoidingView = tree.root.findByType(KeyboardAvoidingView);
+    const scrollView = tree.root.findByType(ScrollView);
+
+    expect(keyboardAvoidingView.props.behavior).toBe(Platform.OS === 'ios' ? 'padding' : undefined);
+    expect(scrollView.props.keyboardShouldPersistTaps).toBe('handled');
+    expect(scrollView.props.keyboardDismissMode).toBe(Platform.OS === 'ios' ? 'interactive' : 'on-drag');
   });
 });
