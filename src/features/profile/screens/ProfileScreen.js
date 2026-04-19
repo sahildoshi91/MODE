@@ -46,7 +46,7 @@ function formatExceptionDate(value) {
 function SettingToggle({ label, description, enabled, onToggle }) {
   return (
     <GlassSurface
-      state={enabled ? 'elevated' : 'default'}
+      state={enabled ? 'active' : 'default'}
       radius="s"
       padding={theme.spacing[2]}
       onPress={onToggle}
@@ -56,6 +56,8 @@ function SettingToggle({ label, description, enabled, onToggle }) {
         enabled && styles.toggleRowEnabled,
       ]}
       contentStyle={styles.toggleRowContent}
+      fillColor={enabled ? theme.colors.nav.activeBg : theme.colors.glass.base}
+      borderColor={enabled ? theme.colors.nav.activeBorder : theme.colors.glass.borderDefault}
     >
       <View style={styles.toggleCopy}>
         <ModeText variant="bodySm">{label}</ModeText>
@@ -204,7 +206,12 @@ export default function ProfileScreen({
   };
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
+    <SafeScreen
+      includeTopInset={false}
+      style={styles.screen}
+      atmosphere="system"
+      atmosphereOverlayStrength={0.94}
+    >
       <HeaderBar
         title="Settings"
         subtitle="Personalization and account details"
@@ -216,7 +223,7 @@ export default function ProfileScreen({
           { paddingBottom: theme.spacing[4] + bottomInset },
         ]}
       >
-        <ModeCard variant="surface">
+        <ModeCard variant="hero">
           <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Account</ModeText>
           <View style={styles.row}>
             <ModeText variant="bodySm" tone="secondary">Email</ModeText>

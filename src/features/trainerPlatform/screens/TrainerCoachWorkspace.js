@@ -31,7 +31,7 @@ function CoachSubviewSwitcher({ activeSubview, onChange, options }) {
           >
             <ModeText
               variant="caption"
-              tone={isActive ? 'inverse' : 'secondary'}
+              tone={isActive ? 'primary' : 'secondary'}
               style={styles.switchOptionText}
             >
               {option.label}
@@ -159,8 +159,8 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     borderRadius: theme.radii.pill,
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.subtle,
+    borderColor: theme.colors.glass.borderStrong,
+    backgroundColor: theme.colors.surface.elevated,
     padding: 2,
     gap: 4,
   },
@@ -173,7 +173,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   switchOptionActive: {
-    backgroundColor: theme.colors.brand.progressCore,
+    backgroundColor: theme.colors.nav.activeBg,
+    borderWidth: 1,
+    borderColor: theme.colors.nav.activeBorder,
   },
   switchOptionPressed: {
     opacity: 0.88,

@@ -46,4 +46,41 @@ describe('CoachStreamItem', () => {
       tree.unmount();
     });
   });
+
+  it('renders structured markdown-like AI content without leaking markdown markers', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachStreamItem item={{ kind: 'internal_ai_private', status: 'confirmed', text: '### Tips\\n**Key takeaway:** Stay consistent.' }} />,
+      );
+    });
+
+    const leakedNodes = tree.root.findAll((node) => {
+      const value = node?.props?.children;
+      return typeof value === 'string' && (value.includes('###') || value.includes('**'));
+    });
+    expect(leakedNodes).toHaveLength(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('keeps pending internal AI rows in plain text mode for streaming stability', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachStreamItem item={{ kind: 'internal_ai_private', status: 'pending', text: '**Streaming** update' }} />,
+      );
+    });
+
+    const pendingTextNode = tree.root.find(
+      (node) => node.type === Text && node?.props?.children === '**Streaming** update',
+    );
+    expect(pendingTextNode).toBeTruthy();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
 });

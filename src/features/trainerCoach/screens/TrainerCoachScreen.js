@@ -26,6 +26,8 @@ import { useTrainerCoachWorkspace } from '../hooks/useTrainerCoachWorkspace';
 
 const SUMMARY_COLLAPSE_SCROLL_THRESHOLD = 72;
 const COPY_FEEDBACK_TIMEOUT_MS = 2200;
+const KEYBOARD_OPEN_COMPOSER_OFFSET = theme.spacing[1];
+const JUMP_TO_LATEST_BOTTOM_OFFSET = theme.spacing[2];
 
 function asNonNegativeNumber(value, fallback = 0) {
   const parsed = Number(value);
@@ -89,6 +91,12 @@ export default function TrainerCoachScreen({
     [state.stream],
   );
   const showJumpToLatest = visibleStream.length > 0 && !isNearBottom;
+  const dockAnchorInset = Math.max(bottomInset, 0);
+  const activeComposerOffset = isKeyboardVisible
+    ? KEYBOARD_OPEN_COMPOSER_OFFSET
+    : dockAnchorInset;
+  const trainerStreamContentBottomPadding = composerDockHeight + activeComposerOffset;
+  const jumpToLatestBottom = trainerStreamContentBottomPadding + JUMP_TO_LATEST_BOTTOM_OFFSET;
 
   const helperLabel = useMemo(() => {
     if (isSendingMessage) {
@@ -236,7 +244,13 @@ export default function TrainerCoachScreen({
   }, []);
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
+    <SafeScreen
+      includeBottomInset={false}
+      includeTopInset={false}
+      style={styles.screen}
+      atmosphere="coach"
+      atmosphereOverlayStrength={0.96}
+    >
       <HeaderBar
         title="Coach"
         subtitle="Orchestrate, review, and apply coaching work"
@@ -357,7 +371,7 @@ export default function TrainerCoachScreen({
               <CoachStreamList
                 streamItems={visibleStream}
                 forceScrollSignal={streamForceScrollSignal}
-                contentBottomPadding={composerDockHeight}
+                contentBottomPadding={trainerStreamContentBottomPadding}
                 onScrollMetricsChange={(metrics) => {
                   if (!metrics || typeof metrics !== 'object') {
                     return;
@@ -392,7 +406,7 @@ export default function TrainerCoachScreen({
                   onPress={handleJumpToLatest}
                   style={({ pressed }) => [
                     styles.jumpToLatestButton,
-                    { bottom: composerDockHeight + theme.spacing[2] },
+                    { bottom: jumpToLatestBottom },
                     pressed && styles.jumpToLatestButtonPressed,
                   ]}
                 >
@@ -403,30 +417,36 @@ export default function TrainerCoachScreen({
               ) : null}
 
               <View
-                onLayout={(event) => {
-                  const nextHeight = event?.nativeEvent?.layout?.height || 0;
-                  setComposerDockHeight((current) => (current === nextHeight ? current : nextHeight));
-                }}
+                pointerEvents="box-none"
                 style={[
                   styles.composerDock,
-                  { paddingBottom: isKeyboardVisible ? theme.spacing[1] : Math.max(bottomInset, 0) },
+                  { bottom: activeComposerOffset },
                 ]}
               >
-                <CoachComposerWithCommands
-                  value={composerValue}
-                  onChangeText={setComposerValue}
-                  onSubmit={handleSubmitComposer}
-                  onCommandSelect={handleCommandSelect}
-                  disabled={state.loading || isSendingMessage}
-                  isSubmitting={isSendingMessage}
-                />
-                {helperLabel ? (
-                  <View style={styles.helperRow}>
-                    <ModeText variant="caption" tone={state.error && !isSendingMessage ? 'error' : 'secondary'}>
-                      {helperLabel}
-                    </ModeText>
-                  </View>
-                ) : null}
+                <View
+                  testID="trainer-coach-composer-dock-stack"
+                  onLayout={(event) => {
+                    const nextHeight = event?.nativeEvent?.layout?.height || 0;
+                    setComposerDockHeight((current) => (current === nextHeight ? current : nextHeight));
+                  }}
+                  style={styles.composerDockStack}
+                >
+                  <CoachComposerWithCommands
+                    value={composerValue}
+                    onChangeText={setComposerValue}
+                    onSubmit={handleSubmitComposer}
+                    onCommandSelect={handleCommandSelect}
+                    disabled={state.loading || isSendingMessage}
+                    isSubmitting={isSendingMessage}
+                  />
+                  {helperLabel ? (
+                    <View style={styles.helperRow}>
+                      <ModeText variant="caption" tone={state.error && !isSendingMessage ? 'error' : 'secondary'}>
+                        {helperLabel}
+                      </ModeText>
+                    </View>
+                  ) : null}
+                </View>
               </View>
             </View>
           </View>
@@ -480,8 +500,8 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     borderRadius: theme.radii.pill,
     borderWidth: 1,
-    borderColor: theme.colors.cta.primaryBorder,
-    backgroundColor: theme.colors.cta.primaryBg,
+    borderColor: theme.colors.nav.activeBorder,
+    backgroundColor: theme.colors.nav.activeBg,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     zIndex: 2,
@@ -497,12 +517,11 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
+    zIndex: 3,
+  },
+  composerDockStack: {
     paddingTop: theme.spacing[1],
     gap: theme.spacing[1],
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border.default,
-    backgroundColor: theme.colors.surface.glass,
   },
   helperRow: {
     minHeight: 0,

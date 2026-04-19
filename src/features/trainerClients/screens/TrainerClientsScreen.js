@@ -1126,7 +1126,12 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
       : [];
 
     return (
-      <SafeScreen includeTopInset={false} style={styles.screen}>
+      <SafeScreen
+        includeTopInset={false}
+        style={styles.screen}
+        atmosphere="clients"
+        atmosphereOverlayStrength={0.95}
+      >
         <HeaderBar
           title={detailClientName}
           subtitle="Trainer-side client memory and AI context"
@@ -1184,7 +1189,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
 
           {!isLoadingDetail && !detailError ? (
             <>
-              <ModeCard variant="tinted">
+              <ModeCard variant="hero">
                 <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Profile Overview</ModeText>
                 <ModeText variant="bodySm">Goal: {profile.primary_goal || 'Not set'}</ModeText>
                 <ModeText variant="bodySm" tone="secondary">
@@ -1511,7 +1516,12 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   }
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
+    <SafeScreen
+      includeTopInset={false}
+      style={styles.screen}
+      atmosphere="clients"
+      atmosphereOverlayStrength={0.95}
+    >
       <HeaderBar
         title="Command Center"
         subtitle="Prioritized client risk scan and talking points"
@@ -1523,7 +1533,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
           { paddingBottom: theme.spacing[4] + bottomInset },
         ]}
       >
-        <ModeCard variant="tinted">
+        <ModeCard variant="hero">
           <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>
             {plannerDayLabel}{plannerDateLabel ? ` · ${plannerDateLabel}` : ''}
           </ModeText>

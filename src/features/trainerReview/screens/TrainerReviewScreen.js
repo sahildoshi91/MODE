@@ -158,7 +158,12 @@ export default function TrainerReviewScreen({
   );
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
+    <SafeScreen
+      includeTopInset={false}
+      style={styles.screen}
+      atmosphere="coach"
+      atmosphereOverlayStrength={0.93}
+    >
       <HeaderBar
         title={selectedOutputId ? 'Review Detail' : 'AI Review'}
         onBack={selectedOutputId ? handleBackToList : null}

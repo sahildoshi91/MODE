@@ -32,7 +32,7 @@ function PaneToggle({
               pressed && styles.toggleButtonPressed,
             ]}
           >
-            <ModeText variant="caption" tone={isActive ? 'inverse' : 'secondary'} style={styles.toggleText}>
+            <ModeText variant="caption" tone={isActive ? 'primary' : 'secondary'} style={styles.toggleText}>
               {pane.label}
             </ModeText>
           </Pressable>
@@ -101,8 +101,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     borderRadius: theme.radii.pill,
     borderWidth: 1,
-    borderColor: theme.colors.border.default,
-    backgroundColor: theme.colors.surface.base,
+    borderColor: theme.colors.glass.borderStrong,
+    backgroundColor: theme.colors.surface.elevated,
     padding: 2,
     gap: 4,
     ...theme.shadows.soft,
@@ -116,9 +116,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   toggleButtonActive: {
-    backgroundColor: theme.colors.cta.primaryBg,
+    backgroundColor: theme.colors.nav.activeBg,
     borderWidth: 1,
-    borderColor: theme.colors.cta.primaryBorder,
+    borderColor: theme.colors.nav.activeBorder,
+    shadowColor: theme.colors.accent.primary,
+    shadowOpacity: 0.16,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 2,
   },
   toggleButtonPressed: {
     opacity: theme.interaction.pressedOpacity,
@@ -127,4 +132,3 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
-

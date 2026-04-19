@@ -115,7 +115,12 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
   }, [payload]);
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
+    <SafeScreen
+      includeTopInset={false}
+      style={styles.screen}
+      atmosphere="home"
+      atmosphereOverlayStrength={0.92}
+    >
       <HeaderBar
         title="Coach Insights"
         subtitle="Calm signals from your recent check-ins"
@@ -137,7 +142,7 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
 
         {!isLoading && !error && payload ? (
           <>
-            <ModeCard variant="surface">
+            <ModeCard variant="hero">
               <ModeText variant="label" tone="tertiary">Current context</ModeText>
               <View style={styles.badgeRow}>
                 <StateBadge mode={payload.avg_mode_last_7_days || 'RECOVER'} />

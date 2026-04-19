@@ -13,7 +13,10 @@ import OnboardingLandingScreen from '../features/auth/screens/OnboardingLandingS
 import CoachChatScreen from '../features/chat/screens/CoachChatScreen';
 import DailyCheckinScreen from '../features/dailyCheckin/screens/DailyCheckinScreen';
 import CoachInsightsScreen from '../features/insights/screens/CoachInsightsScreen';
-import LiquidBottomNav from '../features/navigation/components/LiquidBottomNav';
+import LiquidBottomNav, {
+  NAV_BOTTOM_OFFSET,
+  NAV_PILL_HEIGHT,
+} from '../features/navigation/components/LiquidBottomNav';
 import CoachTabGuardScreen from '../features/onboarding/screens/CoachTabGuardScreen';
 import ClientOnboardingFlowScreen from '../features/onboarding/screens/ClientOnboardingFlowScreen';
 import ProductPreviewScreen from '../features/onboarding/screens/ProductPreviewScreen';
@@ -37,9 +40,9 @@ import {
 } from '../config/featureFlags';
 import { supabase } from '../services/supabaseClient';
 
-const FLOATING_NAV_BOTTOM_OFFSET = 12;
-const FLOATING_NAV_PILL_HEIGHT = 62;
-const COACH_CHAT_NAV_GAP = 2;
+const FLOATING_NAV_BOTTOM_OFFSET = NAV_BOTTOM_OFFSET;
+const FLOATING_NAV_PILL_HEIGHT = NAV_PILL_HEIGHT;
+const COACH_CHAT_NAV_GAP = 10;
 const COACH_CHAT_DOCK_CLEARANCE =
   FLOATING_NAV_BOTTOM_OFFSET + FLOATING_NAV_PILL_HEIGHT + COACH_CHAT_NAV_GAP;
 const ASSIGNMENT_STATUS_AUTO_RETRY_DELAY_MS = 900;

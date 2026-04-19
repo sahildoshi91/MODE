@@ -37,3 +37,7 @@ export const TRAINER_ASSISTANT_V1_ENABLED = parseBooleanFlag(
   process.env.EXPO_PUBLIC_TRAINER_ASSISTANT_V1_ENABLED,
   true,
 );
+export const AI_RESPONSE_RENDERING_V1_ENABLED = parseBooleanFlag(
+  process.env.EXPO_PUBLIC_AI_RESPONSE_RENDERING_V1_ENABLED,
+  true,
+);

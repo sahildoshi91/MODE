@@ -46,7 +46,7 @@ export default function TodaySummaryBar({
   }
 
   return (
-    <ModeCard variant="tinted" style={styles.card}>
+    <ModeCard variant="hero" style={styles.card}>
       <View style={styles.header}>
         <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Today Summary</ModeText>
         <Pressable onPress={() => onToggleCollapsed?.(true)} hitSlop={8}>
@@ -77,7 +77,7 @@ export default function TodaySummaryBar({
 
 const styles = StyleSheet.create({
   card: {
-    gap: theme.spacing[1],
+    gap: theme.spacing[2] - 2,
   },
   header: {
     flexDirection: 'row',
@@ -90,6 +90,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontWeight: '700',
+    color: theme.colors.text.primary,
   },
   actions: {
     flexDirection: 'row',
@@ -104,8 +105,8 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     borderRadius: theme.radii.pill,
     borderWidth: 1,
-    borderColor: theme.colors.border.default,
-    backgroundColor: theme.colors.surface.elevated,
+    borderColor: theme.colors.nav.activeBorder,
+    backgroundColor: theme.colors.nav.activeBg,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
   },

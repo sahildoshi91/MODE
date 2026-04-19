@@ -23,7 +23,7 @@ export default function ReviewDetailPanel({
 
   return (
     <>
-      <ModeCard style={styles.outputCard}>
+      <ModeCard variant="hero" style={styles.outputCard}>
         <View style={styles.outputMetaRow}>
           <ModeChip label={sourceLabel(selectedOutput.source_type)} selected={false} />
           <ModeChip label={statusLabel(selectedOutput.review_status)} selected={selectedOutput.review_status === 'approved'} />

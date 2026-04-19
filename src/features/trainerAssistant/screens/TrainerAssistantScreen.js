@@ -620,7 +620,12 @@ export default function TrainerAssistantScreen({
   };
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
+    <SafeScreen
+      includeTopInset={false}
+      style={styles.screen}
+      atmosphere="coach"
+      atmosphereOverlayStrength={0.95}
+    >
       <HeaderBar
         title="Trainer Assistant"
         subtitle={selectedClientId ? `Client: ${selectedClientName}` : 'Select a client to begin'}
@@ -644,7 +649,7 @@ export default function TrainerAssistantScreen({
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
           showsVerticalScrollIndicator={false}
         >
-          <ModeCard style={styles.card}>
+          <ModeCard variant="hero" style={styles.card}>
           <View style={styles.cardHeaderRow}>
             <ModeText variant="label">Client Context</ModeText>
             <ModeButton
@@ -738,7 +743,7 @@ export default function TrainerAssistantScreen({
           ) : null}
           </ModeCard>
 
-          <ModeCard style={styles.card}>
+          <ModeCard variant="surface" style={styles.card}>
             <ModeText variant="label">Pulse</ModeText>
             <ModeText variant="caption" tone="secondary">
               Tap any signal to launch a focused action.
@@ -767,7 +772,7 @@ export default function TrainerAssistantScreen({
             )}
           </ModeCard>
 
-          <ModeCard style={styles.card}>
+          <ModeCard variant="hero" style={styles.card}>
             <ModeText variant="label">Action Chips</ModeText>
             <View style={styles.chipRow}>
               {ACTION_CHIPS.map((chip) => (

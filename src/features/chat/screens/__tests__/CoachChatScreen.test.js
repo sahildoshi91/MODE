@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { FlatList, Keyboard, Platform } from 'react-native';
+import { FlatList, Keyboard, Platform, StyleSheet } from 'react-native';
 
 const mockUseChatConversation = jest.fn();
 const mockRetryFailedRequest = jest.fn();
@@ -90,6 +90,17 @@ describe('CoachChatScreen', () => {
           contentOffset: { y: offset },
           contentSize: { height: contentHeight },
           layoutMeasurement: { height: layoutHeight },
+        },
+      });
+    });
+  }
+
+  function setDockHeight(tree, height) {
+    const dockStack = tree.root.findByProps({ testID: 'coach-chat-dock-stack' });
+    act(() => {
+      dockStack.props.onLayout?.({
+        nativeEvent: {
+          layout: { height },
         },
       });
     });
@@ -251,6 +262,42 @@ describe('CoachChatScreen', () => {
     });
   });
 
+  it('passes message kind through to ChatBubble for stream/finalize rendering decisions', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        { id: 'assistant-stream-1', role: 'assistant', kind: 'assistant_stream', text: 'Streaming draft...' },
+        { id: 'assistant-final-1', role: 'assistant', text: 'Final response.' },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    let tree;
+    act(() => {
+      tree = renderer.create(
+        <CoachChatScreen
+          accessToken="trainer-token"
+          launchContext={{ entrypoint: 'trainer_agent_training', onboarding_action: 'review' }}
+        />,
+      );
+    });
+
+    const bubbleProps = mockChatBubble.mock.calls.map(([props]) => props);
+    const streamBubble = bubbleProps.find((item) => item?.id === 'assistant-stream-1' || item?.text === 'Streaming draft...');
+    const finalBubble = bubbleProps.find((item) => item?.id === 'assistant-final-1' || item?.text === 'Final response.');
+    expect(streamBubble?.messageKind).toBe('assistant_stream');
+    expect(finalBubble?.messageKind || null).toBe(null);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
   it('copies diagnostics bundle from copy error control', async () => {
     const tree = renderScreen();
 
@@ -345,6 +392,31 @@ describe('CoachChatScreen', () => {
     });
   });
 
+  it('disables SafeScreen bottom inset and reserves message space from dock height plus bottom offset', () => {
+    let tree;
+    act(() => {
+      tree = renderer.create(
+        <CoachChatScreen
+          accessToken="trainer-token"
+          launchContext={{ entrypoint: 'trainer_agent_training', onboarding_action: 'review' }}
+          bottomInset={84}
+        />,
+      );
+    });
+    setDockHeight(tree, 52);
+
+    const safeScreen = tree.root.findByProps({ atmosphere: 'chat' });
+    expect(safeScreen.props.includeBottomInset).toBe(false);
+
+    const flatList = tree.root.findByType(FlatList);
+    const contentContainerStyle = StyleSheet.flatten(flatList.props.contentContainerStyle);
+    expect(contentContainerStyle.paddingBottom).toBe(148);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
   it('keeps latest visible on keyboard open when the user is already near bottom', () => {
     const tree = renderScreen();
     setListMetrics(tree, {
@@ -363,6 +435,35 @@ describe('CoachChatScreen', () => {
     expect(global.requestAnimationFrame).toHaveBeenCalled();
 
     act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('uses compact composer offset while keyboard is open', () => {
+    let tree;
+    act(() => {
+      tree = renderer.create(
+        <CoachChatScreen
+          accessToken="trainer-token"
+          launchContext={{ entrypoint: 'trainer_agent_training', onboarding_action: 'review' }}
+          bottomInset={84}
+        />,
+      );
+    });
+    setDockHeight(tree, 52);
+
+    act(() => {
+      keyboardListeners[openEventName]?.({
+        endCoordinates: { height: 260 },
+      });
+    });
+
+    const flatList = tree.root.findByType(FlatList);
+    const contentContainerStyle = StyleSheet.flatten(flatList.props.contentContainerStyle);
+    expect(contentContainerStyle.paddingBottom).toBe(72);
+
+    act(() => {
+      keyboardListeners[closeEventName]?.();
       tree.unmount();
     });
   });

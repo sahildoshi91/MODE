@@ -745,8 +745,8 @@ function ResultCard({
 
   return (
     <GlassCard
-      style={[styles.resultCard, { borderColor: withAlpha(modeTheme.accent, 0.55) }]}
-      state="elevated"
+      style={[styles.resultCard, { borderColor: withAlpha(modeTheme.accent, 0.42) }]}
+      state="default"
       padding={theme.spacing[2]}
     >
       <View style={[styles.bundleBlock, styles.bundleBlockFirst]}>
@@ -2887,7 +2887,8 @@ const styles = StyleSheet.create({
   homeOverviewCard: {
     marginTop: theme.spacing[3],
     borderColor: theme.colors.glass.borderStrong,
-    backgroundColor: theme.colors.glass.elevated,
+    backgroundColor: theme.colors.surface.hero,
+    ...theme.shadows.medium,
   },
   homeOverviewModeRow: {
     flexDirection: 'row',

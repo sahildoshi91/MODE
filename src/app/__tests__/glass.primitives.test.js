@@ -18,7 +18,7 @@ function flatten(style) {
 }
 
 describe('Glass primitives', () => {
-  it('maps GlassSurface active state to glass fill and border tokens', () => {
+  it('maps GlassSurface active state to glass fill and edge tint tokens without hard borders', () => {
     let tree;
     act(() => {
       tree = renderer.create(
@@ -37,11 +37,12 @@ describe('Glass primitives', () => {
       );
     });
     expect(shell).toBeTruthy();
+    expect(flatten(shell.props.style)?.borderWidth).toBeUndefined();
 
     act(() => tree.unmount());
   });
 
-  it('uses a thin edge highlight and avoids thick top bands', () => {
+  it('uses a thin optical edge catch light and avoids thick top bands', () => {
     let tree;
     act(() => {
       tree = renderer.create(
@@ -51,18 +52,25 @@ describe('Glass primitives', () => {
       );
     });
 
-    const layers = tree.root.findAll((node) => node.type === View && node.props?.style);
-    const edgeHighlightLayers = layers.filter((node) => {
-      const style = flatten(node.props.style);
-      return style?.backgroundColor === theme.colors.glass.edgeHighlight;
+    const layers = tree.root.findAll((node) => node.props);
+    const edgeCatchLights = layers.filter((node) => {
+      const colors = node.props?.colors;
+      return Array.isArray(colors)
+        && colors.length === 2
+        && colors[1] === 'rgba(255,255,255,0)';
     });
-    expect(edgeHighlightLayers.length).toBeGreaterThan(0);
-    edgeHighlightLayers.forEach((node) => {
+    expect(edgeCatchLights.length).toBeGreaterThan(0);
+    edgeCatchLights.forEach((node) => {
       const style = flatten(node.props.style);
-      expect(style?.height).toBeLessThanOrEqual(2);
+      if (typeof style?.height === 'number') {
+        expect(style.height).toBeLessThanOrEqual(2);
+      }
     });
 
-    const thickTopBands = layers.filter((node) => {
+    const thickTopBands = tree.root.findAll((node) => {
+      if (node.type !== View || !node.props?.style) {
+        return false;
+      }
       const style = flatten(node.props.style);
       return style?.backgroundColor === theme.colors.glass.highlight && Number(style?.height || 0) >= 8;
     });
@@ -113,7 +121,7 @@ describe('Glass primitives', () => {
         return false;
       }
       const style = flatten(node.props.style);
-      return style?.backgroundColor === theme.colors.glass.elevated;
+      return style?.backgroundColor === theme.colors.nav.activeBg;
     });
     expect(selectedSurface).toBeTruthy();
 
@@ -181,8 +189,8 @@ describe('Glass primitives', () => {
     const aiShell = candidates.find((node) => {
       const style = flatten(node.props.style);
       return (
-        style?.backgroundColor === 'rgba(16, 28, 48, 0.58)'
-        && style?.borderColor === 'rgba(214, 230, 255, 0.24)'
+        style?.backgroundColor === 'rgba(14, 25, 44, 0.64)'
+        && style?.borderColor === 'rgba(214, 230, 255, 0.28)'
       );
     });
     const userShell = candidates.find((node) => {
@@ -194,13 +202,15 @@ describe('Glass primitives', () => {
     });
     expect(aiShell).toBeTruthy();
     expect(userShell).toBeTruthy();
+    expect(flatten(aiShell.props.style)?.borderWidth).toBeUndefined();
+    expect(flatten(userShell.props.style)?.borderWidth).toBeUndefined();
     expect(flatten(aiShell.props.style)?.maxWidth).toBe('74%');
     expect(flatten(userShell.props.style)?.maxWidth).toBe('74%');
 
     const aiText = tree.root.find((node) => node.type === Text && node.props?.children === 'AI bubble text');
     const userText = tree.root.find((node) => node.type === Text && node.props?.children === 'User bubble text');
     expect(flatten(aiText.props.style)?.color).toBe('rgba(255, 255, 255, 0.94)');
-    expect(flatten(userText.props.style)?.color).toBe('#FFFFFF');
+    expect(flatten(userText.props.style)?.color).toBe('rgba(255, 255, 255, 0.95)');
 
     act(() => tree.unmount());
   });
@@ -245,6 +255,34 @@ describe('Glass primitives', () => {
     act(() => tree.unmount());
   });
 
+  it('supports custom renderContent in ChatBubbleAI without breaking default bubbles', () => {
+    let tree;
+    act(() => {
+      tree = renderer.create(
+        <View>
+          <ChatBubbleAI
+            text="AI bubble text"
+            showSpeakerLabel={false}
+            renderContent={() => (
+              <View testID="ai-rich-content">
+                <Text>Structured response</Text>
+              </View>
+            )}
+          />
+          <ChatBubbleAI text="Default bubble text" showSpeakerLabel={false} />
+        </View>,
+      );
+    });
+
+    expect(tree.root.findByProps({ testID: 'ai-rich-content' })).toBeTruthy();
+    const defaultTextNode = tree.root.find(
+      (node) => node.type === Text && node.props?.children === 'Default bubble text',
+    );
+    expect(defaultTextNode).toBeTruthy();
+
+    act(() => tree.unmount());
+  });
+
   it('uses high-contrast text and placeholder styling in GlassInputBar', () => {
     let tree;
     act(() => {
@@ -261,8 +299,14 @@ describe('Glass primitives', () => {
     });
 
     const input = tree.root.findByType(TextInput);
-    expect(input.props.placeholderTextColor).toBe('rgba(255, 255, 255, 0.72)');
-    expect(flatten(input.props.style)?.color).toBe('rgba(255, 255, 255, 0.95)');
+    expect(input.props.placeholderTextColor).toBe('rgba(232, 243, 255, 0.76)');
+    expect(flatten(input.props.style)?.color).toBe('rgba(255, 255, 255, 0.96)');
+    const sendButton = tree.root.find((node) => (
+      node.props?.accessibilityRole === 'button'
+      && node.props?.accessibilityLabel === 'Send message'
+    ));
+    const sendButtonStyle = flatten(sendButton.props.style({ pressed: false }));
+    expect(sendButtonStyle?.borderWidth).toBeUndefined();
 
     act(() => tree.unmount());
   });

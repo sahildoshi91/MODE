@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { Keyboard, KeyboardAvoidingView, Platform } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, Platform, StyleSheet } from 'react-native';
 
 const mockUseTrainerCoachWorkspace = jest.fn();
 const mockSetStringAsync = jest.fn();
@@ -106,6 +106,17 @@ function buildWorkspaceSnapshot(overrides = {}) {
     },
     ...overrides,
   };
+}
+
+function setComposerDockHeight(tree, height) {
+  const dockStack = tree.root.findByProps({ testID: 'trainer-coach-composer-dock-stack' });
+  act(() => {
+    dockStack.props.onLayout?.({
+      nativeEvent: {
+        layout: { height },
+      },
+    });
+  });
 }
 
 describe('TrainerCoachScreen', () => {
@@ -432,6 +443,105 @@ describe('TrainerCoachScreen', () => {
     expect(() => tree.root.findByProps({ testID: 'trainer-coach-jump-latest' })).toThrow();
 
     await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('disables SafeScreen bottom inset and forwards stream bottom padding from dock height plus offset', async () => {
+    mockUseTrainerCoachWorkspace.mockReturnValue(buildWorkspaceSnapshot({
+      state: {
+        ...buildWorkspaceSnapshot().state,
+        stream: [
+          {
+            id: 'system-warning',
+            kind: 'system_confirmation',
+            text: 'Important warning',
+            severity: 'warning',
+            status: 'confirmed',
+          },
+        ],
+      },
+    }));
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-layout-1"
+          bottomInset={84}
+        />,
+      );
+    });
+    setComposerDockHeight(tree, 52);
+
+    const safeScreen = tree.root.findByProps({ atmosphere: 'coach' });
+    expect(safeScreen.props.includeBottomInset).toBe(false);
+
+    const streamList = tree.root.findByType('MockCoachStreamList');
+    expect(streamList.props.contentBottomPadding).toBe(136);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('positions jump-to-latest from unified bottom-stack math and uses compact keyboard offset', async () => {
+    mockUseTrainerCoachWorkspace.mockReturnValue(buildWorkspaceSnapshot({
+      state: {
+        ...buildWorkspaceSnapshot().state,
+        stream: [
+          {
+            id: 'system-warning',
+            kind: 'system_confirmation',
+            text: 'Important warning',
+            severity: 'warning',
+            status: 'confirmed',
+          },
+        ],
+      },
+    }));
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-layout-2"
+          bottomInset={84}
+        />,
+      );
+    });
+    setComposerDockHeight(tree, 52);
+
+    const streamList = tree.root.findByType('MockCoachStreamList');
+    act(() => {
+      streamList.props.onScrollMetricsChange?.({
+        offset: 240,
+        contentHeight: 1200,
+        layoutHeight: 500,
+        nearBottom: false,
+      });
+      streamList.props.onNearBottomChange?.(false);
+    });
+
+    let jumpButton = tree.root.findByProps({ testID: 'trainer-coach-jump-latest' });
+    let jumpStyle = StyleSheet.flatten(jumpButton.props.style({ pressed: false }));
+    expect(jumpStyle.bottom).toBe(148);
+
+    act(() => {
+      keyboardListeners[openEventName]?.({});
+    });
+
+    jumpButton = tree.root.findByProps({ testID: 'trainer-coach-jump-latest' });
+    jumpStyle = StyleSheet.flatten(jumpButton.props.style({ pressed: false }));
+    expect(jumpStyle.bottom).toBe(72);
+
+    const updatedStreamList = tree.root.findByType('MockCoachStreamList');
+    expect(updatedStreamList.props.contentBottomPadding).toBe(60);
+
+    await act(async () => {
+      keyboardListeners[closeEventName]?.();
       tree.unmount();
     });
   });

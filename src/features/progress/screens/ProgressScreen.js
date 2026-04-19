@@ -173,7 +173,7 @@ export default function ProgressScreen({
 
         {!isLoading && !errorMessage && payload ? (
           <>
-            <ModeCard variant="surface" style={styles.summaryCard}>
+            <ModeCard variant="hero" style={styles.summaryCard}>
               <SectionHeader
                 title="Current check-in streak"
                 subtitle={`${payload.checkins_last_7_days || 0} of 7 check-ins complete`}
@@ -267,7 +267,6 @@ export default function ProgressScreen({
             </ModeCard>
 
             <ModeButton
-              variant="secondary"
               title="Open Coach Insights"
               onPress={onOpenInsights}
             />

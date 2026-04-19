@@ -24,7 +24,8 @@ import QuickReplies from '../components/QuickReplies';
 import TypingIndicator from '../components/TypingIndicator';
 import { useChatConversation } from '../hooks/useChatConversation';
 
-const KEYBOARD_OPEN_DOCK_PADDING = theme.spacing[2];
+const KEYBOARD_OPEN_COMPOSER_OFFSET = theme.spacing[1];
+const LIST_BOTTOM_BREATHING_ROOM = theme.spacing[2];
 const COPY_FEEDBACK_TIMEOUT_MS = 2200;
 const NEAR_BOTTOM_THRESHOLD_PX = 120;
 const SAME_SENDER_MESSAGE_GAP = 5;
@@ -151,6 +152,10 @@ export default function CoachChatScreen({
   });
   const keyboardOffsetShiftRef = useRef(0);
   const dockAnchorInset = Math.max(bottomInset, 0);
+  const activeComposerOffset = isKeyboardVisible
+    ? KEYBOARD_OPEN_COMPOSER_OFFSET
+    : dockAnchorInset;
+  const chatListPaddingBottom = dockHeight + activeComposerOffset + LIST_BOTTOM_BREATHING_ROOM;
   const sessionIntro = useMemo(() => resolveSessionIntro(launchContext), [launchContext]);
   const backAccessibilityLabel =
     launchContext?.entrypoint === 'generated_nutrition'
@@ -358,10 +363,11 @@ export default function CoachChatScreen({
 
   return (
     <SafeScreen
+      includeBottomInset={false}
       includeTopInset={false}
       style={styles.screen}
       atmosphere="chat"
-      atmosphereOverlayStrength={1.08}
+      atmosphereOverlayStrength={1.04}
     >
       <HeaderBar
         title="Coach Chat"
@@ -433,6 +439,7 @@ export default function CoachChatScreen({
                     fallbackTriggered={item.fallbackTriggered}
                     showSpeakerLabel={showSpeakerLabel}
                     groupPosition={groupPosition}
+                    messageKind={item?.kind || null}
                   />
                   {stepPreview ? (
                     <View style={styles.previewCard}>
@@ -521,7 +528,7 @@ export default function CoachChatScreen({
             style={styles.messagesList}
             contentContainerStyle={[
               styles.messages,
-              { paddingBottom: dockHeight + theme.spacing[2] },
+              { paddingBottom: chatListPaddingBottom },
             ]}
             ListHeaderComponent={(
               <HeroOverlayCard
@@ -559,92 +566,93 @@ export default function CoachChatScreen({
             }}
           />
 
-          <GlassSurface
-            onLayout={(event) => setDockHeight(event.nativeEvent.layout.height)}
-            state="elevated"
-            radius="l"
-            blur="input"
-            padding={theme.spacing[2]}
+          <View
+            pointerEvents="box-none"
             style={[
               styles.dock,
               {
-                paddingBottom: isKeyboardVisible ? KEYBOARD_OPEN_DOCK_PADDING : dockAnchorInset,
+                bottom: activeComposerOffset,
               },
             ]}
-            contentStyle={styles.dockContent}
           >
-            {hasRetryableFailure ? (
-              <GlassSurface
-                state="muted"
-                radius="s"
-                style={styles.errorRow}
-                contentStyle={styles.errorRowContent}
-                fillColor={theme.colors.feedback.errorBg}
-                borderColor={theme.colors.feedback.errorBorder}
-              >
-                <View style={styles.errorTextWrap}>
-                  <ModeText variant="caption" tone="error" style={styles.errorText}>
-                    {error || 'Coach is temporarily unavailable.'}
-                  </ModeText>
-                  {copyFeedback ? (
-                    <ModeText variant="caption" tone="secondary" style={styles.copyFeedback}>
-                      {copyFeedback}
+            <View
+              testID="coach-chat-dock-stack"
+              onLayout={(event) => setDockHeight(event.nativeEvent.layout.height)}
+              style={styles.dockStack}
+            >
+              {hasRetryableFailure ? (
+                <GlassSurface
+                  state="muted"
+                  radius="s"
+                  style={styles.errorRow}
+                  contentStyle={styles.errorRowContent}
+                  fillColor={theme.colors.feedback.errorBg}
+                  borderColor={theme.colors.feedback.errorBorder}
+                >
+                  <View style={styles.errorTextWrap}>
+                    <ModeText variant="caption" tone="error" style={styles.errorText}>
+                      {error || 'Coach is temporarily unavailable.'}
                     </ModeText>
-                  ) : null}
-                </View>
-                <View style={styles.errorActions}>
-                  <Pressable
-                    accessibilityRole="button"
-                    testID="coach-chat-retry-button"
-                    onPress={handleRetryLastMessage}
-                    disabled={isSending}
-                    style={({ pressed }) => [
-                      styles.retryButton,
-                      pressed && !isSending && styles.retryButtonPressed,
-                      isSending && styles.retryButtonMuted,
-                    ]}
-                  >
-                    <ModeText variant="label" tone="accent">
-                      {isSending ? 'Retrying...' : 'Retry'}
-                    </ModeText>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    testID="coach-chat-copy-error-button"
-                    onPress={handleCopyError}
-                    disabled={isSending}
-                    style={({ pressed }) => [
-                      styles.retryButton,
-                      pressed && !isSending && styles.retryButtonPressed,
-                      isSending && styles.retryButtonMuted,
-                    ]}
-                  >
-                    <ModeText variant="label" tone="secondary">Copy error</ModeText>
-                  </Pressable>
-                </View>
-              </GlassSurface>
-            ) : null}
+                    {copyFeedback ? (
+                      <ModeText variant="caption" tone="secondary" style={styles.copyFeedback}>
+                        {copyFeedback}
+                      </ModeText>
+                    ) : null}
+                  </View>
+                  <View style={styles.errorActions}>
+                    <Pressable
+                      accessibilityRole="button"
+                      testID="coach-chat-retry-button"
+                      onPress={handleRetryLastMessage}
+                      disabled={isSending}
+                      style={({ pressed }) => [
+                        styles.retryButton,
+                        pressed && !isSending && styles.retryButtonPressed,
+                        isSending && styles.retryButtonMuted,
+                      ]}
+                    >
+                      <ModeText variant="label" tone="accent">
+                        {isSending ? 'Retrying...' : 'Retry'}
+                      </ModeText>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      testID="coach-chat-copy-error-button"
+                      onPress={handleCopyError}
+                      disabled={isSending}
+                      style={({ pressed }) => [
+                        styles.retryButton,
+                        pressed && !isSending && styles.retryButtonPressed,
+                        isSending && styles.retryButtonMuted,
+                      ]}
+                    >
+                      <ModeText variant="label" tone="secondary">Copy error</ModeText>
+                    </Pressable>
+                  </View>
+                </GlassSurface>
+              ) : null}
 
-            <QuickReplies
-              replies={quickReplies}
-              disabled={isSending}
-              onSelect={handleQuickReply}
-              style={styles.quickReplies}
-              contentContainerStyle={styles.quickRepliesContent}
-            />
-            {quickReplies?.length ? (
-              <ModeText variant="caption" tone="tertiary" style={styles.quickRepliesLabel}>
-                Coach shortcuts
-              </ModeText>
-            ) : null}
+              <QuickReplies
+                replies={quickReplies}
+                disabled={isSending}
+                onSelect={handleQuickReply}
+                style={styles.quickReplies}
+                contentContainerStyle={styles.quickRepliesContent}
+              />
+              {quickReplies?.length ? (
+                <ModeText variant="caption" tone="tertiary" style={styles.quickRepliesLabel}>
+                  Coach shortcuts
+                </ModeText>
+              ) : null}
 
-            <CoachComposer
-              value={draft}
-              onChangeText={setDraft}
-              onSend={handleSend}
-              disabled={isSending}
-            />
-          </GlassSurface>
+              <CoachComposer
+                value={draft}
+                onChangeText={setDraft}
+                onSend={handleSend}
+                disabled={isSending}
+              />
+            </View>
+          </View>
         </View>
       </KeyboardAvoidingView>
     </SafeScreen>
@@ -675,6 +683,7 @@ const styles = StyleSheet.create({
   },
   sessionIntroCard: {
     marginBottom: theme.spacing[2],
+    ...theme.shadows.medium,
   },
   messageItem: {
     width: '100%',
@@ -687,11 +696,11 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: theme.spacing[2],
     right: theme.spacing[2],
-    bottom: 0,
-    marginBottom: theme.spacing[1],
+    zIndex: 3,
   },
-  dockContent: {
+  dockStack: {
     paddingTop: theme.spacing[1],
+    gap: theme.spacing[1],
   },
   errorRow: {
     marginBottom: theme.spacing[1],
@@ -721,9 +730,8 @@ const styles = StyleSheet.create({
   },
   retryButton: {
     borderRadius: theme.radii.pill,
-    borderWidth: 1,
-    borderColor: theme.colors.glass.borderSoft,
-    backgroundColor: theme.colors.glass.base,
+    backgroundColor: 'rgba(224, 237, 255, 0.11)',
+    overflow: 'hidden',
     paddingVertical: theme.spacing[1] - 2,
     paddingHorizontal: theme.spacing[2],
   },
@@ -736,17 +744,16 @@ const styles = StyleSheet.create({
   },
   previewCard: {
     alignSelf: 'flex-start',
-    width: '88%',
+    width: '86%',
     marginTop: 6,
     marginBottom: 0,
     marginLeft: theme.spacing[1],
     borderRadius: theme.radii.m,
-    borderWidth: 1,
-    borderColor: theme.colors.glass.borderDefault,
-    backgroundColor: theme.colors.glass.elevated,
+    backgroundColor: 'rgba(20, 33, 55, 0.58)',
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     gap: 4,
+    overflow: 'hidden',
   },
   previewScenario: {
     marginTop: 2,
@@ -755,17 +762,16 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   checklistCard: {
-    width: '92%',
+    width: '90%',
     marginTop: 6,
     marginBottom: 0,
     marginLeft: theme.spacing[1],
     borderRadius: theme.radii.m,
-    borderWidth: 1,
-    borderColor: theme.colors.glass.borderDefault,
-    backgroundColor: theme.colors.glass.elevated,
+    backgroundColor: 'rgba(19, 32, 54, 0.6)',
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[2],
     gap: theme.spacing[1],
+    overflow: 'hidden',
   },
   checklistHeader: {
     flexDirection: 'row',
@@ -775,12 +781,11 @@ const styles = StyleSheet.create({
   },
   checklistItem: {
     borderRadius: theme.radii.s,
-    borderWidth: 1,
-    borderColor: theme.colors.glass.borderSoft,
-    backgroundColor: theme.colors.glass.base,
+    backgroundColor: 'rgba(223, 236, 255, 0.09)',
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     gap: 6,
+    overflow: 'hidden',
   },
   checklistScenario: {
     fontWeight: '600',
@@ -795,14 +800,12 @@ const styles = StyleSheet.create({
   },
   checklistActionButton: {
     borderRadius: theme.radii.pill,
-    borderWidth: 1,
-    borderColor: theme.colors.glass.borderDefault,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: 4,
-    backgroundColor: theme.colors.glass.base,
+    backgroundColor: 'rgba(224, 237, 255, 0.11)',
+    overflow: 'hidden',
   },
   checklistApproveButton: {
-    borderColor: theme.colors.accent.primary,
     backgroundColor: theme.colors.accent.soft,
   },
   checklistActionButtonMuted: {
@@ -815,12 +818,11 @@ const styles = StyleSheet.create({
   checklistApproveAllButton: {
     alignSelf: 'flex-start',
     borderRadius: theme.radii.pill,
-    borderWidth: 1,
-    borderColor: theme.colors.accent.primary,
     backgroundColor: theme.colors.accent.soft,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: 5,
     marginTop: 2,
+    overflow: 'hidden',
   },
   quickReplies: {
     marginBottom: theme.spacing[1],
@@ -832,5 +834,7 @@ const styles = StyleSheet.create({
     marginTop: -2,
     marginBottom: theme.spacing[1] - 2,
     paddingHorizontal: theme.spacing[1],
+    color: theme.colors.text.secondary,
+    fontWeight: '600',
   },
 });

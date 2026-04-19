@@ -1,8 +1,11 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import { ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { AI_RESPONSE_RENDERING_V1_ENABLED } from '../../../config/featureFlags';
+import AIResponseRenderer from '../../chat/components/AIResponseRenderer';
+import { parseAIResponseText, stripEmojiForDisplay } from '../../chat/utils/aiResponseParser';
 
 function resolveKindLabel(kind) {
   if (kind === 'trainer_input') {
@@ -56,18 +59,51 @@ function styleByKind(kind) {
   };
 }
 
+function shouldRenderStructuredStreamItem(kind, status) {
+  if (!AI_RESPONSE_RENDERING_V1_ENABLED) {
+    return false;
+  }
+  if (status === 'pending') {
+    return false;
+  }
+  return kind === 'internal_ai_private' || kind === 'client_message_draft';
+}
+
 function CoachStreamItem({ item }) {
   const kind = item?.kind || 'system_confirmation';
   const style = styleByKind(kind);
+  const streamStatus = typeof item?.status === 'string' ? item.status : 'confirmed';
+  const safeText = useMemo(
+    () => stripEmojiForDisplay(String(item?.text || '')),
+    [item?.text],
+  );
+  const structuredModel = useMemo(() => {
+    if (!shouldRenderStructuredStreamItem(kind, streamStatus)) {
+      return null;
+    }
+    return parseAIResponseText(safeText);
+  }, [kind, safeText, streamStatus]);
+  const hasStructuredBlocks = Boolean(
+    structuredModel
+    && Array.isArray(structuredModel.blocks)
+    && structuredModel.blocks.length > 0,
+  );
   return (
     <View style={styles.row}>
       <ModeText variant="caption" tone="tertiary" style={styles.label}>
         {resolveKindLabel(kind)}
       </ModeText>
       <View style={[styles.bubble, style.container]}>
-        <ModeText variant="bodySm" tone={style.textTone} style={style.textStyle}>
-          {item?.text || ''}
-        </ModeText>
+        {hasStructuredBlocks ? (
+          <AIResponseRenderer
+            model={structuredModel}
+            testIDPrefix="coach-stream-ai-response"
+          />
+        ) : (
+          <ModeText variant="bodySm" tone={style.textTone} style={style.textStyle}>
+            {safeText}
+          </ModeText>
+        )}
       </View>
     </View>
   );
@@ -109,8 +145,8 @@ const styles = StyleSheet.create({
     paddingVertical: theme.spacing[1] + 2,
   },
   trainerInput: {
-    backgroundColor: theme.colors.cta.primaryBg,
-    borderColor: theme.colors.cta.primaryBorder,
+    backgroundColor: theme.colors.nav.activeBg,
+    borderColor: theme.colors.nav.activeBorder,
   },
   trainerInputText: {
     color: '#FFFFFF',

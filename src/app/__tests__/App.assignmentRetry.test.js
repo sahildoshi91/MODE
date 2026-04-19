@@ -84,8 +84,14 @@ jest.mock('../../features/insights/screens/CoachInsightsScreen', () => {
 });
 jest.mock('../../features/navigation/components/LiquidBottomNav', () => {
   const React = require('react');
-  return function MockLiquidBottomNav(props) {
+  function MockLiquidBottomNav(props) {
     return React.createElement('MockLiquidBottomNav', props);
+  }
+  return {
+    __esModule: true,
+    default: MockLiquidBottomNav,
+    NAV_BOTTOM_OFFSET: 10,
+    NAV_PILL_HEIGHT: 64,
   };
 });
 jest.mock('../../features/profile/screens/ProfileScreen', () => {
