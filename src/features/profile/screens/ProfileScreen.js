@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ScrollView, StyleSheet, View } from 'react-native';
 import Constants from 'expo-constants';
 
 import {
+  GlassSurface,
+  GlassToggle,
   HeaderBar,
   ModeButton,
   ModeCard,
@@ -43,22 +45,26 @@ function formatExceptionDate(value) {
 
 function SettingToggle({ label, description, enabled, onToggle }) {
   return (
-    <Pressable
+    <GlassSurface
+      state={enabled ? 'elevated' : 'default'}
+      radius="s"
+      padding={theme.spacing[2]}
       onPress={onToggle}
-      style={({ pressed }) => [
+      highlight={false}
+      style={[
         styles.toggleRow,
         enabled && styles.toggleRowEnabled,
-        pressed && styles.toggleRowPressed,
       ]}
+      contentStyle={styles.toggleRowContent}
     >
       <View style={styles.toggleCopy}>
         <ModeText variant="bodySm">{label}</ModeText>
         <ModeText variant="caption" tone="secondary">{description}</ModeText>
       </View>
-      <View style={[styles.toggleTrack, enabled && styles.toggleTrackEnabled]}>
-        <View style={[styles.toggleThumb, enabled && styles.toggleThumbEnabled]} />
+      <View pointerEvents="none">
+        <GlassToggle value={enabled} onValueChange={() => {}} />
       </View>
-    </Pressable>
+    </GlassSurface>
   );
 }
 
@@ -392,51 +398,20 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   toggleRow: {
-    borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    borderRadius: theme.radii.s,
-    backgroundColor: theme.colors.surface.base,
     minHeight: 56,
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
+    marginBottom: theme.spacing[1],
+  },
+  toggleRowContent: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: theme.spacing[1],
     gap: theme.spacing[2],
   },
   toggleRowEnabled: {
-    borderColor: theme.colors.state.buildBorder,
-    backgroundColor: theme.colors.state.buildFill,
-  },
-  toggleRowPressed: {
-    opacity: theme.interaction.pressedOpacity,
+    borderColor: theme.colors.glass.borderActive,
   },
   toggleCopy: {
     flex: 1,
-  },
-  toggleTrack: {
-    width: 42,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: theme.colors.surface.base,
-    borderWidth: 1,
-    borderColor: theme.colors.border.subtle,
-    padding: 2,
-    justifyContent: 'center',
-  },
-  toggleTrackEnabled: {
-    backgroundColor: theme.colors.accent.primary,
-    borderColor: theme.colors.accent.primary,
-  },
-  toggleThumb: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: theme.colors.text.primary,
-  },
-  toggleThumbEnabled: {
-    alignSelf: 'flex-end',
   },
   settingsInput: {
     marginTop: theme.spacing[2],

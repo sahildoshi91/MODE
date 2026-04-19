@@ -9,8 +9,10 @@ import {
 } from 'react-native';
 
 import {
+  GlassToggle,
   ModeButton,
   ModeCard,
+  ModeChip,
   ModeInput,
   ModeText,
 } from '../../../../lib/components';
@@ -415,18 +417,12 @@ function MemoryPanel({
       />
       <View style={styles.visibilityRow}>
         {MEMORY_VISIBILITY_OPTIONS.map((option) => (
-          <Pressable
+          <ModeChip
             key={option.key}
+            label={option.label}
+            selected={draftVisibility === option.key}
             onPress={() => setDraftVisibility(option.key)}
-            style={[
-              styles.visibilityChip,
-              draftVisibility === option.key && styles.visibilityChipActive,
-            ]}
-          >
-            <ModeText variant="caption" tone={draftVisibility === option.key ? 'inverse' : 'secondary'}>
-              {option.label}
-            </ModeText>
-          </Pressable>
+          />
         ))}
       </View>
       {error ? (
@@ -1215,18 +1211,12 @@ function ClientContextPanel({
             {WEEKDAY_OPTIONS.map((weekday) => {
               const selected = recurringWeekdays.includes(weekday.value);
               return (
-                <Pressable
+                <ModeChip
                   key={weekday.value}
+                  label={weekday.label}
+                  selected={selected}
                   onPress={() => toggleWeekday(weekday.value)}
-                  style={[
-                    styles.weekdayChip,
-                    selected && styles.weekdayChipActive,
-                  ]}
-                >
-                  <ModeText variant="caption" tone={selected ? 'inverse' : 'secondary'}>
-                    {weekday.label}
-                  </ModeText>
-                </Pressable>
+                />
               );
             })}
           </View>
@@ -1235,13 +1225,13 @@ function ClientContextPanel({
             onChangeText={setPreferredMeetingLocation}
             placeholder="Preferred meeting location"
           />
-          <Pressable
-            onPress={() => setAutoUseTrainerDefaultLocation((current) => !current)}
-            style={styles.inlineToggle}
-          >
+          <View style={styles.inlineToggle}>
             <ModeText variant="bodySm">Use trainer default location fallback</ModeText>
-            <ModeText variant="caption" tone="secondary">{autoUseTrainerDefaultLocation ? 'On' : 'Off'}</ModeText>
-          </Pressable>
+            <GlassToggle
+              value={Boolean(autoUseTrainerDefaultLocation)}
+              onValueChange={setAutoUseTrainerDefaultLocation}
+            />
+          </View>
           <ModeButton
             title={isSaving ? 'Saving...' : 'Save Schedule Preferences'}
             onPress={handleSaveSchedulePreferences}
@@ -1492,17 +1482,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: theme.spacing[1],
   },
-  visibilityChip: {
-    borderRadius: theme.radii.pill,
-    borderWidth: 1,
-    borderColor: theme.colors.border.default,
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: 6,
-  },
-  visibilityChipActive: {
-    backgroundColor: theme.colors.cta.primaryBg,
-    borderColor: theme.colors.cta.primaryBorder,
-  },
   listStack: {
     gap: theme.spacing[1],
   },
@@ -1513,17 +1492,5 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: theme.spacing[1],
-  },
-  weekdayChip: {
-    borderRadius: theme.radii.pill,
-    borderWidth: 1,
-    borderColor: theme.colors.border.default,
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: 6,
-    backgroundColor: theme.colors.surface.elevated,
-  },
-  weekdayChipActive: {
-    backgroundColor: theme.colors.cta.primaryBg,
-    borderColor: theme.colors.cta.primaryBorder,
   },
 });

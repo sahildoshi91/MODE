@@ -17,8 +17,12 @@ class ConversationState(BaseModel):
 
 class ChatRequest(BaseModel):
     conversation_id: UUID | None = None
+    request_id: UUID | None = None
     message: str = Field(min_length=1, max_length=4000)
     client_context: dict[str, Any] = Field(default_factory=dict)
+    client_message_id: str | None = Field(default=None, min_length=1, max_length=120)
+    idempotency_key: str | None = Field(default=None, min_length=1, max_length=120)
+    since_seq: int | None = Field(default=None, ge=0)
 
     @field_validator("message")
     @classmethod
@@ -36,6 +40,16 @@ class ChatRequest(BaseModel):
         if len(json.dumps(value, default=str)) > 8000:
             raise ValueError("client_context payload is too large")
         return value
+
+    @field_validator("client_message_id", "idempotency_key")
+    @classmethod
+    def validate_optional_delivery_identifiers(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            return None
+        return normalized
 
 
 class TokenUsage(BaseModel):
@@ -73,6 +87,7 @@ class ConversationUsage(BaseModel):
 
 class ChatResponse(BaseModel):
     conversation_id: str | None
+    request_id: str | None = None
     assistant_message: str
     quick_replies: list[str] = Field(default_factory=list)
     conversation_state: ConversationState
@@ -102,3 +117,18 @@ class ChatHistoryItem(BaseModel):
 class ChatHistoryResponse(BaseModel):
     conversation_id: str | None = None
     items: list[ChatHistoryItem] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
+class ChatRequestEvent(BaseModel):
+    request_id: str
+    seq: int
+    event_type: str
+    stage: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    created_at: str | None = None
+
+
+class ChatRequestEventsResponse(BaseModel):
+    request_id: str
+    events: list[ChatRequestEvent] = Field(default_factory=list)

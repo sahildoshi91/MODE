@@ -83,6 +83,46 @@ jest.mock('../../../../../lib/components', () => {
     ModeText: ({ children, style }) => React.createElement(Text, { style }, children),
     ProgressBar: ({ style, progress }) => React.createElement(View, { style, accessibilityValue: { now: progress } }),
     SafeScreen: ({ children, style }) => React.createElement(View, { style }, children),
+    GlassCard: ({ children, style }) => React.createElement(View, { style }, children),
+    GlassSurface: ({ children, style, onPress }) => React.createElement(
+      Pressable,
+      { style, onPress },
+      children,
+    ),
+    GlassPill: ({ label, onPress, style, testID }) => React.createElement(
+      Pressable,
+      { style, onPress, testID },
+      React.createElement(Text, null, label),
+    ),
+    GlassToggle: ({ value, onValueChange, style }) => React.createElement(
+      Pressable,
+      { style, onPress: () => onValueChange?.(!value) },
+      React.createElement(Text, null, value ? 'on' : 'off'),
+    ),
+    GlassSlider: ({ style, testID }) => React.createElement(View, { style, testID }),
+    HeroOverlayCard: ({ children, style, title, body, eyebrow, testID }) => React.createElement(
+      View,
+      { style, testID },
+      eyebrow ? React.createElement(Text, null, eyebrow) : null,
+      title ? React.createElement(Text, null, title) : null,
+      body ? React.createElement(Text, null, body) : null,
+      children,
+    ),
+    MiniStat: ({ style, label, value, helper }) => React.createElement(
+      View,
+      { style },
+      React.createElement(Text, null, label),
+      React.createElement(Text, null, value),
+      helper ? React.createElement(Text, null, helper) : null,
+    ),
+    MacroBar: ({ style }) => React.createElement(View, { style }),
+    ProgressRing: ({ style }) => React.createElement(View, { style }),
+    SectionHeader: ({ style, title, subtitle }) => React.createElement(
+      View,
+      { style },
+      React.createElement(Text, null, title),
+      subtitle ? React.createElement(Text, null, subtitle) : null,
+    ),
   };
 });
 
@@ -235,6 +275,8 @@ describe('DailyCheckinScreen training routine flow', () => {
 
     await flushEffects();
 
+    expect(tree.root.findByProps({ testID: 'daily-checkin-home-overview' })).toBeTruthy();
+
     await act(async () => {
       tree.root.findByProps({ testID: 'build-training-routine-action' }).props.onPress();
     });
@@ -247,6 +289,7 @@ describe('DailyCheckinScreen training routine flow', () => {
     expect(setupRendered).not.toContain('Limited');
     expect(tree.root.findByProps({ testID: 'training-time-scroller' }).props.horizontal).toBe(true);
     expect(tree.root.findByProps({ testID: 'training-time-row' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'training-time-slider' })).toBeTruthy();
 
     await act(async () => {
       tree.root.findByProps({ testID: 'environment-option-hotel_room' }).props.onPress();

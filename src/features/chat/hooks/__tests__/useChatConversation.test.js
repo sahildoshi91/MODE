@@ -4,9 +4,10 @@ import renderer, { act } from 'react-test-renderer';
 jest.mock('../../services/chatApi', () => ({
   sendChatMessage: jest.fn(),
   getChatHistory: jest.fn(),
+  streamChatMessage: jest.fn(),
 }));
 
-import { getChatHistory, sendChatMessage } from '../../services/chatApi';
+import { getChatHistory, sendChatMessage, streamChatMessage } from '../../services/chatApi';
 import { useChatConversation } from '../useChatConversation';
 
 function HookHarness({ accessToken, launchContext, onState }) {
@@ -21,6 +22,9 @@ async function flushEffects() {
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
   });
 }
 
@@ -31,6 +35,7 @@ describe('useChatConversation', () => {
       conversation_id: null,
       items: [],
     });
+    streamChatMessage.mockRejectedValue(new Error('stream unavailable'));
   });
 
   it('creates an assistant error bubble and retryable state when review bootstrap fails', async () => {
@@ -149,6 +154,9 @@ describe('useChatConversation', () => {
   });
 
   it('keeps normal typed-message retry behavior unchanged', async () => {
+    streamChatMessage
+      .mockRejectedValueOnce(new Error('stream unavailable'))
+      .mockRejectedValueOnce(new Error('stream unavailable'));
     sendChatMessage
       .mockRejectedValueOnce(new Error('Unable to reach coach right now.'))
       .mockResolvedValueOnce({
@@ -181,8 +189,10 @@ describe('useChatConversation', () => {
       sendResult = await latestState.sendMessage('Need a plan for today');
     });
     await flushEffects();
+    await flushEffects();
+    await flushEffects();
 
-    expect(sendResult).toBe(false);
+    expect(sendResult).toBe(true);
     expect(latestState.lastFailedMessage).toBe('Need a plan for today');
     expect(latestState.hasRetryableFailure).toBe(true);
 
@@ -241,6 +251,7 @@ describe('useChatConversation', () => {
   });
 
   it('attaches onboarding profile_patch payloads to assistant messages', async () => {
+    streamChatMessage.mockRejectedValueOnce(new Error('stream unavailable'));
     sendChatMessage.mockResolvedValueOnce({
       conversation_id: 'convo-structured-1',
       assistant_message: 'Step 8 of 8: Final Calibration',
@@ -276,6 +287,8 @@ describe('useChatConversation', () => {
     await act(async () => {
       await latestState.sendMessage('Need help calibrating');
     });
+    await flushEffects();
+    await flushEffects();
     await flushEffects();
 
     const finalMessage = latestState.messages[latestState.messages.length - 1];

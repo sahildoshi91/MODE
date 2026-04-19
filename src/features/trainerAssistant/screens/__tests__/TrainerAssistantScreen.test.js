@@ -2,6 +2,7 @@ jest.mock('../../services/trainerAssistantApi', () => ({
   approveTrainerAssistantDraft: jest.fn(),
   editTrainerAssistantDraft: jest.fn(),
   executeTrainerAssistantAction: jest.fn(),
+  executeTrainerAssistantActionStream: jest.fn(),
   getTrainerAssistantBootstrap: jest.fn(),
   rejectTrainerAssistantDraft: jest.fn(),
 }));
@@ -24,6 +25,7 @@ import TrainerAssistantScreen from '../TrainerAssistantScreen';
 import {
   approveTrainerAssistantDraft,
   executeTrainerAssistantAction,
+  executeTrainerAssistantActionStream,
   getTrainerAssistantBootstrap,
 } from '../../services/trainerAssistantApi';
 
@@ -133,6 +135,7 @@ describe('TrainerAssistantScreen', () => {
     jest.clearAllMocks();
     Clipboard.setStringAsync.mockResolvedValue(undefined);
     getTrainerAssistantBootstrap.mockResolvedValue(buildBootstrapPayload());
+    executeTrainerAssistantActionStream.mockRejectedValue(new Error('stream unavailable'));
     executeTrainerAssistantAction.mockResolvedValue(buildExecutePayload('adjust_plan'));
     approveTrainerAssistantDraft.mockResolvedValue({
       draft_id: 'draft-1',

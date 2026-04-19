@@ -19,11 +19,13 @@ import {
   SafeScreen,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { getAIProgressLabel } from '../../messaging';
 import { buildTrainerRouteDiagnosticsBundle } from '../../trainerPlatform/utils/trainerRouteDiagnostics';
 import {
   approveTrainerAssistantDraft,
   editTrainerAssistantDraft,
   executeTrainerAssistantAction,
+  executeTrainerAssistantActionStream,
   getTrainerAssistantBootstrap,
   rejectTrainerAssistantDraft,
 } from '../services/trainerAssistantApi';
@@ -181,6 +183,7 @@ export default function TrainerAssistantScreen({
   const [draftStatus, setDraftStatus] = useState('open');
 
   const [isExecuting, setIsExecuting] = useState(false);
+  const [executionProgressStage, setExecutionProgressStage] = useState(null);
   const [executionError, setExecutionError] = useState(null);
   const [executionErrorDetails, setExecutionErrorDetails] = useState(null);
 
@@ -320,16 +323,37 @@ export default function TrainerAssistantScreen({
     setIsExecuting(true);
     setExecutionError(null);
     setExecutionErrorDetails(null);
+    setExecutionProgressStage('reviewing_message');
     setMutationError(null);
     setMutationSuccess(null);
 
     try {
-      const response = await executeTrainerAssistantAction({
-        accessToken,
-        clientId,
-        actionType,
-        message: prompt,
-      });
+      let response = null;
+      try {
+        response = await executeTrainerAssistantActionStream({
+          accessToken,
+          clientId,
+          actionType,
+          message: prompt,
+          onEvent: (eventPayload) => {
+            const eventType = String(eventPayload?.type || '').trim().toLowerCase();
+            if (eventType === 'ack' || eventType === 'progress') {
+              setExecutionProgressStage(eventPayload?.stage || 'reviewing_message');
+              return;
+            }
+            if (eventType === 'completed' || eventType === 'done') {
+              setExecutionProgressStage('finalizing_response');
+            }
+          },
+        });
+      } catch (_streamError) {
+        response = await executeTrainerAssistantAction({
+          accessToken,
+          clientId,
+          actionType,
+          message: prompt,
+        });
+      }
       setDraftId(response?.draft_id || null);
       setDraftOutput(response?.output || null);
       setRouteSummary(response?.route || null);
@@ -337,10 +361,12 @@ export default function TrainerAssistantScreen({
       setSelectedActionType(response?.output?.action_type || actionType);
       setSelectedClientId(clientId);
       await loadBootstrap({ preferredClientId: clientId, keepCurrentPrompt: true });
+      setExecutionProgressStage(null);
     } catch (error) {
       const parsedError = buildTrainerRouteError(error, 'Unable to generate trainer assistant draft.');
       setExecutionError(parsedError.message || 'Unable to generate trainer assistant draft.');
       setExecutionErrorDetails(parsedError);
+      setExecutionProgressStage(null);
     } finally {
       setIsExecuting(false);
     }
@@ -498,6 +524,9 @@ export default function TrainerAssistantScreen({
   const executionStaleRoute = Boolean(executionErrorDetails?.isStaleBackendRoute);
   const executionConnectivityError = Boolean(executionErrorDetails?.stage === 'network' && !executionStaleRoute);
   const executionRecommendedApiBase = executionErrorDetails?.recommendedApiBase || null;
+  const executionProgressLabel = executionProgressStage
+    ? getAIProgressLabel(executionProgressStage)
+    : null;
   const executionAttemptedHosts = Array.isArray(executionErrorDetails?.attemptedBaseUrls)
     ? executionErrorDetails.attemptedBaseUrls.filter(Boolean)
     : [];
@@ -781,6 +810,11 @@ export default function TrainerAssistantScreen({
               onPress={() => runExecution()}
               disabled={isExecuting}
             />
+            {isExecuting && executionProgressLabel ? (
+              <ModeText variant="caption" tone="secondary">
+                {executionProgressLabel}
+              </ModeText>
+            ) : null}
             {executionError && executionStaleRoute ? (
               <View style={styles.routeDiagnosticBlock}>
                 <ModeText variant="caption" tone="error">{executionError}</ModeText>

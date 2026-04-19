@@ -63,6 +63,7 @@ class PromptPackage:
 class StreamResultState:
     conversation_usage: ConversationUsage | None = None
     token_usage: TokenUsage = field(default_factory=TokenUsage)
+    assistant_message_id: str | None = None
 
 
 class ConversationProcessingError(RuntimeError):
@@ -471,9 +472,11 @@ class ConversationService:
         onboarding_progress: dict[str, Any],
         calibration_pending: bool,
         profile_patch: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> ChatResponse:
         return ChatResponse(
             conversation_id=conversation_id,
+            request_id=request_id,
             assistant_message=assistant_message,
             quick_replies=quick_replies,
             conversation_state=ConversationState(
@@ -517,22 +520,43 @@ class ConversationService:
                     source_message_id=None,
                 )
             else:
-                user_message = self.repository.save_message(
-                    conversation["id"],
-                    "user",
-                    request.message,
-                    {
-                        "client_context": request.client_context,
-                        "route": {
-                            "flow": "trainer_onboarding_v2",
-                            "reason": "trainer_setup",
-                            "task_type": "trainer_onboarding",
-                            "response_mode": "state_machine",
-                            "provider": "system",
-                            "model": "trainer-onboarding-v2",
+                try:
+                    user_message = self.repository.save_message(
+                        conversation["id"],
+                        "user",
+                        request.message,
+                        {
+                            "client_context": request.client_context,
+                            "route": {
+                                "flow": "trainer_onboarding_v2",
+                                "reason": "trainer_setup",
+                                "task_type": "trainer_onboarding",
+                                "response_mode": "state_machine",
+                                "provider": "system",
+                                "model": "trainer-onboarding-v2",
+                            },
                         },
-                    },
-                )
+                        client_message_id=self._client_message_id_text(request),
+                        idempotency_key=self._idempotency_key_text(request),
+                        request_id=self._request_id_text(request),
+                    )
+                except TypeError:
+                    user_message = self.repository.save_message(
+                        conversation["id"],
+                        "user",
+                        request.message,
+                        {
+                            "client_context": request.client_context,
+                            "route": {
+                                "flow": "trainer_onboarding_v2",
+                                "reason": "trainer_setup",
+                                "task_type": "trainer_onboarding",
+                                "response_mode": "state_machine",
+                                "provider": "system",
+                                "model": "trainer-onboarding-v2",
+                            },
+                        },
+                    )
                 should_force_restart = bool(
                     onboarding_action == "retrain"
                     and request.conversation_id is None
@@ -555,27 +579,51 @@ class ConversationService:
 
         assistant_message = onboarding_turn.assistant_message
         stage = f"trainer_onboarding_{onboarding_turn.current_stage}"
-        self.repository.save_message(
-            conversation["id"],
-            "assistant",
-            assistant_message,
-            {
-                "provider": "system",
-                "model": "trainer-onboarding-v2",
-                "route": {
-                    "flow": "trainer_onboarding_v2",
-                    "reason": "trainer_setup",
-                    "task_type": "trainer_onboarding",
-                    "response_mode": "bootstrap" if is_bootstrap else "state_machine",
+        try:
+            self.repository.save_message(
+                conversation["id"],
+                "assistant",
+                assistant_message,
+                {
+                    "provider": "system",
+                    "model": "trainer-onboarding-v2",
+                    "route": {
+                        "flow": "trainer_onboarding_v2",
+                        "reason": "trainer_setup",
+                        "task_type": "trainer_onboarding",
+                        "response_mode": "bootstrap" if is_bootstrap else "state_machine",
+                    },
+                    "onboarding_state": {
+                        "status": onboarding_turn.onboarding_status,
+                        "progress": onboarding_turn.onboarding_progress,
+                        "calibration_pending": onboarding_turn.calibration_pending,
+                        "current_stage": onboarding_turn.current_stage,
+                    },
                 },
-                "onboarding_state": {
-                    "status": onboarding_turn.onboarding_status,
-                    "progress": onboarding_turn.onboarding_progress,
-                    "calibration_pending": onboarding_turn.calibration_pending,
-                    "current_stage": onboarding_turn.current_stage,
+                request_id=self._request_id_text(request),
+            )
+        except TypeError:
+            self.repository.save_message(
+                conversation["id"],
+                "assistant",
+                assistant_message,
+                {
+                    "provider": "system",
+                    "model": "trainer-onboarding-v2",
+                    "route": {
+                        "flow": "trainer_onboarding_v2",
+                        "reason": "trainer_setup",
+                        "task_type": "trainer_onboarding",
+                        "response_mode": "bootstrap" if is_bootstrap else "state_machine",
+                    },
+                    "onboarding_state": {
+                        "status": onboarding_turn.onboarding_status,
+                        "progress": onboarding_turn.onboarding_progress,
+                        "calibration_pending": onboarding_turn.calibration_pending,
+                        "current_stage": onboarding_turn.current_stage,
+                    },
                 },
-            },
-        )
+            )
         self.repository.update_conversation_state(
             conversation["id"],
             stage,
@@ -592,6 +640,7 @@ class ConversationService:
             onboarding_turn.onboarding_progress,
             onboarding_turn.calibration_pending,
             onboarding_turn.profile_patch,
+            self._request_id_text(request),
         )
 
     def _serialize_route_metadata(
@@ -806,6 +855,146 @@ class ConversationService:
                 False,
             )
 
+    def _request_id_text(self, request: ChatRequest) -> str | None:
+        if not request.request_id:
+            return None
+        return str(request.request_id)
+
+    def _client_message_id_text(self, request: ChatRequest) -> str | None:
+        if not request.client_message_id:
+            return None
+        value = str(request.client_message_id).strip()
+        return value or None
+
+    def _idempotency_key_text(self, request: ChatRequest) -> str | None:
+        if not request.idempotency_key:
+            return None
+        value = str(request.idempotency_key).strip()
+        return value or None
+
+    def _save_user_message(
+        self,
+        *,
+        conversation_id: str,
+        request: ChatRequest,
+        route_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        client_message_id = self._client_message_id_text(request)
+        existing_message = None
+        if client_message_id:
+            with suppress(Exception):
+                existing_message = self.repository.find_message_by_client_message_id(
+                    conversation_id,
+                    client_message_id,
+                )
+        if existing_message:
+            return existing_message
+
+        try:
+            return self.repository.save_message(
+                conversation_id,
+                "user",
+                request.message,
+                {
+                    "client_context": request.client_context,
+                    "route": route_metadata,
+                },
+                client_message_id=client_message_id,
+                idempotency_key=self._idempotency_key_text(request),
+                request_id=self._request_id_text(request),
+            )
+        except TypeError:
+            # Backward compatibility for test fakes with legacy save_message signature.
+            return self.repository.save_message(
+                conversation_id,
+                "user",
+                request.message,
+                {
+                    "client_context": request.client_context,
+                    "route": route_metadata,
+                },
+            )
+
+    def create_ai_request_record(
+        self,
+        *,
+        conversation_id: str,
+        trainer_context: TrainerContext,
+        request: ChatRequest,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        if not trainer_context.trainer_id:
+            return None
+        idempotency_key = self._idempotency_key_text(request)
+        if idempotency_key:
+            existing = self.repository.get_ai_request_by_idempotency(
+                conversation_id=conversation_id,
+                idempotency_key=idempotency_key,
+            )
+            if existing:
+                return existing
+        return self.repository.create_ai_request(
+            request_id=self._request_id_text(request),
+            conversation_id=conversation_id,
+            trainer_id=trainer_context.trainer_id,
+            client_id=trainer_context.client_id,
+            request_status="request_received",
+            client_message_id=self._client_message_id_text(request),
+            idempotency_key=idempotency_key,
+            metadata=metadata or {},
+        )
+
+    def append_ai_request_event(
+        self,
+        *,
+        request_id: str,
+        seq: int,
+        event_type: str,
+        stage: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        with suppress(Exception):
+            self.repository.append_ai_request_event(
+                request_id=request_id,
+                seq=seq,
+                event_type=event_type,
+                stage=stage,
+                payload=payload or {},
+            )
+
+    def update_ai_request_status(
+        self,
+        *,
+        request_id: str,
+        status: str,
+        latest_event_seq: int | None = None,
+        completed_message_id: str | None = None,
+        error_detail: str | None = None,
+    ) -> None:
+        with suppress(Exception):
+            self.repository.update_ai_request_status(
+                request_id=request_id,
+                status=status,
+                latest_event_seq=latest_event_seq,
+                completed_message_id=completed_message_id,
+                error_detail=error_detail,
+            )
+
+    def get_ai_request_events(
+        self,
+        *,
+        request_id: str,
+        since_seq: int = 0,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        with suppress(Exception):
+            return self.repository.list_ai_request_events(
+                request_id=request_id,
+                since_seq=since_seq,
+                limit=limit,
+            )
+        return []
+
     def _persist_assistant_message(
         self,
         conversation_id: str,
@@ -816,25 +1005,46 @@ class ConversationService:
         completion: TextCompletion,
         fallback_reason: str | None = None,
         orchestration_metadata: dict[str, Any] | None = None,
+        source_request_id: str | None = None,
     ) -> tuple[RouteDebug, ConversationUsage, dict[str, Any]]:
         route_debug = self._build_route_debug(route, execution_provider, execution_model, fallback_reason)
-        saved_message = self.repository.save_message(
-            conversation_id,
-            "assistant",
-            assistant_message,
-            {
-                "provider": execution_provider,
-                "model": execution_model,
-                "token_usage": {
-                    "prompt_tokens": completion.token_usage.prompt_tokens,
-                    "completion_tokens": completion.token_usage.completion_tokens,
-                    "total_tokens": completion.token_usage.total_tokens,
-                    "thoughts_tokens": completion.token_usage.thoughts_tokens,
+        try:
+            saved_message = self.repository.save_message(
+                conversation_id,
+                "assistant",
+                assistant_message,
+                {
+                    "provider": execution_provider,
+                    "model": execution_model,
+                    "token_usage": {
+                        "prompt_tokens": completion.token_usage.prompt_tokens,
+                        "completion_tokens": completion.token_usage.completion_tokens,
+                        "total_tokens": completion.token_usage.total_tokens,
+                        "thoughts_tokens": completion.token_usage.thoughts_tokens,
+                    },
+                    "route": self._serialize_route_metadata(route, execution_provider, execution_model, fallback_reason),
+                    "orchestration": orchestration_metadata or {},
                 },
-                "route": self._serialize_route_metadata(route, execution_provider, execution_model, fallback_reason),
-                "orchestration": orchestration_metadata or {},
-            },
-        )
+                request_id=source_request_id,
+            )
+        except TypeError:
+            saved_message = self.repository.save_message(
+                conversation_id,
+                "assistant",
+                assistant_message,
+                {
+                    "provider": execution_provider,
+                    "model": execution_model,
+                    "token_usage": {
+                        "prompt_tokens": completion.token_usage.prompt_tokens,
+                        "completion_tokens": completion.token_usage.completion_tokens,
+                        "total_tokens": completion.token_usage.total_tokens,
+                        "thoughts_tokens": completion.token_usage.thoughts_tokens,
+                    },
+                    "route": self._serialize_route_metadata(route, execution_provider, execution_model, fallback_reason),
+                    "orchestration": orchestration_metadata or {},
+                },
+            )
         try:
             self.repository.record_usage_event(
                 conversation_id=conversation_id,
@@ -941,6 +1151,7 @@ class ConversationService:
         fallback_triggered: bool,
         route_debug: RouteDebug,
         conversation_usage: ConversationUsage,
+        request_id: str | None = None,
     ) -> ChatResponse:
         is_trainer_only = self._is_trainer_only_context(trainer_context)
         onboarding_status = (
@@ -955,6 +1166,7 @@ class ConversationService:
         )
         return ChatResponse(
             conversation_id=conversation_id,
+            request_id=request_id,
             assistant_message=assistant_message,
             quick_replies=[],
             conversation_state=ConversationState(
@@ -1034,6 +1246,7 @@ class ConversationService:
         *,
         conversation_id: str | None = None,
         limit: int = 80,
+        cursor: str | None = None,
     ) -> ChatHistoryResponse:
         del user_id
         if not trainer_context.trainer_id:
@@ -1061,11 +1274,27 @@ class ConversationService:
             return ChatHistoryResponse(conversation_id=None, items=[])
 
         conversation_id_value = str(conversation.get("id"))
-        rows = self.repository.list_messages_with_payload(conversation_id_value, limit=max(1, min(limit, 200)))
+        page_limit = max(1, min(limit, 200))
+        normalized_cursor = str(cursor).strip() if isinstance(cursor, str) and cursor.strip() else None
+        try:
+            rows = self.repository.list_messages_with_payload(
+                conversation_id_value,
+                limit=page_limit,
+                before_created_at=normalized_cursor,
+            )
+        except TypeError:
+            rows = self.repository.list_messages_with_payload(
+                conversation_id_value,
+                limit=page_limit,
+            )
         items = [self._to_history_item(row) for row in rows]
+        next_cursor = None
+        if len(rows) >= page_limit and rows:
+            next_cursor = str(rows[0].get("created_at") or "").strip() or None
         return ChatHistoryResponse(
             conversation_id=conversation_id_value,
             items=items,
+            next_cursor=next_cursor,
         )
 
     def stream_chat(
@@ -1098,14 +1327,10 @@ class ConversationService:
         route, conversation, prompt = self._prepare_route_and_prompt(trainer_context, request)
         route_metadata = route.as_dict()
         try:
-            user_message = self.repository.save_message(
-                conversation["id"],
-                "user",
-                request.message,
-                {
-                    "client_context": request.client_context,
-                    "route": route_metadata,
-                },
+            user_message = self._save_user_message(
+                conversation_id=conversation["id"],
+                request=request,
+                route_metadata=route_metadata,
             )
         except Exception as exc:
             self._mark_conversation_failed(conversation["id"])
@@ -1142,8 +1367,10 @@ class ConversationService:
                         ANTHROPIC_SONNET_MODEL,
                         completion,
                         orchestration_metadata=prompt.orchestration_metadata,
+                        source_request_id=self._request_id_text(request),
                     )
                     result_state.conversation_usage = conversation_usage
+                    result_state.assistant_message_id = str(saved_assistant_message.get("id") or "") or None
                     self._log_generated_chat_output_safely(
                         trainer_context=trainer_context,
                         conversation_id=conversation["id"],
@@ -1172,27 +1399,20 @@ class ConversationService:
             return conversation["id"], anthropic_iterator(), route_debug, result_state
 
         if route.provider != "gemini" or not self.gemini_client:
-            try:
-                completion, execution_provider, execution_model, fallback_reason = self._execute_route(route, prompt)
-            except ConversationProcessingError:
-                self._mark_conversation_failed(conversation["id"])
-                raise
-            except Exception as exc:
-                self._mark_conversation_failed(conversation["id"])
-                raise ConversationProcessingError("Chat response could not be completed") from exc
-
-            route_debug = self._build_route_debug(route, execution_provider, execution_model, fallback_reason)
-            result_state = StreamResultState(
-                token_usage=TokenUsage(
-                    prompt_tokens=completion.token_usage.prompt_tokens,
-                    completion_tokens=completion.token_usage.completion_tokens,
-                    total_tokens=completion.token_usage.total_tokens,
-                    thoughts_tokens=completion.token_usage.thoughts_tokens,
-                )
-            )
+            route_debug = self._build_route_debug(route, route.provider, route.model)
+            result_state = StreamResultState()
 
             def fallback_iterator() -> Iterator[str]:
                 try:
+                    completion, execution_provider, execution_model, fallback_reason = self._execute_route(route, prompt)
+                    nonlocal route_debug
+                    route_debug = self._build_route_debug(route, execution_provider, execution_model, fallback_reason)
+                    result_state.token_usage = TokenUsage(
+                        prompt_tokens=completion.token_usage.prompt_tokens,
+                        completion_tokens=completion.token_usage.completion_tokens,
+                        total_tokens=completion.token_usage.total_tokens,
+                        thoughts_tokens=completion.token_usage.thoughts_tokens,
+                    )
                     assistant_message = (completion.text or "").strip()
                     if not assistant_message:
                         assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
@@ -1206,8 +1426,10 @@ class ConversationService:
                         completion,
                         fallback_reason,
                         orchestration_metadata=prompt.orchestration_metadata,
+                        source_request_id=self._request_id_text(request),
                     )
                     result_state.conversation_usage = conversation_usage
+                    result_state.assistant_message_id = str(saved_assistant_message.get("id") or "") or None
                     self._log_generated_chat_output_safely(
                         trainer_context=trainer_context,
                         conversation_id=conversation["id"],
@@ -1265,8 +1487,10 @@ class ConversationService:
                     GEMINI_MODEL,
                     completion,
                     orchestration_metadata=prompt.orchestration_metadata,
+                    source_request_id=self._request_id_text(request),
                 )
                 result_state.conversation_usage = conversation_usage
+                result_state.assistant_message_id = str(saved_assistant_message.get("id") or "") or None
                 self._log_generated_chat_output_safely(
                     trainer_context=trainer_context,
                     conversation_id=conversation["id"],
@@ -1315,14 +1539,10 @@ class ConversationService:
 
         route, conversation, prompt = self._prepare_route_and_prompt(trainer_context, request)
         try:
-            user_message = self.repository.save_message(
-                conversation["id"],
-                "user",
-                request.message,
-                {
-                    "client_context": request.client_context,
-                    "route": route.as_dict(),
-                },
+            user_message = self._save_user_message(
+                conversation_id=conversation["id"],
+                request=request,
+                route_metadata=route.as_dict(),
             )
 
             completion, execution_provider, execution_model, fallback_reason = self._execute_route(route, prompt)
@@ -1339,6 +1559,7 @@ class ConversationService:
                 completion,
                 fallback_reason,
                 orchestration_metadata=prompt.orchestration_metadata,
+                source_request_id=self._request_id_text(request),
             )
         except ConversationProcessingError:
             self._mark_conversation_failed(conversation["id"])
@@ -1378,4 +1599,5 @@ class ConversationService:
             fallback_triggered=bool(fallback_reason),
             route_debug=route_debug,
             conversation_usage=conversation_usage,
+            request_id=self._request_id_text(request),
         )

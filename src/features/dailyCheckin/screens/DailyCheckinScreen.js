@@ -28,10 +28,18 @@ import {
 import {
   HeaderBar,
   ModeButton,
-  ModeCard,
   ModeText,
-  ProgressBar,
   SafeScreen,
+  GlassCard,
+  GlassSurface,
+  GlassPill,
+  GlassToggle,
+  GlassSlider,
+  HeroOverlayCard,
+  MiniStat,
+  MacroBar,
+  ProgressRing,
+  SectionHeader,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { SHOW_DEV_CONNECTION_DEBUG } from '../../../config/featureFlags';
@@ -736,7 +744,11 @@ function ResultCard({
   const modeTheme = MODE_THEME[result.mode] || MODE_THEME.RECOVER;
 
   return (
-    <View style={[styles.resultCard, { borderColor: withAlpha(modeTheme.accent, 0.55) }]}>
+    <GlassCard
+      style={[styles.resultCard, { borderColor: withAlpha(modeTheme.accent, 0.55) }]}
+      state="elevated"
+      padding={theme.spacing[2]}
+    >
       <View style={[styles.bundleBlock, styles.bundleBlockFirst]}>
         <Text style={styles.bundleLabel}>Training</Text>
         <Text style={styles.bundleValue}>{result.training.type}</Text>
@@ -770,7 +782,7 @@ function ResultCard({
           />
         ) : null}
       </View>
-    </View>
+    </GlassCard>
   );
 }
 
@@ -784,10 +796,16 @@ function HomeOverviewCard({ result, isModeInfoOpen, onToggleModeInfo, onOpenInsi
   const modeGuideCopy = MODE_GUIDE_DETAILS[result.mode] || MODE_GUIDE_DETAILS.RECOVER;
 
   return (
-    <ModeCard variant="surface" style={styles.homeOverviewCard}>
+    <HeroOverlayCard
+      eyebrow="Today"
+      title={`${result.mode} mode`}
+      body={result.mode_tagline || 'Progress today is about smart decisions, not pressure.'}
+      style={styles.homeOverviewCard}
+      testID="daily-checkin-home-overview"
+    >
       <View style={styles.homeOverviewModeRow}>
         <ModeText variant="label" tone="tertiary" style={styles.homeOverviewModeLabel}>
-          Today&apos;s mode
+          {modeTheme.badge}
         </ModeText>
         <Pressable
           accessibilityRole="button"
@@ -803,15 +821,31 @@ function HomeOverviewCard({ result, isModeInfoOpen, onToggleModeInfo, onOpenInsi
           <Feather name="info" size={14} color={theme.colors.textMedium} />
         </Pressable>
       </View>
-      <ModeText variant="display" style={[styles.homeOverviewModeValue, { color: modeTheme.accent }]}>
-        {result.mode}
-      </ModeText>
-      <ModeText variant="h3" style={styles.homeOverviewTitle}>
-        {modeTheme.badge}
-      </ModeText>
-      <ModeText variant="bodySm" tone="secondary" style={styles.homeOverviewBody}>
-        {result.mode_tagline || 'Progress today is about smart decisions, not pressure.'}
-      </ModeText>
+
+      <View style={styles.homeOverviewMetricsRow}>
+        <ProgressRing
+          value={scoreProgress}
+          centerValue={result.score}
+          label="/25"
+          size={86}
+          accentColor={modeTheme.accent}
+        />
+        <View style={styles.homeOverviewMetricsStats}>
+          <MiniStat
+            label="Training"
+            value={result?.training?.duration || '--'}
+            helper={result?.training?.intensity || ''}
+            style={styles.homeMiniStat}
+          />
+          <MiniStat
+            label="Nutrition"
+            value={result?.nutrition?.rule || '--'}
+            helper="Fuel focus"
+            style={styles.homeMiniStat}
+          />
+        </View>
+      </View>
+
       {isModeInfoOpen ? (
         <View style={styles.homeOverviewInfoPanel}>
           <ModeText variant="bodySm" tone="secondary" style={styles.homeOverviewInfoBody}>
@@ -842,11 +876,11 @@ function HomeOverviewCard({ result, isModeInfoOpen, onToggleModeInfo, onOpenInsi
         </ModeText>
       </View>
       <View style={styles.homeOverviewProgressWrap}>
-        <ModeText variant="caption" tone="tertiary">Readiness score {result.score}/25</ModeText>
-        <ProgressBar
+        <MacroBar
+          label="Readiness"
+          valueLabel={`${result.score}/25`}
           progress={scoreProgress}
-          trackColor={theme.colors.surface.base}
-          fillColor={modeTheme.accent}
+          accentColor={modeTheme.accent}
           style={styles.homeOverviewProgress}
         />
       </View>
@@ -854,7 +888,7 @@ function HomeOverviewCard({ result, isModeInfoOpen, onToggleModeInfo, onOpenInsi
         <ModeButton title="Coach insights" variant="ghost" onPress={onOpenInsights} />
         <ModeButton title="Talk to coach" onPress={onOpenCoachChat} />
       </View>
-    </ModeCard>
+    </HeroOverlayCard>
   );
 }
 
@@ -1037,9 +1071,10 @@ function PreviousContextToggle({ previousCheckin, isLoadingPreviousCheckin, incl
           <Text style={styles.previousMeta}>{previousCheckin.mode} • {previousCheckin.score}/25</Text>
         </View>
       </View>
-      <View style={[styles.toggleTrack, includeYesterdayContext && styles.toggleTrackOn]}>
-        <View style={[styles.toggleThumb, includeYesterdayContext && styles.toggleThumbOn]} />
-      </View>
+      <GlassToggle
+        value={includeYesterdayContext}
+        onValueChange={onToggle}
+      />
     </Pressable>
   );
 }
@@ -1120,7 +1155,12 @@ function TrainingPlanView({ plan, expandedExercises, onToggleExercise, bottomPad
 
   return (
     <ScrollView contentContainerStyle={[styles.planScrollContent, { paddingBottom: bottomPadding }]}>
-      <View style={styles.trainingHeaderCard}>
+      <HeroOverlayCard
+        eyebrow="Workout"
+        title={displayPlan.title}
+        body={displayPlan.description}
+        style={styles.trainingHeaderCard}
+      >
         <View style={styles.trainingHeaderRow}>
           <TrainingIconBadge
             Icon={Dumbbell}
@@ -1128,21 +1168,15 @@ function TrainingPlanView({ plan, expandedExercises, onToggleExercise, bottomPad
             style={styles.trainingHeaderIconBadge}
             testID="training-section-icon-title"
           />
-          <View style={styles.trainingHeaderCopy}>
-            <Text style={styles.trainingTitle}>{displayPlan.title}</Text>
-            {displayPlan.description ? (
-              <Text style={styles.trainingDescription}>{displayPlan.description}</Text>
-            ) : null}
-          </View>
         </View>
         <View style={styles.metaRow}>
           <Text style={styles.metaPill}>{displayPlan.difficulty}</Text>
           <Text style={styles.metaPill}>{displayPlan.durationMinutes} min</Text>
           <Text style={styles.metaPill}>{(displayPlan.exercises || []).length} exercises</Text>
         </View>
-      </View>
+      </HeroOverlayCard>
 
-      <View style={styles.sectionCard}>
+      <GlassCard style={styles.sectionCard} state="elevated">
         <TrainingSectionHeader
           Icon={Flame}
           title="Warm-Up"
@@ -1163,9 +1197,9 @@ function TrainingPlanView({ plan, expandedExercises, onToggleExercise, bottomPad
             <Text style={styles.simpleDuration}>{item.duration}</Text>
           </View>
         ))}
-      </View>
+      </GlassCard>
 
-      <View style={styles.sectionCard}>
+      <GlassCard style={styles.sectionCard} state="elevated">
         <TrainingSectionHeader
           Icon={Dumbbell}
           title="Main Workout"
@@ -1233,9 +1267,9 @@ function TrainingPlanView({ plan, expandedExercises, onToggleExercise, bottomPad
             </View>
           );
         })}
-      </View>
+      </GlassCard>
 
-      <View style={styles.sectionCard}>
+      <GlassCard style={styles.sectionCard} state="elevated">
         <TrainingSectionHeader
           Icon={Snowflake}
           title="Cool-Down"
@@ -1256,11 +1290,11 @@ function TrainingPlanView({ plan, expandedExercises, onToggleExercise, bottomPad
             <Text style={styles.simpleDuration}>{item.duration}</Text>
           </View>
         ))}
-      </View>
+      </GlassCard>
 
-      <View style={styles.coachNoteCard}>
+      <GlassCard style={styles.coachNoteCard} state="default">
         <Text style={styles.coachNoteText}>{displayPlan.coachNote}</Text>
-      </View>
+      </GlassCard>
     </ScrollView>
   );
 }
@@ -1270,14 +1304,17 @@ function GuidedWorkoutView({ plan, elapsedSeconds, guidedStatus, bottomPadding =
 
   return (
     <ScrollView contentContainerStyle={[styles.planScrollContent, { paddingBottom: bottomPadding }]}>
-      <View style={styles.guidedHeroCard}>
+      <HeroOverlayCard
+        eyebrow="Guided Workout"
+        title={displayPlan?.title}
+        style={styles.guidedHeroCard}
+      >
         <Text style={styles.guidedEyebrow}>Guided Workout</Text>
-        <Text style={styles.guidedTitle}>{displayPlan?.title}</Text>
         <Text style={styles.guidedTimer}>{formatDuration(elapsedSeconds)}</Text>
         <Text style={styles.guidedStatus}>Status: {guidedStatus}</Text>
-      </View>
+      </HeroOverlayCard>
       {(displayPlan?.exercises || []).map((exercise, index) => (
-        <View key={`guided-${index}`} style={styles.guidedExerciseRow}>
+        <GlassCard key={`guided-${index}`} style={styles.guidedExerciseRow} state="default" padding={theme.spacing[2]}>
           <TrainingItemIconBadge
             section={TRAINING_ITEM_SECTIONS.GUIDED}
             item={exercise}
@@ -1288,7 +1325,7 @@ function GuidedWorkoutView({ plan, elapsedSeconds, guidedStatus, bottomPadding =
             <Text style={styles.exerciseName}>{exercise.name}</Text>
             <Text style={styles.simpleDesc}>{exercise.sets}x{exercise.reps} • Rest {exercise.rest}</Text>
           </View>
-        </View>
+        </GlassCard>
       ))}
     </ScrollView>
   );
@@ -1301,17 +1338,20 @@ function NutritionPlanView({ plan }) {
 
   return (
     <ScrollView contentContainerStyle={styles.planScrollContent}>
-      <View style={styles.nutritionHeaderCard}>
-        <Text style={styles.trainingTitle}>{plan.title}</Text>
-        <Text style={styles.nutritionCoachNote}>{plan.coachNote}</Text>
+      <HeroOverlayCard
+        eyebrow="Nutrition"
+        title={plan.title}
+        body={plan.coachNote}
+        style={styles.nutritionHeaderCard}
+      >
         <View style={styles.metaRow}>
           <Text style={styles.metaPill}>🔥 {plan.totalCalories} kcal</Text>
           <Text style={styles.metaPill}>💪 {plan.totalProtein}g</Text>
         </View>
-      </View>
+      </HeroOverlayCard>
 
       {(plan.meals || []).map((meal, index) => (
-        <View key={`meal-${index}`} style={styles.mealCard}>
+        <GlassCard key={`meal-${index}`} style={styles.mealCard} state="default" padding={theme.spacing[2]}>
           <View style={styles.mealTopRow}>
             <View>
               <Text style={styles.mealName}>{meal.emoji} {meal.name}</Text>
@@ -1326,7 +1366,7 @@ function NutritionPlanView({ plan }) {
             </View>
           ))}
           {meal.notes ? <Text style={styles.mealNotes}>{meal.notes}</Text> : null}
-        </View>
+        </GlassCard>
       ))}
     </ScrollView>
   );
@@ -2006,9 +2046,20 @@ export default function DailyCheckinScreen({
   const planPrimaryCtaBottom = resolvedFloatingNavClearance + 2;
   const planCtaOffset = planPrimaryCtaBottom + 64;
   const guidedWorkoutCtaOffset = bottomInset + 116;
+  const atmosphereContext = (
+    (step === 'plan' && planType === PLAN_TYPE.NUTRITION)
+      ? 'nutrition'
+      : (
+        step === 'plan'
+        || step === 'guided-workout'
+        || step === 'environment'
+      )
+        ? 'workout'
+        : 'home'
+  );
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
+    <SafeScreen includeTopInset={false} style={styles.screen} atmosphere={atmosphereContext}>
       <Animated.View
         pointerEvents="none"
         style={[
@@ -2153,7 +2204,11 @@ export default function DailyCheckinScreen({
 
               {planType === PLAN_TYPE.TRAINING ? (
                 <>
-                  <Text style={styles.sectionHeading}>Environment</Text>
+                  <SectionHeader
+                    title="Environment"
+                    subtitle="Select where and how hard to train today"
+                    style={styles.setupSectionHeader}
+                  />
                   <View style={styles.environmentGrid}>
                     {ENVIRONMENT_OPTIONS.map((option) => {
                       const selected = environment === option.value;
@@ -2205,41 +2260,74 @@ export default function DailyCheckinScreen({
                       {TIME_OPTIONS.map((minutes) => {
                         const selected = timeAvailable === minutes;
                         return (
-                          <Pressable
+                          <GlassPill
                             key={minutes}
                             onPress={() => setTimeAvailable(minutes)}
                             testID={`training-time-pill-${minutes}`}
+                            label={`${minutes}m`}
+                            selected={selected}
                             style={[styles.timePill, selected && styles.timePillSelected]}
-                          >
-                            <Text style={[styles.timePillText, selected && styles.timePillTextSelected]}>{minutes}m</Text>
-                          </Pressable>
+                          />
                         );
                       })}
                     </ScrollView>
+                    <GlassSlider
+                      testID="training-time-slider"
+                      value={timeAvailable}
+                      min={TIME_OPTIONS[0]}
+                      max={TIME_OPTIONS[TIME_OPTIONS.length - 1]}
+                      onChange={(nextValue) => {
+                        const nearest = TIME_OPTIONS.reduce((currentBest, candidate) => (
+                          Math.abs(candidate - nextValue) < Math.abs(currentBest - nextValue)
+                            ? candidate
+                            : currentBest
+                        ), TIME_OPTIONS[0]);
+                        setTimeAvailable(nearest);
+                      }}
+                      onComplete={(nextValue) => {
+                        const nearest = TIME_OPTIONS.reduce((currentBest, candidate) => (
+                          Math.abs(candidate - nextValue) < Math.abs(currentBest - nextValue)
+                            ? candidate
+                            : currentBest
+                        ), TIME_OPTIONS[0]);
+                        setTimeAvailable(nearest);
+                      }}
+                      style={styles.timeSlider}
+                    />
                   </View>
                 </>
               ) : (
                 <>
-                  <Text style={styles.sectionHeading}>Day Type</Text>
+                  <SectionHeader
+                    title="Day Type"
+                    subtitle="Set nutrition context for better planning"
+                    style={styles.setupSectionHeader}
+                  />
                   <View style={styles.dayTypeList}>
-                    <Pressable
+                    <GlassSurface
                       onPress={() => {
                         setNutritionDayType('normal');
                         setNutritionDayNote('');
                       }}
                       style={[styles.dayTypeCard, nutritionDayType === 'normal' && styles.dayTypeCardSelected]}
+                      state={nutritionDayType === 'normal' ? 'active' : 'default'}
+                      radius="m"
+                      padding={theme.spacing[2]}
                     >
-                      <Text style={styles.dayTypeTitle}>📅 Normal day</Text>
+                      <Text style={styles.dayTypeTitle}>Normal day</Text>
                       <Text style={styles.dayTypeBody}>Regular routine, no special context</Text>
-                    </Pressable>
+                    </GlassSurface>
 
-                    <Pressable
+                    <GlassSurface
                       onPress={() => setNutritionDayType('custom')}
                       style={[styles.dayTypeCard, nutritionDayType === 'custom' && styles.dayTypeCardSelected]}
+                      state={nutritionDayType === 'custom' ? 'active' : 'default'}
+                      radius="m"
+                      padding={theme.spacing[2]}
                     >
-                      <Text style={styles.dayTypeTitle}>✏️ Something different today</Text>
+                      <Text style={styles.dayTypeTitle}>Something different today</Text>
                       <Text style={styles.dayTypeBody}>Travel, event, dietary change, etc.</Text>
-                    </Pressable>
+                    </GlassSurface>
                   </View>
 
                   {nutritionDayType === 'custom' ? (
@@ -2740,17 +2828,14 @@ const styles = StyleSheet.create({
     height: 26,
   },
   resultCard: {
-    backgroundColor: theme.colors.surface.base,
-    borderColor: theme.colors.border.soft,
-    borderWidth: 1,
-    borderRadius: 28,
-    padding: theme.spacing[4],
+    borderColor: theme.colors.glass.borderDefault,
+    padding: theme.spacing[2],
     marginTop: theme.spacing[4],
   },
   bundleBlock: {
     paddingTop: theme.spacing[2],
     borderTopWidth: 1,
-    borderTopColor: theme.colors.border.soft,
+    borderTopColor: theme.colors.glass.borderSoft,
     marginTop: theme.spacing[2],
   },
   bundleBlockFirst: {
@@ -2801,8 +2886,8 @@ const styles = StyleSheet.create({
   },
   homeOverviewCard: {
     marginTop: theme.spacing[3],
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.base,
+    borderColor: theme.colors.glass.borderStrong,
+    backgroundColor: theme.colors.glass.elevated,
   },
   homeOverviewModeRow: {
     flexDirection: 'row',
@@ -2821,30 +2906,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.subtle,
+    borderColor: theme.colors.glass.borderDefault,
+    backgroundColor: theme.colors.glass.base,
   },
   homeOverviewInfoButtonPressed: {
     opacity: 0.88,
     transform: [{ scale: 0.96 }],
   },
-  homeOverviewModeValue: {
-    marginTop: theme.spacing[1],
-    fontWeight: '700',
-  },
-  homeOverviewTitle: {
+  homeOverviewMetricsRow: {
     marginTop: theme.spacing[2],
+    flexDirection: 'row',
+    gap: theme.spacing[2],
+    alignItems: 'center',
   },
-  homeOverviewBody: {
-    marginTop: theme.spacing[1],
+  homeOverviewMetricsStats: {
+    flex: 1,
+    gap: theme.spacing[1],
+  },
+  homeMiniStat: {
+    marginBottom: 0,
   },
   homeOverviewInfoPanel: {
     marginTop: theme.spacing[3],
     padding: theme.spacing[3],
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.subtle,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: theme.colors.glass.base,
     gap: theme.spacing[2],
   },
   homeOverviewInfoBody: {
@@ -2867,14 +2955,14 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   homeOverviewInputValue: {
-    color: theme.colors.textHigh,
+    color: theme.colors.text.primary,
   },
   homeOverviewMindsetWrap: {
     marginTop: theme.spacing[3],
   },
   homeOverviewMindsetValue: {
     marginTop: theme.spacing[1],
-    color: theme.colors.textHigh,
+    color: theme.colors.text.primary,
   },
   homeOverviewProgressWrap: {
     marginTop: theme.spacing[3],
@@ -2886,8 +2974,11 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing[2],
     gap: theme.spacing[1],
   },
+  setupSectionHeader: {
+    marginBottom: theme.spacing[2],
+  },
   summaryStatusTitle: {
-    color: theme.colors.textHigh,
+    color: theme.colors.text.primary,
     ...theme.typography.body2,
     fontFamily: theme.typography.fontFamily,
     fontWeight: '700',
@@ -3157,9 +3248,7 @@ const styles = StyleSheet.create({
   },
   timeSelectorRow: {
     marginTop: theme.spacing[3],
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
+    gap: theme.spacing[1],
   },
   timeLabelRow: {
     flexDirection: 'row',
@@ -3179,49 +3268,34 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   timePillScroller: {
-    flex: 1,
+    width: '100%',
   },
   timePillRow: {
     flexDirection: 'row',
-    gap: 6,
-    paddingRight: 2,
+    gap: 8,
+    paddingRight: 4,
   },
   timePill: {
-    borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    borderRadius: 999,
     minWidth: 52,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: theme.colors.surface.base,
-    alignItems: 'center',
   },
   timePillSelected: {
-    backgroundColor: withAlpha(theme.colors.accent.primary, 0.1),
-    borderColor: withAlpha(theme.colors.accent.primary, 0.4),
+    shadowColor: theme.colors.accent.primary,
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
   },
-  timePillText: {
-    color: theme.colors.textMedium,
-    ...theme.typography.body3,
-    fontFamily: theme.typography.fontFamily,
-    fontWeight: '600',
-  },
-  timePillTextSelected: {
-    color: theme.colors.accent.primary,
+  timeSlider: {
+    width: '100%',
   },
   dayTypeList: {
     gap: 10,
   },
   dayTypeCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.base,
-    padding: theme.spacing[2],
+    marginBottom: 0,
   },
   dayTypeCardSelected: {
-    borderColor: withAlpha(theme.colors.accent.primary, 0.5),
-    backgroundColor: withAlpha(theme.colors.accent.primary, 0.12),
+    shadowColor: theme.colors.accent.primary,
+    shadowOpacity: 0.16,
+    shadowRadius: 10,
   },
   dayTypeTitle: {
     color: theme.colors.textHigh,
@@ -3364,11 +3438,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   trainingHeaderCard: {
-    borderRadius: 20,
-    backgroundColor: withAlpha(theme.colors.status.info, 0.22),
-    borderWidth: 1,
-    borderColor: withAlpha(theme.colors.accent.primary, 0.34),
-    padding: theme.spacing[3],
+    marginBottom: 0,
   },
   trainingHeaderRow: {
     flexDirection: 'row',
@@ -3401,23 +3471,19 @@ const styles = StyleSheet.create({
     marginTop: 10,
   },
   metaPill: {
-    color: theme.colors.textHigh,
+    color: theme.colors.text.primary,
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
-    backgroundColor: withAlpha(theme.colors.status.info, 0.24),
+    backgroundColor: withAlpha(theme.colors.status.info, 0.2),
     borderWidth: 1,
-    borderColor: withAlpha(theme.colors.accent.primary, 0.35),
+    borderColor: theme.colors.glass.borderDefault,
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
     textTransform: 'capitalize',
   },
   sectionCard: {
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.base,
-    padding: theme.spacing[2],
+    marginBottom: 0,
   },
   sectionTitle: {
     color: theme.colors.textHigh,
@@ -3456,7 +3522,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   simpleName: {
-    color: theme.colors.textHigh,
+    color: theme.colors.text.primary,
     ...theme.typography.body2,
     fontFamily: theme.typography.fontFamily,
     fontWeight: '600',
@@ -3476,9 +3542,9 @@ const styles = StyleSheet.create({
   },
   exerciseCard: {
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
+    borderColor: theme.colors.glass.borderSoft,
     borderRadius: 14,
-    backgroundColor: theme.colors.surface.muted,
+    backgroundColor: theme.colors.glass.base,
     marginBottom: 10,
   },
   exerciseTopRow: {
@@ -3500,7 +3566,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   exerciseName: {
-    color: theme.colors.textHigh,
+    color: theme.colors.text.primary,
     ...theme.typography.body2,
     fontFamily: theme.typography.fontFamily,
     fontWeight: '700',
@@ -3515,7 +3581,7 @@ const styles = StyleSheet.create({
     color: theme.colors.textMedium,
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
-    backgroundColor: theme.colors.surface.subtle,
+    backgroundColor: theme.colors.glass.elevated,
     borderRadius: 999,
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -3527,7 +3593,7 @@ const styles = StyleSheet.create({
   },
   exerciseExpanded: {
     borderTopWidth: 1,
-    borderTopColor: theme.colors.border.soft,
+    borderTopColor: theme.colors.glass.borderSoft,
     padding: 10,
     gap: 8,
   },
@@ -3551,21 +3617,21 @@ const styles = StyleSheet.create({
   coachTipBox: {
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: withAlpha(theme.colors.accent.primary, 0.42),
-    backgroundColor: withAlpha(theme.colors.status.info, 0.25),
+    borderColor: theme.colors.glass.borderActive,
+    backgroundColor: withAlpha(theme.colors.status.info, 0.18),
     padding: 8,
   },
   coachTipText: {
-    color: theme.colors.textHigh,
+    color: theme.colors.text.primary,
     ...theme.typography.body3,
     fontFamily: theme.typography.fontFamily,
     flex: 1,
   },
   videoPlaceholder: {
     borderRadius: 10,
-    backgroundColor: theme.colors.surface.subtle,
+    backgroundColor: theme.colors.glass.elevated,
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
+    borderColor: theme.colors.glass.borderSoft,
     minHeight: 72,
     alignItems: 'center',
     justifyContent: 'center',
@@ -3577,24 +3643,15 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
   },
   coachNoteCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: withAlpha(theme.colors.accent.primary, 0.35),
-    backgroundColor: withAlpha(theme.colors.accent.primary, 0.12),
-    padding: theme.spacing[2],
+    marginBottom: 0,
   },
   coachNoteText: {
-    color: theme.colors.textHigh,
+    color: theme.colors.text.primary,
     ...theme.typography.body2,
     fontFamily: theme.typography.fontFamily,
     fontStyle: 'italic',
   },
   guidedHeroCard: {
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: withAlpha(theme.colors.accent.primary, 0.38),
-    backgroundColor: withAlpha(theme.colors.status.info, 0.24),
-    padding: theme.spacing[3],
     alignItems: 'center',
   },
   guidedEyebrow: {
@@ -3623,11 +3680,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   guidedExerciseRow: {
-    borderRadius: 14,
-    borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.base,
-    padding: theme.spacing[2],
+    marginBottom: 0,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -3727,11 +3780,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   nutritionHeaderCard: {
-    borderRadius: 20,
-    backgroundColor: withAlpha(theme.colors.status.info, 0.2),
-    borderWidth: 1,
-    borderColor: withAlpha(theme.colors.accent.primary, 0.35),
-    padding: theme.spacing[3],
+    marginBottom: 0,
   },
   nutritionCoachNote: {
     color: theme.colors.textMedium,
@@ -3741,11 +3790,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   mealCard: {
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.base,
-    padding: theme.spacing[2],
+    marginBottom: 0,
     gap: 8,
   },
   mealTopRow: {
@@ -3754,7 +3799,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   mealName: {
-    color: theme.colors.textHigh,
+    color: theme.colors.text.primary,
     ...theme.typography.body1,
     fontFamily: theme.typography.fontFamily,
     fontWeight: '700',
@@ -3780,10 +3825,10 @@ const styles = StyleSheet.create({
   logSheet: {
     width: '100%',
     maxWidth: 380,
-    borderRadius: 18,
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.base,
+    borderColor: theme.colors.glass.borderStrong,
+    backgroundColor: theme.colors.glass.elevated,
     padding: theme.spacing[3],
   },
   logSheetTitle: {
@@ -3803,10 +3848,10 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 21,
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
+    borderColor: theme.colors.glass.borderSoft,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: theme.colors.surface.subtle,
+    backgroundColor: theme.colors.glass.base,
   },
   ratingPillSelected: {
     borderColor: withAlpha(theme.colors.accent.primary, 0.52),

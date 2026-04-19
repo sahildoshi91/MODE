@@ -12,9 +12,10 @@ import * as Clipboard from 'expo-clipboard';
 
 import {
   HeaderBar,
-  ModeCard,
   ModeText,
   SafeScreen,
+  GlassSurface,
+  HeroOverlayCard,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import ChatBubble from '../components/ChatBubble';
@@ -326,7 +327,7 @@ export default function CoachChatScreen({
   }, []);
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
+    <SafeScreen includeTopInset={false} style={styles.screen} atmosphere="chat">
       <HeaderBar
         title="Coach Chat"
         onBack={onBack}
@@ -352,6 +353,13 @@ export default function CoachChatScreen({
               updateScrollMetrics({ layoutHeight: event?.nativeEvent?.layout?.height });
             }}
             renderItem={({ item, index }) => {
+              if (item?.kind === 'assistant_progress') {
+                return (
+                  <View style={styles.messageItem}>
+                    <TypingIndicator text={item?.text} />
+                  </View>
+                );
+              }
               const trainerOnboardingPatch = item?.profilePatch?.trainer_onboarding
                 && typeof item.profilePatch.trainer_onboarding === 'object'
                 ? item.profilePatch.trainer_onboarding
@@ -472,19 +480,15 @@ export default function CoachChatScreen({
               { paddingBottom: dockHeight + theme.spacing[2] },
             ]}
             ListHeaderComponent={(
-              <ModeCard variant="tinted" style={styles.sessionIntroCard} noShadow>
-                <ModeText variant="caption" tone="tertiary" style={styles.sessionIntroEyebrow}>
-                  {sessionIntro.eyebrow}
-                </ModeText>
-                <ModeText variant="h3" style={styles.sessionIntroTitle}>
-                  {sessionIntro.title}
-                </ModeText>
-                <ModeText variant="bodySm" tone="secondary" style={styles.sessionIntroBody}>
-                  {sessionIntro.body}
-                </ModeText>
-              </ModeCard>
+              <HeroOverlayCard
+                eyebrow={sessionIntro.eyebrow}
+                title={sessionIntro.title}
+                body={sessionIntro.body}
+                style={styles.sessionIntroCard}
+                testID="coach-chat-session-intro"
+              />
             )}
-            ListFooterComponent={isSending ? <TypingIndicator /> : <View style={styles.threadSpacer} />}
+            ListFooterComponent={<View style={styles.threadSpacer} />}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             showsVerticalScrollIndicator={false}
@@ -511,17 +515,29 @@ export default function CoachChatScreen({
             }}
           />
 
-          <View
+          <GlassSurface
             onLayout={(event) => setDockHeight(event.nativeEvent.layout.height)}
+            state="elevated"
+            radius="l"
+            blur="input"
+            padding={theme.spacing[2]}
             style={[
               styles.dock,
               {
                 paddingBottom: isKeyboardVisible ? KEYBOARD_OPEN_DOCK_PADDING : dockAnchorInset,
               },
             ]}
+            contentStyle={styles.dockContent}
           >
             {hasRetryableFailure ? (
-              <View style={styles.errorRow}>
+              <GlassSurface
+                state="muted"
+                radius="s"
+                style={styles.errorRow}
+                contentStyle={styles.errorRowContent}
+                fillColor={theme.colors.feedback.errorBg}
+                borderColor={theme.colors.feedback.errorBorder}
+              >
                 <View style={styles.errorTextWrap}>
                   <ModeText variant="caption" tone="error" style={styles.errorText}>
                     {error || 'Coach is temporarily unavailable.'}
@@ -562,7 +578,7 @@ export default function CoachChatScreen({
                     <ModeText variant="label" tone="secondary">Copy error</ModeText>
                   </Pressable>
                 </View>
-              </View>
+              </GlassSurface>
             ) : null}
 
             <QuickReplies
@@ -584,7 +600,7 @@ export default function CoachChatScreen({
               onSend={handleSend}
               disabled={isSending}
             />
-          </View>
+          </GlassSurface>
         </View>
       </KeyboardAvoidingView>
     </SafeScreen>
@@ -615,19 +631,6 @@ const styles = StyleSheet.create({
   },
   sessionIntroCard: {
     marginBottom: theme.spacing[2],
-    borderColor: theme.colors.border.default,
-    backgroundColor: theme.colors.surface.elevated,
-  },
-  sessionIntroEyebrow: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-  },
-  sessionIntroTitle: {
-    marginTop: 2,
-  },
-  sessionIntroBody: {
-    marginTop: theme.spacing[1],
-    maxWidth: 520,
   },
   messageItem: {
     width: '100%',
@@ -638,21 +641,18 @@ const styles = StyleSheet.create({
   },
   dock: {
     position: 'absolute',
-    left: 0,
-    right: 0,
+    left: theme.spacing[2],
+    right: theme.spacing[2],
     bottom: 0,
+    marginBottom: theme.spacing[1],
+  },
+  dockContent: {
     paddingTop: theme.spacing[1],
-    paddingHorizontal: theme.spacing[3],
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.border.default,
-    backgroundColor: theme.colors.surface.glass,
   },
   errorRow: {
     marginBottom: theme.spacing[1],
-    borderRadius: theme.radii.s,
-    borderWidth: 1,
-    borderColor: theme.colors.feedback.errorBorder,
-    backgroundColor: theme.colors.feedback.errorBg,
+  },
+  errorRowContent: {
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     flexDirection: 'row',
@@ -678,8 +678,8 @@ const styles = StyleSheet.create({
   retryButton: {
     borderRadius: theme.radii.pill,
     borderWidth: 1,
-    borderColor: theme.colors.border.subtle,
-    backgroundColor: theme.colors.surface.base,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: theme.colors.glass.base,
     paddingVertical: theme.spacing[1] - 2,
     paddingHorizontal: theme.spacing[2],
   },
@@ -698,8 +698,8 @@ const styles = StyleSheet.create({
     marginLeft: theme.spacing[1],
     borderRadius: theme.radii.m,
     borderWidth: 1,
-    borderColor: theme.colors.border.default,
-    backgroundColor: theme.colors.surface.elevated,
+    borderColor: theme.colors.glass.borderDefault,
+    backgroundColor: theme.colors.glass.elevated,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     gap: 4,
@@ -717,8 +717,8 @@ const styles = StyleSheet.create({
     marginLeft: theme.spacing[1],
     borderRadius: theme.radii.m,
     borderWidth: 1,
-    borderColor: theme.colors.border.default,
-    backgroundColor: theme.colors.surface.elevated,
+    borderColor: theme.colors.glass.borderDefault,
+    backgroundColor: theme.colors.glass.elevated,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[2],
     gap: theme.spacing[1],
@@ -732,8 +732,8 @@ const styles = StyleSheet.create({
   checklistItem: {
     borderRadius: theme.radii.s,
     borderWidth: 1,
-    borderColor: theme.colors.border.subtle,
-    backgroundColor: theme.colors.surface.base,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: theme.colors.glass.base,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     gap: 6,
@@ -752,10 +752,10 @@ const styles = StyleSheet.create({
   checklistActionButton: {
     borderRadius: theme.radii.pill,
     borderWidth: 1,
-    borderColor: theme.colors.border.default,
+    borderColor: theme.colors.glass.borderDefault,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: 4,
-    backgroundColor: theme.colors.surface.base,
+    backgroundColor: theme.colors.glass.base,
   },
   checklistApproveButton: {
     borderColor: theme.colors.accent.primary,

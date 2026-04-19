@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 
-import { executeTrainerAssistantAction } from '../../trainerAssistant/services/trainerAssistantApi';
+import { getAIProgressLabel } from '../../messaging';
+import {
+  executeTrainerAssistantAction,
+  executeTrainerAssistantActionStream,
+} from '../../trainerAssistant/services/trainerAssistantApi';
 import {
   approveTrainerCoachQueueItem,
   createTrainerCoachEvent,
@@ -55,22 +59,24 @@ function buildStreamEventFromSystemRecord(event) {
 }
 
 function buildStreamItem({
+  id = null,
   kind,
   text,
   visibility = 'trainer_private',
   status = 'confirmed',
   severity = 'info',
   payload = {},
+  createdAt = null,
 }) {
   return {
-    id: `${kind}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    id: id || `${kind}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
     kind,
     text,
     visibility,
     status,
     severity,
     payload,
-    createdAt: new Date().toISOString(),
+    createdAt: createdAt || new Date().toISOString(),
   };
 }
 
@@ -274,6 +280,22 @@ function workspaceReducer(state, action) {
         ...state,
         stream: [...state.stream, action.payload].slice(-400),
       };
+    case 'UPSERT_STREAM': {
+      const next = [...state.stream];
+      const index = next.findIndex((item) => item.id === action.payload.id);
+      if (index >= 0) {
+        next[index] = {
+          ...next[index],
+          ...action.payload,
+        };
+      } else {
+        next.push(action.payload);
+      }
+      return {
+        ...state,
+        stream: next.slice(-400),
+      };
+    }
     case 'OPEN_PANEL':
       return {
         ...state,
@@ -439,6 +461,10 @@ export function useTrainerCoachWorkspace({
 
   const appendStream = useCallback((payload) => {
     dispatch({ type: 'APPEND_STREAM', payload });
+  }, []);
+
+  const upsertStream = useCallback((payload) => {
+    dispatch({ type: 'UPSERT_STREAM', payload });
   }, []);
 
   const applyMutationResponse = useCallback((payload) => {
@@ -769,15 +795,76 @@ export function useTrainerCoachWorkspace({
       return true;
     }
 
+    const progressStreamId = buildIdempotencyKey('assistant-progress');
+    upsertStream(buildStreamItem({
+      id: progressStreamId,
+      kind: 'internal_ai_private',
+      text: getAIProgressLabel('reviewing_message'),
+      visibility: 'trainer_private',
+      status: 'pending',
+      severity: 'info',
+      payload: {
+        stage: 'reviewing_message',
+        transient: true,
+      },
+    }));
+
     try {
-      const response = await executeTrainerAssistantAction({
-        accessToken,
-        actionType: inferActionType(trimmed),
-        message: trimmed,
-      });
+      let response = null;
+      let streamErrorDetail = null;
+      try {
+        response = await executeTrainerAssistantActionStream({
+          accessToken,
+          actionType: inferActionType(trimmed),
+          message: trimmed,
+          onEvent: (eventPayload) => {
+            const eventType = String(eventPayload?.type || '').toLowerCase();
+            if (eventType === 'ack' || eventType === 'progress') {
+              const stage = eventPayload?.stage || 'reviewing_message';
+              upsertStream(buildStreamItem({
+                id: progressStreamId,
+                kind: 'internal_ai_private',
+                text: getAIProgressLabel(stage),
+                visibility: 'trainer_private',
+                status: 'pending',
+                severity: 'info',
+                payload: {
+                  stage,
+                  transient: true,
+                },
+              }));
+              return;
+            }
+            if (eventType === 'failed' || eventType === 'error') {
+              streamErrorDetail = String(eventPayload?.detail || '').trim() || null;
+            }
+          },
+        });
+      } catch (_streamError) {
+        response = await executeTrainerAssistantAction({
+          accessToken,
+          actionType: inferActionType(trimmed),
+          message: trimmed,
+        });
+        if (streamErrorDetail) {
+          upsertStream(buildStreamItem({
+            id: progressStreamId,
+            kind: 'internal_ai_private',
+            text: streamErrorDetail,
+            visibility: 'trainer_private',
+            status: 'pending',
+            severity: 'warning',
+            payload: {
+              stage: 'fallback',
+              transient: true,
+            },
+          }));
+        }
+      }
       const queueItem = buildQueueItemFromAssistantResponse(response);
       dispatch({ type: 'UPSERT_QUEUE_ITEM', payload: queueItem });
-      appendStream(buildStreamItem({
+      upsertStream(buildStreamItem({
+        id: progressStreamId,
         kind: 'internal_ai_private',
         text: queueItem.summary || queueItem.headline || 'Draft generated.',
         visibility: 'trainer_private',
@@ -786,6 +873,7 @@ export function useTrainerCoachWorkspace({
         payload: {
           output_id: queueItem.output_id,
           action_type: queueItem.action_type,
+          transient: false,
         },
       }));
       appendStream(buildStreamItem({
@@ -799,7 +887,8 @@ export function useTrainerCoachWorkspace({
       await refreshWorkspace({ silent: true });
       return true;
     } catch (error) {
-      appendStream(buildStreamItem({
+      upsertStream(buildStreamItem({
+        id: progressStreamId,
         kind: 'system_confirmation',
         text: buildAssistantExecuteFailureMessage(error),
         visibility: 'system',
@@ -808,7 +897,7 @@ export function useTrainerCoachWorkspace({
       }));
       return false;
     }
-  }, [accessToken, appendStream, refreshWorkspace, routeSlashCommand]);
+  }, [accessToken, appendStream, refreshWorkspace, routeSlashCommand, upsertStream]);
 
   const retryPendingOps = useCallback(async () => {
     if (!accessToken || state.sync.replaying || state.sync.pendingOps.length === 0) {

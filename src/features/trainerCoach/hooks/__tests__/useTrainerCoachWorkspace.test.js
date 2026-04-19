@@ -3,6 +3,7 @@ import renderer, { act } from 'react-test-renderer';
 
 jest.mock('../../../trainerAssistant/services/trainerAssistantApi', () => ({
   executeTrainerAssistantAction: jest.fn(),
+  executeTrainerAssistantActionStream: jest.fn(),
 }));
 
 jest.mock('../../services/trainerCoachApi', () => ({
@@ -24,7 +25,10 @@ import {
   createTrainerCoachEvent,
   getTrainerCoachWorkspace,
 } from '../../services/trainerCoachApi';
-import { executeTrainerAssistantAction } from '../../../trainerAssistant/services/trainerAssistantApi';
+import {
+  executeTrainerAssistantAction,
+  executeTrainerAssistantActionStream,
+} from '../../../trainerAssistant/services/trainerAssistantApi';
 import {
   loadTrainerCoachPendingOps,
   loadTrainerCoachWorkspaceCache,
@@ -104,6 +108,7 @@ describe('useTrainerCoachWorkspace', () => {
     saveTrainerCoachWorkspaceCache.mockResolvedValue(undefined);
     saveTrainerCoachPendingOps.mockResolvedValue(undefined);
     getTrainerCoachWorkspace.mockResolvedValue(buildWorkspacePayload());
+    executeTrainerAssistantActionStream.mockRejectedValue(new Error('stream unavailable'));
     executeTrainerAssistantAction.mockResolvedValue({
       draft_id: 'draft-1',
       output: {

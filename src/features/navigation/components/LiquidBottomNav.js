@@ -1,9 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Platform, Pressable, StyleSheet, View } from 'react-native';
-import { BlurView } from 'expo-blur';
+import { Animated, Pressable, StyleSheet, View } from 'react-native';
 import { BarChart3, Dumbbell, Home, User, Users } from 'lucide-react-native';
 
-import { ModeText } from '../../../../lib/components';
+import { GlassSurface, ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 
 const CLIENT_TABS = [
@@ -74,15 +73,15 @@ export default function LiquidBottomNav({
       pointerEvents="box-none"
       style={[styles.wrapper, { bottom: Math.max(bottomInset, 0) + NAV_BOTTOM_OFFSET }]}
     >
-      <View
+      <GlassSurface
         onLayout={(event) => setContainerWidth(event.nativeEvent.layout.width)}
+        state="elevated"
+        radius="pill"
+        blur="nav"
+        padding={INDICATOR_EDGE_INSET}
         style={styles.pill}
+        contentStyle={styles.pillContent}
       >
-        <View pointerEvents="none" style={styles.backdrop} />
-        {Platform.OS === 'ios' ? (
-          <BlurView intensity={30} tint="dark" style={StyleSheet.absoluteFill} />
-        ) : null}
-
         <Animated.View
           pointerEvents="none"
           style={[
@@ -136,7 +135,7 @@ export default function LiquidBottomNav({
             </Pressable>
           );
         })}
-      </View>
+      </GlassSurface>
     </View>
   );
 }
@@ -153,25 +152,18 @@ const styles = StyleSheet.create({
     width: '92%',
     maxWidth: 460,
     minWidth: 280,
-    borderRadius: theme.radii.pill,
-    overflow: 'hidden',
+    marginBottom: 0,
+    ...theme.shadows.soft,
+  },
+  pillContent: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: INDICATOR_EDGE_INSET,
-    backgroundColor: theme.colors.surface.glass,
-    borderWidth: 1,
-    borderColor: theme.colors.border.default,
-    ...theme.shadows.medium,
-  },
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: theme.colors.surface.base,
-    opacity: 0.84,
   },
   activePill: {
     position: 'absolute',
-    top: INDICATOR_EDGE_INSET,
-    bottom: INDICATOR_EDGE_INSET,
+    top: 0,
+    bottom: 0,
     borderRadius: theme.radii.pill,
     backgroundColor: theme.colors.nav.activeBg,
     borderWidth: 1,

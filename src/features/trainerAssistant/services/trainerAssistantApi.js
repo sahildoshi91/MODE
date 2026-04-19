@@ -1,5 +1,6 @@
 import { fetchWithApiFallback } from '../../../services/apiRequest';
 import { buildApiNetworkError } from '../../../services/apiNetworkError';
+import { consumeSseStream } from '../../messaging';
 import {
   probeBackendConnectivity,
   selectRecommendedApiBaseUrl,
@@ -7,6 +8,7 @@ import {
 
 const DEFAULT_TRAINER_ASSISTANT_TIMEOUT_MS = 10000;
 const EXECUTE_TRAINER_ASSISTANT_TIMEOUT_MS = 60000;
+const EXECUTE_TRAINER_ASSISTANT_STREAM_TIMEOUT_MS = 120000;
 
 function buildNetworkError(error, path) {
   return buildApiNetworkError(error, path);
@@ -16,11 +18,15 @@ function resolveTrainerAssistantTimeoutMs(path) {
   if (path === '/api/v1/trainer-assistant/execute') {
     return EXECUTE_TRAINER_ASSISTANT_TIMEOUT_MS;
   }
+  if (path === '/api/v1/trainer-assistant/execute/stream') {
+    return EXECUTE_TRAINER_ASSISTANT_STREAM_TIMEOUT_MS;
+  }
   return DEFAULT_TRAINER_ASSISTANT_TIMEOUT_MS;
 }
 
 function shouldAttachConnectivityProbe(path) {
-  return path === '/api/v1/trainer-assistant/execute';
+  return path === '/api/v1/trainer-assistant/execute'
+    || path === '/api/v1/trainer-assistant/execute/stream';
 }
 
 async function attachConnectivityProbe(error, path) {
@@ -219,6 +225,83 @@ export async function executeTrainerAssistantAction({
       routing_input: routingInput,
     },
   });
+}
+
+export async function executeTrainerAssistantActionStream({
+  accessToken,
+  clientId = null,
+  actionType,
+  message = null,
+  routingInput = null,
+  onEvent,
+}) {
+  const path = '/api/v1/trainer-assistant/execute/stream';
+  let response;
+  let baseUrl;
+
+  try {
+    ({ response, baseUrl } = await fetchWithApiFallback(path, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        client_id: clientId,
+        action_type: actionType,
+        message,
+        routing_input: routingInput,
+      }),
+      timeoutMs: resolveTrainerAssistantTimeoutMs(path),
+    }));
+  } catch (error) {
+    const networkError = buildNetworkError(error, path);
+    await attachConnectivityProbe(networkError, path);
+    throw networkError;
+  }
+
+  if (!response.ok) {
+    const parsed = await parseError(response, path);
+    const error = new Error(parsed.message || 'Unable to generate trainer assistant draft.');
+    error.status = response.status;
+    error.code = parsed.code;
+    error.hint = parsed.hint;
+    error.details = parsed.details;
+    error.api_base_url = baseUrl;
+    error.request_path = path;
+    throw error;
+  }
+
+  let completedPayload = null;
+  let streamError = null;
+
+  await consumeSseStream(response, {
+    onEvent: (eventPayload, meta) => {
+      if (typeof onEvent === 'function') {
+        onEvent(eventPayload, meta);
+      }
+      const payloadType = String(eventPayload?.type || '').toLowerCase();
+      if (payloadType === 'completed' || payloadType === 'done') {
+        completedPayload = eventPayload;
+        return;
+      }
+      if (payloadType === 'failed' || payloadType === 'error') {
+        streamError = new Error(eventPayload?.detail || 'Unable to generate trainer assistant draft.');
+      }
+    },
+  });
+
+  if (streamError) {
+    throw streamError;
+  }
+  if (completedPayload?.output && completedPayload?.route) {
+    return {
+      draft_id: completedPayload.draft_id,
+      output: completedPayload.output,
+      route: completedPayload.route,
+    };
+  }
+  throw new Error('Trainer assistant stream completed without final payload.');
 }
 
 export async function editTrainerAssistantDraft({

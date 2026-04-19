@@ -12,11 +12,13 @@ import {
   EmptyState,
   HeaderBar,
   InlineFeedback,
+  MacroBar,
+  MiniStat,
   ModeButton,
   ModeCard,
   ModeChip,
   ModeText,
-  ProgressBar,
+  SectionHeader,
   SafeScreen,
   StreakRing,
 } from '../../../../lib/components';
@@ -124,7 +126,7 @@ export default function ProgressScreen({
     : `Weekly readiness trend: ${sevenDayChange.toFixed(1)} (recovery support recommended).`;
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
+    <SafeScreen includeTopInset={false} style={styles.screen} atmosphere="home">
       <HeaderBar title="Progress" subtitle="Consistency, habits, and recovery-aware trends" />
 
       <ScrollView
@@ -172,20 +174,20 @@ export default function ProgressScreen({
         {!isLoading && !errorMessage && payload ? (
           <>
             <ModeCard variant="surface" style={styles.summaryCard}>
+              <SectionHeader
+                title="Current check-in streak"
+                subtitle={`${payload.checkins_last_7_days || 0} of 7 check-ins complete`}
+                style={styles.summaryHeader}
+              />
               <View style={styles.summaryTopRow}>
                 <StreakRing value={payload.current_streak_days || 0} label="days" />
                 <View style={styles.summaryCopy}>
-                  <ModeText variant="h3">Current check-in streak</ModeText>
-                  <ModeText variant="label" tone="tertiary" style={styles.summarySectionLabel}>
-                    Weekly consistency
-                  </ModeText>
-                  <ModeText variant="bodySm" tone="secondary" style={styles.summarySectionMeta}>
-                    {payload.checkins_last_7_days || 0} of 7 check-ins complete
-                  </ModeText>
-                  <ProgressBar
+                  <ModeText variant="label" tone="tertiary" style={styles.summarySectionLabel}>Weekly consistency</ModeText>
+                  <MacroBar
+                    label="Completion"
+                    valueLabel={`${Math.round(consistencyRatio * 100)}%`}
                     progress={consistencyRatio}
-                    trackColor={theme.colors.surface.base}
-                    fillColor={theme.colors.accent.primary}
+                    accentColor={theme.colors.accent.primary}
                     style={styles.progressBar}
                   />
                 </View>
@@ -199,21 +201,17 @@ export default function ProgressScreen({
 
             <ModeCard variant="tinted">
               <ModeText variant="h3">Readiness scores</ModeText>
-              <View style={styles.metricRow}>
-                <View style={styles.metricCell}>
-                  <ModeText variant="caption" tone="tertiary">7-day average</ModeText>
-                  <ModeText variant="h2">{formatScore(payload.avg_score_last_7_days)}</ModeText>
-                  <ModeText variant="bodySm" tone="secondary">
-                    {payload.avg_mode_last_7_days || 'Builds after your first week of check-ins.'}
-                  </ModeText>
-                </View>
-                <View style={styles.metricCell}>
-                  <ModeText variant="caption" tone="tertiary">30-day average</ModeText>
-                  <ModeText variant="h2">{formatScore(payload.avg_score_last_30_days)}</ModeText>
-                  <ModeText variant="bodySm" tone="secondary">
-                    {payload.avg_mode_last_30_days || thirtyDayAvailabilityCopy}
-                  </ModeText>
-                </View>
+              <View style={styles.metricRowGlass}>
+                <MiniStat
+                  label="7-day average"
+                  value={formatScore(payload.avg_score_last_7_days)}
+                  helper={payload.avg_mode_last_7_days || 'Builds after your first week of check-ins.'}
+                />
+                <MiniStat
+                  label="30-day average"
+                  value={formatScore(payload.avg_score_last_30_days)}
+                  helper={payload.avg_mode_last_30_days || thirtyDayAvailabilityCopy}
+                />
               </View>
               <ModeText variant="bodySm" tone="secondary" style={styles.readinessFooter}>
                 Your readiness averages summarize recent daily check-in scores so you can spot short-term and long-term trends.
@@ -310,6 +308,9 @@ const styles = StyleSheet.create({
   summaryCard: {
     marginBottom: 0,
   },
+  summaryHeader: {
+    marginBottom: theme.spacing[1],
+  },
   summaryTopRow: {
     flexDirection: 'row',
     gap: theme.spacing[2],
@@ -321,25 +322,13 @@ const styles = StyleSheet.create({
   summarySectionLabel: {
     marginTop: theme.spacing[1],
   },
-  summarySectionMeta: {
-    marginTop: theme.spacing[1],
-    marginBottom: theme.spacing[2],
-  },
   progressBar: {
     marginTop: theme.spacing[1],
   },
-  metricRow: {
+  metricRowGlass: {
     marginTop: theme.spacing[2],
     flexDirection: 'row',
     gap: theme.spacing[2],
-  },
-  metricCell: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    borderRadius: theme.radii.s,
-    backgroundColor: theme.colors.surface.base,
-    padding: theme.spacing[2],
   },
   readinessFooter: {
     marginTop: theme.spacing[2],

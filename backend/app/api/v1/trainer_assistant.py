@@ -1,8 +1,10 @@
 import logging
+import json
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.api.v1.trainer_auth import require_trainer_actor
 from app.core.auth import AuthenticatedUser, CurrentUser
@@ -201,6 +203,73 @@ async def execute_trainer_assistant(
                 "action_type": request.action_type.value,
             },
         )
+
+
+@router.post("/execute/stream")
+async def execute_trainer_assistant_stream(
+    request: TrainerAssistantExecuteRequest,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerAssistantService = Depends(get_trainer_assistant_service),
+):
+    _ensure_enabled()
+    require_trainer_actor(user, trainer_context)
+    request_id = str(uuid4())
+
+    def emit_event(seq: int, payload: dict[str, object]) -> str:
+        return f"data: {json.dumps({**payload, 'request_id': request_id, 'seq': seq})}\n\n"
+
+    def event_stream():
+        seq = 0
+        try:
+            seq += 1
+            yield emit_event(seq, {"type": "ack", "stage": "reviewing_message"})
+            seq += 1
+            yield emit_event(seq, {"type": "progress", "stage": "checking_context"})
+            seq += 1
+            yield emit_event(seq, {"type": "progress", "stage": "preparing_response"})
+            response = service.execute(trainer_context, request)
+            seq += 1
+            yield emit_event(seq, {"type": "progress", "stage": "finalizing_response"})
+            seq += 1
+            yield emit_event(
+                seq,
+                {
+                    "type": "completed",
+                    "draft_id": response.draft_id,
+                    "output": response.output.model_dump(mode="json"),
+                    "route": response.route.model_dump(mode="json"),
+                },
+            )
+            seq += 1
+            yield emit_event(
+                seq,
+                {
+                    "type": "done",
+                    "draft_id": response.draft_id,
+                    "route": response.route.model_dump(mode="json"),
+                },
+            )
+        except ValueError as exc:
+            seq += 1
+            yield emit_event(seq, {"type": "failed", "detail": str(exc)})
+            seq += 1
+            yield emit_event(seq, {"type": "error", "detail": str(exc)})
+        except Exception as exc:
+            logger.exception(
+                "Unexpected trainer assistant stream failure user_id=%s trainer_id=%s client_id=%s action_type=%s",
+                user.id,
+                trainer_context.trainer_id,
+                trainer_context.client_id,
+                request.action_type.value,
+                exc_info=exc,
+            )
+            seq += 1
+            yield emit_event(seq, {"type": "failed", "detail": CONTROLLED_TRAINER_ASSISTANT_ERROR_DETAIL})
+            seq += 1
+            yield emit_event(seq, {"type": "error", "detail": CONTROLLED_TRAINER_ASSISTANT_ERROR_DETAIL})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @router.post("/drafts/{draft_id}/edit", response_model=TrainerAssistantDraftMutationResponse)

@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 
-import { getChatHistory, sendChatMessage } from '../services/chatApi';
+import {
+  buildClientMessageId,
+  buildIdempotencyKey,
+  buildRequestId,
+  createAIProgressController,
+  getAIProgressLabel,
+  AI_PROGRESS_STAGES,
+} from '../../messaging';
+import { getChatHistory, sendChatMessage, streamChatMessage } from '../services/chatApi';
 
 const DEFAULT_WELCOME_MESSAGE = 'I am here to help you make steady progress that fits your day. Share what you need and we will choose the next smart step together.';
 const DEFAULT_QUICK_REPLIES = ['Plan my next best action', 'Adjust today\'s training', 'Help with consistency'];
@@ -303,25 +311,52 @@ export function useChatConversation(accessToken, launchContext = null) {
   const [messages, setMessages] = useState(() => [buildInitialMessage(launchContextPayload)]);
   const [conversationId, setConversationId] = useState(null);
   const [quickReplies, setQuickReplies] = useState(() => buildInitialQuickReplies(launchContextPayload));
-  const [isSending, setIsSending] = useState(false);
+  const [isQueueProcessing, setIsQueueProcessing] = useState(false);
+  const [activeAssistantRequests, setActiveAssistantRequests] = useState(0);
   const [isBootstrapping, setIsBootstrapping] = useState(() => shouldBootstrapTrainerOnboarding);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
   const [error, setError] = useState(null);
   const [errorDetails, setErrorDetails] = useState(null);
   const [failedRequest, setFailedRequest] = useState(null);
   const bootstrapStartedRef = useRef(false);
-  const lastFailedMessage = failedRequest?.type === 'message'
-    ? failedRequest.message
-    : null;
+  const queueRef = useRef([]);
+  const processingRef = useRef(false);
+  const messagesRef = useRef(messages);
+  const conversationIdRef = useRef(conversationId);
+  const launchContextRef = useRef(launchContextPayload);
+  const isBootstrappingRef = useRef(isBootstrapping);
 
   useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
+  useEffect(() => {
+    conversationIdRef.current = conversationId;
+  }, [conversationId]);
+
+  useEffect(() => {
+    launchContextRef.current = launchContextPayload;
+  }, [launchContextPayload]);
+
+  useEffect(() => {
+    isBootstrappingRef.current = isBootstrapping;
+  }, [isBootstrapping]);
+
+  useEffect(() => {
+    const initialMessages = [buildInitialMessage(launchContextPayload)];
     bootstrapStartedRef.current = false;
+    queueRef.current = [];
+    processingRef.current = false;
     setConversationId(null);
-    setMessages([buildInitialMessage(launchContextPayload)]);
+    conversationIdRef.current = null;
+    setMessages(initialMessages);
+    messagesRef.current = initialMessages;
     setQuickReplies(buildInitialQuickReplies(launchContextPayload));
     setError(null);
     setErrorDetails(null);
     setFailedRequest(null);
+    setIsQueueProcessing(false);
+    setActiveAssistantRequests(0);
     setIsBootstrapping(shouldBootstrapTrainerOnboarding);
     setIsHistoryLoading(false);
   }, [launchContextPayload, shouldBootstrapTrainerOnboarding]);
@@ -336,8 +371,10 @@ export function useChatConversation(accessToken, launchContext = null) {
       const hydratedMessages = mapHydratedHistoryMessages(payload);
       if (hydratedMessages.length > 0) {
         setConversationId(payload?.conversation_id || null);
+        conversationIdRef.current = payload?.conversation_id || null;
         setMessages(hydratedMessages);
-        setQuickReplies([]);
+        messagesRef.current = hydratedMessages;
+        setQuickReplies(payload?.quick_replies || []);
       } else {
         setMessages((current) => current.filter((item) => item?.id !== STALE_CHAT_HISTORY_WARNING_ID));
       }
@@ -378,7 +415,7 @@ export function useChatConversation(accessToken, launchContext = null) {
     };
   }, [accessToken, hydrateHistory, launchContextPayload, shouldBootstrapTrainerOnboarding]);
 
-  const requestBootstrap = async () => sendChatMessage({
+  const requestBootstrap = useCallback(async () => sendChatMessage({
     accessToken,
     conversationId: null,
     message: '__onboarding_bootstrap__',
@@ -387,9 +424,9 @@ export function useChatConversation(accessToken, launchContext = null) {
       ...launchContextPayload,
       onboarding_bootstrap: true,
     },
-  });
+  }), [accessToken, launchContextPayload]);
 
-  const runBootstrap = async ({ includeErrorBubble = true, isActive = () => true } = {}) => {
+  const runBootstrap = useCallback(async ({ includeErrorBubble = true, isActive = () => true } = {}) => {
     if (!accessToken) {
       return false;
     }
@@ -403,8 +440,9 @@ export function useChatConversation(accessToken, launchContext = null) {
         return false;
       }
       setConversationId(payload.conversation_id || null);
+      conversationIdRef.current = payload.conversation_id || null;
       setQuickReplies(payload.quick_replies || []);
-      setMessages([
+      const bootstrapMessages = [
         {
           id: `assistant-bootstrap-${Date.now()}`,
           role: 'assistant',
@@ -412,7 +450,9 @@ export function useChatConversation(accessToken, launchContext = null) {
           fallbackTriggered: payload.fallback_triggered,
           profilePatch: normalizeProfilePatch(payload.profile_patch),
         },
-      ]);
+      ];
+      setMessages(bootstrapMessages);
+      messagesRef.current = bootstrapMessages;
       return true;
     } catch (requestError) {
       if (!isActive()) {
@@ -439,7 +479,7 @@ export function useChatConversation(accessToken, launchContext = null) {
         setIsBootstrapping(false);
       }
     }
-  };
+  }, [accessToken, requestBootstrap]);
 
   useEffect(() => {
     if (!shouldBootstrapTrainerOnboarding || !accessToken || bootstrapStartedRef.current) {
@@ -455,62 +495,308 @@ export function useChatConversation(accessToken, launchContext = null) {
     return () => {
       isActive = false;
     };
-  }, [accessToken, launchContextPayload, shouldBootstrapTrainerOnboarding]);
+  }, [accessToken, runBootstrap, shouldBootstrapTrainerOnboarding]);
 
-  const sendMessage = async (text) => {
-    const trimmed = text.trim();
-    if (!trimmed || !accessToken || isSending || isBootstrapping) {
+  const updateMessageById = useCallback((messageId, patch) => {
+    if (!messageId) {
+      return;
+    }
+    setMessages((current) => {
+      const next = current.map((item) => (
+        item?.id === messageId
+          ? { ...item, ...patch }
+          : item
+      ));
+      messagesRef.current = next;
+      return next;
+    });
+  }, []);
+
+  const removeTransientAssistantRows = useCallback((requestId, streamMessageId = null) => {
+    if (!requestId && !streamMessageId) {
+      return;
+    }
+    setMessages((current) => current.filter((item) => {
+      if (streamMessageId && item?.id === streamMessageId) {
+        return false;
+      }
+      if (!requestId) {
+        return true;
+      }
+      if (item?.requestId !== requestId) {
+        return true;
+      }
+      return item?.kind !== 'assistant_progress';
+    }));
+  }, []);
+
+  const executeOutboundMessage = useCallback(async (messageEntry) => {
+    if (!messageEntry?.id || !accessToken) {
       return false;
     }
 
+    updateMessageById(messageEntry.id, { status: 'sending' });
     setError(null);
     setErrorDetails(null);
     setFailedRequest(null);
-    const nextUserMessage = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      text: trimmed,
+    setActiveAssistantRequests((value) => value + 1);
+
+    const requestId = buildRequestId('chat-request');
+    const progressMessageId = `assistant-progress-${requestId}`;
+    const streamMessageId = `assistant-stream-${requestId}`;
+    let allowProgressUpdates = true;
+    const stageController = createAIProgressController({
+      onStageChange: (stage) => {
+        if (!allowProgressUpdates) {
+          return;
+        }
+        const nextLabel = getAIProgressLabel(stage);
+        setMessages((current) => {
+          const withoutStream = current.filter((item) => item?.id !== streamMessageId);
+          const nextProgressRow = {
+            id: progressMessageId,
+            role: 'assistant',
+            kind: 'assistant_progress',
+            requestId,
+            stage,
+            text: nextLabel,
+            status: 'working',
+          };
+          const existingIndex = withoutStream.findIndex((item) => item?.id === progressMessageId);
+          if (existingIndex >= 0) {
+            const clone = [...withoutStream];
+            clone[existingIndex] = { ...clone[existingIndex], ...nextProgressRow };
+            return clone;
+          }
+          return [...withoutStream, nextProgressRow];
+        });
+      },
+    });
+    stageController.setStage(AI_PROGRESS_STAGES.REVIEWING_MESSAGE, { force: true });
+
+    let collectedAssistantText = '';
+    let streamFailure = null;
+    let responsePayload = null;
+    let responseConversationId = conversationIdRef.current;
+
+    const consumeStreamPayload = (eventPayload) => {
+      const payloadType = String(eventPayload?.type || '').toLowerCase();
+      if (eventPayload?.conversation_id) {
+        responseConversationId = eventPayload.conversation_id;
+      }
+      if (payloadType === 'ack') {
+        stageController.setStage(eventPayload?.stage || AI_PROGRESS_STAGES.REVIEWING_MESSAGE);
+        return;
+      }
+      if (payloadType === 'progress') {
+        stageController.setStage(eventPayload?.stage || AI_PROGRESS_STAGES.CHECKING_CONTEXT);
+        return;
+      }
+      if (payloadType === 'delta') {
+        allowProgressUpdates = false;
+        if (typeof eventPayload?.text === 'string') {
+          collectedAssistantText += eventPayload.text;
+        }
+        setMessages((current) => {
+          const withoutProgress = current.filter((item) => item?.id !== progressMessageId);
+          const nextStreamRow = {
+            id: streamMessageId,
+            role: 'assistant',
+            kind: 'assistant_stream',
+            requestId,
+            text: collectedAssistantText,
+            status: 'streaming',
+          };
+          const existingIndex = withoutProgress.findIndex((item) => item?.id === streamMessageId);
+          if (existingIndex >= 0) {
+            const clone = [...withoutProgress];
+            clone[existingIndex] = { ...clone[existingIndex], ...nextStreamRow };
+            return clone;
+          }
+          return [...withoutProgress, nextStreamRow];
+        });
+        return;
+      }
+      if (payloadType === 'completed') {
+        allowProgressUpdates = false;
+        responsePayload = eventPayload;
+        if (typeof eventPayload?.assistant_message === 'string' && eventPayload.assistant_message.trim().length > 0) {
+          collectedAssistantText = eventPayload.assistant_message.trim();
+        }
+        return;
+      }
+      if (payloadType === 'done') {
+        allowProgressUpdates = false;
+        if (!responsePayload) {
+          responsePayload = eventPayload;
+        }
+        return;
+      }
+      if (payloadType === 'failed' || payloadType === 'error') {
+        allowProgressUpdates = false;
+        streamFailure = new Error(eventPayload?.detail || 'Unable to reach coach right now.');
+      }
     };
-    setMessages((current) => [...current, nextUserMessage]);
-    setIsSending(true);
 
     try {
-      const payload = await sendChatMessage({
+      await streamChatMessage({
         accessToken,
-        conversationId,
-        message: trimmed,
+        conversationId: conversationIdRef.current,
+        message: messageEntry.text,
         clientContext: {
           platform: Platform.OS,
-          ...launchContextPayload,
+          ...launchContextRef.current,
         },
+        clientMessageId: messageEntry.clientMessageId,
+        idempotencyKey: messageEntry.idempotencyKey,
+        requestId,
+        onEvent: consumeStreamPayload,
       });
 
-      setConversationId(payload.conversation_id || null);
-      setQuickReplies(payload.quick_replies || []);
-      setMessages((current) => [
-        ...current,
-        {
-          id: `assistant-${Date.now()}`,
-          role: 'assistant',
-          text: payload.assistant_message,
-          fallbackTriggered: payload.fallback_triggered,
-          profilePatch: normalizeProfilePatch(payload.profile_patch),
-        },
-      ]);
-      return true;
-    } catch (requestError) {
-      const message = requestError.message || 'Unable to reach coach right now.';
-      setError(message);
-      setErrorDetails(requestError && typeof requestError === 'object' ? requestError : null);
-      setFailedRequest({ type: 'message', message: trimmed });
-      return false;
+      if (streamFailure) {
+        throw streamFailure;
+      }
+    } catch (streamError) {
+      if (!collectedAssistantText.trim()) {
+        try {
+          responsePayload = await sendChatMessage({
+            accessToken,
+            conversationId: conversationIdRef.current,
+            message: messageEntry.text,
+            clientContext: {
+              platform: Platform.OS,
+              ...launchContextRef.current,
+            },
+            clientMessageId: messageEntry.clientMessageId,
+            idempotencyKey: messageEntry.idempotencyKey,
+            requestId,
+          });
+          if (responsePayload?.conversation_id) {
+            responseConversationId = responsePayload.conversation_id;
+          }
+          if (typeof responsePayload?.assistant_message === 'string') {
+            collectedAssistantText = responsePayload.assistant_message;
+          }
+        } catch (fallbackError) {
+          removeTransientAssistantRows(requestId, streamMessageId);
+          const message = fallbackError?.message || streamError?.message || 'Unable to reach coach right now.';
+          updateMessageById(messageEntry.id, { status: 'failed' });
+          setError(message);
+          setErrorDetails(
+            (fallbackError && typeof fallbackError === 'object')
+              ? fallbackError
+              : (streamError && typeof streamError === 'object' ? streamError : null),
+          );
+          setFailedRequest({
+            type: 'message',
+            messageId: messageEntry.id,
+            message: messageEntry.text,
+          });
+          return false;
+        }
+      } else {
+        removeTransientAssistantRows(requestId, null);
+      }
     } finally {
-      setIsSending(false);
+      setActiveAssistantRequests((value) => Math.max(0, value - 1));
     }
+
+    const finalAssistantText = String(
+      responsePayload?.assistant_message
+      || responsePayload?.text
+      || collectedAssistantText
+      || '',
+    ).trim() || "I'm here with you. Could you rephrase that and I'll try again?";
+
+    setMessages((current) => {
+      const withoutTransient = current.filter((item) => (
+        item?.id !== progressMessageId && item?.id !== streamMessageId
+      ));
+      return [
+        ...withoutTransient,
+        {
+          id: `assistant-${requestId}`,
+          role: 'assistant',
+          text: finalAssistantText,
+          fallbackTriggered: Boolean(responsePayload?.fallback_triggered),
+          profilePatch: normalizeProfilePatch(responsePayload?.profile_patch),
+          requestId,
+        },
+      ];
+    });
+    updateMessageById(messageEntry.id, { status: 'sent' });
+    setConversationId(responsePayload?.conversation_id || responseConversationId || null);
+    setQuickReplies(Array.isArray(responsePayload?.quick_replies) ? responsePayload.quick_replies : []);
+    setError(null);
+    setErrorDetails(null);
+    setFailedRequest((current) => (
+      current?.type === 'message' && current?.messageId === messageEntry.id
+        ? null
+        : current
+    ));
+    return true;
+  }, [accessToken, removeTransientAssistantRows, updateMessageById]);
+
+  const drainQueue = useCallback(async () => {
+    if (processingRef.current || !accessToken || isBootstrappingRef.current) {
+      return false;
+    }
+    processingRef.current = true;
+    setIsQueueProcessing(true);
+
+    let allSucceeded = true;
+    try {
+      while (queueRef.current.length > 0) {
+        const nextMessageId = queueRef.current[0];
+        const messageEntry = messagesRef.current.find((item) => item?.id === nextMessageId);
+        if (!messageEntry) {
+          queueRef.current.shift();
+          continue;
+        }
+        const sent = await executeOutboundMessage(messageEntry);
+        if (!sent) {
+          allSucceeded = false;
+          break;
+        }
+        queueRef.current.shift();
+      }
+    } finally {
+      processingRef.current = false;
+      setIsQueueProcessing(false);
+    }
+
+    return allSucceeded;
+  }, [accessToken, executeOutboundMessage]);
+
+  const sendMessage = async (text) => {
+    const trimmed = String(text || '').trim();
+    if (!trimmed || !accessToken || isBootstrapping) {
+      return false;
+    }
+
+    const nextUserMessage = {
+      id: `user-${buildClientMessageId('chat')}`,
+      role: 'user',
+      text: trimmed,
+      status: 'queued_local',
+      clientMessageId: buildClientMessageId('chat-client'),
+      idempotencyKey: buildIdempotencyKey('chat-send'),
+      createdAt: new Date().toISOString(),
+    };
+
+    setMessages((current) => [...current, nextUserMessage]);
+    messagesRef.current = [...messagesRef.current, nextUserMessage];
+    queueRef.current.push(nextUserMessage.id);
+    setError(null);
+    setErrorDetails(null);
+    setFailedRequest(null);
+
+    drainQueue();
+    return true;
   };
 
   const retryFailedRequest = async () => {
-    if (!failedRequest || isSending || isBootstrapping) {
+    if (!failedRequest || isQueueProcessing || isBootstrapping) {
       return false;
     }
     if (failedRequest.type === 'history') {
@@ -527,16 +813,36 @@ export function useChatConversation(accessToken, launchContext = null) {
     if (failedRequest.type === 'bootstrap') {
       return runBootstrap({ includeErrorBubble: true });
     }
-    if (failedRequest.type === 'message' && typeof failedRequest.message === 'string') {
-      return sendMessage(failedRequest.message);
+    if (failedRequest.type === 'message' && typeof failedRequest.messageId === 'string') {
+      const retryMessageId = failedRequest.messageId;
+      const messageEntry = messagesRef.current.find((item) => item?.id === retryMessageId);
+      if (!messageEntry) {
+        return false;
+      }
+      updateMessageById(retryMessageId, { status: 'queued_local' });
+      if (!queueRef.current.includes(retryMessageId)) {
+        queueRef.current.unshift(retryMessageId);
+      }
+      setError(null);
+      setErrorDetails(null);
+      setFailedRequest(null);
+      return drainQueue();
     }
     return false;
   };
 
+  const lastFailedMessage = useMemo(() => {
+    if (failedRequest?.type === 'message' && typeof failedRequest.message === 'string') {
+      return failedRequest.message;
+    }
+    const failedItem = [...messages].reverse().find((item) => item?.role === 'user' && item?.status === 'failed');
+    return failedItem?.text || null;
+  }, [failedRequest, messages]);
+
   return {
     messages,
     quickReplies,
-    isSending: isSending || isBootstrapping || isHistoryLoading,
+    isSending: isQueueProcessing || activeAssistantRequests > 0 || isBootstrapping || isHistoryLoading,
     error,
     errorDetails,
     lastFailedMessage,
