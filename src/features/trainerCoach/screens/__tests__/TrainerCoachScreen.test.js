@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { KeyboardAvoidingView, Platform } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, Platform } from 'react-native';
 
 const mockUseTrainerCoachWorkspace = jest.fn();
 const mockSetStringAsync = jest.fn();
@@ -109,9 +109,27 @@ function buildWorkspaceSnapshot(overrides = {}) {
 }
 
 describe('TrainerCoachScreen', () => {
+  const openEventName = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+  const closeEventName = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+  let keyboardListeners = {};
+  let keyboardAddListenerSpy;
+
   beforeEach(() => {
     jest.clearAllMocks();
+    keyboardListeners = {};
+    keyboardAddListenerSpy = jest.spyOn(Keyboard, 'addListener').mockImplementation((eventName, callback) => {
+      keyboardListeners[eventName] = callback;
+      return {
+        remove: jest.fn(() => {
+          delete keyboardListeners[eventName];
+        }),
+      };
+    });
     mockSetStringAsync.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    keyboardAddListenerSpy?.mockRestore();
   });
 
   it('renders stale-route recovery card and retries workspace load', async () => {
@@ -261,6 +279,384 @@ describe('TrainerCoachScreen', () => {
     });
   });
 
+  it('does not render the legacy draft queue dock in Coach screen layout', async () => {
+    mockUseTrainerCoachWorkspace.mockReturnValue(buildWorkspaceSnapshot());
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    expect(() => tree.root.findByType('MockDraftQueueDock')).toThrow();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('filters routine system confirmations out of the visible coach stream', async () => {
+    const snapshot = buildWorkspaceSnapshot({
+      state: {
+        ...buildWorkspaceSnapshot().state,
+        stream: [
+          {
+            id: 'system-info',
+            kind: 'system_confirmation',
+            text: 'Routine info',
+            severity: 'info',
+            status: 'confirmed',
+          },
+          {
+            id: 'system-success',
+            kind: 'system_confirmation',
+            text: 'Routine success',
+            severity: 'success',
+            status: 'confirmed',
+          },
+          {
+            id: 'system-warning',
+            kind: 'system_confirmation',
+            text: 'Important warning',
+            severity: 'warning',
+            status: 'confirmed',
+          },
+          {
+            id: 'system-error',
+            kind: 'system_confirmation',
+            text: 'Important error',
+            severity: 'error',
+            status: 'confirmed',
+          },
+          {
+            id: 'system-failed',
+            kind: 'system_confirmation',
+            text: 'Failed event',
+            severity: 'info',
+            status: 'failed',
+          },
+          {
+            id: 'trainer-private',
+            kind: 'internal_ai_private',
+            text: 'Draft update',
+            severity: 'info',
+            status: 'confirmed',
+          },
+        ],
+      },
+    });
+    mockUseTrainerCoachWorkspace.mockReturnValue(snapshot);
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    const streamList = tree.root.findByType('MockCoachStreamList');
+    expect(streamList.props.streamItems.map((item) => item.id)).toEqual([
+      'system-warning',
+      'system-error',
+      'system-failed',
+      'trainer-private',
+    ]);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows jump-to-latest when viewport leaves the bottom and forces scroll on press', async () => {
+    const snapshot = buildWorkspaceSnapshot({
+      state: {
+        ...buildWorkspaceSnapshot().state,
+        stream: [
+          {
+            id: 'system-warning',
+            kind: 'system_confirmation',
+            text: 'Important warning',
+            severity: 'warning',
+            status: 'confirmed',
+          },
+        ],
+      },
+    });
+    mockUseTrainerCoachWorkspace.mockReturnValue(snapshot);
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-jump-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    let streamList = tree.root.findByType('MockCoachStreamList');
+    act(() => {
+      streamList.props.onScrollMetricsChange?.({
+        offset: 240,
+        contentHeight: 1200,
+        layoutHeight: 500,
+        nearBottom: false,
+      });
+      streamList.props.onNearBottomChange?.(false);
+    });
+
+    expect(() => tree.root.findByProps({ testID: 'trainer-coach-jump-latest' })).not.toThrow();
+    const signalBeforeJump = tree.root.findByType('MockCoachStreamList').props.forceScrollSignal;
+
+    const jumpButton = tree.root.findByProps({ testID: 'trainer-coach-jump-latest' });
+    act(() => {
+      jumpButton.props.onPress();
+    });
+
+    streamList = tree.root.findByType('MockCoachStreamList');
+    expect(streamList.props.forceScrollSignal).toBeGreaterThan(signalBeforeJump);
+
+    act(() => {
+      streamList.props.onNearBottomChange?.(true);
+    });
+    expect(() => tree.root.findByProps({ testID: 'trainer-coach-jump-latest' })).toThrow();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('re-entry starts fresh at near-bottom state without viewport restore props', async () => {
+    const snapshot = buildWorkspaceSnapshot({
+      state: {
+        ...buildWorkspaceSnapshot().state,
+        stream: [
+          {
+            id: 'system-warning',
+            kind: 'system_confirmation',
+            text: 'Important warning',
+            severity: 'warning',
+            status: 'confirmed',
+          },
+        ],
+      },
+    });
+    mockUseTrainerCoachWorkspace.mockReturnValue(snapshot);
+
+    let firstTree;
+    await act(async () => {
+      firstTree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-reentry-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    const firstStreamList = firstTree.root.findByType('MockCoachStreamList');
+    act(() => {
+      firstStreamList.props.onScrollMetricsChange?.({
+        offset: 320,
+        contentHeight: 1200,
+        layoutHeight: 500,
+        nearBottom: false,
+      });
+      firstStreamList.props.onNearBottomChange?.(false);
+    });
+    expect(() => firstTree.root.findByProps({ testID: 'trainer-coach-jump-latest' })).not.toThrow();
+
+    await act(async () => {
+      firstTree.unmount();
+    });
+
+    let secondTree;
+    await act(async () => {
+      secondTree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-reentry-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    const secondStreamList = secondTree.root.findByType('MockCoachStreamList');
+    expect(secondStreamList.props.restoreScrollOffset).toBeUndefined();
+    expect(secondStreamList.props.restoreScrollSignal).toBeUndefined();
+    expect(() => secondTree.root.findByProps({ testID: 'trainer-coach-jump-latest' })).toThrow();
+
+    await act(async () => {
+      secondTree.unmount();
+    });
+  });
+
+  it('forces a latest anchor pass when keyboard opens near the bottom', async () => {
+    const snapshot = buildWorkspaceSnapshot({
+      state: {
+        ...buildWorkspaceSnapshot().state,
+        stream: [
+          {
+            id: 'system-warning',
+            kind: 'system_confirmation',
+            text: 'Important warning',
+            severity: 'warning',
+            status: 'confirmed',
+          },
+        ],
+      },
+    });
+    mockUseTrainerCoachWorkspace.mockReturnValue(snapshot);
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-keyboard-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    let streamList = tree.root.findByType('MockCoachStreamList');
+    const initialSignal = streamList.props.forceScrollSignal;
+    act(() => {
+      streamList.props.onScrollMetricsChange?.({
+        offset: 700,
+        contentHeight: 1200,
+        layoutHeight: 500,
+        nearBottom: true,
+      });
+      streamList.props.onNearBottomChange?.(true);
+      keyboardListeners[openEventName]?.({});
+    });
+
+    streamList = tree.root.findByType('MockCoachStreamList');
+    expect(streamList.props.forceScrollSignal).toBeGreaterThan(initialSignal);
+
+    act(() => {
+      keyboardListeners[closeEventName]?.();
+    });
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('keeps force-scroll signal stable when stream updates arrive without direct user intent', async () => {
+    const baseState = buildWorkspaceSnapshot().state;
+    const actions = {
+      ...buildWorkspaceSnapshot().actions,
+      sendIntentMessage: jest.fn().mockResolvedValue(true),
+    };
+    let snapshot = buildWorkspaceSnapshot({
+      state: {
+        ...baseState,
+        stream: [
+          {
+            id: 'system-hidden-1',
+            kind: 'system_confirmation',
+            text: 'Routine info one',
+            severity: 'info',
+            status: 'confirmed',
+          },
+        ],
+      },
+      actions,
+    });
+    mockUseTrainerCoachWorkspace.mockImplementation(() => snapshot);
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    let streamList = tree.root.findByType('MockCoachStreamList');
+    const initialSignal = streamList.props.forceScrollSignal;
+    expect(streamList.props.streamItems).toEqual([]);
+
+    snapshot = buildWorkspaceSnapshot({
+      state: {
+        ...snapshot.state,
+        stream: [
+          ...snapshot.state.stream,
+          {
+            id: 'system-hidden-2',
+            kind: 'system_confirmation',
+            text: 'Routine success two',
+            severity: 'success',
+            status: 'confirmed',
+          },
+        ],
+      },
+      actions,
+    });
+
+    await act(async () => {
+      tree.update(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    streamList = tree.root.findByType('MockCoachStreamList');
+    expect(streamList.props.forceScrollSignal).toBe(initialSignal);
+
+    snapshot = buildWorkspaceSnapshot({
+      state: {
+        ...snapshot.state,
+        stream: [
+          ...snapshot.state.stream,
+          {
+            id: 'system-warning',
+            kind: 'system_confirmation',
+            text: 'Important warning',
+            severity: 'warning',
+            status: 'confirmed',
+          },
+        ],
+      },
+      actions,
+    });
+
+    await act(async () => {
+      tree.update(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    streamList = tree.root.findByType('MockCoachStreamList');
+    expect(streamList.props.forceScrollSignal).toBe(initialSignal);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('sets submitting state immediately on send and clears composer only after successful send', async () => {
     const deferred = createDeferred();
     const snapshot = buildWorkspaceSnapshot({
@@ -349,7 +745,7 @@ describe('TrainerCoachScreen', () => {
     });
   });
 
-  it('increments stream force-scroll signal on send and on incoming stream updates', async () => {
+  it('increments stream force-scroll signal on send while leaving passive incoming updates unchanged', async () => {
     const baseState = buildWorkspaceSnapshot().state;
     const actions = {
       ...buildWorkspaceSnapshot().actions,
@@ -423,7 +819,7 @@ describe('TrainerCoachScreen', () => {
     });
 
     streamList = tree.root.findByType('MockCoachStreamList');
-    expect(streamList.props.forceScrollSignal).toBeGreaterThan(postSendSignal);
+    expect(streamList.props.forceScrollSignal).toBe(postSendSignal);
 
     await act(async () => {
       tree.unmount();

@@ -196,6 +196,36 @@ describe('useTrainerCoachWorkspace', () => {
     expect(lastItem.text).toContain('Unknown command');
   });
 
+  it('keeps /drafts available as a redirect message to Clients without opening queue panel', async () => {
+    let latestSnapshot = null;
+    const onSnapshot = (snapshot) => {
+      latestSnapshot = snapshot;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          onSnapshot={onSnapshot}
+        />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await latestSnapshot.actions.sendIntentMessage('/drafts');
+    });
+    await flushEffects();
+
+    expect(latestSnapshot.state.panels.active).not.toBe('draft_review');
+    const stream = latestSnapshot.state.stream;
+    const lastItem = stream[stream.length - 1];
+    expect(lastItem.kind).toBe('system_confirmation');
+    expect(lastItem.status).toBe('confirmed');
+    expect(lastItem.text).toContain('Clients tab');
+  });
+
   it('persists system confirmations through trainer-coach events API', async () => {
     let latestSnapshot = null;
     const onSnapshot = (snapshot) => {

@@ -23,7 +23,11 @@ export default function TodaySummaryBar({
   if (!summary) {
     return null;
   }
-  const actions = Array.isArray(summary.actions) ? summary.actions.slice(0, 2) : [];
+  const actions = Array.isArray(summary.actions)
+    ? summary.actions
+      .filter((action) => action?.target !== 'queue')
+      .slice(0, 2)
+    : [];
   const tone = resolveSummaryTone(summary.state);
 
   if (collapsed) {
@@ -109,4 +113,3 @@ const styles = StyleSheet.create({
     opacity: theme.interaction.pressedOpacity,
   },
 });
-

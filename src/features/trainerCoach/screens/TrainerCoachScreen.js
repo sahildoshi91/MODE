@@ -3,6 +3,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   StyleSheet,
   View,
 } from 'react-native';
@@ -20,13 +21,35 @@ import { buildTrainerRouteDiagnosticsBundle } from '../../trainerPlatform/utils/
 import CoachComposerWithCommands from '../components/CoachComposerWithCommands';
 import CoachPanelHost from '../components/CoachPanelHost';
 import CoachStreamList from '../components/CoachStreamList';
-import DraftQueueDock from '../components/DraftQueueDock';
 import TodaySummaryBar from '../components/TodaySummaryBar';
 import { useTrainerCoachWorkspace } from '../hooks/useTrainerCoachWorkspace';
 
 const SUMMARY_COLLAPSE_SCROLL_THRESHOLD = 72;
-const QUEUE_MINIMIZE_SCROLL_THRESHOLD = 260;
 const COPY_FEEDBACK_TIMEOUT_MS = 2200;
+
+function asNonNegativeNumber(value, fallback = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function shouldDisplayStreamItem(item) {
+  if (item?.kind !== 'system_confirmation') {
+    return true;
+  }
+  const severity = typeof item?.severity === 'string'
+    ? item.severity.trim().toLowerCase()
+    : 'info';
+  const status = typeof item?.status === 'string'
+    ? item.status.trim().toLowerCase()
+    : 'confirmed';
+  if (status === 'failed') {
+    return true;
+  }
+  return severity === 'warning' || severity === 'error';
+}
 
 export default function TrainerCoachScreen({
   accessToken,
@@ -36,17 +59,18 @@ export default function TrainerCoachScreen({
   const [composerValue, setComposerValue] = useState('');
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [isNearBottom, setIsNearBottom] = useState(true);
   const [composerDockHeight, setComposerDockHeight] = useState(0);
   const [streamForceScrollSignal, setStreamForceScrollSignal] = useState(0);
   const [copyFeedback, setCopyFeedback] = useState(null);
   const copyFeedbackTimerRef = useRef(null);
-  const streamMetricsRef = useRef({
+  const visibleStreamLengthRef = useRef(0);
+  const latestScrollMetricsRef = useRef({
     offset: 0,
     contentHeight: 0,
     layoutHeight: 0,
     nearBottom: true,
   });
-  const previousStreamLengthRef = useRef(0);
   const {
     state,
     actions,
@@ -60,6 +84,11 @@ export default function TrainerCoachScreen({
   const workspaceNetworkError = (!staleRouteError && state.errorDetails?.stage === 'network')
     ? state.errorDetails
     : null;
+  const visibleStream = useMemo(
+    () => (Array.isArray(state.stream) ? state.stream.filter(shouldDisplayStreamItem) : []),
+    [state.stream],
+  );
+  const showJumpToLatest = visibleStream.length > 0 && !isNearBottom;
 
   const helperLabel = useMemo(() => {
     if (isSendingMessage) {
@@ -99,10 +128,20 @@ export default function TrainerCoachScreen({
   }, []);
 
   useEffect(() => {
+    visibleStreamLengthRef.current = visibleStream.length;
+  }, [visibleStream.length]);
+
+  useEffect(() => {
     const openEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const closeEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
     const keyboardOpenSubscription = Keyboard.addListener(openEvent, () => {
       setIsKeyboardVisible(true);
+      if (
+        latestScrollMetricsRef.current.nearBottom
+        && visibleStreamLengthRef.current > 0
+      ) {
+        setStreamForceScrollSignal((value) => value + 1);
+      }
     });
     const keyboardCloseSubscription = Keyboard.addListener(closeEvent, () => {
       setIsKeyboardVisible(false);
@@ -121,23 +160,8 @@ export default function TrainerCoachScreen({
     }
   }, []);
 
-  useEffect(() => {
-    const streamLength = Array.isArray(state.stream) ? state.stream.length : 0;
-    const previousLength = previousStreamLengthRef.current;
-    if (streamLength > 0 && previousLength === 0) {
-      setStreamForceScrollSignal((value) => value + 1);
-    } else if (streamLength > previousLength) {
-      setStreamForceScrollSignal((value) => value + 1);
-    }
-    previousStreamLengthRef.current = streamLength;
-  }, [state.stream]);
-
   const handleSummaryAction = async (summaryAction) => {
     const target = summaryAction?.target;
-    if (target === 'queue') {
-      actions.openPanel('draft_review', null);
-      return;
-    }
     if (target === 'panel_rules') {
       actions.openPanel('rules', null);
       return;
@@ -206,6 +230,10 @@ export default function TrainerCoachScreen({
       showCopyFeedback('Unable to copy diagnostics');
     }
   }, [showCopyFeedback, staleRouteError, workspaceNetworkError]);
+
+  const handleJumpToLatest = useCallback(() => {
+    setStreamForceScrollSignal((value) => value + 1);
+  }, []);
 
   return (
     <SafeScreen includeTopInset={false} style={styles.screen}>
@@ -325,36 +353,54 @@ export default function TrainerCoachScreen({
               onToggleCollapsed={actions.setSummaryCollapsed}
             />
 
-            <DraftQueueDock
-              queue={state.queue}
-              minimized={state.ui.queueMinimized}
-              onToggleMinimized={actions.setQueueMinimized}
-              onOpenQueue={() => actions.openPanel('draft_review', null)}
-              onOpenDraft={(item) => actions.openPanel('draft_review', { outputId: item.output_id })}
-            />
-
             <View style={styles.streamViewport}>
               <CoachStreamList
-                streamItems={state.stream}
+                streamItems={visibleStream}
                 forceScrollSignal={streamForceScrollSignal}
                 contentBottomPadding={composerDockHeight}
-              onScrollMetricsChange={(metrics) => {
-                if (!metrics || typeof metrics !== 'object') {
-                  return;
-                }
-                streamMetricsRef.current = metrics;
-              }}
+                onScrollMetricsChange={(metrics) => {
+                  if (!metrics || typeof metrics !== 'object') {
+                    return;
+                  }
+                  const nextOffset = asNonNegativeNumber(metrics.offset, 0);
+                  const nextNearBottom = Boolean(metrics.nearBottom);
+                  latestScrollMetricsRef.current = {
+                    offset: nextOffset,
+                    contentHeight: asNonNegativeNumber(metrics.contentHeight, 0),
+                    layoutHeight: asNonNegativeNumber(metrics.layoutHeight, 0),
+                    nearBottom: nextNearBottom,
+                  };
+                }}
+                onNearBottomChange={(nearBottom) => {
+                  const normalized = Boolean(nearBottom);
+                  setIsNearBottom((current) => (current === normalized ? current : normalized));
+                  latestScrollMetricsRef.current = {
+                    ...latestScrollMetricsRef.current,
+                    nearBottom: normalized,
+                  };
+                }}
                 onScrollDepthChange={(offsetY) => {
                   const shouldCollapseSummary = offsetY > SUMMARY_COLLAPSE_SCROLL_THRESHOLD;
-                  const shouldMinimizeQueue = offsetY > QUEUE_MINIMIZE_SCROLL_THRESHOLD;
                   if (shouldCollapseSummary !== state.ui.summaryCollapsed) {
                     actions.setSummaryCollapsed(shouldCollapseSummary);
                   }
-                  if (shouldMinimizeQueue !== state.ui.queueMinimized) {
-                    actions.setQueueMinimized(shouldMinimizeQueue);
-                  }
                 }}
               />
+              {showJumpToLatest ? (
+                <Pressable
+                  testID="trainer-coach-jump-latest"
+                  onPress={handleJumpToLatest}
+                  style={({ pressed }) => [
+                    styles.jumpToLatestButton,
+                    { bottom: composerDockHeight + theme.spacing[2] },
+                    pressed && styles.jumpToLatestButtonPressed,
+                  ]}
+                >
+                  <ModeText variant="caption" tone="inverse" style={styles.jumpToLatestLabel}>
+                    Jump to latest
+                  </ModeText>
+                </Pressable>
+              ) : null}
 
               <View
                 onLayout={(event) => {
@@ -428,6 +474,24 @@ const styles = StyleSheet.create({
   streamViewport: {
     flex: 1,
     position: 'relative',
+  },
+  jumpToLatestButton: {
+    position: 'absolute',
+    alignSelf: 'center',
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+    borderColor: theme.colors.cta.primaryBorder,
+    backgroundColor: theme.colors.cta.primaryBg,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    zIndex: 2,
+  },
+  jumpToLatestButtonPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
+  },
+  jumpToLatestLabel: {
+    fontWeight: '600',
   },
   composerDock: {
     position: 'absolute',

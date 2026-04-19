@@ -8,9 +8,16 @@ import {
   ModeChip,
   ModeInput,
   ModeText,
+  ProgressBar,
   SafeScreen,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import {
+  approveTrainerCoachQueueItem,
+  editTrainerCoachQueueItem,
+  getTrainerCoachQueue,
+  rejectTrainerCoachQueueItem,
+} from '../../trainerCoach/services/trainerCoachApi';
 import {
   archiveTrainerClientMemory,
   createTrainerClientScheduleException,
@@ -29,6 +36,11 @@ import {
   resolveClientScheduledForFilter,
   toggleIsoWeekday,
 } from '../utils/scheduleResolver';
+import {
+  DRAFT_REVIEW_DAILY_GOAL,
+  loadDraftReviewTracker,
+  recordDraftReviewAction,
+} from '../storage/draftReviewTrackerStorage';
 
 const VIEW_MODE = {
   COMMAND_CENTER: 'command_center',
@@ -62,6 +74,102 @@ const MEMORY_VISIBILITY = [
   { key: 'internal_only', label: 'Internal Only' },
   { key: 'ai_usable', label: 'AI Usable' },
 ];
+
+const DRAFT_QUEUE_FETCH_LIMIT = 100;
+
+const DRAFT_REVIEW_ACTION_TYPE = {
+  SAVE_EDIT: 'save_edit',
+  APPROVE: 'approve',
+  REJECT: 'reject',
+};
+
+function buildDraftReviewIdempotencyKey(prefix = 'clients-draft-review') {
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 12)}`;
+}
+
+function resolveDraftReviewOutputSeed(draft) {
+  if (!draft || typeof draft !== 'object') {
+    return '';
+  }
+  const reviewedText = typeof draft.reviewed_output_text === 'string' ? draft.reviewed_output_text.trim() : '';
+  if (reviewedText) {
+    return reviewedText;
+  }
+  const summary = typeof draft.summary === 'string' ? draft.summary.trim() : '';
+  if (summary) {
+    return summary;
+  }
+  const outputText = typeof draft.output_text === 'string' ? draft.output_text.trim() : '';
+  if (outputText) {
+    return outputText;
+  }
+  if (draft.output_json && typeof draft.output_json === 'object') {
+    const outputJsonSummary = typeof draft.output_json.summary === 'string'
+      ? draft.output_json.summary.trim()
+      : '';
+    if (outputJsonSummary) {
+      return outputJsonSummary;
+    }
+  }
+  return '';
+}
+
+function resolveDraftQueueSelection(items, preferredOutputId, { allowNullSelection = false } = {}) {
+  const queueItems = Array.isArray(items) ? items : [];
+  if (queueItems.length === 0) {
+    return null;
+  }
+  if (allowNullSelection && preferredOutputId === null) {
+    return null;
+  }
+  if (typeof preferredOutputId === 'string' && preferredOutputId.trim()) {
+    const match = queueItems.find((item) => item.output_id === preferredOutputId);
+    if (match?.output_id) {
+      return match.output_id;
+    }
+  }
+  return queueItems[0].output_id;
+}
+
+function buildNextDraftReviewState(items, currentOutputId, actionType) {
+  const queueItems = Array.isArray(items) ? items : [];
+  if (queueItems.length === 0) {
+    return {
+      optimisticItems: [],
+      nextOutputId: null,
+      allowNullSelection: true,
+    };
+  }
+
+  const currentIndex = queueItems.findIndex((item) => item.output_id === currentOutputId);
+  const resolvedIndex = currentIndex >= 0 ? currentIndex : 0;
+
+  if (actionType === DRAFT_REVIEW_ACTION_TYPE.SAVE_EDIT) {
+    const nextOutputId = queueItems[resolvedIndex + 1]?.output_id || null;
+    return {
+      optimisticItems: queueItems,
+      nextOutputId,
+      allowNullSelection: nextOutputId === null,
+    };
+  }
+
+  const optimisticItems = queueItems.filter((item) => item.output_id !== currentOutputId);
+  if (optimisticItems.length === 0) {
+    return {
+      optimisticItems: [],
+      nextOutputId: null,
+      allowNullSelection: true,
+    };
+  }
+  const nextOutputId = optimisticItems[resolvedIndex]?.output_id
+    || optimisticItems[optimisticItems.length - 1]?.output_id
+    || null;
+  return {
+    optimisticItems,
+    nextOutputId,
+    allowNullSelection: false,
+  };
+}
 
 function formatSessionWindow(startAt, endAt) {
   if (!startAt && !endAt) {
@@ -235,6 +343,7 @@ function buildTrainerRouteError(error, fallbackMessage) {
       && (
         (typeof requestPath === 'string' && requestPath.startsWith('/api/v1/trainer-home/command-center'))
         || (typeof requestPath === 'string' && requestPath.startsWith('/api/v1/trainer-clients/'))
+        || (typeof requestPath === 'string' && requestPath.startsWith('/api/v1/trainer-coach/'))
       )
     )
   );
@@ -287,6 +396,24 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   const [editingVisibility, setEditingVisibility] = useState('internal_only');
   const [editingTagsText, setEditingTagsText] = useState('');
 
+  const [draftQueueItems, setDraftQueueItems] = useState([]);
+  const [isLoadingDraftQueue, setIsLoadingDraftQueue] = useState(true);
+  const [draftQueueError, setDraftQueueError] = useState(null);
+  const [activeDraftOutputId, setActiveDraftOutputId] = useState(null);
+  const [draftReviewText, setDraftReviewText] = useState('');
+  const [isMutatingDraftReview, setIsMutatingDraftReview] = useState(false);
+  const [draftReviewMutationError, setDraftReviewMutationError] = useState(null);
+  const [draftReviewMutationSuccess, setDraftReviewMutationSuccess] = useState(null);
+
+  const [draftReviewTracker, setDraftReviewTracker] = useState({
+    date_key: null,
+    daily_count: 0,
+    lifetime_count: 0,
+    pending_sync_events: [],
+    updated_at: null,
+  });
+  const [isLoadingDraftReviewTracker, setIsLoadingDraftReviewTracker] = useState(true);
+
   const selectedDayConfig = useMemo(
     () => DAY_FILTERS.find((option) => option.key === dayFilter) || DAY_FILTERS[0],
     [dayFilter],
@@ -305,6 +432,40 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   const selectedClientFromList = useMemo(
     () => clientItems.find((item) => item.client_id === selectedClientId) || null,
     [clientItems, selectedClientId],
+  );
+
+  const draftReviewTrackerScopeId = useMemo(() => {
+    const trainerId = commandCenterPayload?.trainer?.trainer_id;
+    if (typeof trainerId === 'string' && trainerId.trim()) {
+      return trainerId.trim();
+    }
+    return 'default';
+  }, [commandCenterPayload?.trainer?.trainer_id]);
+
+  const activeDraft = useMemo(() => {
+    if (!Array.isArray(draftQueueItems) || draftQueueItems.length === 0) {
+      return null;
+    }
+    if (typeof activeDraftOutputId === 'string' && activeDraftOutputId.trim()) {
+      return draftQueueItems.find((item) => item.output_id === activeDraftOutputId) || null;
+    }
+    return null;
+  }, [activeDraftOutputId, draftQueueItems]);
+
+  const activeDraftPosition = useMemo(() => {
+    if (!activeDraft?.output_id) {
+      return null;
+    }
+    const index = draftQueueItems.findIndex((item) => item.output_id === activeDraft.output_id);
+    return index >= 0 ? index + 1 : null;
+  }, [activeDraft?.output_id, draftQueueItems]);
+
+  const draftQueueCount = Array.isArray(draftQueueItems) ? draftQueueItems.length : 0;
+  const draftReviewDailyCount = Number(draftReviewTracker?.daily_count) || 0;
+  const draftReviewLifetimeCount = Number(draftReviewTracker?.lifetime_count) || 0;
+  const draftReviewDailyProgress = Math.max(
+    0,
+    Math.min(1, draftReviewDailyCount / DRAFT_REVIEW_DAILY_GOAL),
   );
 
   const visibleClientItems = useMemo(() => {
@@ -363,6 +524,74 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     }
   }, [accessToken, plannerDate]);
 
+  const loadDraftQueue = useCallback(async ({
+    silent = false,
+    preferredOutputId,
+    allowNullSelection = false,
+  } = {}) => {
+    if (!accessToken) {
+      setDraftQueueItems([]);
+      setActiveDraftOutputId(null);
+      setDraftQueueError(null);
+      setIsLoadingDraftQueue(false);
+      return [];
+    }
+    if (!silent) {
+      setIsLoadingDraftQueue(true);
+    }
+    setDraftQueueError(null);
+    try {
+      const payload = await getTrainerCoachQueue({
+        accessToken,
+        date: plannerDate,
+        limit: DRAFT_QUEUE_FETCH_LIMIT,
+      });
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      setDraftQueueItems(items);
+      setActiveDraftOutputId((previous) => {
+        const nextPreferred = typeof preferredOutputId !== 'undefined' ? preferredOutputId : previous;
+        return resolveDraftQueueSelection(items, nextPreferred, { allowNullSelection });
+      });
+      return items;
+    } catch (error) {
+      setDraftQueueError(buildTrainerRouteError(error, 'Unable to load draft queue.'));
+      return [];
+    } finally {
+      if (!silent) {
+        setIsLoadingDraftQueue(false);
+      }
+    }
+  }, [accessToken, plannerDate]);
+
+  const loadDraftReviewTrackerState = useCallback(async () => {
+    if (!accessToken) {
+      setDraftReviewTracker({
+        date_key: null,
+        daily_count: 0,
+        lifetime_count: 0,
+        pending_sync_events: [],
+        updated_at: null,
+      });
+      setIsLoadingDraftReviewTracker(false);
+      return;
+    }
+    setIsLoadingDraftReviewTracker(true);
+    try {
+      const snapshot = await loadDraftReviewTracker(draftReviewTrackerScopeId);
+      setDraftReviewTracker(snapshot);
+    } catch (_error) {
+      setDraftReviewTracker({
+        date_key: null,
+        daily_count: 0,
+        lifetime_count: 0,
+        pending_sync_events: [],
+        updated_at: null,
+      });
+    } finally {
+      setIsLoadingDraftReviewTracker(false);
+    }
+  }, [accessToken, draftReviewTrackerScopeId]);
+
   const loadClientDetailView = useCallback(async (clientId) => {
     if (!accessToken || !clientId) {
       return;
@@ -390,6 +619,19 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   useEffect(() => {
     loadCommandCenter();
   }, [loadCommandCenter]);
+
+  useEffect(() => {
+    loadDraftQueue();
+  }, [loadDraftQueue]);
+
+  useEffect(() => {
+    loadDraftReviewTrackerState();
+  }, [loadDraftReviewTrackerState]);
+
+  useEffect(() => {
+    setDraftReviewText(resolveDraftReviewOutputSeed(activeDraft));
+    setDraftReviewMutationError(null);
+  }, [activeDraft?.output_id]);
 
   useEffect(() => {
     const nextDrafts = {};
@@ -754,6 +996,106 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     } finally {
       setIsSavingDetailSchedule(false);
     }
+  };
+
+  const handleRefreshCommandCenter = async ({ refreshTalkingPoints = false } = {}) => {
+    await Promise.all([
+      loadCommandCenter({ refreshTalkingPoints }),
+      loadDraftQueue({ silent: refreshTalkingPoints }),
+    ]);
+  };
+
+  const runDraftReviewMutation = async (actionType) => {
+    if (!accessToken || !activeDraft?.output_id || isMutatingDraftReview) {
+      return;
+    }
+
+    const outputId = activeDraft.output_id;
+    const editedOutputText = draftReviewText.trim();
+    if (!editedOutputText) {
+      setDraftReviewMutationError('Add review text before continuing.');
+      return;
+    }
+
+    const editedOutputJson = {
+      ...(activeDraft.output_json && typeof activeDraft.output_json === 'object'
+        ? activeDraft.output_json
+        : {}),
+      summary: editedOutputText,
+    };
+    const nextQueueState = buildNextDraftReviewState(draftQueueItems, outputId, actionType);
+
+    setIsMutatingDraftReview(true);
+    setDraftReviewMutationError(null);
+    setDraftReviewMutationSuccess(null);
+
+    try {
+      if (actionType === DRAFT_REVIEW_ACTION_TYPE.SAVE_EDIT) {
+        await editTrainerCoachQueueItem({
+          accessToken,
+          outputId,
+          editedOutputText,
+          editedOutputJson,
+          notes: 'Saved from Clients Draft Review flow.',
+        });
+      } else if (actionType === DRAFT_REVIEW_ACTION_TYPE.APPROVE) {
+        await approveTrainerCoachQueueItem({
+          accessToken,
+          outputId,
+          editedOutputText,
+          editedOutputJson,
+          applyBundle: {},
+          idempotencyKey: buildDraftReviewIdempotencyKey('clients-approve'),
+        });
+      } else {
+        await rejectTrainerCoachQueueItem({
+          accessToken,
+          outputId,
+          reason: 'Rejected from Clients Draft Review flow.',
+          editedOutputText,
+          editedOutputJson,
+        });
+      }
+
+      setDraftQueueItems(nextQueueState.optimisticItems);
+      setActiveDraftOutputId(nextQueueState.nextOutputId);
+
+      const trackerSnapshot = await recordDraftReviewAction(
+        draftReviewTrackerScopeId,
+        {
+          actionType,
+          outputId,
+        },
+      );
+      setDraftReviewTracker(trackerSnapshot);
+
+      if (actionType === DRAFT_REVIEW_ACTION_TYPE.SAVE_EDIT) {
+        setDraftReviewMutationSuccess('Edit saved. Moving to the next draft.');
+      } else if (actionType === DRAFT_REVIEW_ACTION_TYPE.APPROVE) {
+        setDraftReviewMutationSuccess('Draft approved. Moving to the next draft.');
+      } else {
+        setDraftReviewMutationSuccess('Draft rejected. Moving to the next draft.');
+      }
+
+      await loadDraftQueue({
+        silent: true,
+        preferredOutputId: nextQueueState.nextOutputId,
+        allowNullSelection: nextQueueState.allowNullSelection,
+      });
+    } catch (error) {
+      setDraftReviewMutationError(error?.message || 'Unable to process draft review action.');
+      await loadDraftQueue({ silent: true });
+    } finally {
+      setIsMutatingDraftReview(false);
+    }
+  };
+
+  const handleStartDraftQueueFromTop = () => {
+    if (!Array.isArray(draftQueueItems) || draftQueueItems.length === 0) {
+      setActiveDraftOutputId(null);
+      return;
+    }
+    setActiveDraftOutputId(draftQueueItems[0].output_id);
   };
 
   const totals = commandCenterPayload?.totals || {
@@ -1198,17 +1540,168 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
             <ModeButton
               title="Refresh"
               variant="secondary"
-              onPress={() => loadCommandCenter()}
+              onPress={() => handleRefreshCommandCenter()}
               style={styles.summaryActionButton}
             />
             <ModeButton
               title={isRefreshingTalkingPoints ? 'Refreshing...' : 'Refresh Talking Points'}
               variant="ghost"
               disabled={isRefreshingTalkingPoints}
-              onPress={() => loadCommandCenter({ refreshTalkingPoints: true })}
+              onPress={() => handleRefreshCommandCenter({ refreshTalkingPoints: true })}
               style={styles.summaryActionButton}
             />
           </View>
+        </ModeCard>
+
+        <ModeCard variant="surface" testID="trainer-clients-draft-review-card" style={styles.draftReviewCard}>
+          <View style={styles.draftReviewHeader}>
+            <View>
+              <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Draft Review Queue</ModeText>
+              <ModeText variant="bodySm">{draftQueueCount} pending</ModeText>
+            </View>
+            <View style={styles.draftReviewTrackerSummary}>
+              <ModeText
+                testID="trainer-clients-draft-review-daily-count"
+                variant="bodySm"
+                tone="accent"
+                style={styles.draftReviewTrackerValue}
+              >
+                {draftReviewDailyCount} / {DRAFT_REVIEW_DAILY_GOAL} today
+              </ModeText>
+              <ModeText
+                testID="trainer-clients-draft-review-lifetime-count"
+                variant="caption"
+                tone="secondary"
+              >
+                {draftReviewLifetimeCount} total
+              </ModeText>
+            </View>
+          </View>
+
+          <ProgressBar
+            testID="trainer-clients-draft-review-progress"
+            progress={draftReviewDailyProgress}
+            trackColor={theme.colors.surface.base}
+            fillColor={theme.colors.accent.primary}
+            style={styles.draftReviewProgress}
+          />
+
+          {isLoadingDraftReviewTracker ? (
+            <ModeText variant="caption" tone="secondary">Loading review tracker...</ModeText>
+          ) : null}
+
+          {isLoadingDraftQueue ? (
+            <View style={styles.draftReviewLoadingRow}>
+              <ActivityIndicator size="small" color={theme.colors.accent.primary} />
+              <ModeText variant="caption" tone="secondary">Loading draft queue...</ModeText>
+            </View>
+          ) : null}
+
+          {!isLoadingDraftQueue && draftQueueError ? (
+            <View style={styles.draftReviewMessageBlock}>
+              <ModeText variant="bodySm" tone="error">{draftQueueError.message}</ModeText>
+              <ModeButton
+                title="Retry Queue"
+                size="sm"
+                variant="secondary"
+                onPress={() => loadDraftQueue()}
+              />
+            </View>
+          ) : null}
+
+          {!isLoadingDraftQueue && !draftQueueError && draftQueueCount === 0 ? (
+            <ModeText variant="bodySm" tone="secondary">No pending drafts right now.</ModeText>
+          ) : null}
+
+          {!isLoadingDraftQueue && !draftQueueError && draftQueueCount > 0 && !activeDraft ? (
+            <View style={styles.draftReviewMessageBlock}>
+              <ModeText variant="bodySm" tone="secondary">
+                Great pass complete. Start from top to run another review loop.
+              </ModeText>
+              <ModeButton
+                testID="trainer-clients-draft-review-start-over"
+                title="Start From Top"
+                size="sm"
+                variant="secondary"
+                onPress={handleStartDraftQueueFromTop}
+              />
+            </View>
+          ) : null}
+
+          {!isLoadingDraftQueue && !draftQueueError && activeDraft ? (
+            <View style={styles.draftReviewBody}>
+              <ModeText
+                testID="trainer-clients-draft-review-active-title"
+                variant="bodySm"
+                style={styles.draftReviewDraftTitle}
+              >
+                {activeDraft.headline || activeDraft.summary || 'Untitled draft'}
+              </ModeText>
+              <ModeText variant="caption" tone="secondary">
+                {activeDraft.client_name || 'Client'} · {activeDraft.priority_tier || 'normal'} priority · {activeDraft.action_type || activeDraft.source_type}
+              </ModeText>
+              {activeDraftPosition ? (
+                <ModeText variant="caption" tone="tertiary">
+                  Reviewing {activeDraftPosition} of {draftQueueCount}
+                </ModeText>
+              ) : null}
+
+              <ModeInput
+                testID="trainer-clients-draft-review-editor"
+                value={draftReviewText}
+                onChangeText={setDraftReviewText}
+                placeholder="Edit draft summary before applying"
+                multiline
+                style={styles.draftReviewInput}
+              />
+
+              <View style={styles.draftReviewActionRow}>
+                <ModeButton
+                  testID="trainer-clients-draft-review-save-next"
+                  title={isMutatingDraftReview ? 'Working...' : 'Save & Next'}
+                  size="sm"
+                  variant="secondary"
+                  disabled={isMutatingDraftReview}
+                  onPress={() => runDraftReviewMutation(DRAFT_REVIEW_ACTION_TYPE.SAVE_EDIT)}
+                  style={styles.draftReviewActionButton}
+                />
+                <ModeButton
+                  testID="trainer-clients-draft-review-approve-next"
+                  title={isMutatingDraftReview ? 'Working...' : 'Approve & Next'}
+                  size="sm"
+                  disabled={isMutatingDraftReview}
+                  onPress={() => runDraftReviewMutation(DRAFT_REVIEW_ACTION_TYPE.APPROVE)}
+                  style={styles.draftReviewActionButton}
+                />
+              </View>
+              <View style={styles.draftReviewActionRow}>
+                <ModeButton
+                  testID="trainer-clients-draft-review-reject-next"
+                  title={isMutatingDraftReview ? 'Working...' : 'Reject & Next'}
+                  size="sm"
+                  variant="destructive"
+                  disabled={isMutatingDraftReview}
+                  onPress={() => runDraftReviewMutation(DRAFT_REVIEW_ACTION_TYPE.REJECT)}
+                  style={styles.draftReviewActionButton}
+                />
+                <ModeButton
+                  title="Refresh Queue"
+                  size="sm"
+                  variant="ghost"
+                  disabled={isMutatingDraftReview}
+                  onPress={() => loadDraftQueue()}
+                  style={styles.draftReviewActionButton}
+                />
+              </View>
+            </View>
+          ) : null}
+
+          {draftReviewMutationError ? (
+            <ModeText variant="caption" tone="error">{draftReviewMutationError}</ModeText>
+          ) : null}
+          {draftReviewMutationSuccess ? (
+            <ModeText variant="caption" tone="secondary">{draftReviewMutationSuccess}</ModeText>
+          ) : null}
         </ModeCard>
 
         <View style={styles.filterRow}>
@@ -1289,7 +1782,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
             <ModeButton
               title="Retry"
               variant="secondary"
-              onPress={() => loadCommandCenter()}
+              onPress={() => handleRefreshCommandCenter()}
               style={styles.actionButton}
             />
           </ModeCard>
@@ -1483,6 +1976,51 @@ const styles = StyleSheet.create({
     marginTop: theme.spacing[2],
   },
   summaryActionButton: {
+    flex: 1,
+  },
+  draftReviewCard: {
+    gap: theme.spacing[1],
+  },
+  draftReviewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: theme.spacing[2],
+  },
+  draftReviewTrackerSummary: {
+    alignItems: 'flex-end',
+    gap: 2,
+  },
+  draftReviewTrackerValue: {
+    fontWeight: '700',
+  },
+  draftReviewProgress: {
+    marginTop: theme.spacing[1] - 2,
+    marginBottom: theme.spacing[1] - 2,
+  },
+  draftReviewLoadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing[1],
+  },
+  draftReviewMessageBlock: {
+    gap: theme.spacing[1],
+  },
+  draftReviewBody: {
+    marginTop: theme.spacing[1] - 2,
+    gap: theme.spacing[1],
+  },
+  draftReviewDraftTitle: {
+    fontWeight: '700',
+  },
+  draftReviewInput: {
+    minHeight: 96,
+  },
+  draftReviewActionRow: {
+    flexDirection: 'row',
+    gap: theme.spacing[1],
+  },
+  draftReviewActionButton: {
     flex: 1,
   },
   filterRow: {

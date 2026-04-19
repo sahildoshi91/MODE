@@ -15,7 +15,6 @@ const COMMANDS = [
   '/program',
   '/memory',
   '/flag',
-  '/drafts',
   '/client',
   '/rules',
 ];

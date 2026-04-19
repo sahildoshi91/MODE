@@ -670,11 +670,9 @@ export function useTrainerCoachWorkspace({
     }
 
     if (command === '/drafts') {
-      const firstDraft = state.queue[0] || null;
-      openPanel('draft_review', firstDraft ? { outputId: firstDraft.output_id } : null);
       appendStream(buildStreamItem({
         kind: 'system_confirmation',
-        text: firstDraft ? 'Draft Review panel opened.' : 'Draft queue is empty.',
+        text: 'Draft review now lives in the Clients tab under Command Center.',
         visibility: 'system',
         status: 'confirmed',
         severity: 'info',

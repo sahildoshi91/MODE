@@ -1,6 +1,6 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { FlatList, Platform } from 'react-native';
+import { FlatList, Platform, StyleSheet } from 'react-native';
 
 jest.mock('../CoachStreamItem', () => {
   const React = require('react');
@@ -20,6 +20,31 @@ describe('CoachStreamList', () => {
     };
   }
 
+  function markListReady(tree, {
+    layoutHeight = 500,
+    contentHeight = 1200,
+    offset = 700,
+  } = {}) {
+    const list = tree.root.findByType(FlatList);
+    act(() => {
+      list.props.onLayout?.({
+        nativeEvent: {
+          layout: { height: layoutHeight },
+        },
+      });
+      list.props.onContentSizeChange?.(0, contentHeight);
+      if (Number.isFinite(offset)) {
+        list.props.onScroll?.({
+          nativeEvent: {
+            contentOffset: { y: offset },
+            contentSize: { height: contentHeight },
+            layoutMeasurement: { height: layoutHeight },
+          },
+        });
+      }
+    });
+  }
+
   it('keeps keyboard-dismiss props enabled even when stream is empty', async () => {
     let tree;
     await act(async () => {
@@ -29,7 +54,7 @@ describe('CoachStreamList', () => {
     });
 
     const list = tree.root.findByType(FlatList);
-    expect(list.props.keyboardShouldPersistTaps).toBe('never');
+    expect(list.props.keyboardShouldPersistTaps).toBe('handled');
     expect(list.props.keyboardDismissMode).toBe(Platform.OS === 'ios' ? 'interactive' : 'on-drag');
     const emptyLabelNodes = tree.root.findAll(
       (node) => node?.props?.children === 'No coach activity yet. Start with a prompt or slash command.',
@@ -81,10 +106,37 @@ describe('CoachStreamList', () => {
         />,
       );
     });
+    expect(listHandle.scrollToEnd).not.toHaveBeenCalled();
 
-    expect(listHandle.scrollToIndex).toHaveBeenCalledWith(
-      expect.objectContaining({ index: 0 }),
-    );
+    markListReady(tree);
+
+    expect(listHandle.scrollToEnd).toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('keeps content hidden until initial bottom snap is settled', async () => {
+    const listHandle = buildListHandle();
+    const listRef = { current: listHandle };
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachStreamList
+          streamItems={[{ id: 'item-1', kind: 'system_confirmation', text: 'hello' }]}
+          listRef={listRef}
+        />,
+      );
+    });
+
+    let list = tree.root.findByType(FlatList);
+    expect(StyleSheet.flatten(list.props.style)?.opacity).toBe(0);
+
+    markListReady(tree);
+
+    list = tree.root.findByType(FlatList);
+    expect(StyleSheet.flatten(list.props.style)?.opacity).toBeUndefined();
 
     await act(async () => {
       tree.unmount();
@@ -103,6 +155,7 @@ describe('CoachStreamList', () => {
         />,
       );
     });
+    markListReady(tree);
     listHandle.scrollToEnd.mockClear();
 
     await act(async () => {
@@ -117,9 +170,7 @@ describe('CoachStreamList', () => {
       );
     });
 
-    expect(listHandle.scrollToIndex).toHaveBeenCalledWith(
-      expect.objectContaining({ index: 1 }),
-    );
+    expect(listHandle.scrollToEnd).toHaveBeenCalled();
 
     await act(async () => {
       tree.unmount();
@@ -152,10 +203,86 @@ describe('CoachStreamList', () => {
       );
     });
 
-    expect(listHandle.scrollToIndex).toHaveBeenCalled();
+    expect(listHandle.scrollToEnd).toHaveBeenCalled();
 
     await act(async () => {
       tree.unmount();
     });
   });
+
+  it('re-scrolls to latest when contentBottomPadding grows while near bottom', async () => {
+    const listHandle = buildListHandle();
+    const listRef = { current: listHandle };
+    const streamItems = [{ id: 'item-1', kind: 'system_confirmation', text: 'one' }];
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachStreamList
+          streamItems={streamItems}
+          listRef={listRef}
+          contentBottomPadding={0}
+        />,
+      );
+    });
+    markListReady(tree);
+    listHandle.scrollToIndex.mockClear();
+    listHandle.scrollToEnd.mockClear();
+    listHandle.scrollToOffset.mockClear();
+
+    await act(async () => {
+      tree.update(
+        <CoachStreamList
+          streamItems={streamItems}
+          listRef={listRef}
+          contentBottomPadding={64}
+        />,
+      );
+    });
+
+    expect(listHandle.scrollToEnd).toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('restores a prior viewport offset without forcing a jump to latest', async () => {
+    const listHandle = buildListHandle();
+    const listRef = { current: listHandle };
+    const streamItems = [{ id: 'item-1', kind: 'system_confirmation', text: 'one' }];
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachStreamList
+          streamItems={streamItems}
+          listRef={listRef}
+          restoreScrollOffset={null}
+          restoreScrollSignal={0}
+        />,
+      );
+    });
+    listHandle.scrollToEnd.mockClear();
+    listHandle.scrollToOffset.mockClear();
+
+    await act(async () => {
+      tree.update(
+        <CoachStreamList
+          streamItems={streamItems}
+          listRef={listRef}
+          restoreScrollOffset={180}
+          restoreScrollSignal={1}
+        />,
+      );
+    });
+
+    expect(listHandle.scrollToOffset).toHaveBeenCalledWith(
+      expect.objectContaining({ offset: 180 }),
+    );
+    expect(listHandle.scrollToEnd).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
 });

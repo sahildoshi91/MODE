@@ -54,7 +54,7 @@ function styleByKind(kind) {
   };
 }
 
-export default function CoachStreamItem({ item }) {
+function CoachStreamItem({ item }) {
   const kind = item?.kind || 'system_confirmation';
   const style = styleByKind(kind);
   return (
@@ -68,6 +68,26 @@ export default function CoachStreamItem({ item }) {
     </View>
   );
 }
+
+function areEqualCoachStreamItemProps(previousProps, nextProps) {
+  const previousItem = previousProps?.item || {};
+  const nextItem = nextProps?.item || {};
+  if (previousItem === nextItem) {
+    return true;
+  }
+  return (
+    previousItem.id === nextItem.id
+    && previousItem.kind === nextItem.kind
+    && previousItem.text === nextItem.text
+    && previousItem.status === nextItem.status
+    && previousItem.severity === nextItem.severity
+    && previousItem.visibility === nextItem.visibility
+  );
+}
+
+const MemoizedCoachStreamItem = React.memo(CoachStreamItem, areEqualCoachStreamItemProps);
+
+export default MemoizedCoachStreamItem;
 
 const styles = StyleSheet.create({
   row: {
@@ -105,4 +125,3 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.feedback.successBorder,
   },
 });
-
