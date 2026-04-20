@@ -4,15 +4,16 @@ import { StyleSheet, View } from 'react-native';
 import { ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { AI_RESPONSE_RENDERING_V1_ENABLED } from '../../../config/featureFlags';
+import { resolveAssistantDisplayName } from '../../messaging';
 import AIResponseRenderer from '../../chat/components/AIResponseRenderer';
 import { parseAIResponseText, stripEmojiForDisplay } from '../../chat/utils/aiResponseParser';
 
-function resolveKindLabel(kind) {
+function resolveKindLabel(kind, assistantDisplayName) {
   if (kind === 'trainer_input') {
     return 'Trainer';
   }
   if (kind === 'internal_ai_private') {
-    return 'Internal AI';
+    return resolveAssistantDisplayName(assistantDisplayName);
   }
   if (kind === 'system_confirmation') {
     return 'System';
@@ -69,7 +70,7 @@ function shouldRenderStructuredStreamItem(kind, status) {
   return kind === 'internal_ai_private' || kind === 'client_message_draft';
 }
 
-function CoachStreamItem({ item }) {
+function CoachStreamItem({ item, assistantDisplayName }) {
   const kind = item?.kind || 'system_confirmation';
   const style = styleByKind(kind);
   const streamStatus = typeof item?.status === 'string' ? item.status : 'confirmed';
@@ -91,7 +92,7 @@ function CoachStreamItem({ item }) {
   return (
     <View style={styles.row}>
       <ModeText variant="caption" tone="tertiary" style={styles.label}>
-        {resolveKindLabel(kind)}
+        {resolveKindLabel(kind, assistantDisplayName)}
       </ModeText>
       <View style={[styles.bubble, style.container]}>
         {hasStructuredBlocks ? (
@@ -112,11 +113,14 @@ function CoachStreamItem({ item }) {
 function areEqualCoachStreamItemProps(previousProps, nextProps) {
   const previousItem = previousProps?.item || {};
   const nextItem = nextProps?.item || {};
+  const previousAssistantDisplayName = previousProps?.assistantDisplayName || null;
+  const nextAssistantDisplayName = nextProps?.assistantDisplayName || null;
   if (previousItem === nextItem) {
-    return true;
+    return previousAssistantDisplayName === nextAssistantDisplayName;
   }
   return (
-    previousItem.id === nextItem.id
+    previousAssistantDisplayName === nextAssistantDisplayName
+    && previousItem.id === nextItem.id
     && previousItem.kind === nextItem.kind
     && previousItem.text === nextItem.text
     && previousItem.status === nextItem.status
@@ -131,18 +135,16 @@ export default MemoizedCoachStreamItem;
 
 const styles = StyleSheet.create({
   row: {
-    gap: 4,
+    gap: 3,
   },
   label: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
-    fontWeight: '700',
+    fontWeight: '600',
   },
   bubble: {
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1] + 2,
+    paddingVertical: theme.spacing[1] + 1,
   },
   trainerInput: {
     backgroundColor: theme.colors.nav.activeBg,

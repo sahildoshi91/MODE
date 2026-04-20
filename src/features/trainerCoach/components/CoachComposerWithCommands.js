@@ -11,6 +11,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 
 import { ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { resolveAssistantDisplayName } from '../../messaging';
 
 const COMMANDS = [
   '/program',
@@ -25,9 +26,14 @@ export default function CoachComposerWithCommands({
   onChangeText,
   onSubmit,
   onCommandSelect,
+  assistantDisplayName,
   disabled = false,
   isSubmitting = false,
 }) {
+  const resolvedAssistantDisplayName = useMemo(
+    () => resolveAssistantDisplayName(assistantDisplayName),
+    [assistantDisplayName],
+  );
   const normalized = String(value || '').trim().toLowerCase();
   const commandSuggestions = useMemo(() => {
     if (!normalized.startsWith('/')) {
@@ -114,7 +120,7 @@ export default function CoachComposerWithCommands({
         <TextInput
           value={value}
           onChangeText={onChangeText}
-          placeholder="Ask coach or type / for commands"
+          placeholder={`Message ${resolvedAssistantDisplayName} or type / for commands`}
           placeholderTextColor={theme.colors.text.tertiary}
           style={styles.input}
           multiline

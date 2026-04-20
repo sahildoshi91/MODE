@@ -43,6 +43,7 @@ describe('trainerHomeApi schedule endpoints', () => {
       accessToken: 'trainer-token',
       defaultMeetingLocation: 'Main Gym',
       autoFillMeetingLocation: false,
+      assistantDisplayName: 'Atlas',
     });
 
     expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
@@ -63,6 +64,7 @@ describe('trainerHomeApi schedule endpoints', () => {
         body: JSON.stringify({
           default_meeting_location: 'Main Gym',
           auto_fill_meeting_location: false,
+          assistant_display_name: 'Atlas',
         }),
       }),
     );

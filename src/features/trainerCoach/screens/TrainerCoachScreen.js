@@ -17,6 +17,11 @@ import {
   SafeScreen,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import {
+  DEFAULT_ASSISTANT_DISPLAY_NAME,
+  resolveAssistantDisplayName,
+} from '../../messaging';
+import { getTrainerSettingsMe } from '../../profile/services/profileApi';
 import { buildTrainerRouteDiagnosticsBundle } from '../../trainerPlatform/utils/trainerRouteDiagnostics';
 import CoachComposerWithCommands from '../components/CoachComposerWithCommands';
 import CoachPanelHost from '../components/CoachPanelHost';
@@ -28,6 +33,7 @@ const SUMMARY_COLLAPSE_SCROLL_THRESHOLD = 72;
 const COPY_FEEDBACK_TIMEOUT_MS = 2200;
 const KEYBOARD_OPEN_COMPOSER_OFFSET = theme.spacing[1];
 const JUMP_TO_LATEST_BOTTOM_OFFSET = theme.spacing[2];
+const VISIBLE_CONVERSATION_KINDS = new Set(['trainer_input', 'internal_ai_private']);
 
 function asNonNegativeNumber(value, fallback = 0) {
   const parsed = Number(value);
@@ -38,19 +44,8 @@ function asNonNegativeNumber(value, fallback = 0) {
 }
 
 function shouldDisplayStreamItem(item) {
-  if (item?.kind !== 'system_confirmation') {
-    return true;
-  }
-  const severity = typeof item?.severity === 'string'
-    ? item.severity.trim().toLowerCase()
-    : 'info';
-  const status = typeof item?.status === 'string'
-    ? item.status.trim().toLowerCase()
-    : 'confirmed';
-  if (status === 'failed') {
-    return true;
-  }
-  return severity === 'warning' || severity === 'error';
+  const kind = typeof item?.kind === 'string' ? item.kind : '';
+  return VISIBLE_CONVERSATION_KINDS.has(kind);
 }
 
 export default function TrainerCoachScreen({
@@ -66,6 +61,7 @@ export default function TrainerCoachScreen({
   const [composerDockHeight, setComposerDockHeight] = useState(0);
   const [streamForceScrollSignal, setStreamForceScrollSignal] = useState(0);
   const [copyFeedback, setCopyFeedback] = useState(null);
+  const [assistantDisplayName, setAssistantDisplayName] = useState(DEFAULT_ASSISTANT_DISPLAY_NAME);
   const copyFeedbackTimerRef = useRef(null);
   const visibleStreamLengthRef = useRef(0);
   const latestScrollMetricsRef = useRef({
@@ -80,6 +76,7 @@ export default function TrainerCoachScreen({
   } = useTrainerCoachWorkspace({
     accessToken,
     trainerId,
+    assistantDisplayName,
   });
   const staleRouteError = state.errorDetails?.isStaleBackendRoute
     ? state.errorDetails
@@ -101,7 +98,7 @@ export default function TrainerCoachScreen({
 
   const helperLabel = useMemo(() => {
     if (isSendingMessage) {
-      return 'Sending...';
+      return `${assistantDisplayName} is reviewing...`;
     }
     if (state.sync.replaying) {
       return 'Replaying pending operations...';
@@ -110,7 +107,7 @@ export default function TrainerCoachScreen({
       return 'Pending changes will sync automatically when online.';
     }
     if (state.loading) {
-      return 'Loading Coach workspace...';
+      return `${assistantDisplayName} is syncing your workspace...`;
     }
     if (state.error && !staleRouteError) {
       return state.error;
@@ -123,7 +120,35 @@ export default function TrainerCoachScreen({
     state.loading,
     state.sync.replaying,
     staleRouteError,
+    assistantDisplayName,
   ]);
+
+  useEffect(() => {
+    let isActive = true;
+    if (!accessToken) {
+      setAssistantDisplayName(DEFAULT_ASSISTANT_DISPLAY_NAME);
+      return () => {
+        isActive = false;
+      };
+    }
+    getTrainerSettingsMe({ accessToken })
+      .then((payload) => {
+        if (!isActive) {
+          return;
+        }
+        setAssistantDisplayName(resolveAssistantDisplayName(payload?.assistant_display_name));
+      })
+      .catch(() => {
+        if (!isActive) {
+          return;
+        }
+        setAssistantDisplayName(DEFAULT_ASSISTANT_DISPLAY_NAME);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [accessToken]);
 
   const showCopyFeedback = useCallback((message) => {
     if (copyFeedbackTimerRef.current) {
@@ -254,7 +279,7 @@ export default function TrainerCoachScreen({
     >
       <HeaderBar
         title="Coach"
-        subtitle="Orchestrate, review, and apply coaching work"
+        subtitle={`Conversation with ${assistantDisplayName}`}
       />
       <KeyboardAvoidingView
         style={styles.keyboardWrap}
@@ -371,6 +396,7 @@ export default function TrainerCoachScreen({
             <View style={styles.streamViewport}>
               <CoachStreamList
                 streamItems={visibleStream}
+                assistantDisplayName={assistantDisplayName}
                 forceScrollSignal={streamForceScrollSignal}
                 contentBottomPadding={trainerStreamContentBottomPadding}
                 onScrollMetricsChange={(metrics) => {
@@ -437,6 +463,7 @@ export default function TrainerCoachScreen({
                     onChangeText={setComposerValue}
                     onSubmit={handleSubmitComposer}
                     onCommandSelect={handleCommandSelect}
+                    assistantDisplayName={assistantDisplayName}
                     disabled={state.loading || isSendingMessage}
                     isSubmitting={isSendingMessage}
                   />

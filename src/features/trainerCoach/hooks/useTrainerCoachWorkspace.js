@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 
-import { getAIProgressLabel } from '../../messaging';
+import { resolveAssistantDisplayName } from '../../messaging';
 import {
   executeTrainerAssistantAction,
   executeTrainerAssistantActionStream,
@@ -44,6 +44,21 @@ const INITIAL_STATE = {
   errorDetails: null,
   generatedAt: null,
 };
+
+function buildAssistantProgressLabel(stage, assistantDisplayName) {
+  const resolvedAssistantName = resolveAssistantDisplayName(assistantDisplayName);
+  const normalizedStage = String(stage || '').trim().toLowerCase();
+  if (normalizedStage === 'checking_context') {
+    return `${resolvedAssistantName} is checking context...`;
+  }
+  if (normalizedStage === 'preparing_response') {
+    return `${resolvedAssistantName} is thinking...`;
+  }
+  if (normalizedStage === 'finalizing_response') {
+    return `${resolvedAssistantName} is finalizing...`;
+  }
+  return `${resolvedAssistantName} is reviewing...`;
+}
 
 function buildStreamEventFromSystemRecord(event) {
   return {
@@ -422,6 +437,7 @@ function buildQueueItemFromAssistantResponse(responsePayload) {
 export function useTrainerCoachWorkspace({
   accessToken,
   trainerId,
+  assistantDisplayName,
 }) {
   const [state, dispatch] = useReducer(workspaceReducer, INITIAL_STATE);
   const didAutoReplayRef = useRef(false);
@@ -799,7 +815,7 @@ export function useTrainerCoachWorkspace({
     upsertStream(buildStreamItem({
       id: progressStreamId,
       kind: 'internal_ai_private',
-      text: getAIProgressLabel('reviewing_message'),
+      text: buildAssistantProgressLabel('reviewing_message', assistantDisplayName),
       visibility: 'trainer_private',
       status: 'pending',
       severity: 'info',
@@ -824,7 +840,7 @@ export function useTrainerCoachWorkspace({
               upsertStream(buildStreamItem({
                 id: progressStreamId,
                 kind: 'internal_ai_private',
-                text: getAIProgressLabel(stage),
+                text: buildAssistantProgressLabel(stage, assistantDisplayName),
                 visibility: 'trainer_private',
                 status: 'pending',
                 severity: 'info',
@@ -897,7 +913,7 @@ export function useTrainerCoachWorkspace({
       }));
       return false;
     }
-  }, [accessToken, appendStream, refreshWorkspace, routeSlashCommand, upsertStream]);
+  }, [accessToken, appendStream, assistantDisplayName, refreshWorkspace, routeSlashCommand, upsertStream]);
 
   const retryPendingOps = useCallback(async () => {
     if (!accessToken || state.sync.replaying || state.sync.pendingOps.length === 0) {

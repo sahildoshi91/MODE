@@ -19,6 +19,11 @@ import {
   getTrainerSettingsMe,
   patchTrainerSettingsMe,
 } from '../services/profileApi';
+import {
+  ASSISTANT_DISPLAY_NAME_MAX_LENGTH,
+  prepareAssistantDisplayNameForSave,
+  resolveAssistantDisplayName,
+} from '../../messaging';
 import { formatIsoWeekdaySummary } from '../../trainerClients/utils/scheduleResolver';
 
 function valueOrFallback(value, fallback = 'Not available') {
@@ -90,6 +95,7 @@ export default function ProfileScreen({
   const [trainerSettingsDraft, setTrainerSettingsDraft] = useState({
     defaultMeetingLocation: '',
     autoFillMeetingLocation: true,
+    assistantDisplayName: '',
   });
   const [trainerSettingsError, setTrainerSettingsError] = useState(null);
   const [trainerSettingsSuccess, setTrainerSettingsSuccess] = useState(null);
@@ -99,6 +105,13 @@ export default function ProfileScreen({
   const [trainerSchedule, setTrainerSchedule] = useState(null);
   const [trainerScheduleError, setTrainerScheduleError] = useState(null);
   const [isLoadingTrainerSchedule, setIsLoadingTrainerSchedule] = useState(false);
+  const resolvedAssistantPreviewName = useMemo(
+    () => resolveAssistantDisplayName(trainerSettingsDraft.assistantDisplayName),
+    [trainerSettingsDraft.assistantDisplayName],
+  );
+  const assistantDisplayNameCharacterCount = String(
+    trainerSettingsDraft.assistantDisplayName || '',
+  ).trim().length;
 
   useEffect(() => {
     let isMounted = true;
@@ -122,6 +135,7 @@ export default function ProfileScreen({
         setTrainerSettingsDraft({
           defaultMeetingLocation: String(payload?.default_meeting_location || ''),
           autoFillMeetingLocation: payload?.auto_fill_meeting_location !== false,
+          assistantDisplayName: String(payload?.assistant_display_name || ''),
         });
       })
       .catch((error) => {
@@ -187,15 +201,20 @@ export default function ProfileScreen({
     setTrainerSettingsSuccess(null);
     try {
       const trimmedLocation = String(trainerSettingsDraft.defaultMeetingLocation || '').trim();
+      const normalizedAssistantName = prepareAssistantDisplayNameForSave(
+        trainerSettingsDraft.assistantDisplayName,
+      );
       const payload = await patchTrainerSettingsMe({
         accessToken,
         defaultMeetingLocation: trimmedLocation || null,
         autoFillMeetingLocation: Boolean(trainerSettingsDraft.autoFillMeetingLocation),
+        assistantDisplayName: normalizedAssistantName,
       });
       setTrainerSettings(payload);
       setTrainerSettingsDraft({
         defaultMeetingLocation: String(payload?.default_meeting_location || ''),
         autoFillMeetingLocation: payload?.auto_fill_meeting_location !== false,
+        assistantDisplayName: String(payload?.assistant_display_name || ''),
       });
       setTrainerSettingsSuccess('Trainer defaults saved.');
     } catch (error) {
@@ -256,7 +275,7 @@ export default function ProfileScreen({
           <ModeCard variant="surface">
             <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Trainer Session Defaults</ModeText>
             <ModeText variant="bodySm" tone="secondary">
-              Set your default in-person location and auto-fill behavior for client schedules.
+              Set your default session behavior and assistant identity for your workspace.
             </ModeText>
 
             <ModeInput
@@ -268,6 +287,35 @@ export default function ProfileScreen({
               placeholder="Default meeting location (e.g., My Gym)"
               style={styles.settingsInput}
             />
+
+            <View style={styles.assistantNameSection}>
+              <ModeText variant="bodySm">Name your assistant</ModeText>
+              <ModeText variant="caption" tone="secondary">
+                This is what your internal coaching AI will be called in your workspace.
+              </ModeText>
+              <ModeInput
+                value={trainerSettingsDraft.assistantDisplayName}
+                onChangeText={(value) => setTrainerSettingsDraft((current) => ({
+                  ...current,
+                  assistantDisplayName: value,
+                }))}
+                placeholder="Coach AI"
+                maxLength={ASSISTANT_DISPLAY_NAME_MAX_LENGTH}
+                style={styles.assistantNameInput}
+              />
+              <View style={styles.assistantPreviewCard}>
+                <View style={styles.assistantPreviewRow}>
+                  <ModeText variant="caption" tone="tertiary">Trainer</ModeText>
+                  <ModeText variant="caption" tone="tertiary">{resolvedAssistantPreviewName}</ModeText>
+                </View>
+                <ModeText variant="caption" tone="secondary">
+                  Preview: Trainer and {resolvedAssistantPreviewName}
+                </ModeText>
+              </View>
+              <ModeText variant="caption" tone="tertiary">
+                {`${assistantDisplayNameCharacterCount}/${ASSISTANT_DISPLAY_NAME_MAX_LENGTH} characters`}
+              </ModeText>
+            </View>
 
             <SettingToggle
               label="Auto-fill for client sessions"
@@ -291,9 +339,14 @@ export default function ProfileScreen({
               <ModeText variant="caption" tone="secondary">Loading trainer defaults...</ModeText>
             ) : null}
             {trainerSettings ? (
-              <ModeText variant="caption" tone="secondary">
-                Current default: {valueOrFallback(trainerSettings.default_meeting_location, 'Not set')}
-              </ModeText>
+              <View style={styles.trainerDefaultsSummary}>
+                <ModeText variant="caption" tone="secondary">
+                  Current default location: {valueOrFallback(trainerSettings.default_meeting_location, 'Not set')}
+                </ModeText>
+                <ModeText variant="caption" tone="secondary">
+                  Assistant name: {resolveAssistantDisplayName(trainerSettings.assistant_display_name)}
+                </ModeText>
+              </View>
             ) : null}
             {trainerSettingsError ? (
               <ModeText variant="caption" tone="error">{trainerSettingsError}</ModeText>
@@ -427,6 +480,31 @@ const styles = StyleSheet.create({
   settingsAction: {
     marginTop: theme.spacing[1],
     marginBottom: theme.spacing[1],
+  },
+  assistantNameSection: {
+    marginBottom: theme.spacing[1],
+    gap: theme.spacing[1],
+  },
+  assistantNameInput: {
+    marginTop: 0,
+    marginBottom: 0,
+  },
+  assistantPreviewCard: {
+    borderRadius: theme.radii.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    gap: theme.spacing[1] - 4,
+  },
+  assistantPreviewRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  trainerDefaultsSummary: {
+    gap: theme.spacing[1] - 4,
   },
   trainerScheduleList: {
     marginTop: theme.spacing[1],

@@ -67,6 +67,7 @@ export async function patchTrainerSettingsMe({
   accessToken,
   defaultMeetingLocation,
   autoFillMeetingLocation,
+  assistantDisplayName,
 } = {}) {
   const body = {};
   if (typeof defaultMeetingLocation !== 'undefined') {
@@ -74,6 +75,9 @@ export async function patchTrainerSettingsMe({
   }
   if (typeof autoFillMeetingLocation !== 'undefined') {
     body.auto_fill_meeting_location = autoFillMeetingLocation;
+  }
+  if (typeof assistantDisplayName !== 'undefined') {
+    body.assistant_display_name = assistantDisplayName;
   }
   return requestProfileApi('/api/v1/trainer-settings/me', {
     accessToken,

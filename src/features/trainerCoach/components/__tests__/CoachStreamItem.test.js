@@ -4,11 +4,14 @@ import { StyleSheet, Text } from 'react-native';
 
 import CoachStreamItem from '../CoachStreamItem';
 
-async function expectLabelForKind(kind, label) {
+async function expectLabelForKind(kind, label, assistantDisplayName = null) {
   let tree;
   await act(async () => {
     tree = renderer.create(
-      <CoachStreamItem item={{ kind, text: 'Sample text' }} />,
+      <CoachStreamItem
+        item={{ kind, text: 'Sample text' }}
+        assistantDisplayName={assistantDisplayName}
+      />,
     );
   });
   const labelNodes = tree.root.findAll(
@@ -22,7 +25,7 @@ async function expectLabelForKind(kind, label) {
 
 describe('CoachStreamItem', () => {
   it('renders non-ambiguous labels for private/system/public message kinds', async () => {
-    await expectLabelForKind('internal_ai_private', 'Internal AI');
+    await expectLabelForKind('internal_ai_private', 'Atlas', 'Atlas');
     await expectLabelForKind('system_confirmation', 'System');
     await expectLabelForKind('client_message_draft', 'Client Draft');
     await expectLabelForKind('client_message_sent', 'Client Sent');

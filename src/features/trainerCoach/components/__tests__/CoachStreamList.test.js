@@ -57,7 +57,28 @@ describe('CoachStreamList', () => {
     expect(list.props.keyboardShouldPersistTaps).toBe('handled');
     expect(list.props.keyboardDismissMode).toBe(Platform.OS === 'ios' ? 'interactive' : 'on-drag');
     const emptyLabelNodes = tree.root.findAll(
-      (node) => node?.props?.children === 'No coach activity yet. Start with a prompt or slash command.',
+      (node) => node?.props?.children === 'No conversation yet. Message Coach AI to get started.',
+    );
+    expect(emptyLabelNodes.length).toBeGreaterThan(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('uses the resolved assistant display name in empty-state guidance copy', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachStreamList
+          streamItems={[]}
+          assistantDisplayName="Atlas"
+        />,
+      );
+    });
+
+    const emptyLabelNodes = tree.root.findAll(
+      (node) => node?.props?.children === 'No conversation yet. Message Atlas to get started.',
     );
     expect(emptyLabelNodes.length).toBeGreaterThan(0);
 

@@ -4,6 +4,7 @@ import { Keyboard, KeyboardAvoidingView, Platform, StyleSheet } from 'react-nati
 
 const mockUseTrainerCoachWorkspace = jest.fn();
 const mockSetStringAsync = jest.fn();
+const mockGetTrainerSettingsMe = jest.fn();
 
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react');
@@ -20,6 +21,10 @@ jest.mock('../../hooks/useTrainerCoachWorkspace', () => ({
 
 jest.mock('expo-clipboard', () => ({
   setStringAsync: (...args) => mockSetStringAsync(...args),
+}));
+
+jest.mock('../../../profile/services/profileApi', () => ({
+  getTrainerSettingsMe: (...args) => mockGetTrainerSettingsMe(...args),
 }));
 
 jest.mock('../../components/CoachComposerWithCommands', () => {
@@ -119,6 +124,13 @@ function setComposerDockHeight(tree, height) {
   });
 }
 
+async function flushEffects() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
 describe('TrainerCoachScreen', () => {
   const openEventName = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
   const closeEventName = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
@@ -137,6 +149,10 @@ describe('TrainerCoachScreen', () => {
       };
     });
     mockSetStringAsync.mockResolvedValue(undefined);
+    mockGetTrainerSettingsMe.mockResolvedValue({
+      trainer_id: 'trainer-1',
+      assistant_display_name: null,
+    });
   });
 
   afterEach(() => {
@@ -311,6 +327,47 @@ describe('TrainerCoachScreen', () => {
     });
   });
 
+  it('passes resolved assistant display name into trainer-facing stream and composer surfaces', async () => {
+    mockGetTrainerSettingsMe.mockResolvedValueOnce({
+      trainer_id: 'trainer-1',
+      assistant_display_name: 'Atlas',
+    });
+    mockUseTrainerCoachWorkspace.mockReturnValue(buildWorkspaceSnapshot({
+      state: {
+        ...buildWorkspaceSnapshot().state,
+        stream: [
+          {
+            id: 'assistant-name-test',
+            kind: 'internal_ai_private',
+            text: 'Ready when you are.',
+            status: 'confirmed',
+          },
+        ],
+      },
+    }));
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          bottomInset={12}
+        />,
+      );
+    });
+    await flushEffects();
+
+    const streamList = tree.root.findByType('MockCoachStreamList');
+    const composer = tree.root.findByType('MockCoachComposerWithCommands');
+    expect(streamList.props.assistantDisplayName).toBe('Atlas');
+    expect(composer.props.assistantDisplayName).toBe('Atlas');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('filters routine system confirmations out of the visible coach stream', async () => {
     const snapshot = buildWorkspaceSnapshot({
       state: {
@@ -358,6 +415,13 @@ describe('TrainerCoachScreen', () => {
             severity: 'info',
             status: 'confirmed',
           },
+          {
+            id: 'trainer-input',
+            kind: 'trainer_input',
+            text: 'Need a variation for Tuesday.',
+            severity: 'info',
+            status: 'confirmed',
+          },
         ],
       },
     });
@@ -376,10 +440,8 @@ describe('TrainerCoachScreen', () => {
 
     const streamList = tree.root.findByType('MockCoachStreamList');
     expect(streamList.props.streamItems.map((item) => item.id)).toEqual([
-      'system-warning',
-      'system-error',
-      'system-failed',
       'trainer-private',
+      'trainer-input',
     ]);
 
     await act(async () => {
@@ -393,10 +455,10 @@ describe('TrainerCoachScreen', () => {
         ...buildWorkspaceSnapshot().state,
         stream: [
           {
-            id: 'system-warning',
-            kind: 'system_confirmation',
-            text: 'Important warning',
-            severity: 'warning',
+            id: 'assistant-1',
+            kind: 'internal_ai_private',
+            text: 'Draft update ready.',
+            severity: 'info',
             status: 'confirmed',
           },
         ],
@@ -453,10 +515,10 @@ describe('TrainerCoachScreen', () => {
         ...buildWorkspaceSnapshot().state,
         stream: [
           {
-            id: 'system-warning',
-            kind: 'system_confirmation',
-            text: 'Important warning',
-            severity: 'warning',
+            id: 'assistant-layout-1',
+            kind: 'internal_ai_private',
+            text: 'Draft update ready.',
+            severity: 'info',
             status: 'confirmed',
           },
         ],
@@ -492,10 +554,10 @@ describe('TrainerCoachScreen', () => {
         ...buildWorkspaceSnapshot().state,
         stream: [
           {
-            id: 'system-warning',
-            kind: 'system_confirmation',
-            text: 'Important warning',
-            severity: 'warning',
+            id: 'assistant-layout-2',
+            kind: 'internal_ai_private',
+            text: 'Draft update ready.',
+            severity: 'info',
             status: 'confirmed',
           },
         ],
@@ -552,10 +614,10 @@ describe('TrainerCoachScreen', () => {
         ...buildWorkspaceSnapshot().state,
         stream: [
           {
-            id: 'system-warning',
-            kind: 'system_confirmation',
-            text: 'Important warning',
-            severity: 'warning',
+            id: 'assistant-reentry',
+            kind: 'internal_ai_private',
+            text: 'Draft update ready.',
+            severity: 'info',
             status: 'confirmed',
           },
         ],
@@ -617,10 +679,10 @@ describe('TrainerCoachScreen', () => {
         ...buildWorkspaceSnapshot().state,
         stream: [
           {
-            id: 'system-warning',
-            kind: 'system_confirmation',
-            text: 'Important warning',
-            severity: 'warning',
+            id: 'assistant-keyboard',
+            kind: 'internal_ai_private',
+            text: 'Draft update ready.',
+            severity: 'info',
             status: 'confirmed',
           },
         ],

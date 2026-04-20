@@ -14,7 +14,7 @@ class TrainerSettingsRepository:
         response = (
             self.supabase
             .table("trainers")
-            .select("id, default_meeting_location, auto_fill_meeting_location")
+            .select("id, default_meeting_location, auto_fill_meeting_location, assistant_display_name")
             .eq("id", trainer_id)
             .limit(1)
             .execute()
@@ -34,4 +34,3 @@ class TrainerSettingsRepository:
             .execute()
         )
         return response.data[0] if response.data else None
-

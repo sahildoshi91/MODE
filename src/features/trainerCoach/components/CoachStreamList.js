@@ -16,6 +16,7 @@ import {
 
 import { ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { resolveAssistantDisplayName } from '../../messaging';
 import CoachStreamItem from './CoachStreamItem';
 
 const NEAR_BOTTOM_THRESHOLD_PX = 120;
@@ -32,6 +33,7 @@ function asNonNegativeNumber(value, fallback = 0) {
 
 export default function CoachStreamList({
   streamItems,
+  assistantDisplayName,
   onScrollDepthChange,
   onScrollMetricsChange,
   onNearBottomChange,
@@ -47,6 +49,10 @@ export default function CoachStreamList({
     [streamItems],
   );
   const normalizedContentBottomPadding = asNonNegativeNumber(contentBottomPadding, 0);
+  const resolvedAssistantDisplayName = useMemo(
+    () => resolveAssistantDisplayName(assistantDisplayName),
+    [assistantDisplayName],
+  );
   const internalListRef = useRef(null);
   const didInitialAutoScrollRef = useRef(false);
   const suppressNextAutoScrollRef = useRef(false);
@@ -137,8 +143,13 @@ export default function CoachStreamList({
   }, [onNearBottomChange, onScrollMetricsChange]);
   const keyExtractor = useCallback((item) => item.id, []);
   const renderItem = useCallback(
-    ({ item }) => <CoachStreamItem item={item} />,
-    [],
+    ({ item }) => (
+      <CoachStreamItem
+        item={item}
+        assistantDisplayName={resolvedAssistantDisplayName}
+      />
+    ),
+    [resolvedAssistantDisplayName],
   );
 
   const updateScrollMetrics = useCallback((partial = {}) => {
@@ -385,7 +396,7 @@ export default function CoachStreamList({
         ListEmptyComponent={(
           <View style={styles.emptyState}>
             <ModeText variant="caption" tone="secondary">
-              No coach activity yet. Start with a prompt or slash command.
+              {`No conversation yet. Message ${resolvedAssistantDisplayName} to get started.`}
             </ModeText>
           </View>
         )}
@@ -421,7 +432,7 @@ const styles = StyleSheet.create({
     opacity: 0,
   },
   listContent: {
-    gap: theme.spacing[2],
+    gap: theme.spacing[1] + 2,
   },
   emptyContent: {
     flexGrow: 1,
