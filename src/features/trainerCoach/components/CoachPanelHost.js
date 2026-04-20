@@ -17,6 +17,12 @@ import {
   ModeText,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import DraftReviewStructuredCard from '../../draftReview/components/DraftReviewStructuredCard';
+import {
+  buildRegenerationLaunchContext,
+  rebuildJSON,
+  transformPlan,
+} from '../../draftReview/domain/draftReviewModel';
 import {
   archiveTrainerRule,
   listTrainerRules,
@@ -78,27 +84,23 @@ function PlaceholderPanel({ title, detail }) {
 
 function DraftReviewPanel({
   draft,
+  onOpenTrainerCoach,
   onApprove,
   onEdit,
   onReject,
   onClose,
 }) {
-  const [editedText, setEditedText] = useState('');
+  const [draftModel, setDraftModel] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [actionError, setActionError] = useState(null);
   const [applyMemory, setApplyMemory] = useState(false);
   const [memoryKey, setMemoryKey] = useState('coach_note');
   const [memoryText, setMemoryText] = useState('');
-  const [sendClientMessage, setSendClientMessage] = useState(false);
-  const [deliveryText, setDeliveryText] = useState('');
 
   useEffect(() => {
-    const summary = draft?.reviewed_output_text || draft?.summary || draft?.output_text || '';
-    setEditedText(summary);
-    setDeliveryText(summary);
+    setDraftModel(draft ? transformPlan(draft) : null);
     setActionError(null);
     setApplyMemory(false);
-    setSendClientMessage(false);
     setMemoryKey('coach_note');
     setMemoryText('');
   }, [draft]);
@@ -112,6 +114,10 @@ function DraftReviewPanel({
     );
   }
 
+  const uiState = draftModel && typeof draftModel === 'object'
+    ? draftModel
+    : transformPlan(draft);
+  const rebuiltOutput = rebuildJSON(uiState, draft);
   const applyBundle = {};
   if (applyMemory && memoryKey.trim() && memoryText.trim()) {
     applyBundle.memory_deltas = [
@@ -123,16 +129,6 @@ function DraftReviewPanel({
       },
     ];
   }
-  if (sendClientMessage) {
-    applyBundle.delivery = {
-      mode: 'send_client_message',
-      message_text: deliveryText.trim() || editedText.trim(),
-    };
-  }
-  const editedOutputJson = {
-    ...(draft.output_json || {}),
-    summary: editedText,
-  };
 
   const runAction = async (runner) => {
     if (isSubmitting) {
@@ -156,18 +152,33 @@ function DraftReviewPanel({
     <View style={styles.panelBody}>
       <ModeText variant="label" tone="tertiary" style={styles.panelLabel}>Draft Review</ModeText>
       <ModeText variant="bodySm" style={styles.panelTitle}>
-        {draft.headline || draft.summary || 'Untitled draft'}
+        {uiState?.title || draft.headline || draft.summary || 'Untitled draft'}
       </ModeText>
       <ModeText variant="caption" tone="secondary">
         {`${draft.action_type || draft.source_type} · ${draft.priority_tier || 'normal'} priority`}
       </ModeText>
 
-      <ModeInput
-        value={editedText}
-        onChangeText={setEditedText}
-        placeholder="Edit draft summary before approval"
-        multiline
-        style={styles.multilineInput}
+      <DraftReviewStructuredCard
+        model={uiState}
+        modelKey={draft.output_id}
+        onModelChange={setDraftModel}
+        onRetryRender={() => {
+          setDraftModel(transformPlan(draft));
+          setActionError(null);
+        }}
+        onRegeneratePlan={() => runAction(async () => {
+          const ok = await onReject?.({
+            outputId: draft.output_id,
+            reason: 'Rejected for regeneration from Coach Draft Review panel.',
+            editedOutputText: rebuiltOutput.editedOutputText,
+            editedOutputJson: rebuiltOutput.editedOutputJson,
+          });
+          if (ok && typeof onOpenTrainerCoach === 'function') {
+            onOpenTrainerCoach(buildRegenerationLaunchContext(draft, uiState));
+          }
+          return ok;
+        })}
+        testIDPrefix="trainer-coach-draft-review"
       />
 
       <ModeCard variant="surface" style={styles.inlineCard}>
@@ -193,22 +204,6 @@ function DraftReviewPanel({
         ) : null}
       </ModeCard>
 
-      <ModeCard variant="surface" style={styles.inlineCard}>
-        <Pressable onPress={() => setSendClientMessage((current) => !current)} style={styles.inlineToggle}>
-          <ModeText variant="bodySm">Send client message on approval</ModeText>
-          <ModeText variant="caption" tone="secondary">{sendClientMessage ? 'On' : 'Off'}</ModeText>
-        </Pressable>
-        {sendClientMessage ? (
-          <ModeInput
-            value={deliveryText}
-            onChangeText={setDeliveryText}
-            placeholder="Client-facing message text"
-            multiline
-            style={styles.multilineInput}
-          />
-        ) : null}
-      </ModeCard>
-
       {actionError ? (
         <ModeText variant="caption" tone="error">{actionError}</ModeText>
       ) : null}
@@ -219,8 +214,8 @@ function DraftReviewPanel({
           variant="ghost"
           onPress={() => runAction(() => onEdit?.({
             outputId: draft.output_id,
-            editedOutputText: editedText.trim(),
-            editedOutputJson,
+            editedOutputText: rebuiltOutput.editedOutputText,
+            editedOutputJson: rebuiltOutput.editedOutputJson,
             notes: 'Edited in Coach Draft Review panel.',
           }))}
           disabled={isSubmitting}
@@ -229,8 +224,8 @@ function DraftReviewPanel({
           title={isSubmitting ? 'Approving...' : 'Approve'}
           onPress={() => runAction(() => onApprove?.({
             outputId: draft.output_id,
-            editedOutputText: editedText.trim(),
-            editedOutputJson,
+            editedOutputText: rebuiltOutput.editedOutputText,
+            editedOutputJson: rebuiltOutput.editedOutputJson,
             applyBundle,
           }))}
           disabled={isSubmitting}
@@ -243,8 +238,8 @@ function DraftReviewPanel({
           onPress={() => runAction(() => onReject?.({
             outputId: draft.output_id,
             reason: 'Rejected from Coach Draft Review panel.',
-            editedOutputText: editedText.trim(),
-            editedOutputJson,
+            editedOutputText: rebuiltOutput.editedOutputText,
+            editedOutputJson: rebuiltOutput.editedOutputJson,
           }))}
           disabled={isSubmitting}
         />
@@ -1291,6 +1286,7 @@ export default function CoachPanelHost({
   activePanel,
   panelContext,
   queue,
+  onOpenTrainerCoach,
   onClose,
   onApproveDraft,
   onEditDraft,
@@ -1351,6 +1347,7 @@ export default function CoachPanelHost({
             {activePanel === 'draft_review' ? (
               <DraftReviewPanel
                 draft={selectedDraft}
+                onOpenTrainerCoach={onOpenTrainerCoach}
                 onApprove={onApproveDraft}
                 onEdit={onEditDraft}
                 onReject={onRejectDraft}

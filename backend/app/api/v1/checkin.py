@@ -72,6 +72,86 @@ def _build_generate_plan_error_payload(
     return payload
 
 
+def _normalize_preview_text(value: object) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _safe_positive_int(value: object) -> int:
+    try:
+        parsed = int(float(value))
+        return parsed if parsed > 0 else 0
+    except Exception:
+        return 0
+
+
+def _derive_plan_preview(
+    *,
+    structured_payload: dict | None,
+    plan_type_value: str | None,
+) -> tuple[str | None, str | None]:
+    if not isinstance(structured_payload, dict):
+        plan_type_label = _normalize_preview_text(plan_type_value).replace("_", " ").strip()
+        if plan_type_label:
+            return f"{plan_type_label.title()} Plan", f"{plan_type_label.title()} plan ready for review."
+        return None, None
+
+    headline = (
+        _normalize_preview_text(structured_payload.get("headline"))
+        or _normalize_preview_text(structured_payload.get("title"))
+    ) or None
+    summary = (
+        _normalize_preview_text(structured_payload.get("summary"))
+        or _normalize_preview_text(structured_payload.get("description"))
+    ) or None
+
+    meals = structured_payload.get("meals")
+    if not summary and isinstance(meals, list):
+        total_calories = _safe_positive_int(
+            structured_payload.get("totalCalories")
+            or structured_payload.get("total_calories")
+            or structured_payload.get("calories")
+        )
+        total_protein = _safe_positive_int(
+            structured_payload.get("totalProtein")
+            or structured_payload.get("total_protein")
+            or structured_payload.get("protein")
+        )
+        if total_calories == 0 and total_protein == 0:
+            for meal in meals:
+                if not isinstance(meal, dict):
+                    continue
+                total_calories += _safe_positive_int(meal.get("totalCalories"))
+                total_protein += _safe_positive_int(meal.get("totalProtein"))
+        meal_count = len([meal for meal in meals if isinstance(meal, dict)])
+        if meal_count > 0:
+            summary = (
+                f"{meal_count} meals | {total_calories} kcal | {total_protein}g protein"
+                if (total_calories > 0 or total_protein > 0)
+                else f"{meal_count} meals planned"
+            )
+
+    exercises = structured_payload.get("exercises")
+    if not summary and isinstance(exercises, list):
+        exercise_count = len([item for item in exercises if isinstance(item, dict)])
+        if exercise_count > 0:
+            summary = f"{exercise_count} exercises planned"
+
+    blocks = structured_payload.get("blocks")
+    if not summary and isinstance(blocks, list):
+        block_count = len([item for item in blocks if isinstance(item, dict)])
+        if block_count > 0:
+            summary = f"{block_count} workout blocks planned"
+
+    if not headline:
+        plan_type_label = _normalize_preview_text(plan_type_value).replace("_", " ").strip()
+        headline = f"{plan_type_label.title()} Plan" if plan_type_label else "Generated Plan"
+    if not summary:
+        summary = "Plan ready for review."
+    return headline, summary
+
+
 @router.get("/today", response_model=DailyCheckinStatusResponse)
 async def get_today_checkin(
     request_date: date | None = None,
@@ -212,6 +292,11 @@ async def generate_checkin_plan(
                     plan_type_value = plan_type.value
                 else:
                     plan_type_value = str(plan_type) if plan_type is not None else None
+                structured_payload = response_payload.get("structured") if isinstance(response_payload, dict) else None
+                headline, summary = _derive_plan_preview(
+                    structured_payload=structured_payload if isinstance(structured_payload, dict) else None,
+                    plan_type_value=plan_type_value,
+                )
                 ai_feedback_logger_service.log_generated_output(
                     tenant_id=trainer_context.tenant_id,
                     trainer_id=trainer_context.trainer_id,
@@ -221,7 +306,9 @@ async def generate_checkin_plan(
                     output_text=response_payload.get("content") if isinstance(response_payload, dict) else None,
                     output_json={
                         "plan_type": plan_type_value,
-                        "structured": response_payload.get("structured"),
+                        "structured": structured_payload,
+                        "headline": headline,
+                        "summary": summary,
                         "request_fingerprint": response_payload.get("request_fingerprint"),
                         "revision_number": response_payload.get("revision_number"),
                         "workout_context": response_payload.get("workout_context"),

@@ -9,6 +9,11 @@ import {
   SafeScreen,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import {
+  buildRegenerationLaunchContext,
+  rebuildJSON,
+  transformPlan,
+} from '../../draftReview/domain/draftReviewModel';
 import ReviewDetailPanel from '../components/ReviewDetailPanel';
 import ReviewFiltersCard from '../components/ReviewFiltersCard';
 import ReviewQueueList from '../components/ReviewQueueList';
@@ -24,6 +29,7 @@ export default function TrainerReviewScreen({
   accessToken,
   bottomInset = 0,
   topToolbar = null,
+  onOpenTrainerCoach = null,
 }) {
   const [statusFilter, setStatusFilter] = useState('open');
   const [sourceFilter, setSourceFilter] = useState('all');
@@ -36,7 +42,7 @@ export default function TrainerReviewScreen({
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState(null);
 
-  const [editedText, setEditedText] = useState('');
+  const [draftModel, setDraftModel] = useState(null);
   const [isMutating, setIsMutating] = useState(false);
   const [mutationError, setMutationError] = useState(null);
   const [mutationSuccess, setMutationSuccess] = useState(null);
@@ -79,11 +85,7 @@ export default function TrainerReviewScreen({
         outputId,
       });
       setDetailPayload(payload);
-      const reviewedText = typeof payload?.output?.reviewed_output_text === 'string'
-        ? payload.output.reviewed_output_text
-        : '';
-      const originalText = typeof payload?.output?.output_text === 'string' ? payload.output.output_text : '';
-      setEditedText(reviewedText || originalText);
+      setDraftModel(payload?.output ? transformPlan(payload.output) : null);
     } catch (error) {
       setDetailError(error?.message || 'Unable to load output detail.');
     } finally {
@@ -104,13 +106,27 @@ export default function TrainerReviewScreen({
     setSelectedOutputId(null);
     setDetailPayload(null);
     setDetailError(null);
+    setDraftModel(null);
     setMutationError(null);
     setMutationSuccess(null);
   };
 
-  const runMutation = async (mutationFn, successMessage) => {
+  const resolveEditedOutputPayload = useCallback(() => {
+    if (!selectedOutput) {
+      return {
+        editedOutputText: null,
+        editedOutputJson: null,
+      };
+    }
+    const uiState = draftModel && typeof draftModel === 'object'
+      ? draftModel
+      : transformPlan(selectedOutput);
+    return rebuildJSON(uiState, selectedOutput);
+  }, [draftModel, selectedOutput]);
+
+  const runMutation = async (mutationFn, successMessage, { afterSuccess } = {}) => {
     if (!accessToken || !selectedOutputId || isMutating) {
-      return;
+      return false;
     }
     setIsMutating(true);
     setMutationError(null);
@@ -120,42 +136,91 @@ export default function TrainerReviewScreen({
       await loadOutputDetail(selectedOutputId);
       await loadOutputs();
       setMutationSuccess(successMessage);
+      if (typeof afterSuccess === 'function') {
+        afterSuccess();
+      }
+      return true;
     } catch (error) {
       setMutationError(error?.message || 'Unable to update output.');
+      return false;
     } finally {
       setIsMutating(false);
     }
   };
 
-  const handleSaveEdit = async () => runMutation(
-    () => editTrainerReviewOutput({
-      accessToken,
-      outputId: selectedOutputId,
-      editedOutputText: editedText.trim(),
-      autoApplyDeltas: true,
-    }),
-    'Edit saved.',
-  );
+  const handleSaveEdit = async () => {
+    const { editedOutputText, editedOutputJson } = resolveEditedOutputPayload();
+    await runMutation(
+      () => editTrainerReviewOutput({
+        accessToken,
+        outputId: selectedOutputId,
+        editedOutputText,
+        editedOutputJson,
+        autoApplyDeltas: true,
+      }),
+      'Edit saved.',
+    );
+  };
 
-  const handleApprove = async () => runMutation(
-    () => approveTrainerReviewOutput({
-      accessToken,
-      outputId: selectedOutputId,
-      editedOutputText: editedText.trim(),
-      autoApplyDeltas: true,
-    }),
-    'Output approved.',
-  );
+  const handleApprove = async () => {
+    const { editedOutputText, editedOutputJson } = resolveEditedOutputPayload();
+    await runMutation(
+      () => approveTrainerReviewOutput({
+        accessToken,
+        outputId: selectedOutputId,
+        editedOutputText,
+        editedOutputJson,
+        autoApplyDeltas: true,
+      }),
+      'Output approved.',
+    );
+  };
 
-  const handleReject = async () => runMutation(
-    () => rejectTrainerReviewOutput({
-      accessToken,
-      outputId: selectedOutputId,
-      reason: 'Rejected in trainer review workspace.',
-      editedOutputText: editedText.trim(),
-    }),
-    'Output rejected.',
-  );
+  const handleReject = async () => {
+    const { editedOutputText, editedOutputJson } = resolveEditedOutputPayload();
+    await runMutation(
+      () => rejectTrainerReviewOutput({
+        accessToken,
+        outputId: selectedOutputId,
+        reason: 'Rejected in trainer review workspace.',
+        editedOutputText,
+        editedOutputJson,
+      }),
+      'Output rejected.',
+    );
+  };
+
+  const handleRetryRender = () => {
+    if (!selectedOutput) {
+      return;
+    }
+    setDraftModel(transformPlan(selectedOutput));
+    setMutationError(null);
+  };
+
+  const handleRegeneratePlan = async () => {
+    if (!selectedOutput) {
+      return;
+    }
+    const { editedOutputText, editedOutputJson } = resolveEditedOutputPayload();
+    await runMutation(
+      () => rejectTrainerReviewOutput({
+        accessToken,
+        outputId: selectedOutputId,
+        reason: 'Rejected for regeneration in trainer review workspace.',
+        editedOutputText,
+        editedOutputJson,
+      }),
+      'Draft rejected and regeneration launched.',
+      {
+        afterSuccess: () => {
+          if (typeof onOpenTrainerCoach === 'function') {
+            onOpenTrainerCoach(buildRegenerationLaunchContext(selectedOutput, draftModel));
+          }
+        },
+      },
+    );
+  };
 
   return (
     <SafeScreen
@@ -244,8 +309,10 @@ export default function TrainerReviewScreen({
               <ReviewDetailPanel
                 selectedOutput={selectedOutput}
                 feedbackEvents={feedbackEvents}
-                editedText={editedText}
-                onEditedTextChange={setEditedText}
+                draftModel={draftModel}
+                onDraftModelChange={setDraftModel}
+                onRetryRender={handleRetryRender}
+                onRegeneratePlan={handleRegeneratePlan}
                 isMutating={isMutating}
                 mutationError={mutationError}
                 mutationSuccess={mutationSuccess}

@@ -973,6 +973,7 @@ function AppShell() {
               <TrainerClientsScreen
                 accessToken={session.access_token}
                 bottomInset={contentBottomInset}
+                onOpenTrainerCoach={handleOpenTrainerCoach}
               />
             ) : null}
 

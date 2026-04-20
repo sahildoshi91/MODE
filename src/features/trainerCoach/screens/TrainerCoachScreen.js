@@ -57,6 +57,7 @@ export default function TrainerCoachScreen({
   accessToken,
   trainerId,
   bottomInset = 0,
+  onOpenTrainerCoach = null,
 }) {
   const [composerValue, setComposerValue] = useState('');
   const [isSendingMessage, setIsSendingMessage] = useState(false);
@@ -459,6 +460,7 @@ export default function TrainerCoachScreen({
           activePanel={state.panels.active}
           panelContext={state.panels.context}
           queue={state.queue}
+          onOpenTrainerCoach={onOpenTrainerCoach}
           onClose={actions.closePanel}
           onApproveDraft={actions.approveDraft}
           onEditDraft={actions.editDraft}

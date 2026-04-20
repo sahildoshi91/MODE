@@ -411,11 +411,19 @@ class TrainerCoachService:
         output_json = row.get("reviewed_output_json")
         if not isinstance(output_json, dict):
             output_json = row.get("output_json") if isinstance(row.get("output_json"), dict) else {}
-        summary = output_json.get("summary") if isinstance(output_json.get("summary"), str) else None
-        if not summary:
-            summary = row.get("reviewed_output_text") or row.get("output_text")
-        action_type = output_json.get("action_type") if isinstance(output_json.get("action_type"), str) else None
-        headline = output_json.get("headline") if isinstance(output_json.get("headline"), str) else None
+
+        structured = output_json.get("structured") if isinstance(output_json.get("structured"), dict) else output_json
+        derived_headline, derived_summary = self._derive_queue_preview_copy(
+            output_json=output_json,
+            structured=structured if isinstance(structured, dict) else {},
+            reviewed_output_text=row.get("reviewed_output_text"),
+            output_text=row.get("output_text"),
+        )
+        action_type = self._first_readable_text(
+            output_json.get("action_type"),
+            structured.get("action_type") if isinstance(structured, dict) else None,
+            output_json.get("plan_type"),
+        )
         client_id = row.get("client_id")
         return CoachQueueItem(
             output_id=str(row.get("id")),
@@ -429,8 +437,8 @@ class TrainerCoachService:
             queue_priority=int(row.get("queue_priority") or 0),
             delivery_state=str(row.get("delivery_state") or "draft"),
             action_type=action_type,
-            headline=headline,
-            summary=summary,
+            headline=derived_headline,
+            summary=derived_summary,
             output_text=row.get("output_text"),
             output_json=row.get("output_json") if isinstance(row.get("output_json"), dict) else {},
             reviewed_output_text=row.get("reviewed_output_text"),
@@ -498,3 +506,114 @@ class TrainerCoachService:
                 target_date,
             )
             return None
+
+    @staticmethod
+    def _normalize_text(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    @classmethod
+    def _looks_like_serialized_blob(cls, value: Any) -> bool:
+        text = cls._normalize_text(value)
+        if not text:
+            return False
+        return text.startswith("{") or text.startswith("[") or text.startswith("<")
+
+    @classmethod
+    def _first_readable_text(cls, *values: Any) -> str | None:
+        for value in values:
+            text = cls._normalize_text(value)
+            if not text:
+                continue
+            if cls._looks_like_serialized_blob(text):
+                continue
+            return text
+        return None
+
+    @classmethod
+    def _safe_int(cls, value: Any) -> int:
+        try:
+            parsed = int(float(value))
+            return max(parsed, 0)
+        except Exception:
+            return 0
+
+    @classmethod
+    def _derive_nutrition_macro_summary(cls, structured: dict[str, Any]) -> str | None:
+        meals = structured.get("meals")
+        if not isinstance(meals, list):
+            return None
+
+        total_calories = cls._safe_int(
+            structured.get("totalCalories")
+            or structured.get("total_calories")
+            or structured.get("calories")
+        )
+        total_protein = cls._safe_int(
+            structured.get("totalProtein")
+            or structured.get("total_protein")
+            or structured.get("protein")
+        )
+        if total_calories == 0 and total_protein == 0:
+            for meal in meals:
+                if not isinstance(meal, dict):
+                    continue
+                total_calories += cls._safe_int(meal.get("totalCalories"))
+                total_protein += cls._safe_int(meal.get("totalProtein"))
+        meal_count = len([meal for meal in meals if isinstance(meal, dict)])
+        if meal_count == 0:
+            return None
+        if total_calories > 0 or total_protein > 0:
+            return f"{meal_count} meals | {total_calories} kcal | {total_protein}g protein"
+        return f"{meal_count} meals planned"
+
+    @classmethod
+    def _derive_training_summary(cls, structured: dict[str, Any]) -> str | None:
+        exercises = structured.get("exercises")
+        if isinstance(exercises, list):
+            count = len([item for item in exercises if isinstance(item, dict)])
+            if count > 0:
+                return f"{count} exercises planned"
+        blocks = structured.get("blocks")
+        if isinstance(blocks, list):
+            count = len([item for item in blocks if isinstance(item, dict)])
+            if count > 0:
+                return f"{count} workout blocks planned"
+        return None
+
+    @classmethod
+    def _derive_queue_preview_copy(
+        cls,
+        *,
+        output_json: dict[str, Any],
+        structured: dict[str, Any],
+        reviewed_output_text: Any,
+        output_text: Any,
+    ) -> tuple[str | None, str | None]:
+        headline = cls._first_readable_text(
+            output_json.get("headline"),
+            structured.get("headline"),
+            structured.get("title"),
+        )
+
+        summary = cls._first_readable_text(
+            output_json.get("summary"),
+            structured.get("summary"),
+            structured.get("description"),
+        )
+        if not summary:
+            summary = cls._derive_nutrition_macro_summary(structured) or cls._derive_training_summary(structured)
+        if not summary:
+            summary = cls._first_readable_text(reviewed_output_text, output_text)
+        if not summary:
+            summary = "Draft ready for review."
+
+        if not headline:
+            plan_type = cls._first_readable_text(output_json.get("plan_type"), structured.get("plan_type"))
+            if plan_type:
+                normalized_plan = plan_type.replace("_", " ").strip().title()
+                headline = f"{normalized_plan} Draft"
+            else:
+                headline = "Draft Review"
+        return headline, summary

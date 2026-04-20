@@ -1,7 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Keyboard,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Feather from '@expo/vector-icons/Feather';
 
 import {
+  GlassSurface,
+  GlassToggle,
   HeaderBar,
   ModeButton,
   ModeCard,
@@ -13,6 +26,12 @@ import {
   SafeScreen,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import DraftReviewStructuredCard from '../../draftReview/components/DraftReviewStructuredCard';
+import {
+  buildRegenerationLaunchContext,
+  rebuildJSON,
+  transformPlan,
+} from '../../draftReview/domain/draftReviewModel';
 import {
   approveTrainerCoachQueueItem,
   editTrainerCoachQueueItem,
@@ -24,6 +43,7 @@ import {
   createTrainerClientScheduleException,
   createTrainerClientMemory,
   deleteTrainerClientScheduleException,
+  getTrainerClientSchedulePreferences,
   getTrainerClientAIContext,
   getTrainerClientDetail,
   getTrainerCommandCenter,
@@ -42,11 +62,18 @@ import {
   loadDraftReviewTracker,
   recordDraftReviewAction,
 } from '../storage/draftReviewTrackerStorage';
+import {
+  FilterBar,
+  FilterBottomSheet,
+} from '../components/CommandCenterFilters';
 
 const VIEW_MODE = {
   COMMAND_CENTER: 'command_center',
   CLIENT_DETAIL: 'client_detail',
+  CLIENT_SETUP: 'client_setup',
 };
+
+const CLIENT_SETUP_NOTES_MEMORY_KEY = 'client_setup_notes_v1';
 
 const PRIORITY_FILTERS = [
   { key: 'all', label: 'All' },
@@ -65,17 +92,6 @@ const SESSION_FILTERS = [
   { key: 'all', label: 'All Clients' },
 ];
 
-const MEMORY_TYPES = [
-  { key: 'note', label: 'Notes' },
-  { key: 'preference', label: 'Preferences' },
-  { key: 'constraint', label: 'Constraints' },
-];
-
-const MEMORY_VISIBILITY = [
-  { key: 'internal_only', label: 'Internal Only' },
-  { key: 'ai_usable', label: 'AI Usable' },
-];
-
 const DRAFT_QUEUE_FETCH_LIMIT = 100;
 
 const DRAFT_REVIEW_ACTION_TYPE = {
@@ -84,35 +100,18 @@ const DRAFT_REVIEW_ACTION_TYPE = {
   REJECT: 'reject',
 };
 
+const DEFAULT_DAY_FILTER = 'today';
+const DEFAULT_SESSION_FILTER = 'scheduled';
+const DEFAULT_PRIORITY_FILTER = 'all';
+
+const FILTER_SHEET = {
+  DAY: 'day',
+  SESSION: 'session',
+  PRIORITY: 'priority',
+};
+
 function buildDraftReviewIdempotencyKey(prefix = 'clients-draft-review') {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 12)}`;
-}
-
-function resolveDraftReviewOutputSeed(draft) {
-  if (!draft || typeof draft !== 'object') {
-    return '';
-  }
-  const reviewedText = typeof draft.reviewed_output_text === 'string' ? draft.reviewed_output_text.trim() : '';
-  if (reviewedText) {
-    return reviewedText;
-  }
-  const summary = typeof draft.summary === 'string' ? draft.summary.trim() : '';
-  if (summary) {
-    return summary;
-  }
-  const outputText = typeof draft.output_text === 'string' ? draft.output_text.trim() : '';
-  if (outputText) {
-    return outputText;
-  }
-  if (draft.output_json && typeof draft.output_json === 'object') {
-    const outputJsonSummary = typeof draft.output_json.summary === 'string'
-      ? draft.output_json.summary.trim()
-      : '';
-    if (outputJsonSummary) {
-      return outputJsonSummary;
-    }
-  }
-  return '';
 }
 
 function resolveDraftQueueSelection(items, preferredOutputId, { allowNullSelection = false } = {}) {
@@ -194,59 +193,157 @@ function formatAvgScore(value) {
   return `${value.toFixed(1)}/25`;
 }
 
-function formatPriorityLabel(value) {
+function normalizePriorityTier(value) {
   const normalized = String(value || '').trim().toLowerCase();
-  if (normalized === 'critical') {
-    return 'Critical';
+  if (normalized === 'critical' || normalized === 'high' || normalized === 'medium') {
+    return normalized;
   }
-  if (normalized === 'high') {
-    return 'High';
-  }
-  if (normalized === 'medium') {
-    return 'Watch';
-  }
-  return 'Stable';
+  return 'low';
 }
 
-function priorityBadgeStyle(tier) {
-  const normalized = String(tier || '').trim().toLowerCase();
-  if (normalized === 'critical') {
+function resolveConcernBadge(client) {
+  const priorityTier = normalizePriorityTier(client?.priority_tier);
+  if (priorityTier === 'critical') {
     return {
+      tier: 'critical',
+      label: 'Needs Attention',
       backgroundColor: theme.colors.feedback.errorBg,
       borderColor: theme.colors.feedback.errorBorder,
       tone: 'error',
     };
   }
-  if (normalized === 'high') {
+  if (priorityTier === 'high') {
     return {
+      tier: 'high',
+      label: 'At Risk',
       backgroundColor: theme.colors.feedback.warningBg,
       borderColor: theme.colors.feedback.warningBorder,
       tone: 'warning',
     };
   }
-  if (normalized === 'medium') {
+  if (priorityTier === 'medium') {
     return {
+      tier: 'medium',
+      label: 'Follow-Up',
       backgroundColor: theme.colors.surface.elevated,
       borderColor: theme.colors.border.default,
       tone: 'secondary',
     };
   }
+  return null;
+}
+
+function normalizeBriefClause(input) {
+  const normalized = String(input || '')
+    .replace(/^[\s•\-–]+/, '')
+    .replace(/^\d+[.)]\s+/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.;:,]+$/, '');
+  if (!normalized) {
+    return '';
+  }
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function splitCoachingPromptIntoBullets(point) {
+  const normalized = String(point || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) {
+    return [];
+  }
+  const delimitersNormalized = normalized
+    .replace(/\bthen\b/gi, '|')
+    .replace(/[;:]+/g, '|')
+    .replace(/\.(?=\s+[A-Z])/g, '|')
+    .replace(/,\s+(?=(?:and\s+)?(?:today|this week|confirm|review|check|acknowledge|celebrate|open|start|ask|lock|set|mention)\b)/gi, '|')
+    .replace(/\s+and\s+(?=today['’]s\b)/gi, '|');
+  const parsedClauses = delimitersNormalized
+    .split('|')
+    .map(normalizeBriefClause)
+    .filter((clause) => clause.length >= 8);
+  const fallbackClauses = parsedClauses.length >= 2
+    ? parsedClauses
+    : normalized
+      .split(',')
+      .map(normalizeBriefClause)
+      .filter((clause) => clause.length >= 10);
+  const uniqueClauses = [];
+  const seen = new Set();
+  fallbackClauses.forEach((clause) => {
+    const key = clause.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      uniqueClauses.push(clause);
+    }
+  });
+  return uniqueClauses.slice(0, 4);
+}
+
+function buildFallbackBriefBullets({ client, isScheduledForSelectedDay }) {
+  const weekSummary = client?.week_summary || {};
+  const checkinsCompleted = Number(weekSummary.checkins_completed_7d) || 0;
+  const hasTodayCheckin = Boolean(weekSummary.checkins_completed_today);
+  return [
+    'Acknowledge one specific win from the week',
+    checkinsCompleted > 0
+      ? `${checkinsCompleted} check-ins completed this week`
+      : 'No check-ins completed this week yet',
+    hasTodayCheckin
+      ? "Today's check-in is already done"
+      : "Confirm today's readiness before coaching",
+    isScheduledForSelectedDay
+      ? 'Confirm the top blocker before coaching'
+      : 'Confirm the top blocker and next-session plan',
+  ];
+}
+
+function buildReadinessNarrative(client, isScheduledForSelectedDay) {
+  const weekSummary = client?.week_summary || {};
+  const averageScore = typeof weekSummary.avg_score_7d === 'number'
+    ? weekSummary.avg_score_7d
+    : null;
+  const workoutsCompleted = Number(weekSummary.workouts_completed_7d) || 0;
+  if (averageScore !== null && averageScore >= 20) {
+    return `Readiness looks solid at an average score of ${averageScore.toFixed(1)}/25 with strong consistency this week. Movement quality and recovery appear stable, so consider a small progression if the client reports low friction today.`;
+  }
+  if (averageScore !== null && averageScore < 15) {
+    return `Readiness is trending low at ${averageScore.toFixed(1)}/25 this week. Keep intensity controlled, reinforce recovery basics, and confirm today's biggest friction point before progressing load.`;
+  }
+  if (!isScheduledForSelectedDay) {
+    return 'No session is scheduled today. Use the recent check-in trend to set one accountability action before the next session.';
+  }
+  if (workoutsCompleted <= 1) {
+    return 'Workout completion has been light this week. Open with one confidence-building win, then align on the smallest next action they can complete within 24 hours.';
+  }
+  return 'Readiness context is steady. Confirm the top blocker, reinforce one win, and set one specific coaching target for this session.';
+}
+
+function buildCoachingBrief(client, isScheduledForSelectedDay) {
+  const talkingPoints = Array.isArray(client?.talking_points?.points)
+    ? client.talking_points.points
+    : [];
+  const leadPoint = talkingPoints.find((point) => typeof point === 'string' && point.trim());
+  const parsedBullets = splitCoachingPromptIntoBullets(leadPoint);
+  const bullets = parsedBullets.length >= 2
+    ? parsedBullets
+    : buildFallbackBriefBullets({ client, isScheduledForSelectedDay });
+  const secondaryPoint = talkingPoints.find((point, index) => (
+    index > 0
+    && typeof point === 'string'
+    && point.trim()
+  ));
   return {
-    backgroundColor: theme.colors.feedback.successBg,
-    borderColor: theme.colors.feedback.successBorder,
-    tone: 'info',
+    bullets: bullets.slice(0, 4),
+    narrative: secondaryPoint ? secondaryPoint.trim() : buildReadinessNarrative(client, isScheduledForSelectedDay),
   };
 }
 
-function severityChipStyle(severity) {
-  const normalized = String(severity || '').trim().toLowerCase();
-  if (normalized === 'high') {
-    return styles.riskChipHigh;
+function formatModeSuffix(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) {
+    return '';
   }
-  if (normalized === 'medium') {
-    return styles.riskChipMedium;
-  }
-  return styles.riskChipLow;
+  return ` (${normalized})`;
 }
 
 function parseTags(inputValue) {
@@ -274,6 +371,33 @@ function formatDateLabel(value) {
     month: 'short',
     day: 'numeric',
   });
+}
+
+function formatCompactDateLabel(value) {
+  if (!value) {
+    return '';
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return '';
+  }
+  return parsed.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function buildMemoryMetaLine(record) {
+  const tags = Array.isArray(record?.tags) ? record.tags : [];
+  const parts = [];
+  if (tags.length > 0) {
+    parts.push(tags.join(', '));
+  }
+  const updatedLabel = formatCompactDateLabel(record?.updated_at || record?.created_at);
+  if (updatedLabel) {
+    parts.push(`Updated ${updatedLabel}`);
+  }
+  return parts.join(' • ');
 }
 
 function toLocalIsoDate(value) {
@@ -358,20 +482,689 @@ function buildTrainerRouteError(error, fallbackMessage) {
   };
 }
 
-export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
+function normalizeScheduleDraft(draft) {
+  return {
+    recurringWeekdays: Array.isArray(draft?.recurringWeekdays)
+      ? [...new Set(draft.recurringWeekdays.map((value) => Number(value)).filter((value) => value >= 1 && value <= 7))].sort((a, b) => a - b)
+      : [],
+    preferredMeetingLocation: String(draft?.preferredMeetingLocation || '').trim(),
+    autoUseTrainerDefaultLocation: draft?.autoUseTrainerDefaultLocation !== false,
+  };
+}
+
+function areScheduleDraftsEqual(a, b) {
+  const left = normalizeScheduleDraft(a);
+  const right = normalizeScheduleDraft(b);
+  if (left.autoUseTrainerDefaultLocation !== right.autoUseTrainerDefaultLocation) {
+    return false;
+  }
+  if (left.preferredMeetingLocation !== right.preferredMeetingLocation) {
+    return false;
+  }
+  if (left.recurringWeekdays.length !== right.recurringWeekdays.length) {
+    return false;
+  }
+  return left.recurringWeekdays.every((value, index) => value === right.recurringWeekdays[index]);
+}
+
+function hasConfiguredTemplate(scheduleDraft) {
+  const normalized = normalizeScheduleDraft(scheduleDraft);
+  return (
+    normalized.recurringWeekdays.length > 0
+    || Boolean(normalized.preferredMeetingLocation)
+    || normalized.autoUseTrainerDefaultLocation === false
+  );
+}
+
+function buildScheduleUiState(scheduleDraft) {
+  return {
+    isTemplateExpanded: !hasConfiguredTemplate(scheduleDraft),
+    activeQuickRow: null,
+    isActionsSheetOpen: false,
+  };
+}
+
+function formatTemplateLocationLabel(scheduleDraft) {
+  const preferredMeetingLocation = String(scheduleDraft?.preferredMeetingLocation || '').trim();
+  if (preferredMeetingLocation) {
+    return preferredMeetingLocation;
+  }
+  return scheduleDraft?.autoUseTrainerDefaultLocation ? 'Trainer default' : 'Not set';
+}
+
+function formatOverrideSummary({
+  exceptionType,
+  plannerDayLabel,
+  isScheduledForSelectedDay,
+}) {
+  if (exceptionType === 'skip') {
+    return `Override • ${plannerDayLabel} skipped`;
+  }
+  if (exceptionType === 'add') {
+    return `Override • ${plannerDayLabel} added`;
+  }
+  return isScheduledForSelectedDay ? 'Status • Scheduled today' : 'Status • No session today';
+}
+
+function toRecordTimestamp(value) {
+  const parsed = new Date(value || '');
+  const timestamp = parsed.getTime();
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function findClientSetupNotesRecord(records) {
+  const rows = (Array.isArray(records) ? records : [])
+    .filter((record) => (
+      !record?.is_archived
+      && record?.memory_type === 'note'
+      && record?.memory_key === CLIENT_SETUP_NOTES_MEMORY_KEY
+    ))
+    .sort((left, right) => (
+      toRecordTimestamp(right?.updated_at || right?.created_at)
+      - toRecordTimestamp(left?.updated_at || left?.created_at)
+    ));
+  return rows[0] || null;
+}
+
+function normalizeSetupOverrideMode(exceptionType) {
+  if (exceptionType === 'skip' || exceptionType === 'add') {
+    return exceptionType;
+  }
+  return 'none';
+}
+
+function setupOverrideLabel(mode, plannerDayLabel) {
+  if (mode === 'skip') {
+    return `${plannerDayLabel} skipped`;
+  }
+  if (mode === 'add') {
+    return `${plannerDayLabel} added`;
+  }
+  return `Use recurring ${plannerDayLabel.toLowerCase()} plan`;
+}
+
+function CommandCenterActionsSheet({
+  visible,
+  onClose,
+  plannerDayLabel,
+  onEditSessionSetup,
+  onEditClientNotes,
+  onOpenClientDetail,
+  onSkip,
+  onAdd,
+  onClear,
+  isSaving = false,
+  hasOverride = false,
+  testIDPrefix,
+}) {
+  if (!visible) {
+    return null;
+  }
+  return (
+    <Modal
+      visible
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View style={styles.scheduleSheetRoot}>
+        <Pressable style={styles.scheduleSheetBackdrop} onPress={onClose} />
+        <GlassSurface
+          state="elevated"
+          radius="xl"
+          padding={0}
+          style={styles.scheduleSheet}
+          contentStyle={styles.scheduleSheetContent}
+          fillColor={theme.colors.surface.overlay}
+          borderColor={theme.colors.glass.borderStrong}
+          highlight
+        >
+          <View style={styles.scheduleSheetGrabber} />
+          <ModeText variant="h3" style={styles.scheduleSheetTitle}>Client actions</ModeText>
+          <ModeButton
+            testID={`${testIDPrefix}-action-edit-setup`}
+            title="Edit Session Setup"
+            size="sm"
+            variant="secondary"
+            disabled={isSaving}
+            onPress={onEditSessionSetup}
+          />
+          <ModeButton
+            testID={`${testIDPrefix}-action-edit-notes`}
+            title="Edit Client Notes"
+            size="sm"
+            variant="ghost"
+            disabled={isSaving}
+            onPress={onEditClientNotes}
+          />
+          <ModeButton
+            testID={`${testIDPrefix}-action-open-detail`}
+            title="Open Client Detail"
+            size="sm"
+            variant="ghost"
+            disabled={isSaving}
+            onPress={onOpenClientDetail}
+          />
+          <ModeButton
+            testID={`${testIDPrefix}-action-skip`}
+            title={`Mark ${plannerDayLabel} skip`}
+            size="sm"
+            variant="secondary"
+            disabled={isSaving}
+            onPress={onSkip}
+          />
+          <ModeButton
+            testID={`${testIDPrefix}-action-add`}
+            title={`Add ${plannerDayLabel} session`}
+            size="sm"
+            variant="ghost"
+            disabled={isSaving}
+            onPress={onAdd}
+          />
+          <ModeButton
+            testID={`${testIDPrefix}-action-clear`}
+            title="Clear today override"
+            size="sm"
+            variant="ghost"
+            disabled={isSaving || !hasOverride}
+            onPress={onClear}
+          />
+          <ModeButton
+            title="Close"
+            size="sm"
+            variant="ghost"
+            disabled={isSaving}
+            onPress={onClose}
+          />
+        </GlassSurface>
+      </View>
+    </Modal>
+  );
+}
+
+function ClientSummaryBlock({
+  title,
+  concernBadge,
+  briefBullets,
+  sessionLine,
+  metricLine,
+  locationLine,
+  readinessNarrative,
+  onOpenActions,
+  testIDPrefix,
+}) {
+  return (
+    <View>
+      <View style={styles.clientHeaderRow}>
+        <ModeText variant="h3" style={styles.clientName}>{title}</ModeText>
+        <View style={styles.headerActions}>
+          {concernBadge ? (
+            <View
+              testID={`${testIDPrefix}-concern-badge`}
+              style={[
+                styles.priorityBadge,
+                {
+                  backgroundColor: concernBadge.backgroundColor,
+                  borderColor: concernBadge.borderColor,
+                },
+              ]}
+            >
+              <ModeText variant="caption" tone={concernBadge.tone}>{concernBadge.label}</ModeText>
+            </View>
+          ) : null}
+          <Pressable
+            testID={`${testIDPrefix}-actions-open`}
+            onPress={onOpenActions}
+            style={({ pressed }) => [styles.iconActionButton, pressed && styles.iconActionButtonPressed]}
+            accessibilityRole="button"
+            accessibilityLabel="Open client actions"
+          >
+            <Feather name="more-horizontal" size={16} color={theme.colors.text.secondary} />
+          </Pressable>
+        </View>
+      </View>
+
+      <View style={styles.summaryTextBlock} testID={`${testIDPrefix}-summary`}>
+        <View testID={`${testIDPrefix}-coaching-brief`} style={styles.coachingBriefBlock}>
+          <ModeText testID={`${testIDPrefix}-brief-title`} variant="label" tone="tertiary">
+            Suggested opening
+          </ModeText>
+          <View style={styles.coachingBriefList}>
+            {briefBullets.map((bullet, index) => (
+              <ModeText
+                key={`${testIDPrefix}-brief-${index + 1}`}
+                testID={`${testIDPrefix}-brief-bullet-${index + 1}`}
+                variant="bodySm"
+                style={styles.coachingBriefBullet}
+              >
+                • {bullet}
+              </ModeText>
+            ))}
+          </View>
+        </View>
+
+        <View testID={`${testIDPrefix}-supporting-signals`} style={styles.supportingSignalBlock}>
+          <ModeText variant="caption" tone="secondary" style={styles.supportingMetaLine}>{sessionLine}</ModeText>
+          <ModeText variant="caption" tone="tertiary" style={styles.supportingMetaLine}>{metricLine}</ModeText>
+          <ModeText variant="caption" tone="tertiary" style={styles.supportingMetaLine}>{locationLine}</ModeText>
+        </View>
+
+        <View style={styles.readinessNarrativeBlock}>
+          <ModeText
+            testID={`${testIDPrefix}-readiness-narrative`}
+            variant="bodySm"
+            tone="secondary"
+            style={styles.readinessNarrativeText}
+          >
+            {readinessNarrative}
+          </ModeText>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function ClientTodayCard({
+  client,
+  plannerDayLabel,
+  isActionsOpen,
+  isMutatingActions,
+  onOpenActions,
+  onCloseActions,
+  onEditSessionSetup,
+  onEditClientNotes,
+  onApplySkip,
+  onApplyAdd,
+  onClearOverride,
+  onOpenClientDetail,
+}) {
+  const clientId = client?.client_id || 'unknown';
+  const isScheduledForSelectedDay = typeof client?.scheduled_today === 'boolean'
+    ? client.scheduled_today
+    : resolveClientScheduledForFilter(client, null);
+  const concernBadge = resolveConcernBadge(client);
+  const coachingBrief = buildCoachingBrief(client, isScheduledForSelectedDay);
+  const sessionWindow = formatSessionWindow(client?.session_start_at, client?.session_end_at);
+  const sessionLine = isScheduledForSelectedDay
+    ? `Next Session: ${plannerDayLabel}${sessionWindow !== 'No session scheduled' ? ` • ${sessionWindow}` : ''}`
+    : `Next Session: No ${plannerDayLabel.toLowerCase()} session scheduled`;
+  const metricLine = `${client?.week_summary?.checkins_completed_7d || 0} check-ins • avg ${formatAvgScore(client?.week_summary?.avg_score_7d)}${formatModeSuffix(client?.week_summary?.avg_mode_7d)} • ${client?.week_summary?.workouts_completed_7d || 0} workouts`;
+  const locationLine = `Location • ${client?.meeting_location || 'Not set'}`;
+  const hasOverride = Boolean(client?.selected_date_exception_type);
+  const testIDPrefix = `trainer-client-card-${clientId}`;
+
+  return (
+    <PremiumClientCard
+      emphasis={concernBadge?.tier === 'critical' ? 'focus' : 'default'}
+      style={styles.clientOperationalCard}
+    >
+      <ClientSummaryBlock
+        title={client?.client_name || 'Client'}
+        concernBadge={concernBadge}
+        briefBullets={coachingBrief.bullets}
+        sessionLine={sessionLine}
+        metricLine={metricLine}
+        locationLine={locationLine}
+        readinessNarrative={coachingBrief.narrative}
+        onOpenActions={onOpenActions}
+        testIDPrefix={testIDPrefix}
+      />
+
+      <ModeButton
+        title="Open Client Detail"
+        variant="ghost"
+        size="sm"
+        onPress={onOpenClientDetail}
+      />
+
+      <CommandCenterActionsSheet
+        visible={Boolean(isActionsOpen)}
+        onClose={onCloseActions}
+        plannerDayLabel={plannerDayLabel}
+        onEditSessionSetup={onEditSessionSetup}
+        onEditClientNotes={onEditClientNotes}
+        onOpenClientDetail={onOpenClientDetail}
+        onSkip={onApplySkip}
+        onAdd={onApplyAdd}
+        onClear={onClearOverride}
+        isSaving={Boolean(isMutatingActions)}
+        hasOverride={hasOverride}
+        testIDPrefix={testIDPrefix}
+      />
+    </PremiumClientCard>
+  );
+}
+
+function ClientSetupScreen({
+  clientName,
+  plannerDayLabel,
+  setupDraft,
+  setupFocusSection,
+  setupError,
+  setupSuccess,
+  isLoading,
+  isSaving,
+  onBack,
+  onPatchDraft,
+  onToggleRecurringWeekday,
+  onSave,
+}) {
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={theme.colors.accent.primary} />
+        <ModeText variant="bodySm" tone="secondary">Loading client setup...</ModeText>
+      </View>
+    );
+  }
+  if (!setupDraft) {
+    return (
+      <ModeCard variant="surface">
+        <ModeText variant="bodySm" tone="error">Unable to load client setup.</ModeText>
+        <ModeButton title="Back" variant="secondary" onPress={onBack} style={styles.actionButton} />
+      </ModeCard>
+    );
+  }
+  return (
+    <>
+      <ModeButton
+        title="Back"
+        variant="ghost"
+        onPress={onBack}
+      />
+
+      <ModeCard variant="hero" testID="trainer-client-setup-screen">
+        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Client Setup</ModeText>
+        <ModeText variant="bodySm">{clientName}</ModeText>
+        <ModeText variant="caption" tone="secondary">
+          {setupFocusSection === 'notes' ? 'Focused section: Notes' : 'Focused section: Schedule'}
+        </ModeText>
+      </ModeCard>
+
+      <ModeCard variant="surface">
+        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Schedule</ModeText>
+        <ModeText variant="bodySm" tone="secondary">Recurring days seen</ModeText>
+        <View style={styles.weekdayChipRowCompact}>
+          {ISO_WEEKDAY_OPTIONS.map((option) => (
+            <ModeChip
+              key={`client-setup-weekday-${option.value}`}
+              testID={`trainer-client-setup-weekday-${option.value}`}
+              label={option.label}
+              selected={Array.isArray(setupDraft.recurringWeekdays) && setupDraft.recurringWeekdays.includes(option.value)}
+              onPress={() => onToggleRecurringWeekday(option.value)}
+            />
+          ))}
+        </View>
+      </ModeCard>
+
+      <ModeCard variant="surface">
+        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>This Week Override</ModeText>
+        <View style={styles.inlineChipRow}>
+          <ModeChip
+            testID="trainer-client-setup-override-none"
+            label="Use recurring"
+            selected={setupDraft.overrideMode === 'none'}
+            onPress={() => onPatchDraft({ overrideMode: 'none' })}
+          />
+          <ModeChip
+            testID="trainer-client-setup-override-skip"
+            label="Skip"
+            selected={setupDraft.overrideMode === 'skip'}
+            onPress={() => onPatchDraft({ overrideMode: 'skip' })}
+          />
+          <ModeChip
+            testID="trainer-client-setup-override-add"
+            label="Add"
+            selected={setupDraft.overrideMode === 'add'}
+            onPress={() => onPatchDraft({ overrideMode: 'add' })}
+          />
+        </View>
+        <ModeText variant="caption" tone="secondary">
+          {setupOverrideLabel(setupDraft.overrideMode, plannerDayLabel)}
+        </ModeText>
+        {setupDraft.overrideMode === 'add' ? (
+          <ModeInput
+            testID="trainer-client-setup-override-location-input"
+            value={setupDraft.overrideLocation || ''}
+            onChangeText={(value) => onPatchDraft({ overrideLocation: value })}
+            placeholder={`${plannerDayLabel} override location (optional)`}
+          />
+        ) : null}
+      </ModeCard>
+
+      <ModeCard variant="surface">
+        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Location</ModeText>
+        <ModeText variant="caption" tone="tertiary">
+          Trainer default: {setupDraft.trainerDefaultLocation || 'Not set'}
+        </ModeText>
+        <ModeText variant="caption" tone="tertiary">
+          Auto-fill trainer default: {setupDraft.trainerAutoFillLocation ? 'On' : 'Off'}
+        </ModeText>
+        <View style={styles.inlineChipRow}>
+          <ModeChip
+            testID="trainer-client-setup-use-default-on"
+            label="Use trainer default"
+            selected={Boolean(setupDraft.autoUseTrainerDefaultLocation)}
+            onPress={() => onPatchDraft({ autoUseTrainerDefaultLocation: true })}
+          />
+          <ModeChip
+            testID="trainer-client-setup-use-default-off"
+            label="Custom location"
+            selected={!setupDraft.autoUseTrainerDefaultLocation}
+            onPress={() => onPatchDraft({ autoUseTrainerDefaultLocation: false })}
+          />
+        </View>
+        <ModeInput
+          testID="trainer-client-setup-client-location-input"
+          value={setupDraft.preferredMeetingLocation || ''}
+          onChangeText={(value) => onPatchDraft({ preferredMeetingLocation: value })}
+          placeholder="Client default location"
+        />
+      </ModeCard>
+
+      <ModeCard variant="surface">
+        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Notes</ModeText>
+        <ModeText variant="caption" tone="secondary">
+          Save durable coaching memory for goals, injuries, food preferences, and accountability themes.
+        </ModeText>
+        <ModeInput
+          testID="trainer-client-setup-notes-input"
+          value={setupDraft.notesText || ''}
+          onChangeText={(value) => onPatchDraft({ notesText: value })}
+          placeholder="Write coaching setup notes..."
+          multiline
+          style={styles.memoryInput}
+        />
+      </ModeCard>
+
+      {setupError ? (
+        <ModeCard variant="surface">
+          <ModeText variant="bodySm" tone="error">{setupError}</ModeText>
+        </ModeCard>
+      ) : null}
+      {setupSuccess ? (
+        <ModeCard variant="surface">
+          <ModeText variant="bodySm" tone="secondary">{setupSuccess}</ModeText>
+        </ModeCard>
+      ) : null}
+
+      <ModeButton
+        testID="trainer-client-setup-save"
+        title={isSaving ? 'Saving...' : 'Save Setup'}
+        variant="primary"
+        disabled={isSaving}
+        onPress={onSave}
+      />
+    </>
+  );
+}
+
+function MemoryEditSheet({
+  visible,
+  record,
+  isSaving,
+  text,
+  tagsText,
+  aiReadable,
+  tagsVisible,
+  onChangeText,
+  onChangeTagsText,
+  onToggleAiReadable,
+  onShowTags,
+  onSave,
+  onClose,
+}) {
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  useEffect(() => {
+    if (!visible) {
+      setKeyboardHeight(0);
+      return undefined;
+    }
+    const openEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const closeEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const openSubscription = Keyboard.addListener(openEvent, (event) => {
+      const nextHeight = Number(event?.endCoordinates?.height) || 0;
+      setKeyboardHeight(Math.max(0, nextHeight));
+    });
+    const closeSubscription = Keyboard.addListener(closeEvent, () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      openSubscription.remove();
+      closeSubscription.remove();
+    };
+  }, [visible]);
+
+  if (!visible || !record) {
+    return null;
+  }
+
+  return (
+    <Modal
+      visible
+      transparent
+      animationType="slide"
+      onRequestClose={onClose}
+    >
+      <View testID="trainer-client-memory-edit-sheet" style={styles.memoryEditSheetRoot}>
+        <Pressable
+          testID="trainer-client-memory-edit-sheet-backdrop"
+          style={styles.memoryEditSheetBackdrop}
+          onPress={onClose}
+        />
+        <GlassSurface
+          state="elevated"
+          radius="xl"
+          padding={0}
+          style={[
+            styles.memoryEditSheet,
+            keyboardHeight > 0 && { marginBottom: keyboardHeight + theme.spacing[1] },
+          ]}
+          contentStyle={styles.memoryEditSheetContent}
+          fillColor={theme.colors.surface.overlay}
+          borderColor={theme.colors.glass.borderStrong}
+          highlight
+        >
+          <View style={styles.memoryEditSheetGrabber} />
+          <View style={styles.memoryEditSheetHeader}>
+            <View style={styles.memoryEditSheetCopy}>
+              <ModeText variant="label" tone="tertiary" style={styles.memoryEditSheetLabel}>Edit Memory</ModeText>
+              <ModeText variant="caption" tone="secondary">{toTitleCase(record.memory_type || 'note')}</ModeText>
+            </View>
+            <Pressable
+              testID="trainer-client-memory-edit-close"
+              style={({ pressed }) => [styles.memoryRowIconButton, pressed && styles.memoryRowIconButtonPressed]}
+              onPress={onClose}
+              accessibilityRole="button"
+              accessibilityLabel="Close memory editor"
+              hitSlop={6}
+            >
+              <Feather name="x" size={16} color={theme.colors.text.secondary} />
+            </Pressable>
+          </View>
+          <ModeInput
+            testID="trainer-client-memory-edit-input"
+            value={text}
+            onChangeText={onChangeText}
+            placeholder="Update memory note..."
+          />
+          <View style={styles.memoryToggleRow}>
+            <ModeText variant="bodySm">AI can read this</ModeText>
+            <GlassToggle
+              testID="trainer-client-memory-edit-ai-toggle"
+              value={aiReadable}
+              onValueChange={onToggleAiReadable}
+              disabled={isSaving}
+            />
+          </View>
+          {tagsVisible ? (
+            <ModeInput
+              testID="trainer-client-memory-edit-tags-input"
+              value={tagsText}
+              onChangeText={onChangeTagsText}
+              placeholder="Tags (comma separated)"
+            />
+          ) : (
+            <Pressable
+              testID="trainer-client-memory-edit-add-tags"
+              onPress={onShowTags}
+              style={({ pressed }) => [styles.memoryTagsAction, pressed && styles.memoryTagsActionPressed]}
+              accessibilityRole="button"
+              accessibilityLabel="Add tags"
+            >
+              <ModeText variant="caption" tone="secondary" style={styles.memoryTagsActionText}>Add tags</ModeText>
+            </Pressable>
+          )}
+          <View style={styles.memoryEditSheetActionRow}>
+            <ModeButton
+              testID="trainer-client-memory-edit-cancel"
+              title="Cancel"
+              variant="ghost"
+              size="sm"
+              disabled={isSaving}
+              onPress={onClose}
+              style={styles.memoryEditSheetActionButton}
+            />
+            <ModeButton
+              testID="trainer-client-memory-edit-save"
+              title={isSaving ? 'Saving...' : 'Save'}
+              variant="primary"
+              size="sm"
+              disabled={isSaving}
+              onPress={onSave}
+              style={styles.memoryEditSheetActionButton}
+            />
+          </View>
+        </GlassSurface>
+      </View>
+    </Modal>
+  );
+}
+
+export default function TrainerClientsScreen({
+  accessToken,
+  bottomInset = 0,
+  onOpenTrainerCoach = null,
+}) {
+  const insets = useSafeAreaInsets();
   const [viewMode, setViewMode] = useState(VIEW_MODE.COMMAND_CENTER);
-  const [dayFilter, setDayFilter] = useState('today');
-  const [sessionFilter, setSessionFilter] = useState('scheduled');
-  const [priorityFilter, setPriorityFilter] = useState('all');
+  const [dayFilter, setDayFilter] = useState(DEFAULT_DAY_FILTER);
+  const [sessionFilter, setSessionFilter] = useState(DEFAULT_SESSION_FILTER);
+  const [priorityFilter, setPriorityFilter] = useState(DEFAULT_PRIORITY_FILTER);
+  const [activeFilterSheet, setActiveFilterSheet] = useState(null);
   const [commandCenterPayload, setCommandCenterPayload] = useState(null);
   const [isLoadingCommandCenter, setIsLoadingCommandCenter] = useState(true);
   const [hasLoadedCommandCenter, setHasLoadedCommandCenter] = useState(false);
   const [isRefreshingTalkingPoints, setIsRefreshingTalkingPoints] = useState(false);
   const [commandCenterError, setCommandCenterError] = useState(null);
-  const [scheduleMutationError, setScheduleMutationError] = useState(null);
-  const [scheduleMutationSuccess, setScheduleMutationSuccess] = useState(null);
+  const [scheduleBaseByClient, setScheduleBaseByClient] = useState({});
   const [scheduleDraftByClient, setScheduleDraftByClient] = useState({});
+  const [scheduleTouchedByClient, setScheduleTouchedByClient] = useState({});
+  const [scheduleUiByClient, setScheduleUiByClient] = useState({});
+  const [scheduleFeedbackByClient, setScheduleFeedbackByClient] = useState({});
   const [savingScheduleClientId, setSavingScheduleClientId] = useState(null);
+  const [commandCenterActionsClientId, setCommandCenterActionsClientId] = useState(null);
 
   const [selectedClientId, setSelectedClientId] = useState(null);
   const [detailPayload, setDetailPayload] = useState(null);
@@ -379,29 +1172,46 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   const [aiContextPayload, setAiContextPayload] = useState(null);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState(null);
+  const [detailScheduleBase, setDetailScheduleBase] = useState(null);
   const [detailScheduleDraft, setDetailScheduleDraft] = useState(null);
+  const [detailScheduleUi, setDetailScheduleUi] = useState({
+    isTemplateExpanded: false,
+    activeQuickRow: null,
+    isActionsSheetOpen: false,
+  });
   const [isSavingDetailSchedule, setIsSavingDetailSchedule] = useState(false);
   const [detailScheduleError, setDetailScheduleError] = useState(null);
   const [detailScheduleSuccess, setDetailScheduleSuccess] = useState(null);
+  const [isDetailContextExpanded, setIsDetailContextExpanded] = useState(false);
+  const [setupClientId, setSetupClientId] = useState(null);
+  const [setupReturnView, setSetupReturnView] = useState(VIEW_MODE.COMMAND_CENTER);
+  const [setupFocusSection, setSetupFocusSection] = useState('schedule');
+  const [setupDraft, setSetupDraft] = useState(null);
+  const [setupNotesMemoryId, setSetupNotesMemoryId] = useState(null);
+  const [setupError, setSetupError] = useState(null);
+  const [setupSuccess, setSetupSuccess] = useState(null);
+  const [isLoadingSetup, setIsLoadingSetup] = useState(false);
+  const [isSavingSetup, setIsSavingSetup] = useState(false);
 
-  const [newMemoryType, setNewMemoryType] = useState('note');
-  const [newMemoryVisibility, setNewMemoryVisibility] = useState('internal_only');
   const [newMemoryText, setNewMemoryText] = useState('');
+  const [newMemoryAiReadable, setNewMemoryAiReadable] = useState(false);
   const [newMemoryTagsText, setNewMemoryTagsText] = useState('');
+  const [isNewMemoryTagsVisible, setIsNewMemoryTagsVisible] = useState(false);
   const [isSavingMemory, setIsSavingMemory] = useState(false);
   const [memoryMutationError, setMemoryMutationError] = useState(null);
   const [memoryMutationSuccess, setMemoryMutationSuccess] = useState(null);
 
   const [editingMemoryId, setEditingMemoryId] = useState(null);
   const [editingText, setEditingText] = useState('');
-  const [editingVisibility, setEditingVisibility] = useState('internal_only');
+  const [editingAiReadable, setEditingAiReadable] = useState(false);
   const [editingTagsText, setEditingTagsText] = useState('');
+  const [isEditingTagsVisible, setIsEditingTagsVisible] = useState(false);
 
   const [draftQueueItems, setDraftQueueItems] = useState([]);
   const [isLoadingDraftQueue, setIsLoadingDraftQueue] = useState(true);
   const [draftQueueError, setDraftQueueError] = useState(null);
   const [activeDraftOutputId, setActiveDraftOutputId] = useState(null);
-  const [draftReviewText, setDraftReviewText] = useState('');
+  const [activeDraftModel, setActiveDraftModel] = useState(null);
   const [isMutatingDraftReview, setIsMutatingDraftReview] = useState(false);
   const [draftReviewMutationError, setDraftReviewMutationError] = useState(null);
   const [draftReviewMutationSuccess, setDraftReviewMutationSuccess] = useState(null);
@@ -419,9 +1229,22 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     () => DAY_FILTERS.find((option) => option.key === dayFilter) || DAY_FILTERS[0],
     [dayFilter],
   );
+  const selectedSessionConfig = useMemo(
+    () => SESSION_FILTERS.find((option) => option.key === sessionFilter) || SESSION_FILTERS[0],
+    [sessionFilter],
+  );
+  const selectedPriorityConfig = useMemo(
+    () => PRIORITY_FILTERS.find((option) => option.key === priorityFilter) || PRIORITY_FILTERS[0],
+    [priorityFilter],
+  );
   const plannerDate = useMemo(
     () => buildPlannerDateByOffset(selectedDayConfig.offsetDays),
     [selectedDayConfig.offsetDays],
+  );
+  const hasCustomFilters = (
+    dayFilter !== DEFAULT_DAY_FILTER
+    || sessionFilter !== DEFAULT_SESSION_FILTER
+    || priorityFilter !== DEFAULT_PRIORITY_FILTER
   );
 
   const clientItems = useMemo(() => (
@@ -433,6 +1256,10 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   const selectedClientFromList = useMemo(
     () => clientItems.find((item) => item.client_id === selectedClientId) || null,
     [clientItems, selectedClientId],
+  );
+  const setupClientFromList = useMemo(
+    () => clientItems.find((item) => item.client_id === setupClientId) || null,
+    [clientItems, setupClientId],
   );
 
   const draftReviewTrackerScopeId = useMemo(() => {
@@ -487,6 +1314,33 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     }
     return baseItems;
   }, [clientItems, plannerDate, priorityFilter, sessionFilter]);
+
+  const editingMemoryRecord = useMemo(() => (
+    Array.isArray(memoryRecords)
+      ? memoryRecords.find((record) => record?.id === editingMemoryId) || null
+      : null
+  ), [editingMemoryId, memoryRecords]);
+
+  const scheduleDirtyByClient = useMemo(() => {
+    const nextDirtyByClient = {};
+    clientItems.forEach((client) => {
+      const clientId = client?.client_id;
+      if (!clientId) {
+        return;
+      }
+      const baseDraft = scheduleBaseByClient[clientId] || buildClientScheduleDraft(client);
+      const currentDraft = scheduleDraftByClient[clientId] || baseDraft;
+      nextDirtyByClient[clientId] = !areScheduleDraftsEqual(currentDraft, baseDraft);
+    });
+    return nextDirtyByClient;
+  }, [clientItems, scheduleBaseByClient, scheduleDraftByClient]);
+
+  const detailScheduleDirty = useMemo(() => {
+    if (!detailScheduleBase || !detailScheduleDraft) {
+      return false;
+    }
+    return !areScheduleDraftsEqual(detailScheduleDraft, detailScheduleBase);
+  }, [detailScheduleBase, detailScheduleDraft]);
 
   const loadCommandCenter = useCallback(async ({
     refreshTalkingPoints = false,
@@ -630,60 +1484,281 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   }, [loadDraftReviewTrackerState]);
 
   useEffect(() => {
-    setDraftReviewText(resolveDraftReviewOutputSeed(activeDraft));
+    setActiveDraftModel(activeDraft ? transformPlan(activeDraft) : null);
     setDraftReviewMutationError(null);
     // Preserve local edits when queue metadata refreshes for the same output.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeDraft?.output_id]);
 
   useEffect(() => {
-    const nextDrafts = {};
+    const nextBaseByClient = {};
     clientItems.forEach((item) => {
       const clientId = item?.client_id;
       if (!clientId) {
         return;
       }
-      nextDrafts[clientId] = buildClientScheduleDraft(item);
+      nextBaseByClient[clientId] = buildClientScheduleDraft(item);
     });
-    setScheduleDraftByClient(nextDrafts);
+    setScheduleBaseByClient(nextBaseByClient);
+    setScheduleDraftByClient((previousDraftByClient) => {
+      const nextDraftByClient = {};
+      Object.keys(nextBaseByClient).forEach((clientId) => {
+        const previousDraft = previousDraftByClient[clientId];
+        const previousBase = scheduleBaseByClient[clientId];
+        const shouldPreserveDraft = (
+          previousDraft
+          && previousBase
+          && !areScheduleDraftsEqual(previousDraft, previousBase)
+        );
+        nextDraftByClient[clientId] = shouldPreserveDraft
+          ? previousDraft
+          : nextBaseByClient[clientId];
+      });
+      return nextDraftByClient;
+    });
+    setScheduleUiByClient((previousUiByClient) => {
+      const nextUiByClient = {};
+      Object.keys(nextBaseByClient).forEach((clientId) => {
+        if (previousUiByClient[clientId]) {
+          nextUiByClient[clientId] = previousUiByClient[clientId];
+          return;
+        }
+        nextUiByClient[clientId] = buildScheduleUiState(nextBaseByClient[clientId]);
+      });
+      return nextUiByClient;
+    });
+    setScheduleFeedbackByClient((previousFeedbackByClient) => {
+      const nextFeedbackByClient = {};
+      Object.keys(nextBaseByClient).forEach((clientId) => {
+        if (previousFeedbackByClient[clientId]) {
+          nextFeedbackByClient[clientId] = previousFeedbackByClient[clientId];
+        }
+      });
+      return nextFeedbackByClient;
+    });
+    setScheduleTouchedByClient((previousTouchedByClient) => {
+      const nextTouchedByClient = {};
+      Object.keys(nextBaseByClient).forEach((clientId) => {
+        if (previousTouchedByClient[clientId]) {
+          nextTouchedByClient[clientId] = true;
+        }
+      });
+      return nextTouchedByClient;
+    });
+  // Preserve unsaved per-client edits during command-center refresh.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clientItems]);
 
   useEffect(() => {
-    setScheduleMutationError(null);
-    setScheduleMutationSuccess(null);
+    setScheduleFeedbackByClient({});
   }, [dayFilter, sessionFilter]);
+
+  const closeFilterSheet = useCallback(() => {
+    setActiveFilterSheet(null);
+  }, []);
+
+  const openDayFilterSheet = useCallback(() => {
+    setActiveFilterSheet(FILTER_SHEET.DAY);
+  }, []);
+
+  const openSessionFilterSheet = useCallback(() => {
+    setActiveFilterSheet(FILTER_SHEET.SESSION);
+  }, []);
+
+  const openPriorityFilterSheet = useCallback(() => {
+    setActiveFilterSheet(FILTER_SHEET.PRIORITY);
+  }, []);
+
+  const handleSelectDayFilter = useCallback((nextFilterKey) => {
+    setDayFilter(nextFilterKey);
+    setActiveFilterSheet(null);
+  }, []);
+
+  const handleSelectSessionFilter = useCallback((nextFilterKey) => {
+    setSessionFilter(nextFilterKey);
+    setActiveFilterSheet(null);
+  }, []);
+
+  const handleSelectPriorityFilter = useCallback((nextFilterKey) => {
+    setPriorityFilter(nextFilterKey);
+    setActiveFilterSheet(null);
+  }, []);
+
+  const resetFilters = useCallback(() => {
+    setDayFilter(DEFAULT_DAY_FILTER);
+    setSessionFilter(DEFAULT_SESSION_FILTER);
+    setPriorityFilter(DEFAULT_PRIORITY_FILTER);
+    setActiveFilterSheet(null);
+  }, []);
+
+  const activeFilterSheetConfig = useMemo(() => {
+    if (activeFilterSheet === FILTER_SHEET.DAY) {
+      return {
+        title: 'Day Window',
+        options: DAY_FILTERS,
+        selectedKey: dayFilter,
+        onSelect: handleSelectDayFilter,
+      };
+    }
+    if (activeFilterSheet === FILTER_SHEET.SESSION) {
+      return {
+        title: 'Session Scope',
+        options: SESSION_FILTERS,
+        selectedKey: sessionFilter,
+        onSelect: handleSelectSessionFilter,
+      };
+    }
+    if (activeFilterSheet === FILTER_SHEET.PRIORITY) {
+      return {
+        title: 'Priority',
+        options: PRIORITY_FILTERS,
+        selectedKey: priorityFilter,
+        onSelect: handleSelectPriorityFilter,
+      };
+    }
+    return null;
+  }, [
+    activeFilterSheet,
+    dayFilter,
+    handleSelectDayFilter,
+    handleSelectPriorityFilter,
+    handleSelectSessionFilter,
+    priorityFilter,
+    sessionFilter,
+  ]);
 
   useEffect(() => {
     const nextSchedulePreferences = detailPayload?.schedule_preferences;
     if (!nextSchedulePreferences) {
+      setDetailScheduleBase(null);
       setDetailScheduleDraft(null);
+      setDetailScheduleUi({
+        isTemplateExpanded: false,
+        activeQuickRow: null,
+        isActionsSheetOpen: false,
+      });
       return;
     }
-    setDetailScheduleDraft(buildDetailScheduleDraft(nextSchedulePreferences));
+    const nextBase = buildDetailScheduleDraft(nextSchedulePreferences);
+    const shouldPreserveDraft = (
+      detailScheduleDraft
+      && detailScheduleBase
+      && !areScheduleDraftsEqual(detailScheduleDraft, detailScheduleBase)
+    );
+    setDetailScheduleBase(nextBase);
+    setDetailScheduleDraft(shouldPreserveDraft ? detailScheduleDraft : nextBase);
+    if (!shouldPreserveDraft) {
+      setDetailScheduleUi({
+        isTemplateExpanded: !hasConfiguredTemplate(nextBase),
+        activeQuickRow: null,
+        isActionsSheetOpen: false,
+      });
+    }
+  // Preserve detail edits unless the incoming payload changes from a clean base.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [detailPayload?.schedule_preferences]);
 
   const handleOpenClientDetail = async (clientId) => {
+    setCommandCenterActionsClientId(null);
     setSelectedClientId(clientId);
     setViewMode(VIEW_MODE.CLIENT_DETAIL);
+    setIsDetailContextExpanded(false);
     setDetailScheduleError(null);
     setDetailScheduleSuccess(null);
+    setDetailScheduleUi({
+      isTemplateExpanded: false,
+      activeQuickRow: null,
+      isActionsSheetOpen: false,
+    });
     await loadClientDetailView(clientId);
+  };
+
+  const handleOpenClientSetup = async (
+    clientId,
+    {
+      focusSection = 'schedule',
+      origin = VIEW_MODE.COMMAND_CENTER,
+    } = {},
+  ) => {
+    if (!accessToken || !clientId) {
+      return;
+    }
+    setCommandCenterActionsClientId(null);
+    setSetupClientId(clientId);
+    setSetupReturnView(origin);
+    setSetupFocusSection(focusSection);
+    setSetupError(null);
+    setSetupSuccess(null);
+    setIsLoadingSetup(true);
+    setViewMode(VIEW_MODE.CLIENT_SETUP);
+    try {
+      const [schedulePreferences, memoryRecordsPayload] = await Promise.all([
+        getTrainerClientSchedulePreferences({
+          accessToken,
+          clientId,
+          date: plannerDate,
+        }),
+        listTrainerClientMemory({
+          accessToken,
+          clientId,
+        }),
+      ]);
+      const notesRecord = findClientSetupNotesRecord(memoryRecordsPayload);
+      setSetupNotesMemoryId(notesRecord?.id || null);
+      setSetupDraft({
+        recurringWeekdays: Array.isArray(schedulePreferences?.recurring_weekdays)
+          ? schedulePreferences.recurring_weekdays
+          : [],
+        preferredMeetingLocation: String(schedulePreferences?.preferred_meeting_location || ''),
+        autoUseTrainerDefaultLocation: schedulePreferences?.auto_use_trainer_default_location !== false,
+        overrideMode: normalizeSetupOverrideMode(schedulePreferences?.selected_date_exception_type),
+        overrideLocation: String(schedulePreferences?.selected_date_meeting_location_override || ''),
+        trainerDefaultLocation: String(schedulePreferences?.trainer_default_meeting_location || ''),
+        trainerAutoFillLocation: schedulePreferences?.trainer_auto_fill_meeting_location !== false,
+        notesText: String(notesRecord?.text || ''),
+      });
+    } catch (error) {
+      setSetupDraft(null);
+      setSetupError(error?.message || 'Unable to load client setup.');
+    } finally {
+      setIsLoadingSetup(false);
+    }
+  };
+
+  const handleBackFromClientSetup = () => {
+    const nextViewMode = setupReturnView === VIEW_MODE.CLIENT_DETAIL
+      ? VIEW_MODE.CLIENT_DETAIL
+      : VIEW_MODE.COMMAND_CENTER;
+    setViewMode(nextViewMode);
+    setSetupError(null);
+    setSetupSuccess(null);
+    setSetupClientId(null);
+    setSetupDraft(null);
+    setSetupNotesMemoryId(null);
+    setSetupFocusSection('schedule');
   };
 
   const handleBackToCommandCenter = () => {
     setViewMode(VIEW_MODE.COMMAND_CENTER);
+    setIsDetailContextExpanded(false);
+    cancelEditMemory();
     setDetailError(null);
     setMemoryMutationError(null);
     setMemoryMutationSuccess(null);
     setDetailScheduleError(null);
     setDetailScheduleSuccess(null);
+    setDetailScheduleUi({
+      isTemplateExpanded: false,
+      activeQuickRow: null,
+      isActionsSheetOpen: false,
+    });
   };
 
   const resetNewMemoryForm = () => {
     setNewMemoryText('');
     setNewMemoryTagsText('');
-    setNewMemoryVisibility('internal_only');
-    setNewMemoryType('note');
+    setNewMemoryAiReadable(false);
+    setIsNewMemoryTagsVisible(false);
   };
 
   const handleCreateMemory = async () => {
@@ -702,9 +1777,9 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
       await createTrainerClientMemory({
         accessToken,
         clientId: selectedClientId,
-        memoryType: newMemoryType,
+        memoryType: 'note',
         text: trimmedText,
-        visibility: newMemoryVisibility,
+        visibility: newMemoryAiReadable ? 'ai_usable' : 'internal_only',
         tags: parseTags(newMemoryTagsText),
       });
       await loadClientDetailView(selectedClientId);
@@ -721,8 +1796,9 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   const startEditMemory = (record) => {
     setEditingMemoryId(record.id);
     setEditingText(record.text || '');
-    setEditingVisibility(record.visibility || 'internal_only');
+    setEditingAiReadable(record.visibility === 'ai_usable');
     setEditingTagsText(Array.isArray(record.tags) ? record.tags.join(', ') : '');
+    setIsEditingTagsVisible(Boolean(Array.isArray(record.tags) && record.tags.length > 0));
     setMemoryMutationError(null);
     setMemoryMutationSuccess(null);
   };
@@ -730,12 +1806,13 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   const cancelEditMemory = () => {
     setEditingMemoryId(null);
     setEditingText('');
-    setEditingVisibility('internal_only');
+    setEditingAiReadable(false);
     setEditingTagsText('');
+    setIsEditingTagsVisible(false);
   };
 
-  const handleSaveMemoryEdit = async (memoryId) => {
-    if (!accessToken || !selectedClientId || isSavingMemory) {
+  const handleSaveMemoryEdit = async () => {
+    if (!accessToken || !selectedClientId || !editingMemoryId || isSavingMemory) {
       return;
     }
     const trimmedText = editingText.trim();
@@ -750,9 +1827,9 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
       await updateTrainerClientMemory({
         accessToken,
         clientId: selectedClientId,
-        memoryId,
+        memoryId: editingMemoryId,
         text: trimmedText,
-        visibility: editingVisibility,
+        visibility: editingAiReadable ? 'ai_usable' : 'internal_only',
         tags: parseTags(editingTagsText),
       });
       await loadClientDetailView(selectedClientId);
@@ -792,13 +1869,39 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     }
   };
 
+  const patchScheduleUiByClient = (clientId, nextFields) => {
+    setScheduleUiByClient((previousUiByClient) => ({
+      ...previousUiByClient,
+      [clientId]: {
+        ...buildScheduleUiState(
+          scheduleDraftByClient[clientId]
+          || scheduleBaseByClient[clientId]
+          || buildClientScheduleDraft(clientItems.find((item) => item.client_id === clientId)),
+        ),
+        ...(previousUiByClient[clientId] || {}),
+        ...nextFields,
+      },
+    }));
+  };
+
   const handleScheduleDraftPatch = (clientId, nextFields) => {
-    setScheduleDraftByClient((previous) => ({
-      ...previous,
+    setScheduleDraftByClient((previousDraftByClient) => ({
+      ...previousDraftByClient,
       [clientId]: {
         ...buildClientScheduleDraft(clientItems.find((item) => item.client_id === clientId)),
-        ...(previous[clientId] || {}),
+        ...(previousDraftByClient[clientId] || {}),
         ...nextFields,
+      },
+    }));
+    setScheduleTouchedByClient((previousTouchedByClient) => ({
+      ...previousTouchedByClient,
+      [clientId]: true,
+    }));
+    setScheduleFeedbackByClient((previousFeedbackByClient) => ({
+      ...previousFeedbackByClient,
+      [clientId]: {
+        error: null,
+        success: null,
       },
     }));
   };
@@ -820,8 +1923,13 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
       clientItems.find((item) => item.client_id === clientId),
     );
     setSavingScheduleClientId(clientId);
-    setScheduleMutationError(null);
-    setScheduleMutationSuccess(null);
+    setScheduleFeedbackByClient((previousFeedbackByClient) => ({
+      ...previousFeedbackByClient,
+      [clientId]: {
+        error: null,
+        success: null,
+      },
+    }));
     try {
       const preferredMeetingLocation = String(draft.preferredMeetingLocation || '').trim();
       await patchTrainerClientSchedulePreferences({
@@ -831,10 +1939,40 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         preferredMeetingLocation: preferredMeetingLocation || null,
         autoUseTrainerDefaultLocation: Boolean(draft.autoUseTrainerDefaultLocation),
       });
+      const savedDraft = {
+        ...draft,
+        preferredMeetingLocation,
+      };
+      setScheduleBaseByClient((previousBaseByClient) => ({
+        ...previousBaseByClient,
+        [clientId]: savedDraft,
+      }));
+      if (hasConfiguredTemplate(savedDraft)) {
+        patchScheduleUiByClient(clientId, {
+          isTemplateExpanded: false,
+          activeQuickRow: null,
+        });
+      }
       await loadCommandCenter({ silent: true });
-      setScheduleMutationSuccess('Client schedule template saved.');
+      setScheduleTouchedByClient((previousTouchedByClient) => ({
+        ...previousTouchedByClient,
+        [clientId]: false,
+      }));
+      setScheduleFeedbackByClient((previousFeedbackByClient) => ({
+        ...previousFeedbackByClient,
+        [clientId]: {
+          error: null,
+          success: 'Schedule saved.',
+        },
+      }));
     } catch (error) {
-      setScheduleMutationError(error?.message || 'Unable to save client schedule template.');
+      setScheduleFeedbackByClient((previousFeedbackByClient) => ({
+        ...previousFeedbackByClient,
+        [clientId]: {
+          error: error?.message || 'Unable to save schedule template.',
+          success: null,
+        },
+      }));
     } finally {
       setSavingScheduleClientId(null);
     }
@@ -846,8 +1984,13 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     }
     const draft = scheduleDraftByClient[clientId] || {};
     setSavingScheduleClientId(clientId);
-    setScheduleMutationError(null);
-    setScheduleMutationSuccess(null);
+    setScheduleFeedbackByClient((previousFeedbackByClient) => ({
+      ...previousFeedbackByClient,
+      [clientId]: {
+        error: null,
+        success: null,
+      },
+    }));
     try {
       const exceptionLocationOverride = String(draft.exceptionLocationOverride || '').trim();
       await createTrainerClientScheduleException({
@@ -857,17 +2000,37 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         exceptionType,
         meetingLocationOverride: exceptionLocationOverride || null,
       });
+      setScheduleDraftByClient((previousDraftByClient) => ({
+        ...previousDraftByClient,
+        [clientId]: {
+          ...(previousDraftByClient[clientId] || buildClientScheduleDraft(clientItems.find((item) => item.client_id === clientId))),
+          exceptionType,
+        },
+      }));
+      setCommandCenterActionsClientId((previousClientId) => (
+        previousClientId === clientId ? null : previousClientId
+      ));
       await loadCommandCenter({ silent: true });
       if (selectedClientId === clientId) {
         await loadClientDetailView(clientId);
       }
-      setScheduleMutationSuccess(
-        exceptionType === 'skip'
-          ? `Marked ${plannerDayLabel} as skipped.`
-          : `Added one-off session for ${plannerDayLabel}.`,
-      );
+      setScheduleFeedbackByClient((previousFeedbackByClient) => ({
+        ...previousFeedbackByClient,
+        [clientId]: {
+          error: null,
+          success: exceptionType === 'skip'
+            ? `Marked ${plannerDayLabel} as skipped.`
+            : `Added one-off session for ${plannerDayLabel}.`,
+        },
+      }));
     } catch (error) {
-      setScheduleMutationError(error?.message || 'Unable to save schedule exception.');
+      setScheduleFeedbackByClient((previousFeedbackByClient) => ({
+        ...previousFeedbackByClient,
+        [clientId]: {
+          error: error?.message || 'Unable to save schedule exception.',
+          success: null,
+        },
+      }));
     } finally {
       setSavingScheduleClientId(null);
     }
@@ -878,24 +2041,57 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
       return;
     }
     setSavingScheduleClientId(clientId);
-    setScheduleMutationError(null);
-    setScheduleMutationSuccess(null);
+    setScheduleFeedbackByClient((previousFeedbackByClient) => ({
+      ...previousFeedbackByClient,
+      [clientId]: {
+        error: null,
+        success: null,
+      },
+    }));
     try {
       await deleteTrainerClientScheduleException({
         accessToken,
         clientId,
         sessionDate: plannerDate,
       });
+      setScheduleDraftByClient((previousDraftByClient) => ({
+        ...previousDraftByClient,
+        [clientId]: {
+          ...(previousDraftByClient[clientId] || buildClientScheduleDraft(clientItems.find((item) => item.client_id === clientId))),
+          exceptionType: null,
+        },
+      }));
+      setCommandCenterActionsClientId((previousClientId) => (
+        previousClientId === clientId ? null : previousClientId
+      ));
       await loadCommandCenter({ silent: true });
       if (selectedClientId === clientId) {
         await loadClientDetailView(clientId);
       }
-      setScheduleMutationSuccess('Date override cleared.');
+      setScheduleFeedbackByClient((previousFeedbackByClient) => ({
+        ...previousFeedbackByClient,
+        [clientId]: {
+          error: null,
+          success: 'Date override cleared.',
+        },
+      }));
     } catch (error) {
       if (String(error?.message || '').toLowerCase() === 'schedule exception not found') {
-        setScheduleMutationSuccess('No date override was set.');
+        setScheduleFeedbackByClient((previousFeedbackByClient) => ({
+          ...previousFeedbackByClient,
+          [clientId]: {
+            error: null,
+            success: 'No date override was set.',
+          },
+        }));
       } else {
-        setScheduleMutationError(error?.message || 'Unable to clear schedule exception.');
+        setScheduleFeedbackByClient((previousFeedbackByClient) => ({
+          ...previousFeedbackByClient,
+          [clientId]: {
+            error: error?.message || 'Unable to clear schedule exception.',
+            success: null,
+          },
+        }));
       }
     } finally {
       setSavingScheduleClientId(null);
@@ -907,6 +2103,8 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
       ...(previous || buildDetailScheduleDraft(detailPayload?.schedule_preferences)),
       ...nextFields,
     }));
+    setDetailScheduleError(null);
+    setDetailScheduleSuccess(null);
   };
 
   const handleToggleDetailWeekday = (weekday) => {
@@ -934,9 +2132,21 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         preferredMeetingLocation: preferredMeetingLocation || null,
         autoUseTrainerDefaultLocation: Boolean(detailScheduleDraft.autoUseTrainerDefaultLocation),
       });
+      const savedDraft = {
+        ...detailScheduleDraft,
+        preferredMeetingLocation,
+      };
+      setDetailScheduleBase(savedDraft);
+      if (hasConfiguredTemplate(savedDraft)) {
+        setDetailScheduleUi((previousUi) => ({
+          ...previousUi,
+          isTemplateExpanded: false,
+          activeQuickRow: null,
+        }));
+      }
       await loadClientDetailView(selectedClientId);
       await loadCommandCenter({ silent: true });
-      setDetailScheduleSuccess('Schedule template saved.');
+      setDetailScheduleSuccess('Schedule saved.');
     } catch (error) {
       setDetailScheduleError(error?.message || 'Unable to save schedule template.');
     } finally {
@@ -960,6 +2170,14 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         exceptionType,
         meetingLocationOverride: meetingLocationOverride || null,
       });
+      setDetailScheduleDraft((previousDraft) => ({
+        ...(previousDraft || buildDetailScheduleDraft(detailPayload?.schedule_preferences)),
+        exceptionType,
+      }));
+      setDetailScheduleUi((previousUi) => ({
+        ...previousUi,
+        isActionsSheetOpen: false,
+      }));
       await loadClientDetailView(selectedClientId);
       await loadCommandCenter({ silent: true });
       setDetailScheduleSuccess(
@@ -987,6 +2205,14 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         clientId: selectedClientId,
         sessionDate: plannerDate,
       });
+      setDetailScheduleDraft((previousDraft) => ({
+        ...(previousDraft || buildDetailScheduleDraft(detailPayload?.schedule_preferences)),
+        exceptionType: null,
+      }));
+      setDetailScheduleUi((previousUi) => ({
+        ...previousUi,
+        isActionsSheetOpen: false,
+      }));
       await loadClientDetailView(selectedClientId);
       await loadCommandCenter({ silent: true });
       setDetailScheduleSuccess('Date override cleared.');
@@ -1001,6 +2227,127 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     }
   };
 
+  const patchSetupDraft = (nextFields) => {
+    setSetupDraft((previousDraft) => ({
+      ...(previousDraft || {}),
+      ...nextFields,
+    }));
+    setSetupError(null);
+    setSetupSuccess(null);
+  };
+
+  const handleToggleSetupRecurringWeekday = (weekday) => {
+    const currentWeekdays = Array.isArray(setupDraft?.recurringWeekdays)
+      ? setupDraft.recurringWeekdays
+      : [];
+    patchSetupDraft({
+      recurringWeekdays: toggleIsoWeekday(currentWeekdays, weekday),
+    });
+  };
+
+  const saveClientSetup = async () => {
+    if (!accessToken || !setupClientId || !setupDraft || isSavingSetup) {
+      return;
+    }
+    setIsSavingSetup(true);
+    setSetupError(null);
+    setSetupSuccess(null);
+    try {
+      const preferredMeetingLocation = String(setupDraft.preferredMeetingLocation || '').trim();
+      const overrideLocation = String(setupDraft.overrideLocation || '').trim();
+      const notesText = String(setupDraft.notesText || '').trim();
+
+      await patchTrainerClientSchedulePreferences({
+        accessToken,
+        clientId: setupClientId,
+        recurringWeekdays: Array.isArray(setupDraft.recurringWeekdays) ? setupDraft.recurringWeekdays : [],
+        preferredMeetingLocation: preferredMeetingLocation || null,
+        autoUseTrainerDefaultLocation: Boolean(setupDraft.autoUseTrainerDefaultLocation),
+      });
+
+      if (setupDraft.overrideMode === 'none') {
+        try {
+          await deleteTrainerClientScheduleException({
+            accessToken,
+            clientId: setupClientId,
+            sessionDate: plannerDate,
+          });
+        } catch (error) {
+          const message = String(error?.message || '').toLowerCase();
+          if (message !== 'schedule exception not found') {
+            throw error;
+          }
+        }
+      } else {
+        await createTrainerClientScheduleException({
+          accessToken,
+          clientId: setupClientId,
+          sessionDate: plannerDate,
+          exceptionType: setupDraft.overrideMode,
+          meetingLocationOverride: setupDraft.overrideMode === 'add'
+            ? (overrideLocation || null)
+            : null,
+        });
+      }
+
+      if (setupNotesMemoryId) {
+        if (notesText) {
+          await updateTrainerClientMemory({
+            accessToken,
+            clientId: setupClientId,
+            memoryId: setupNotesMemoryId,
+            text: notesText,
+            visibility: 'ai_usable',
+            tags: ['client_setup'],
+            memoryKey: CLIENT_SETUP_NOTES_MEMORY_KEY,
+            structuredData: {
+              source: 'client_setup_editor',
+              version: 'v1',
+            },
+          });
+        } else {
+          await archiveTrainerClientMemory({
+            accessToken,
+            clientId: setupClientId,
+            memoryId: setupNotesMemoryId,
+          });
+          setSetupNotesMemoryId(null);
+        }
+      } else if (notesText) {
+        const createdNotes = await createTrainerClientMemory({
+          accessToken,
+          clientId: setupClientId,
+          memoryType: 'note',
+          memoryKey: CLIENT_SETUP_NOTES_MEMORY_KEY,
+          text: notesText,
+          visibility: 'ai_usable',
+          tags: ['client_setup'],
+          structuredData: {
+            source: 'client_setup_editor',
+            version: 'v1',
+          },
+        });
+        setSetupNotesMemoryId(createdNotes?.id || null);
+      }
+
+      setSetupDraft((previousDraft) => ({
+        ...(previousDraft || {}),
+        preferredMeetingLocation,
+        overrideLocation,
+        notesText,
+      }));
+      await loadCommandCenter({ silent: true });
+      if (selectedClientId === setupClientId) {
+        await loadClientDetailView(setupClientId);
+      }
+      setSetupSuccess('Client setup saved.');
+    } catch (error) {
+      setSetupError(error?.message || 'Unable to save client setup.');
+    } finally {
+      setIsSavingSetup(false);
+    }
+  };
+
   const handleRefreshCommandCenter = async ({ refreshTalkingPoints = false } = {}) => {
     await Promise.all([
       loadCommandCenter({ refreshTalkingPoints }),
@@ -1008,24 +2355,22 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     ]);
   };
 
-  const runDraftReviewMutation = async (actionType) => {
+  const runDraftReviewMutation = async (
+    actionType,
+    {
+      reasonOverride = null,
+      launchRegenerationIntent = false,
+    } = {},
+  ) => {
     if (!accessToken || !activeDraft?.output_id || isMutatingDraftReview) {
       return;
     }
 
     const outputId = activeDraft.output_id;
-    const editedOutputText = draftReviewText.trim();
-    if (!editedOutputText) {
-      setDraftReviewMutationError('Add review text before continuing.');
-      return;
-    }
-
-    const editedOutputJson = {
-      ...(activeDraft.output_json && typeof activeDraft.output_json === 'object'
-        ? activeDraft.output_json
-        : {}),
-      summary: editedOutputText,
-    };
+    const uiState = activeDraftModel && typeof activeDraftModel === 'object'
+      ? activeDraftModel
+      : transformPlan(activeDraft);
+    const { editedOutputJson, editedOutputText } = rebuildJSON(uiState, activeDraft);
     const nextQueueState = buildNextDraftReviewState(draftQueueItems, outputId, actionType);
 
     setIsMutatingDraftReview(true);
@@ -1054,7 +2399,7 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         await rejectTrainerCoachQueueItem({
           accessToken,
           outputId,
-          reason: 'Rejected from Clients Draft Review flow.',
+          reason: reasonOverride || 'Rejected from Clients Draft Review flow.',
           editedOutputText,
           editedOutputJson,
         });
@@ -1076,8 +2421,14 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         setDraftReviewMutationSuccess('Edit saved. Moving to the next draft.');
       } else if (actionType === DRAFT_REVIEW_ACTION_TYPE.APPROVE) {
         setDraftReviewMutationSuccess('Draft approved. Moving to the next draft.');
+      } else if (launchRegenerationIntent) {
+        setDraftReviewMutationSuccess('Draft rejected and regeneration launched in Coach.');
       } else {
         setDraftReviewMutationSuccess('Draft rejected. Moving to the next draft.');
+      }
+
+      if (launchRegenerationIntent && typeof onOpenTrainerCoach === 'function') {
+        onOpenTrainerCoach(buildRegenerationLaunchContext(activeDraft, uiState));
       }
 
       await loadDraftQueue({
@@ -1091,6 +2442,25 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     } finally {
       setIsMutatingDraftReview(false);
     }
+  };
+
+  const handleRetryDraftRender = () => {
+    if (!activeDraft) {
+      return;
+    }
+    setActiveDraftModel(transformPlan(activeDraft));
+    setDraftReviewMutationError(null);
+    setDraftReviewMutationSuccess('Draft rendering refreshed.');
+  };
+
+  const handleRegenerateDraft = async () => {
+    await runDraftReviewMutation(
+      DRAFT_REVIEW_ACTION_TYPE.REJECT,
+      {
+        reasonOverride: 'Rejected for regeneration from Clients Draft Review flow.',
+        launchRegenerationIntent: true,
+      },
+    );
   };
 
   const handleStartDraftQueueFromTop = () => {
@@ -1110,6 +2480,48 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
   };
   const plannerDayLabel = selectedDayConfig.label;
   const plannerDateLabel = formatPlannerDateLabel(commandCenterPayload?.date || plannerDate);
+  const setupClientName = (
+    detailPayload?.client?.client_id === setupClientId
+      ? detailPayload?.client?.client_name
+      : null
+  ) || setupClientFromList?.client_name || 'Client';
+
+  if (viewMode === VIEW_MODE.CLIENT_SETUP) {
+    return (
+      <SafeScreen
+        includeTopInset={false}
+        style={styles.screen}
+        atmosphere="clients"
+        atmosphereOverlayStrength={0.95}
+      >
+        <HeaderBar
+          title={setupClientName}
+          subtitle="Edit client session setup and notes"
+        />
+        <ScrollView
+          contentContainerStyle={[
+            styles.content,
+            { paddingBottom: theme.spacing[5] + bottomInset },
+          ]}
+        >
+          <ClientSetupScreen
+            clientName={setupClientName}
+            plannerDayLabel={plannerDayLabel}
+            setupDraft={setupDraft}
+            setupFocusSection={setupFocusSection}
+            setupError={setupError}
+            setupSuccess={setupSuccess}
+            isLoading={isLoadingSetup}
+            isSaving={isSavingSetup}
+            onBack={handleBackFromClientSetup}
+            onPatchDraft={patchSetupDraft}
+            onToggleRecurringWeekday={handleToggleSetupRecurringWeekday}
+            onSave={saveClientSetup}
+          />
+        </ScrollView>
+      </SafeScreen>
+    );
+  }
 
   if (viewMode === VIEW_MODE.CLIENT_DETAIL) {
     const detailClientName = detailPayload?.client?.client_name
@@ -1118,9 +2530,25 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
     const activity = detailPayload?.activity_summary || {};
     const profile = detailPayload?.profile_snapshot || {};
     const schedulePreferences = detailPayload?.schedule_preferences || null;
+    const effectiveDetailDraft = detailScheduleDraft || buildDetailScheduleDraft(schedulePreferences);
     const upcomingExceptions = Array.isArray(schedulePreferences?.upcoming_exceptions)
       ? schedulePreferences.upcoming_exceptions
       : [];
+    const detailScheduledToday = Boolean(activity.scheduled_today);
+    const detailStatusLabel = effectiveDetailDraft.exceptionType === 'skip'
+      ? `${plannerDayLabel} skipped`
+      : effectiveDetailDraft.exceptionType === 'add'
+        ? `${plannerDayLabel} added`
+        : (detailScheduledToday ? 'Scheduled today' : 'No session today');
+    const detailSummaryLine = detailScheduledToday
+      ? `Session today • ${formatSessionWindow(activity.session_start_at, activity.session_end_at)}`
+      : 'No session scheduled today';
+    const detailSummaryMeta = formatOverrideSummary({
+      exceptionType: effectiveDetailDraft.exceptionType || schedulePreferences?.selected_date_exception_type,
+      plannerDayLabel,
+      isScheduledForSelectedDay: detailScheduledToday,
+    });
+    const detailMetricLine = `${activity.checkins_completed_7d || 0} check-ins • avg ${formatAvgScore(activity.avg_score_7d)} • ${activity.workouts_completed_7d || 0} workouts`;
     const aiUsableMemory = Array.isArray(aiContextPayload?.applied_ai_usable_memory)
       ? aiContextPayload.applied_ai_usable_memory
       : [];
@@ -1138,6 +2566,8 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         <HeaderBar
           title={detailClientName}
           subtitle="Trainer-side client memory and AI context"
+          onBack={handleBackToCommandCenter}
+          backAccessibilityLabel="Back to Command Center"
         />
         <ScrollView
           contentContainerStyle={[
@@ -1145,12 +2575,6 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
             { paddingBottom: theme.spacing[4] + bottomInset },
           ]}
         >
-          <ModeButton
-            title="Back to Command Center"
-            variant="ghost"
-            onPress={handleBackToCommandCenter}
-          />
-
           {isLoadingDetail ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color={theme.colors.accent.primary} />
@@ -1192,288 +2616,224 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
 
           {!isLoadingDetail && !detailError ? (
             <>
-              <ModeCard variant="hero">
-                <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Profile Overview</ModeText>
-                <ModeText variant="bodySm">Goal: {profile.primary_goal || 'Not set'}</ModeText>
-                <ModeText variant="bodySm" tone="secondary">
-                  Onboarding: {profile.onboarding_status || 'unknown'}
-                </ModeText>
-                <ModeText variant="bodySm" tone="secondary">
-                  Experience: {profile.experience_level || 'Not set'} · Current mode: {profile.current_mode || 'N/A'}
-                </ModeText>
-              </ModeCard>
-
-              <ModeCard variant="surface">
-                <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Activity Summary</ModeText>
-                <ModeText variant="bodySm">
-                  {activity.checkins_completed_7d || 0} check-ins in 7 days · avg {formatAvgScore(activity.avg_score_7d)}
-                </ModeText>
-                <ModeText variant="bodySm" tone="secondary">
-                  {activity.workouts_completed_7d || 0} workouts completed · latest check-in {formatDateLabel(activity.latest_checkin_date)}
-                </ModeText>
-                <ModeText variant="bodySm" tone="secondary">
-                  {plannerDayLabel}: {formatSessionWindow(activity.session_start_at, activity.session_end_at)} · {activity.session_status || 'no session'}
-                </ModeText>
-                <ModeText variant="bodySm" tone="secondary">
-                  Meeting location: {activity.meeting_location || 'Not set'}
-                </ModeText>
-              </ModeCard>
-
-              <ModeCard variant="surface">
-                <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Schedule Template</ModeText>
-                <ModeText variant="bodySm" tone="secondary">
-                  Weekly recurring days plus one-off add/skip overrides for {plannerDayLabel.toLowerCase()}.
-                </ModeText>
-
-                <View style={styles.weekdayChipRow}>
-                  {ISO_WEEKDAY_OPTIONS.map((option) => (
-                    <ModeChip
-                      key={`detail-weekday-${option.value}`}
-                      label={option.label}
-                      selected={Array.isArray(detailScheduleDraft?.recurringWeekdays) && detailScheduleDraft.recurringWeekdays.includes(option.value)}
-                      onPress={() => handleToggleDetailWeekday(option.value)}
-                    />
-                  ))}
+              <ModeCard variant="surface" style={styles.memoryHubCard}>
+                <View style={styles.memorySectionHeaderRow}>
+                  <ModeText variant="label" tone="tertiary" style={styles.memorySectionLabel}>Client Memory</ModeText>
+                  <ModeText variant="caption" tone="secondary">{memoryRecords.length} saved</ModeText>
                 </View>
-
                 <ModeInput
-                  value={detailScheduleDraft?.preferredMeetingLocation || ''}
-                  onChangeText={(value) => patchDetailScheduleDraft({ preferredMeetingLocation: value })}
-                  placeholder="Preferred meeting location (optional)"
-                />
-
-                <View style={styles.inlineChipRow}>
-                  <ModeChip
-                    label={detailScheduleDraft?.autoUseTrainerDefaultLocation ? 'Uses Trainer Default' : 'Default Disabled'}
-                    selected={Boolean(detailScheduleDraft?.autoUseTrainerDefaultLocation)}
-                    onPress={() => patchDetailScheduleDraft({
-                      autoUseTrainerDefaultLocation: !detailScheduleDraft?.autoUseTrainerDefaultLocation,
-                    })}
-                  />
-                </View>
-
-                <ModeInput
-                  value={detailScheduleDraft?.exceptionLocationOverride || ''}
-                  onChangeText={(value) => patchDetailScheduleDraft({ exceptionLocationOverride: value })}
-                  placeholder={`${plannerDayLabel} location override (optional)`}
-                />
-
-                <View style={styles.scheduleActionRow}>
-                  <ModeButton
-                    title={isSavingDetailSchedule ? 'Saving...' : 'Save Template'}
-                    variant="secondary"
-                    disabled={isSavingDetailSchedule}
-                    onPress={saveDetailScheduleTemplate}
-                    style={styles.scheduleActionButton}
-                  />
-                  <ModeButton
-                    title={`Skip ${plannerDayLabel}`}
-                    variant="ghost"
-                    disabled={isSavingDetailSchedule}
-                    onPress={() => setDetailDateException('skip')}
-                    style={styles.scheduleActionButton}
-                  />
-                </View>
-                <View style={styles.scheduleActionRow}>
-                  <ModeButton
-                    title={`Add ${plannerDayLabel}`}
-                    variant="ghost"
-                    disabled={isSavingDetailSchedule}
-                    onPress={() => setDetailDateException('add')}
-                    style={styles.scheduleActionButton}
-                  />
-                  <ModeButton
-                    title="Clear Override"
-                    variant="ghost"
-                    disabled={isSavingDetailSchedule}
-                    onPress={clearDetailDateException}
-                    style={styles.scheduleActionButton}
-                  />
-                </View>
-
-                <ModeText variant="caption" tone="secondary">
-                  Selected date override: {schedulePreferences?.selected_date_exception_type || 'none'}
-                </ModeText>
-                <ModeText variant="caption" tone="secondary">
-                  Weekly template: {formatIsoWeekdaySummary(detailScheduleDraft?.recurringWeekdays)}
-                </ModeText>
-
-                {upcomingExceptions.length > 0 ? (
-                  <View style={styles.scheduleExceptionList}>
-                    {upcomingExceptions.map((exception) => (
-                      <ModeText
-                        key={`${exception.client_id || selectedClientId}-${exception.session_date}`}
-                        variant="caption"
-                        tone="secondary"
-                      >
-                        • {exception.session_date}: {exception.exception_type}
-                        {exception.meeting_location_override ? ` @ ${exception.meeting_location_override}` : ''}
-                      </ModeText>
-                    ))}
-                  </View>
-                ) : (
-                  <ModeText variant="caption" tone="secondary">No upcoming date exceptions.</ModeText>
-                )}
-              </ModeCard>
-
-              {detailScheduleError ? (
-                <ModeCard variant="surface">
-                  <ModeText variant="bodySm" tone="error">{detailScheduleError}</ModeText>
-                </ModeCard>
-              ) : null}
-
-              {detailScheduleSuccess ? (
-                <ModeCard variant="surface">
-                  <ModeText variant="bodySm" tone="secondary">{detailScheduleSuccess}</ModeText>
-                </ModeCard>
-              ) : null}
-
-              <ModeCard variant="surface">
-                <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Add Memory</ModeText>
-                <ModeText variant="bodySm" tone="secondary">
-                  Choose visibility carefully: internal notes stay private; AI-usable notes shape trainer-side generation.
-                </ModeText>
-
-                <View style={styles.chipRow}>
-                  {MEMORY_TYPES.map((option) => (
-                    <ModeChip
-                      key={option.key}
-                      label={option.label}
-                      selected={newMemoryType === option.key}
-                      onPress={() => setNewMemoryType(option.key)}
-                    />
-                  ))}
-                </View>
-
-                <View style={styles.chipRow}>
-                  {MEMORY_VISIBILITY.map((option) => (
-                    <ModeChip
-                      key={option.key}
-                      label={option.label}
-                      selected={newMemoryVisibility === option.key}
-                      onPress={() => setNewMemoryVisibility(option.key)}
-                    />
-                  ))}
-                </View>
-
-                <ModeInput
+                  testID="trainer-client-memory-composer-input"
                   value={newMemoryText}
                   onChangeText={setNewMemoryText}
-                  placeholder="Write a note, preference, or constraint..."
-                  multiline
-                  style={styles.memoryInput}
+                  placeholder="Add memory note..."
                 />
-                <ModeInput
-                  value={newMemoryTagsText}
-                  onChangeText={setNewMemoryTagsText}
-                  placeholder="Tags (comma separated)"
-                />
+                <View style={styles.memoryToggleRow}>
+                  <ModeText variant="bodySm">AI can read this</ModeText>
+                  <GlassToggle
+                    testID="trainer-client-memory-composer-ai-toggle"
+                    value={newMemoryAiReadable}
+                    onValueChange={setNewMemoryAiReadable}
+                    disabled={isSavingMemory}
+                  />
+                </View>
+                {isNewMemoryTagsVisible ? (
+                  <ModeInput
+                    testID="trainer-client-memory-composer-tags-input"
+                    value={newMemoryTagsText}
+                    onChangeText={setNewMemoryTagsText}
+                    placeholder="Tags (comma separated)"
+                  />
+                ) : (
+                  <Pressable
+                    testID="trainer-client-memory-composer-add-tags"
+                    onPress={() => setIsNewMemoryTagsVisible(true)}
+                    style={({ pressed }) => [styles.memoryTagsAction, pressed && styles.memoryTagsActionPressed]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Add tags"
+                  >
+                    <ModeText variant="caption" tone="secondary" style={styles.memoryTagsActionText}>Add tags</ModeText>
+                  </Pressable>
+                )}
                 <ModeButton
+                  testID="trainer-client-memory-composer-save"
                   title={isSavingMemory ? 'Saving...' : 'Save Memory'}
+                  size="sm"
                   variant="primary"
                   disabled={isSavingMemory}
                   onPress={handleCreateMemory}
-                  style={styles.actionButton}
+                  style={styles.memorySaveButton}
                 />
-              </ModeCard>
+                {memoryMutationError ? (
+                  <ModeText variant="caption" tone="error" style={styles.memoryInlineFeedback}>{memoryMutationError}</ModeText>
+                ) : null}
+                {memoryMutationSuccess ? (
+                  <ModeText variant="caption" tone="secondary" style={styles.memoryInlineFeedback}>{memoryMutationSuccess}</ModeText>
+                ) : null}
 
-              {memoryMutationError ? (
-                <ModeCard variant="surface">
-                  <ModeText variant="bodySm" tone="error">{memoryMutationError}</ModeText>
-                </ModeCard>
-              ) : null}
-
-              {memoryMutationSuccess ? (
-                <ModeCard variant="surface">
-                  <ModeText variant="bodySm" tone="secondary">{memoryMutationSuccess}</ModeText>
-                </ModeCard>
-              ) : null}
-
-              <ModeCard variant="surface">
-                <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Saved Memory</ModeText>
-                {memoryRecords.length === 0 ? (
-                  <ModeText variant="bodySm" tone="secondary">No memory captured yet.</ModeText>
-                ) : (
-                  <View style={styles.memoryList}>
-                    {memoryRecords.map((record) => {
-                      const isEditing = editingMemoryId === record.id;
+                <View style={styles.memoryDenseList}>
+                  {memoryRecords.length === 0 ? (
+                    <ModeText variant="bodySm" tone="secondary">No memory captured yet.</ModeText>
+                  ) : (
+                    memoryRecords.map((record) => {
+                      const isAiUsable = record.visibility === 'ai_usable';
+                      const metaLine = buildMemoryMetaLine(record);
                       return (
-                        <ModeCard key={record.id} variant="tinted" style={styles.memoryCard}>
-                          <View style={styles.memoryHeader}>
-                            <ModeText variant="bodySm" style={styles.memoryTitle}>
-                              {toTitleCase(record.memory_type)}
+                        <Pressable
+                          key={record.id}
+                          testID={`trainer-client-memory-row-${record.id}`}
+                          onPress={() => startEditMemory(record)}
+                          style={({ pressed }) => [styles.memoryDenseRow, pressed && styles.memoryDenseRowPressed]}
+                          accessibilityRole="button"
+                          accessibilityLabel="Open memory editor"
+                        >
+                          <View style={styles.memoryDenseRowMain}>
+                            <ModeText
+                              variant="bodySm"
+                              numberOfLines={1}
+                              style={styles.memoryDenseRowText}
+                            >
+                              {record.text || 'No text captured.'}
                             </ModeText>
-                            <ModeChip label={record.visibility === 'ai_usable' ? 'AI Usable' : 'Internal'} />
+                            <ModeText
+                              testID={`trainer-client-memory-meta-${record.id}`}
+                              variant="caption"
+                              tone="secondary"
+                              numberOfLines={1}
+                              style={styles.memoryDenseRowMeta}
+                            >
+                              {metaLine || 'No tags'}
+                            </ModeText>
                           </View>
 
-                          {isEditing ? (
-                            <>
-                              <View style={styles.chipRow}>
-                                {MEMORY_VISIBILITY.map((option) => (
-                                  <ModeChip
-                                    key={`${record.id}-${option.key}`}
-                                    label={option.label}
-                                    selected={editingVisibility === option.key}
-                                    onPress={() => setEditingVisibility(option.key)}
-                                  />
-                                ))}
-                              </View>
-                              <ModeInput
-                                value={editingText}
-                                onChangeText={setEditingText}
-                                multiline
-                                style={styles.memoryInput}
-                              />
-                              <ModeInput
-                                value={editingTagsText}
-                                onChangeText={setEditingTagsText}
-                                placeholder="Tags (comma separated)"
-                              />
-                              <View style={styles.memoryActionRow}>
-                                <ModeButton
-                                  title={isSavingMemory ? 'Saving...' : 'Save'}
-                                  variant="primary"
-                                  disabled={isSavingMemory}
-                                  onPress={() => handleSaveMemoryEdit(record.id)}
-                                  style={styles.memoryActionButton}
-                                />
-                                <ModeButton
-                                  title="Cancel"
-                                  variant="secondary"
-                                  onPress={cancelEditMemory}
-                                  style={styles.memoryActionButton}
-                                />
-                              </View>
-                            </>
-                          ) : (
-                            <>
-                              <ModeText variant="bodySm">{record.text || 'No text captured.'}</ModeText>
-                              {Array.isArray(record.tags) && record.tags.length > 0 ? (
-                                <ModeText variant="caption" tone="secondary" style={styles.memoryTags}>
-                                  Tags: {record.tags.join(', ')}
-                                </ModeText>
-                              ) : null}
-                              <View style={styles.memoryActionRow}>
-                                <ModeButton
-                                  title="Edit"
-                                  variant="secondary"
-                                  onPress={() => startEditMemory(record)}
-                                  style={styles.memoryActionButton}
-                                />
-                                <ModeButton
-                                  title="Archive"
-                                  variant="ghost"
-                                  onPress={() => handleArchiveMemory(record.id)}
-                                  style={styles.memoryActionButton}
-                                />
-                              </View>
-                            </>
-                          )}
-                        </ModeCard>
+                          <View style={styles.memoryDenseRowRight}>
+                            <View style={[
+                              styles.memoryStatusBadge,
+                              isAiUsable ? styles.memoryStatusBadgeAi : styles.memoryStatusBadgeInternal,
+                            ]}
+                            >
+                              <ModeText
+                                variant="caption"
+                                tone={isAiUsable ? 'accent' : 'secondary'}
+                                style={styles.memoryStatusBadgeText}
+                              >
+                                {isAiUsable ? 'AI' : 'Internal'}
+                              </ModeText>
+                            </View>
+                            <View style={styles.memoryIconActions}>
+                              <Pressable
+                                testID={`trainer-client-memory-edit-${record.id}`}
+                                onPress={(event) => {
+                                  event?.stopPropagation?.();
+                                  startEditMemory(record);
+                                }}
+                                style={({ pressed }) => [styles.memoryRowIconButton, pressed && styles.memoryRowIconButtonPressed]}
+                                accessibilityRole="button"
+                                accessibilityLabel="Edit memory"
+                                hitSlop={8}
+                              >
+                                <Feather name="edit-2" size={14} color={theme.colors.text.secondary} />
+                              </Pressable>
+                              <Pressable
+                                testID={`trainer-client-memory-archive-${record.id}`}
+                                onPress={(event) => {
+                                  event?.stopPropagation?.();
+                                  handleArchiveMemory(record.id);
+                                }}
+                                style={({ pressed }) => [styles.memoryRowIconButton, pressed && styles.memoryRowIconButtonPressed]}
+                                accessibilityRole="button"
+                                accessibilityLabel="Archive memory"
+                                hitSlop={8}
+                              >
+                                <Feather name="archive" size={14} color={theme.colors.text.secondary} />
+                              </Pressable>
+                            </View>
+                          </View>
+                        </Pressable>
                       );
-                    })}
+                    })
+                  )}
+                </View>
+              </ModeCard>
+
+              <ModeCard variant="surface" style={styles.clientContextCard}>
+                <Pressable
+                  testID="trainer-client-context-toggle"
+                  onPress={() => setIsDetailContextExpanded((current) => !current)}
+                  style={({ pressed }) => [styles.clientContextToggle, pressed && styles.clientContextTogglePressed]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Toggle client context"
+                >
+                  <View style={styles.clientContextToggleCopy}>
+                    <ModeText variant="label" tone="tertiary" style={styles.memorySectionLabel}>Client Context</ModeText>
+                    <ModeText variant="caption" tone="secondary" numberOfLines={1}>
+                      {profile.primary_goal || 'Goal not set'} • {detailStatusLabel}
+                    </ModeText>
                   </View>
-                )}
+                  <Feather
+                    name={isDetailContextExpanded ? 'chevron-up' : 'chevron-down'}
+                    size={16}
+                    color={theme.colors.text.secondary}
+                  />
+                </Pressable>
+
+                {isDetailContextExpanded ? (
+                  <View style={styles.clientContextExpanded}>
+                    <View style={styles.clientContextGroup}>
+                      <ModeText variant="caption" tone="tertiary">Profile</ModeText>
+                      <ModeText variant="bodySm">Goal: {profile.primary_goal || 'Not set'}</ModeText>
+                      <ModeText variant="caption" tone="secondary">
+                        Onboarding: {profile.onboarding_status || 'unknown'} • Experience: {profile.experience_level || 'Not set'}
+                      </ModeText>
+                    </View>
+                    <View style={styles.clientContextGroup}>
+                      <ModeText variant="caption" tone="tertiary">Activity</ModeText>
+                      <ModeText variant="caption" tone="secondary">
+                        {activity.checkins_completed_7d || 0} check-ins • avg {formatAvgScore(activity.avg_score_7d)} • {activity.workouts_completed_7d || 0} workouts
+                      </ModeText>
+                      <ModeText variant="caption" tone="secondary">
+                        Latest check-in: {formatDateLabel(activity.latest_checkin_date)} • Location: {activity.meeting_location || 'Not set'}
+                      </ModeText>
+                    </View>
+                    <View style={styles.clientContextGroup}>
+                      <ModeText variant="caption" tone="tertiary">Session Setup</ModeText>
+                      <ModeText variant="caption" tone="secondary">{detailSummaryLine}</ModeText>
+                      <ModeText variant="caption" tone="secondary">{detailSummaryMeta}</ModeText>
+                      <ModeText variant="caption" tone="secondary">{detailMetricLine}</ModeText>
+                      <ModeText variant="caption" tone="secondary">
+                        Template days: {formatIsoWeekdaySummary(schedulePreferences?.recurring_weekdays)}
+                      </ModeText>
+                      <ModeText variant="caption" tone="secondary">
+                        Client default location: {schedulePreferences?.preferred_meeting_location || 'Not set'}
+                      </ModeText>
+                      {upcomingExceptions.length > 0 ? (
+                        <View style={styles.scheduleExceptionListCompact}>
+                          {upcomingExceptions.map((exception) => (
+                            <ModeText
+                              key={`${exception.client_id || selectedClientId}-${exception.session_date}`}
+                              variant="caption"
+                              tone="secondary"
+                            >
+                              • {exception.session_date}: {exception.exception_type}
+                              {exception.meeting_location_override ? ` @ ${exception.meeting_location_override}` : ''}
+                            </ModeText>
+                          ))}
+                        </View>
+                      ) : (
+                        <ModeText variant="caption" tone="secondary">No upcoming date exceptions.</ModeText>
+                      )}
+                      <ModeButton
+                        title="Edit Client Setup"
+                        size="sm"
+                        variant="secondary"
+                        onPress={() => handleOpenClientSetup(selectedClientId, {
+                          focusSection: 'schedule',
+                          origin: VIEW_MODE.CLIENT_DETAIL,
+                        })}
+                        style={styles.clientContextActionButton}
+                      />
+                    </View>
+                  </View>
+                ) : null}
               </ModeCard>
 
               <ModeCard variant="surface">
@@ -1514,6 +2874,21 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
             </>
           ) : null}
         </ScrollView>
+        <MemoryEditSheet
+          visible={Boolean(editingMemoryId && editingMemoryRecord)}
+          record={editingMemoryRecord}
+          isSaving={isSavingMemory}
+          text={editingText}
+          tagsText={editingTagsText}
+          aiReadable={editingAiReadable}
+          tagsVisible={isEditingTagsVisible}
+          onChangeText={setEditingText}
+          onChangeTagsText={setEditingTagsText}
+          onToggleAiReadable={setEditingAiReadable}
+          onShowTags={() => setIsEditingTagsVisible(true)}
+          onSave={handleSaveMemoryEdit}
+          onClose={cancelEditMemory}
+        />
       </SafeScreen>
     );
   }
@@ -1647,12 +3022,13 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
 
           {!isLoadingDraftQueue && !draftQueueError && activeDraft ? (
             <View style={styles.draftReviewBody}>
+              <ModeText variant="caption" tone="tertiary">Structured Draft Review</ModeText>
               <ModeText
                 testID="trainer-clients-draft-review-active-title"
                 variant="bodySm"
                 style={styles.draftReviewDraftTitle}
               >
-                {activeDraft.headline || activeDraft.summary || 'Untitled draft'}
+                {activeDraftModel?.title || activeDraft.headline || activeDraft.summary || 'Untitled draft'}
               </ModeText>
               <ModeText variant="caption" tone="secondary">
                 {activeDraft.client_name || 'Client'} · {activeDraft.priority_tier || 'normal'} priority · {activeDraft.action_type || activeDraft.source_type}
@@ -1663,13 +3039,13 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
                 </ModeText>
               ) : null}
 
-              <ModeInput
-                testID="trainer-clients-draft-review-editor"
-                value={draftReviewText}
-                onChangeText={setDraftReviewText}
-                placeholder="Edit draft summary before applying"
-                multiline
-                style={styles.draftReviewInput}
+              <DraftReviewStructuredCard
+                model={activeDraftModel}
+                modelKey={activeDraft.output_id}
+                onModelChange={setActiveDraftModel}
+                onRetryRender={handleRetryDraftRender}
+                onRegeneratePlan={handleRegenerateDraft}
+                testIDPrefix="trainer-clients-draft-review"
               />
 
               <View style={styles.draftReviewActionRow}>
@@ -1721,59 +3097,17 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
           ) : null}
         </ModeCard>
 
-        <ModeCard variant="tinted" style={styles.filterTierCard}>
-          <ModeText variant="label" tone="tertiary" style={styles.filterTierLabel}>Day Window</ModeText>
-          <View style={styles.filterRow}>
-            {DAY_FILTERS.map((option) => (
-              <ModeChip
-                key={option.key}
-                label={option.label}
-                selected={dayFilter === option.key}
-                onPress={() => setDayFilter(option.key)}
-              />
-            ))}
-          </View>
-        </ModeCard>
-
-        <ModeCard variant="tinted" style={styles.filterTierCard}>
-          <ModeText variant="label" tone="tertiary" style={styles.filterTierLabel}>Session Scope</ModeText>
-          <View style={styles.filterRow}>
-            {SESSION_FILTERS.map((option) => (
-              <ModeChip
-                key={option.key}
-                label={option.label}
-                selected={sessionFilter === option.key}
-                onPress={() => setSessionFilter(option.key)}
-              />
-            ))}
-          </View>
-        </ModeCard>
-
-        <ModeCard variant="tinted" style={styles.filterTierCard}>
-          <ModeText variant="label" tone="tertiary" style={styles.filterTierLabel}>Priority</ModeText>
-          <View style={styles.filterRow}>
-            {PRIORITY_FILTERS.map((option) => (
-              <ModeChip
-                key={option.key}
-                label={option.label}
-                selected={priorityFilter === option.key}
-                onPress={() => setPriorityFilter(option.key)}
-              />
-            ))}
-          </View>
-        </ModeCard>
-
-        {scheduleMutationError ? (
-          <ModeCard variant="surface">
-            <ModeText variant="bodySm" tone="error">{scheduleMutationError}</ModeText>
-          </ModeCard>
-        ) : null}
-
-        {scheduleMutationSuccess ? (
-          <ModeCard variant="surface">
-            <ModeText variant="bodySm" tone="secondary">{scheduleMutationSuccess}</ModeText>
-          </ModeCard>
-        ) : null}
+        <FilterBar
+          dayLabel={selectedDayConfig.label}
+          sessionLabel={selectedSessionConfig.label}
+          priorityLabel={selectedPriorityConfig.label}
+          onPressDay={openDayFilterSheet}
+          onPressSession={openSessionFilterSheet}
+          onPressPriority={openPriorityFilterSheet}
+          isDayCustom={dayFilter !== DEFAULT_DAY_FILTER}
+          isSessionCustom={sessionFilter !== DEFAULT_SESSION_FILTER}
+          isPriorityCustom={priorityFilter !== DEFAULT_PRIORITY_FILTER}
+        />
 
         {isLoadingCommandCenter ? (
           <View style={styles.loadingContainer}>
@@ -1825,150 +3159,47 @@ export default function TrainerClientsScreen({ accessToken, bottomInset = 0 }) {
         {!isLoadingCommandCenter && !commandCenterError && visibleClientItems.length > 0 ? (
           <View style={styles.clientList}>
             {visibleClientItems.map((client) => {
-              const badgeVisual = priorityBadgeStyle(client.priority_tier);
-              const isScheduledForSelectedDay = resolveClientScheduledForFilter(client, plannerDate);
-              const isSavingSchedule = savingScheduleClientId === client.client_id;
-              const scheduleDraft = scheduleDraftByClient[client.client_id] || buildClientScheduleDraft(client);
+              const clientId = client.client_id;
               return (
-                <PremiumClientCard
-                  key={client.client_id}
-                  emphasis={client.priority_tier === 'critical' ? 'focus' : 'default'}
-                  style={styles.clientOperationalCard}
-                >
-                  <View style={styles.clientHeaderRow}>
-                    <ModeText variant="h3" style={styles.clientName}>{client.client_name || 'Client'}</ModeText>
-                    <View style={[styles.priorityBadge, { backgroundColor: badgeVisual.backgroundColor, borderColor: badgeVisual.borderColor }]}>
-                      <ModeText variant="caption" tone={badgeVisual.tone}>{formatPriorityLabel(client.priority_tier)}</ModeText>
-                    </View>
-                  </View>
-
-                  <ModeText variant="caption" tone="secondary" style={styles.metaLine}>
-                    {formatSessionWindow(client.session_start_at, client.session_end_at)} · {client.session_status || 'unscheduled'}
-                  </ModeText>
-                  <ModeText variant="bodySm" tone="secondary">
-                    Score {typeof client.priority_score === 'number' ? client.priority_score.toFixed(1) : '0.0'} · {client.week_summary?.checkins_completed_7d || 0} check-ins · avg {formatAvgScore(client.week_summary?.avg_score_7d)} · {client.week_summary?.workouts_completed_7d || 0} workouts
-                  </ModeText>
-
-                  <View style={styles.scheduleEditorBlock}>
-                    <ModeText variant="caption" tone="tertiary">
-                      Weekly Template: {formatIsoWeekdaySummary(client.recurring_weekdays)}
-                    </ModeText>
-                    <View style={styles.weekdayChipRow}>
-                      {ISO_WEEKDAY_OPTIONS.map((option) => (
-                        <ModeChip
-                          key={`${client.client_id}-weekday-${option.value}`}
-                          label={option.label}
-                          selected={Array.isArray(scheduleDraft.recurringWeekdays) && scheduleDraft.recurringWeekdays.includes(option.value)}
-                          onPress={() => handleToggleClientWeekday(client.client_id, option.value)}
-                        />
-                      ))}
-                    </View>
-
-                    <ModeInput
-                      value={scheduleDraft.preferredMeetingLocation}
-                      onChangeText={(value) => handleScheduleDraftPatch(client.client_id, { preferredMeetingLocation: value })}
-                      placeholder="Preferred meeting location (optional)"
-                    />
-
-                    <View style={styles.inlineChipRow}>
-                      <ModeChip
-                        label={scheduleDraft.autoUseTrainerDefaultLocation ? 'Uses Trainer Default' : 'Default Disabled'}
-                        selected={Boolean(scheduleDraft.autoUseTrainerDefaultLocation)}
-                        onPress={() => handleScheduleDraftPatch(client.client_id, {
-                          autoUseTrainerDefaultLocation: !scheduleDraft.autoUseTrainerDefaultLocation,
-                        })}
-                      />
-                    </View>
-
-                    <ModeInput
-                      value={scheduleDraft.exceptionLocationOverride}
-                      onChangeText={(value) => handleScheduleDraftPatch(client.client_id, { exceptionLocationOverride: value })}
-                      placeholder={`${plannerDayLabel} location override (optional)`}
-                    />
-
-                    <View style={styles.scheduleActionRow}>
-                      <ModeButton
-                        title={isSavingSchedule ? 'Saving...' : 'Save Template'}
-                        variant="secondary"
-                        disabled={Boolean(savingScheduleClientId)}
-                        onPress={() => saveClientSchedulePreferences(client.client_id)}
-                        style={styles.scheduleActionButton}
-                      />
-                      <ModeButton
-                        title={`Skip ${plannerDayLabel}`}
-                        variant="ghost"
-                        disabled={Boolean(savingScheduleClientId)}
-                        onPress={() => applyClientDateException(client.client_id, 'skip')}
-                        style={styles.scheduleActionButton}
-                      />
-                    </View>
-                    <View style={styles.scheduleActionRow}>
-                      <ModeButton
-                        title={`Add ${plannerDayLabel}`}
-                        variant="ghost"
-                        disabled={Boolean(savingScheduleClientId)}
-                        onPress={() => applyClientDateException(client.client_id, 'add')}
-                        style={styles.scheduleActionButton}
-                      />
-                      <ModeButton
-                        title="Clear Override"
-                        variant="ghost"
-                        disabled={Boolean(savingScheduleClientId)}
-                        onPress={() => clearClientDateException(client.client_id)}
-                        style={styles.scheduleActionButton}
-                      />
-                    </View>
-                    <ModeText variant="caption" tone="secondary">
-                      {isScheduledForSelectedDay
-                        ? `${plannerDayLabel} is currently scheduled.`
-                        : `${plannerDayLabel} is currently not scheduled.`}
-                    </ModeText>
-                  </View>
-
-                  <View style={styles.riskFlagRow}>
-                    {Array.isArray(client.risk_flags) && client.risk_flags.length > 0 ? (
-                      client.risk_flags.map((flag) => (
-                        <ModeChip
-                          key={`${client.client_id}-${flag.code}`}
-                          label={flag.label}
-                          style={severityChipStyle(flag.severity)}
-                        />
-                      ))
-                    ) : (
-                      <ModeChip label="No active risk flags" style={styles.riskChipLow} />
-                    )}
-                  </View>
-
-                  <View style={styles.summaryBlock}>
-                    <ModeText variant="label" tone="tertiary">Talking Points</ModeText>
-                    {Array.isArray(client?.talking_points?.points) && client.talking_points.points.length > 0 ? (
-                      <View style={styles.pointsList}>
-                        {client.talking_points.points.map((point, index) => (
-                          <ModeText key={`${client.client_id}-point-${index}`} variant="bodySm" tone="secondary">
-                            • {point}
-                          </ModeText>
-                        ))}
-                      </View>
-                    ) : (
-                      <ModeText variant="bodySm" tone="secondary">No talking points generated.</ModeText>
-                    )}
-                    <ModeText variant="caption" tone="tertiary" style={styles.cacheMeta}>
-                      Strategy: {client?.talking_points?.generation_strategy || 'unknown'}
-                    </ModeText>
-                  </View>
-
-                  <ModeButton
-                    title="Open Client Detail"
-                    variant="secondary"
-                    onPress={() => handleOpenClientDetail(client.client_id)}
-                    style={styles.actionButton}
-                  />
-                </PremiumClientCard>
+                <ClientTodayCard
+                  key={clientId}
+                  client={client}
+                  plannerDayLabel={plannerDayLabel}
+                  isActionsOpen={commandCenterActionsClientId === clientId}
+                  isMutatingActions={Boolean(savingScheduleClientId)}
+                  onOpenActions={() => setCommandCenterActionsClientId(clientId)}
+                  onCloseActions={() => setCommandCenterActionsClientId((previousClientId) => (
+                    previousClientId === clientId ? null : previousClientId
+                  ))}
+                  onEditSessionSetup={() => handleOpenClientSetup(clientId, {
+                    focusSection: 'schedule',
+                    origin: VIEW_MODE.COMMAND_CENTER,
+                  })}
+                  onEditClientNotes={() => handleOpenClientSetup(clientId, {
+                    focusSection: 'notes',
+                    origin: VIEW_MODE.COMMAND_CENTER,
+                  })}
+                  onApplySkip={() => applyClientDateException(clientId, 'skip')}
+                  onApplyAdd={() => applyClientDateException(clientId, 'add')}
+                  onClearOverride={() => clearClientDateException(clientId)}
+                  onOpenClientDetail={() => handleOpenClientDetail(clientId)}
+                />
               );
             })}
           </View>
         ) : null}
       </ScrollView>
+      <FilterBottomSheet
+        visible={Boolean(activeFilterSheetConfig)}
+        title={activeFilterSheetConfig?.title || ''}
+        options={activeFilterSheetConfig?.options || []}
+        selectedKey={activeFilterSheetConfig?.selectedKey || ''}
+        onSelect={activeFilterSheetConfig?.onSelect}
+        onClose={closeFilterSheet}
+        showReset={hasCustomFilters}
+        onReset={resetFilters}
+        bottomInset={insets.bottom}
+      />
     </SafeScreen>
   );
 }
@@ -2063,19 +3294,6 @@ const styles = StyleSheet.create({
   draftReviewActionButton: {
     flex: 1,
   },
-  filterRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: theme.spacing[1],
-  },
-  filterTierCard: {
-    marginBottom: 0,
-    paddingTop: theme.spacing[1],
-  },
-  filterTierLabel: {
-    marginBottom: theme.spacing[1],
-    letterSpacing: 0.6,
-  },
   clientList: {
     gap: theme.spacing[2],
   },
@@ -2094,8 +3312,144 @@ const styles = StyleSheet.create({
   priorityBadge: {
     borderWidth: 1,
     borderRadius: theme.radii.pill,
+    paddingHorizontal: theme.spacing[1],
+    paddingVertical: 2,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing[1],
+  },
+  summaryHeaderActions: {
+    marginTop: theme.spacing[1],
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: theme.spacing[2],
+  },
+  summaryTextBlock: {
+    flex: 1,
+    gap: theme.spacing[1],
+    marginTop: theme.spacing[1] - 2,
+  },
+  coachingBriefBlock: {
+    gap: theme.spacing[1] - 2,
+  },
+  coachingBriefList: {
+    gap: theme.spacing[1] - 2,
+  },
+  coachingBriefBullet: {
+    lineHeight: theme.typography.body2.lineHeight + 2,
+  },
+  supportingSignalBlock: {
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.glass.borderSoft,
+    paddingTop: theme.spacing[2],
+    gap: 2,
+  },
+  supportingMetaLine: {
+    lineHeight: theme.typography.body3.lineHeight + 1,
+  },
+  readinessNarrativeBlock: {
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.glass.borderSoft,
+    paddingTop: theme.spacing[2],
+    paddingBottom: theme.spacing[1],
+  },
+  readinessNarrativeText: {
+    lineHeight: theme.typography.body2.lineHeight + 2,
+  },
+  summaryActionStack: {
+    alignItems: 'flex-end',
+    gap: theme.spacing[1],
+  },
+  summaryHeadline: {
+    fontWeight: '700',
+  },
+  summaryHero: {
+    fontWeight: '700',
+  },
+  saveHeaderAction: {
+    width: 88,
+  },
+  iconActionButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: theme.colors.glass.base,
+  },
+  iconActionButtonPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
+  },
+  quickEditRowSurface: {
+    marginTop: theme.spacing[1],
+  },
+  quickEditRowContent: {
     paddingHorizontal: theme.spacing[2],
-    paddingVertical: 4,
+    paddingVertical: theme.spacing[1],
+  },
+  quickEditRowInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[2],
+  },
+  quickEditCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  templateEditor: {
+    marginTop: theme.spacing[1],
+    gap: theme.spacing[1],
+    borderRadius: theme.radii.m,
+    borderWidth: 1,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    padding: theme.spacing[2],
+  },
+  weekdayChipRowCompact: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing[1],
+  },
+  templateToggleRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing[1],
+  },
+  scheduleSheetRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  scheduleSheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(6, 12, 22, 0.5)',
+  },
+  scheduleSheet: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    borderBottomWidth: 0,
+  },
+  scheduleSheetContent: {
+    paddingTop: theme.spacing[1],
+    paddingHorizontal: theme.spacing[3],
+    paddingBottom: theme.spacing[3],
+    gap: theme.spacing[1],
+  },
+  scheduleSheetGrabber: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: theme.colors.glass.borderStrong,
+    marginBottom: theme.spacing[1],
+  },
+  scheduleSheetTitle: {
+    marginBottom: theme.spacing[1],
   },
   metaLine: {
     marginTop: theme.spacing[1],
@@ -2140,6 +3494,12 @@ const styles = StyleSheet.create({
     gap: theme.spacing[1],
     marginTop: theme.spacing[2],
   },
+  riskFlagRowCompact: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing[1],
+    marginTop: theme.spacing[1],
+  },
   riskChipHigh: {
     borderColor: theme.colors.feedback.errorBorder,
     backgroundColor: theme.colors.feedback.errorBg,
@@ -2174,30 +3534,196 @@ const styles = StyleSheet.create({
   memoryInput: {
     marginTop: theme.spacing[1],
   },
-  memoryList: {
+  memoryHubCard: {
+    marginBottom: theme.spacing[1],
+  },
+  memorySectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[2],
+    marginBottom: theme.spacing[1] - 2,
+  },
+  memorySectionLabel: {
+    marginBottom: 0,
+    letterSpacing: 0.56,
+  },
+  memoryToggleRow: {
+    marginTop: theme.spacing[1] - 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: theme.spacing[1],
   },
-  memoryCard: {
+  memoryTagsAction: {
+    marginTop: theme.spacing[1] - 2,
+    alignSelf: 'flex-start',
+    paddingVertical: 4,
+  },
+  memoryTagsActionPressed: {
+    opacity: theme.interaction.pressedOpacity,
+  },
+  memoryTagsActionText: {
+    textDecorationLine: 'underline',
+    textDecorationColor: theme.colors.text.secondary,
+  },
+  memorySaveButton: {
+    marginTop: theme.spacing[1] - 2,
+  },
+  memoryInlineFeedback: {
+    marginTop: theme.spacing[1] - 4,
+  },
+  memoryDenseList: {
+    marginTop: theme.spacing[1],
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.glass.borderSoft,
+  },
+  memoryDenseRow: {
+    minHeight: 56,
+    paddingVertical: theme.spacing[1] - 2,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.glass.borderSoft,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: theme.spacing[1],
   },
-  memoryHeader: {
+  memoryDenseRowPressed: {
+    opacity: theme.interaction.pressedOpacity,
+  },
+  memoryDenseRowMain: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  memoryDenseRowText: {
+    lineHeight: theme.typography.body2.lineHeight,
+  },
+  memoryDenseRowMeta: {
+    lineHeight: theme.typography.body3.lineHeight,
+  },
+  memoryDenseRowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing[1],
+  },
+  memoryStatusBadge: {
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    minWidth: 52,
+    alignItems: 'center',
+  },
+  memoryStatusBadgeAi: {
+    backgroundColor: theme.colors.nav.activeBg,
+    borderColor: theme.colors.nav.activeBorder,
+  },
+  memoryStatusBadgeInternal: {
+    backgroundColor: theme.colors.surface.elevated,
+    borderColor: theme.colors.glass.borderSoft,
+  },
+  memoryStatusBadgeText: {
+    fontWeight: '700',
+  },
+  memoryIconActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  memoryRowIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: theme.colors.glass.base,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  memoryRowIconButtonPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
+  },
+  clientContextCard: {
+    marginBottom: theme.spacing[1],
+  },
+  clientContextToggle: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: theme.spacing[2],
   },
-  memoryTitle: {
-    fontWeight: '600',
+  clientContextTogglePressed: {
+    opacity: theme.interaction.pressedOpacity,
   },
-  memoryTags: {
-    marginTop: theme.spacing[1] - 2,
+  clientContextToggleCopy: {
+    flex: 1,
+    gap: 2,
   },
-  memoryActionRow: {
+  clientContextExpanded: {
+    marginTop: theme.spacing[1],
+    gap: theme.spacing[1],
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.glass.borderSoft,
+    paddingTop: theme.spacing[1],
+  },
+  clientContextGroup: {
+    gap: 2,
+  },
+  clientContextActionButton: {
+    marginTop: theme.spacing[1] - 4,
+  },
+  scheduleExceptionListCompact: {
+    marginTop: 2,
+    gap: 2,
+  },
+  memoryEditSheetRoot: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  memoryEditSheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(6, 12, 22, 0.5)',
+  },
+  memoryEditSheet: {
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+    borderBottomWidth: 0,
+  },
+  memoryEditSheetContent: {
+    paddingTop: theme.spacing[1],
+    paddingHorizontal: theme.spacing[3],
+    paddingBottom: theme.spacing[3],
+    gap: theme.spacing[1],
+  },
+  memoryEditSheetGrabber: {
+    alignSelf: 'center',
+    width: 42,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: theme.colors.glass.borderStrong,
+    marginBottom: theme.spacing[1],
+  },
+  memoryEditSheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[2],
+  },
+  memoryEditSheetCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  memoryEditSheetLabel: {
+    marginBottom: 0,
+  },
+  memoryEditSheetActionRow: {
     flexDirection: 'row',
     gap: theme.spacing[1],
-    marginTop: theme.spacing[1],
+    marginTop: theme.spacing[1] - 2,
   },
-  memoryActionButton: {
+  memoryEditSheetActionButton: {
     flex: 1,
   },
   aiContextMeta: {

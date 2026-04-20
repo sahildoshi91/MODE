@@ -33,6 +33,7 @@ export default function TrainerRouteHost({
         accessToken={accessToken}
         trainerId={assignmentStatus?.trainer_id || assignmentStatus?.assigned_trainer_id || null}
         bottomInset={coachChatBottomInset}
+        onOpenTrainerCoach={onOpenTrainerCoach}
       />
     );
   }
@@ -42,6 +43,7 @@ export default function TrainerRouteHost({
       <TrainerClientsScreen
         accessToken={accessToken}
         bottomInset={contentBottomInset}
+        onOpenTrainerCoach={onOpenTrainerCoach}
       />
     );
   }
@@ -64,6 +66,7 @@ export default function TrainerRouteHost({
       accessToken={accessToken}
       trainerId={assignmentStatus?.trainer_id || assignmentStatus?.assigned_trainer_id || null}
       bottomInset={coachChatBottomInset}
+      onOpenTrainerCoach={onOpenTrainerCoach}
     />
   );
 }

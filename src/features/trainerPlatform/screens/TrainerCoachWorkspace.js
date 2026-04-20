@@ -50,6 +50,7 @@ export default function TrainerCoachWorkspace({
   trainerOnboardingCompleted = false,
   trainerOnboardingStatus = 'not_started',
   trainerOnboardingCompletedSteps = 0,
+  onOpenTrainerCoach = null,
 }) {
   const normalizedOnboardingStatus = typeof trainerOnboardingStatus === 'string'
     ? trainerOnboardingStatus.trim().toLowerCase()
@@ -128,6 +129,7 @@ export default function TrainerCoachWorkspace({
         accessToken={accessToken}
         bottomInset={coachChatBottomInset}
         topToolbar={toolbar}
+        onOpenTrainerCoach={onOpenTrainerCoach}
       />
     );
   }
