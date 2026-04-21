@@ -42,9 +42,13 @@ import {
   SectionHeader,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
-import { SHOW_DEV_CONNECTION_DEBUG } from '../../../config/featureFlags';
+import {
+  BREATHING_TRANSITIONS_ENABLED,
+  SHOW_DEV_CONNECTION_DEBUG,
+} from '../../../config/featureFlags';
 import { getApiDebugInfo } from '../../../services/apiBaseUrl';
 import { getApiRequestDebugState } from '../../../services/apiRequest';
+import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/loading';
 import { resolveTrainingItemVisual, TRAINING_ITEM_SECTIONS } from './trainingVisuals';
 import {
   generateCheckinPlan,
@@ -2046,6 +2050,10 @@ export default function DailyCheckinScreen({
   const planPrimaryCtaBottom = resolvedFloatingNavClearance + 2;
   const planCtaOffset = planPrimaryCtaBottom + 64;
   const guidedWorkoutCtaOffset = bottomInset + 116;
+  const breathingTransitionsEnabled = Boolean(BREATHING_TRANSITIONS_ENABLED);
+  const shouldShowCheckinLoadTransition = breathingTransitionsEnabled && (isLoading || step === 'loading');
+  const shouldShowCheckinReviewTransition = breathingTransitionsEnabled && step === 'reviewing';
+  const shouldShowPlanGenerationTransition = breathingTransitionsEnabled && step === 'plan' && planLoading;
   const atmosphereContext = (
     (step === 'plan' && planType === PLAN_TYPE.NUTRITION)
       ? 'nutrition'
@@ -2071,7 +2079,7 @@ export default function DailyCheckinScreen({
       />
       <BackgroundGrid />
 
-      {(isLoading || step === 'loading') ? (
+      {!breathingTransitionsEnabled && (isLoading || step === 'loading') ? (
         <View style={styles.loadingScreen}>
           <ActivityIndicator size="large" color={theme.colors.accent.primary} />
           <Text style={styles.loadingTitle}>Loading your check-in</Text>
@@ -2094,7 +2102,7 @@ export default function DailyCheckinScreen({
         </View>
       ) : null}
 
-      {step === 'reviewing' ? (
+      {!breathingTransitionsEnabled && step === 'reviewing' ? (
         <View style={styles.loadingScreen}>
           <View style={styles.reviewCard}>
             <ActivityIndicator size="large" color={currentQuestion.color} />
@@ -2392,7 +2400,7 @@ export default function DailyCheckinScreen({
                 }
               />
 
-              {planLoading ? (
+              {!breathingTransitionsEnabled && planLoading ? (
                 <View style={styles.planLoadingWrap}>
                   <ActivityIndicator size="large" color={theme.colors.accent.primary} />
                   <Text style={styles.planLoadingText}>Coach {coachName} is building your workout...</Text>
@@ -2510,7 +2518,7 @@ export default function DailyCheckinScreen({
                 }
               />
 
-              {planLoading ? (
+              {!breathingTransitionsEnabled && planLoading ? (
                 <View style={styles.planLoadingWrap}>
                   <ActivityIndicator size="large" color={theme.colors.accent.primary} />
                   <Text style={styles.planLoadingText}>
@@ -2672,6 +2680,38 @@ export default function DailyCheckinScreen({
             </View>
           </View>
         </View>
+      ) : null}
+
+      {breathingTransitionsEnabled ? (
+        <BreathingTransitionOverlay
+          active={shouldShowCheckinLoadTransition}
+          context={BREATHING_CONTEXT.CHECKIN_LOAD}
+          variant="overlay"
+          progressLabel="Pulling today's status and preparing your flow."
+          testID="daily-checkin-breathing-load"
+        />
+      ) : null}
+
+      {breathingTransitionsEnabled ? (
+        <BreathingTransitionOverlay
+          active={shouldShowCheckinReviewTransition}
+          context={BREATHING_CONTEXT.CHECKIN_REVIEW}
+          variant="overlay"
+          progressLabel="Turning five honest answers into today's call."
+          testID="daily-checkin-breathing-review"
+        />
+      ) : null}
+
+      {breathingTransitionsEnabled ? (
+        <BreathingTransitionOverlay
+          active={shouldShowPlanGenerationTransition}
+          context={BREATHING_CONTEXT.PLAN_GENERATION}
+          variant="overlay"
+          progressLabel={planType === PLAN_TYPE.NUTRITION
+            ? `Coach ${coachName} is building your nutrition plan...`
+            : `Coach ${coachName} is building your workout...`}
+          testID="daily-checkin-breathing-plan-generation"
+        />
       ) : null}
     </SafeScreen>
   );

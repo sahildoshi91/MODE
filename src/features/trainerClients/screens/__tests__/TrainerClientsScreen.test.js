@@ -37,6 +37,11 @@ jest.mock('../../storage/draftReviewTrackerStorage', () => ({
   recordDraftReviewAction: jest.fn(),
 }));
 
+jest.mock('../../storage/trainerClientsSummaryVisibilityStorage', () => ({
+  loadTrainerClientsSummaryVisibility: jest.fn().mockResolvedValue({ collapsed: false }),
+  saveTrainerClientsSummaryVisibility: jest.fn().mockResolvedValue({ collapsed: false }),
+}));
+
 import {
   archiveTrainerClientMemory,
   createTrainerClientScheduleException,
@@ -60,6 +65,10 @@ import {
   loadDraftReviewTracker,
   recordDraftReviewAction,
 } from '../../storage/draftReviewTrackerStorage';
+import {
+  loadTrainerClientsSummaryVisibility,
+  saveTrainerClientsSummaryVisibility,
+} from '../../storage/trainerClientsSummaryVisibilityStorage';
 import TrainerClientsScreen from '../TrainerClientsScreen';
 
 function buildCommandCenterPayload(overrides = {}) {
@@ -169,6 +178,13 @@ function findModeButtonNodesByTestID(root, testID) {
   );
 }
 
+function expectSummaryStatus(tree, { title, subtitle }) {
+  const titleNode = tree.root.findByProps({ testID: 'trainer-clients-summary-status-title' });
+  expect(readNodeText(titleNode)).toContain(title);
+  const subtitleNode = tree.root.findByProps({ testID: 'trainer-clients-summary-status-subtitle' });
+  expect(readNodeText(subtitleNode)).toContain(subtitle);
+}
+
 async function flushEffects() {
   await act(async () => {
     await Promise.resolve();
@@ -179,6 +195,8 @@ async function flushEffects() {
 describe('TrainerClientsScreen draft review queue', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    loadTrainerClientsSummaryVisibility.mockResolvedValue({ collapsed: false });
+    saveTrainerClientsSummaryVisibility.mockResolvedValue({ collapsed: false });
 
     getTrainerCommandCenter.mockResolvedValue(buildCommandCenterPayload());
     getTrainerCoachQueue.mockResolvedValue({
@@ -227,7 +245,10 @@ describe('TrainerClientsScreen draft review queue', () => {
     expect(readNodeText(activeTitle)).toContain('First Draft');
 
     const dailyCount = tree.root.findByProps({ testID: 'trainer-clients-draft-review-daily-count' });
-    expect(readNodeText(dailyCount)).toContain('2 / 10 today');
+    expect(readNodeText(dailyCount)).toContain('2 / 2 today');
+
+    const progressBar = tree.root.findByProps({ testID: 'trainer-clients-draft-review-progress' });
+    expect(progressBar.props.progress).toBe(1);
 
     const lifetimeCount = tree.root.findByProps({ testID: 'trainer-clients-draft-review-lifetime-count' });
     expect(readNodeText(lifetimeCount)).toContain('9 total');
@@ -287,14 +308,17 @@ describe('TrainerClientsScreen draft review queue', () => {
     expect(readNodeText(activeTitle)).toContain('Second Draft');
 
     const dailyCount = tree.root.findByProps({ testID: 'trainer-clients-draft-review-daily-count' });
-    expect(readNodeText(dailyCount)).toContain('3 / 10 today');
+    expect(readNodeText(dailyCount)).toContain('2 / 2 today');
+
+    const progressBar = tree.root.findByProps({ testID: 'trainer-clients-draft-review-progress' });
+    expect(progressBar.props.progress).toBe(1);
 
     await act(async () => {
       tree.unmount();
     });
   });
 
-  it('approve and reject resolve drafts one by one and update progress', async () => {
+  it('approve and reject resolve drafts one by one and hides card when no pending drafts remain', async () => {
     recordDraftReviewAction
       .mockResolvedValueOnce({
         date_key: '2026-04-19',
@@ -364,11 +388,420 @@ describe('TrainerClientsScreen draft review queue', () => {
       outputId: 'output-2',
     }));
     expect(recordDraftReviewAction).toHaveBeenCalledTimes(2);
+    expect(tree.root.findAllByProps({ testID: 'trainer-clients-draft-review-card' })).toHaveLength(0);
+    expect(JSON.stringify(tree.toJSON())).not.toContain('No pending drafts right now.');
 
-    expect(JSON.stringify(tree.toJSON())).toContain('No pending drafts right now.');
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('caps denominator at 10 when pending drafts exceed daily goal', async () => {
+    const queueItems = Array.from({ length: 12 }, (_, index) => (
+      buildDraftItem({
+        output_id: `output-${index + 1}`,
+        headline: `Draft ${index + 1}`,
+      })
+    ));
+
+    getTrainerCoachQueue.mockResolvedValueOnce({
+      count: queueItems.length,
+      items: queueItems,
+    });
+    loadDraftReviewTracker.mockResolvedValue({
+      date_key: '2026-04-19',
+      daily_count: 12,
+      lifetime_count: 19,
+      pending_sync_events: [],
+      updated_at: '2026-04-19T09:10:00.000Z',
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
 
     const dailyCount = tree.root.findByProps({ testID: 'trainer-clients-draft-review-daily-count' });
-    expect(readNodeText(dailyCount)).toContain('4 / 10 today');
+    expect(readNodeText(dailyCount)).toContain('10 / 10 today');
+
+    const progressBar = tree.root.findByProps({ testID: 'trainer-clients-draft-review-progress' });
+    expect(progressBar.props.progress).toBe(1);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows draft review card with retry when queue load fails at zero pending', async () => {
+    getTrainerCoachQueue.mockReset();
+    getTrainerCoachQueue.mockRejectedValueOnce(new Error('Queue unavailable.'));
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expect(() => tree.root.findByProps({ testID: 'trainer-clients-draft-review-card' })).not.toThrow();
+    expect(JSON.stringify(tree.toJSON())).toContain('Queue unavailable.');
+
+    const retryButton = tree.root.find(
+      (node) => typeof node.props?.title === 'string' && node.props.title === 'Retry Queue' && typeof node.props.onPress === 'function',
+    );
+    expect(retryButton).toBeDefined();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('recovers from queue error and shows card content when retry loads pending drafts', async () => {
+    getTrainerCoachQueue.mockReset();
+    getTrainerCoachQueue
+      .mockRejectedValueOnce(new Error('Queue unavailable.'))
+      .mockResolvedValueOnce({
+        count: 1,
+        items: [
+          buildDraftItem({ output_id: 'output-recovered', headline: 'Recovered Draft' }),
+        ],
+      });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    const retryButton = tree.root.find(
+      (node) => typeof node.props?.title === 'string' && node.props.title === 'Retry Queue' && typeof node.props.onPress === 'function',
+    );
+    await act(async () => {
+      await retryButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(getTrainerCoachQueue).toHaveBeenCalledTimes(2);
+    expect(() => tree.root.findByProps({ testID: 'trainer-clients-draft-review-card' })).not.toThrow();
+
+    const activeTitle = tree.root.findByProps({ testID: 'trainer-clients-draft-review-active-title' });
+    expect(readNodeText(activeTitle)).toContain('Recovered Draft');
+
+    const dailyCount = tree.root.findByProps({ testID: 'trainer-clients-draft-review-daily-count' });
+    expect(readNodeText(dailyCount)).toContain('1 / 1 today');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+});
+
+describe('TrainerClientsScreen merged summary status', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    loadTrainerClientsSummaryVisibility.mockResolvedValue({ collapsed: false });
+    saveTrainerClientsSummaryVisibility.mockResolvedValue({ collapsed: false });
+    getTrainerCommandCenter.mockResolvedValue(buildCommandCenterPayload({
+      trainer: {
+        trainer_id: 'trainer-1',
+        trainer_onboarding_completed: true,
+      },
+      totals: {
+        high_priority_clients: 0,
+        critical_priority_clients: 0,
+      },
+    }));
+    getTrainerCoachQueue.mockResolvedValue({ count: 0, items: [] });
+    loadDraftReviewTracker.mockResolvedValue({
+      date_key: '2026-04-19',
+      daily_count: 0,
+      lifetime_count: 0,
+      pending_sync_events: [],
+      updated_at: '2026-04-19T09:00:00.000Z',
+    });
+    recordDraftReviewAction.mockResolvedValue({
+      date_key: '2026-04-19',
+      daily_count: 0,
+      lifetime_count: 0,
+      pending_sync_events: [],
+      updated_at: '2026-04-19T09:00:00.000Z',
+    });
+  });
+
+  it('shows all-clients-on-track status when no drafts or high-risk clients exist', async () => {
+    getTrainerCommandCenter.mockResolvedValueOnce(buildCommandCenterPayload({
+      trainer: {
+        trainer_id: 'trainer-1',
+        trainer_onboarding_completed: true,
+      },
+      totals: {
+        high_priority_clients: 0,
+        critical_priority_clients: 0,
+      },
+    }));
+    getTrainerCoachQueue.mockResolvedValueOnce({ count: 0, items: [] });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expectSummaryStatus(tree, {
+      title: 'All clients are on track',
+      subtitle: 'No blockers are open. You can run a proactive sweep.',
+    });
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('removes refresh actions from the top summary card', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    const refreshButtons = tree.root.findAll(
+      (node) => typeof node.props?.title === 'string' && node.props.title === 'Refresh',
+    );
+    const refreshTalkingPointsButtons = tree.root.findAll(
+      (node) => typeof node.props?.title === 'string' && node.props.title === 'Refresh Talking Points',
+    );
+    expect(refreshButtons).toHaveLength(0);
+    expect(refreshTalkingPointsButtons).toHaveLength(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('collapses and expands top summary card and persists toggle state', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    const collapseSurface = tree.root.findByProps({ testID: 'trainer-clients-summary-surface-expanded' });
+    await act(async () => {
+      collapseSurface.props.onPress();
+    });
+    await flushEffects();
+
+    expect(() => tree.root.findByProps({ testID: 'trainer-clients-summary-collapsed-row' })).not.toThrow();
+    expect(tree.root.findAllByProps({ testID: 'trainer-clients-summary-status-title' })).toHaveLength(0);
+    expect(saveTrainerClientsSummaryVisibility).toHaveBeenCalledWith('trainer-1', { collapsed: true });
+
+    const expandSurface = tree.root.findByProps({ testID: 'trainer-clients-summary-surface-collapsed' });
+    await act(async () => {
+      expandSurface.props.onPress();
+    });
+    await flushEffects();
+
+    expect(() => tree.root.findByProps({ testID: 'trainer-clients-summary-surface-expanded' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-clients-summary-status-title' })).not.toThrow();
+    expect(saveTrainerClientsSummaryVisibility).toHaveBeenCalledWith('trainer-1', { collapsed: false });
+    const expandLabelNodes = tree.root.findAll(
+      (node) => node.type === 'Text' && readNodeText(node) === 'Expand',
+    );
+    const collapseLabelNodes = tree.root.findAll(
+      (node) => node.type === 'Text' && readNodeText(node) === 'Collapse',
+    );
+    expect(expandLabelNodes).toHaveLength(0);
+    expect(collapseLabelNodes).toHaveLength(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('reapplies stored collapsed preference on remount', async () => {
+    let firstTree;
+    await act(async () => {
+      firstTree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    const collapseSurface = firstTree.root.findByProps({ testID: 'trainer-clients-summary-surface-expanded' });
+    await act(async () => {
+      collapseSurface.props.onPress();
+    });
+    await flushEffects();
+    expect(saveTrainerClientsSummaryVisibility).toHaveBeenCalledWith('trainer-1', { collapsed: true });
+
+    await act(async () => {
+      firstTree.unmount();
+    });
+
+    loadTrainerClientsSummaryVisibility.mockResolvedValueOnce({ collapsed: true });
+
+    let secondTree;
+    await act(async () => {
+      secondTree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expect(() => secondTree.root.findByProps({ testID: 'trainer-clients-summary-collapsed-row' })).not.toThrow();
+    expect(secondTree.root.findAllByProps({ testID: 'trainer-clients-summary-status-title' })).toHaveLength(0);
+    expect(loadTrainerClientsSummaryVisibility).toHaveBeenCalledWith('trainer-1');
+
+    await act(async () => {
+      secondTree.unmount();
+    });
+  });
+
+  it('shows drafts-pending status when queue items are present', async () => {
+    getTrainerCommandCenter.mockResolvedValueOnce(buildCommandCenterPayload({
+      trainer: {
+        trainer_id: 'trainer-1',
+        trainer_onboarding_completed: true,
+      },
+      totals: {
+        high_priority_clients: 0,
+        critical_priority_clients: 0,
+      },
+    }));
+    getTrainerCoachQueue.mockResolvedValueOnce({
+      count: 2,
+      items: [
+        buildDraftItem({ output_id: 'output-1', headline: 'First Draft' }),
+        buildDraftItem({ output_id: 'output-2', headline: 'Second Draft' }),
+      ],
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expectSummaryStatus(tree, {
+      title: '2 drafts pending review',
+      subtitle: 'Resolve pending drafts to keep client delivery on track.',
+    });
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows clients-need-attention status when high/critical risk clients exist', async () => {
+    getTrainerCommandCenter.mockResolvedValueOnce(buildCommandCenterPayload({
+      trainer: {
+        trainer_id: 'trainer-1',
+        trainer_onboarding_completed: true,
+      },
+      totals: {
+        high_priority_clients: 3,
+        critical_priority_clients: 1,
+      },
+    }));
+    getTrainerCoachQueue.mockResolvedValueOnce({ count: 0, items: [] });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expectSummaryStatus(tree, {
+      title: '3 clients need attention',
+      subtitle: 'High-risk clients should get a proactive touchpoint today.',
+    });
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows calibration-incomplete status first when trainer onboarding is incomplete', async () => {
+    getTrainerCommandCenter.mockResolvedValueOnce(buildCommandCenterPayload({
+      trainer: {
+        trainer_id: 'trainer-1',
+        trainer_onboarding_completed: false,
+      },
+      totals: {
+        high_priority_clients: 4,
+        critical_priority_clients: 2,
+      },
+    }));
+    getTrainerCoachQueue.mockResolvedValueOnce({
+      count: 3,
+      items: [
+        buildDraftItem({ output_id: 'output-1', headline: 'First Draft' }),
+        buildDraftItem({ output_id: 'output-2', headline: 'Second Draft' }),
+        buildDraftItem({ output_id: 'output-3', headline: 'Third Draft' }),
+      ],
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expectSummaryStatus(tree, {
+      title: 'Calibration incomplete',
+      subtitle: 'Finish coach setup so drafts and rules stay in your voice.',
+    });
 
     await act(async () => {
       tree.unmount();
@@ -379,6 +812,8 @@ describe('TrainerClientsScreen draft review queue', () => {
 describe('TrainerClientsScreen command center filters', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    loadTrainerClientsSummaryVisibility.mockResolvedValue({ collapsed: false });
+    saveTrainerClientsSummaryVisibility.mockResolvedValue({ collapsed: false });
 
     getTrainerCommandCenter.mockResolvedValue(buildCommandCenterPayload());
     getTrainerCoachQueue.mockResolvedValue({ count: 0, items: [] });
@@ -542,6 +977,8 @@ describe('TrainerClientsScreen command center filters', () => {
 describe('TrainerClientsScreen summary-first card and setup flow', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    loadTrainerClientsSummaryVisibility.mockResolvedValue({ collapsed: false });
+    saveTrainerClientsSummaryVisibility.mockResolvedValue({ collapsed: false });
 
     getTrainerCommandCenter.mockResolvedValue(buildCommandCenterPayload({
       clients: [
@@ -1022,6 +1459,8 @@ describe('TrainerClientsScreen dense client memory detail', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    loadTrainerClientsSummaryVisibility.mockResolvedValue({ collapsed: false });
+    saveTrainerClientsSummaryVisibility.mockResolvedValue({ collapsed: false });
 
     getTrainerCommandCenter.mockResolvedValue(buildCommandCenterPayload({
       clients: [buildCommandCenterClient()],

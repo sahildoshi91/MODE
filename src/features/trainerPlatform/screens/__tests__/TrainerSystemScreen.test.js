@@ -114,7 +114,11 @@ import renderer, { act } from 'react-test-renderer';
 
 import { fetchWithApiFallback } from '../../../../services/apiRequest';
 import { listTrainerKnowledgeDocuments } from '../../../trainerHome/services/trainerKnowledgeApi';
-import { listTrainerClients } from '../../../trainerClients/services/trainerHomeApi';
+import {
+  deactivateTrainerInviteCode,
+  listTrainerClients,
+  listTrainerInviteCodes,
+} from '../../../trainerClients/services/trainerHomeApi';
 import { getTrainerSettingsMe } from '../../../profile/services/profileApi';
 import { getTrainerCoachQueue } from '../../../trainerCoach/services/trainerCoachApi';
 import { getTrainerReviewOutputs } from '../../../trainerReview/services/trainerReviewApi';
@@ -154,6 +158,12 @@ describe('TrainerSystemScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
 
+    listTrainerInviteCodes.mockResolvedValue({ items: [], count: 0 });
+    deactivateTrainerInviteCode.mockResolvedValue({
+      id: 'invite-1',
+      code: 'MODE1234',
+      is_active: false,
+    });
     listTrainerKnowledgeDocuments.mockResolvedValue([
       { id: 'doc-1', title: 'Methodology' },
       { id: 'doc-2', title: 'Quick Capture' },
@@ -328,5 +338,75 @@ describe('TrainerSystemScreen', () => {
     });
 
     expect(JSON.stringify(tree.toJSON())).toContain('Client List');
+  });
+
+  it('hides inactive invite codes and removes a row after deactivate in client management', async () => {
+    listTrainerInviteCodes.mockResolvedValue({
+      count: 2,
+      items: [
+        { id: 'invite-active', code: 'MODEACTIVE', is_active: true },
+        { id: 'invite-1', code: 'MODEOLD', is_active: false },
+      ],
+    });
+    deactivateTrainerInviteCode.mockResolvedValue({
+      id: 'invite-active',
+      code: 'MODEACTIVE',
+      is_active: false,
+    });
+
+    const tree = await renderScreen();
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-client-management').props.onPress();
+    });
+    await flushEffects();
+
+    let rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('MODEACTIVE');
+    expect(rendered).not.toContain('MODEOLD');
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-invite-deactivate-invite-active').props.onPress();
+    });
+    await flushEffects();
+
+    expect(deactivateTrainerInviteCode).toHaveBeenCalledWith({
+      accessToken: 'trainer-token',
+      inviteId: 'invite-active',
+    });
+    rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).not.toContain('MODEACTIVE');
+  });
+
+  it('shows Pending user only in Client Management assigned clients list', async () => {
+    listTrainerClients.mockResolvedValue({
+      count: 2,
+      items: [
+        { client_id: 'client-1', client_name: 'Taylor', user_id: 'client-user-1', is_pending_user: true },
+        { client_id: 'client-2', client_name: 'Jordan', user_id: 'client-user-2', is_pending_user: false },
+      ],
+    });
+
+    const tree = await renderScreen();
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-client-management').props.onPress();
+    });
+    await flushEffects();
+
+    let rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Pending user');
+    expect(rendered).toContain('Jordan');
+    expect(rendered).not.toContain('Taylor');
+
+    await act(async () => {
+      findBackButton(tree.root).props.onPress();
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Taylor');
+    expect(rendered).not.toContain('Pending user');
   });
 });

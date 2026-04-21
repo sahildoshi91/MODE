@@ -18,6 +18,8 @@ import {
   HeroOverlayCard,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { BREATHING_TRANSITIONS_ENABLED } from '../../../config/featureFlags';
+import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/loading';
 import ChatBubble from '../components/ChatBubble';
 import CoachComposer from '../components/CoachComposer';
 import QuickReplies from '../components/QuickReplies';
@@ -166,12 +168,15 @@ export default function CoachChatScreen({
     messages,
     quickReplies,
     isSending,
+    isConversationInitializing,
     error,
     errorDetails,
     hasRetryableFailure,
     sendMessage,
     retryFailedRequest,
   } = useChatConversation(accessToken, launchContext);
+  const breathingTransitionsEnabled = Boolean(BREATHING_TRANSITIONS_ENABLED);
+  const shouldDisableComposer = isSending || isConversationInitializing;
 
   const updateScrollMetrics = useCallback((partial = {}) => {
     const current = scrollMetricsRef.current;
@@ -604,26 +609,26 @@ export default function CoachChatScreen({
                       accessibilityRole="button"
                       testID="coach-chat-retry-button"
                       onPress={handleRetryLastMessage}
-                      disabled={isSending}
+                      disabled={shouldDisableComposer}
                       style={({ pressed }) => [
                         styles.retryButton,
-                        pressed && !isSending && styles.retryButtonPressed,
-                        isSending && styles.retryButtonMuted,
+                        pressed && !shouldDisableComposer && styles.retryButtonPressed,
+                        shouldDisableComposer && styles.retryButtonMuted,
                       ]}
                     >
                       <ModeText variant="label" tone="accent">
-                        {isSending ? 'Retrying...' : 'Retry'}
+                        {shouldDisableComposer ? 'Retrying...' : 'Retry'}
                       </ModeText>
                     </Pressable>
                     <Pressable
                       accessibilityRole="button"
                       testID="coach-chat-copy-error-button"
                       onPress={handleCopyError}
-                      disabled={isSending}
+                      disabled={shouldDisableComposer}
                       style={({ pressed }) => [
                         styles.retryButton,
-                        pressed && !isSending && styles.retryButtonPressed,
-                        isSending && styles.retryButtonMuted,
+                        pressed && !shouldDisableComposer && styles.retryButtonPressed,
+                        shouldDisableComposer && styles.retryButtonMuted,
                       ]}
                     >
                       <ModeText variant="label" tone="secondary">Copy error</ModeText>
@@ -634,7 +639,7 @@ export default function CoachChatScreen({
 
               <QuickReplies
                 replies={quickReplies}
-                disabled={isSending}
+                disabled={shouldDisableComposer}
                 onSelect={handleQuickReply}
                 style={styles.quickReplies}
                 contentContainerStyle={styles.quickRepliesContent}
@@ -649,12 +654,21 @@ export default function CoachChatScreen({
                 value={draft}
                 onChangeText={setDraft}
                 onSend={handleSend}
-                disabled={isSending}
+                disabled={shouldDisableComposer}
               />
             </View>
           </View>
         </View>
       </KeyboardAvoidingView>
+      {breathingTransitionsEnabled ? (
+        <BreathingTransitionOverlay
+          active={isConversationInitializing}
+          context={BREATHING_CONTEXT.COACH_OPEN}
+          variant="overlay"
+          progressLabel="Opening your coach channel."
+          testID="coach-chat-breathing-transition"
+        />
+      ) : null}
     </SafeScreen>
   );
 }

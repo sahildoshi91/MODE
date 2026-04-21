@@ -190,6 +190,15 @@ function normalizeListPayload(payload) {
   };
 }
 
+function normalizeActiveInvitePayload(payload) {
+  const normalized = normalizeListPayload(payload);
+  const activeItems = normalized.items.filter((invite) => invite?.is_active !== false);
+  return {
+    items: activeItems,
+    count: activeItems.length,
+  };
+}
+
 function buildOnboardingState({
   trainerOnboardingCompleted = false,
   trainerOnboardingStatus = 'not_started',
@@ -1748,7 +1757,7 @@ function ClientManagementScreen({
         listTrainerInviteCodes({ accessToken }),
       ]);
       setClientsPayload(normalizeListPayload(clientsResponse));
-      setInvitePayload(normalizeListPayload(inviteResponse));
+      setInvitePayload(normalizeActiveInvitePayload(inviteResponse));
     } catch (nextError) {
       setError(nextError?.message || 'Unable to load client management data.');
     } finally {
@@ -1842,8 +1851,8 @@ function ClientManagementScreen({
         metadata: { source: 'system_hub' },
       });
       setInvitePayload((current) => ({
-        count: current.count + 1,
-        items: [payload, ...current.items],
+        items: payload?.is_active === false ? current.items : [payload, ...current.items],
+        count: payload?.is_active === false ? current.count : current.count + 1,
       }));
       setInviteStatus({
         isCreating: false,
@@ -1868,12 +1877,10 @@ function ClientManagementScreen({
     }
     setInviteStatus({ isCreating: false, isDeactivating: inviteId, error: null, success: null });
     try {
-      const payload = await deactivateTrainerInviteCode({ accessToken, inviteId });
+      await deactivateTrainerInviteCode({ accessToken, inviteId });
       setInvitePayload((current) => ({
-        ...current,
-        items: current.items.map((invite) => (
-          invite.id === inviteId ? { ...invite, ...payload } : invite
-        )),
+        count: Math.max(0, current.count - 1),
+        items: current.items.filter((invite) => invite.id !== inviteId),
       }));
       setInviteStatus({ isCreating: false, isDeactivating: null, error: null, success: 'Invite code deactivated.' });
     } catch (error) {
@@ -1886,6 +1893,8 @@ function ClientManagementScreen({
     }
   };
 
+  const visibleInviteCodes = invitePayload.items.filter((invite) => invite?.is_active !== false);
+
   return (
     <SectionShell
       title="Client Management"
@@ -1896,7 +1905,7 @@ function ClientManagementScreen({
       <ModeCard variant="hero">
         <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Add Client</ModeText>
         <ModeText variant="bodySm" tone="secondary">
-          Generate invite codes for new clients. Existing codes stay visible until you deactivate them.
+          Generate invite codes for new clients. Active codes stay visible until they are used or deactivated.
         </ModeText>
         <ModeButton
           title={inviteStatus.isCreating ? 'Creating invite...' : 'Create invite code'}
@@ -1922,12 +1931,12 @@ function ClientManagementScreen({
 
       <SystemSectionCard>
         <SystemSectionHeader title="Invite Codes" />
-        {invitePayload.items.length === 0 ? (
+        {visibleInviteCodes.length === 0 ? (
           <EmptyListState
             title="No invite codes yet"
             detail="Create one above to add clients into your trainer workspace."
           />
-        ) : invitePayload.items.map((invite) => (
+        ) : visibleInviteCodes.map((invite) => (
           <View key={invite.id} style={styles.managementRow}>
             <View style={styles.managementCopy}>
               <ModeText variant="bodySm">{invite.code || 'Invite code'}</ModeText>
@@ -1969,7 +1978,7 @@ function ClientManagementScreen({
           <SystemNavRow
             key={client.client_id || client.id}
             icon="user"
-            title={client.client_name || 'Unnamed client'}
+            title={client.is_pending_user ? 'Pending user' : (client.client_name || 'Unnamed client')}
             subtitle={client.user_id || client.client_id || 'Client'}
             onPress={() => openClient(client)}
             testID={`trainer-system-client-management-row-${client.client_id || client.id}`}

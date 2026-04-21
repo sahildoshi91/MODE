@@ -449,6 +449,28 @@ class OnboardingRepository:
             return None
         return rows[0]
 
+    def deactivate_invite_code(
+        self,
+        *,
+        invite_id: str,
+        trainer_id: str,
+        tenant_id: str,
+    ) -> dict[str, Any] | None:
+        now = datetime.now(timezone.utc).isoformat()
+        rows = (
+            self.supabase_admin
+            .table("trainer_invite_codes")
+            .update({
+                "is_active": False,
+                "updated_at": now,
+            })
+            .eq("id", invite_id)
+            .eq("trainer_id", trainer_id)
+            .eq("tenant_id", tenant_id)
+            .execute()
+        ).data or []
+        return rows[0] if rows else None
+
     def get_trainer_by_id(self, *, trainer_id: str) -> dict[str, Any] | None:
         rows = (
             self.supabase_admin

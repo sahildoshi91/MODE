@@ -11,6 +11,8 @@ import {
   StateBadge,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { BREATHING_TRANSITIONS_ENABLED } from '../../../config/featureFlags';
+import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/loading';
 import { getCheckinProgress } from '../../dailyCheckin/services/checkinApi';
 
 function inferPattern(payload) {
@@ -67,6 +69,7 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
   const [payload, setPayload] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const breathingTransitionsEnabled = Boolean(BREATHING_TRANSITIONS_ENABLED);
 
   const loadInsights = useCallback(async () => {
     if (!accessToken) {
@@ -129,7 +132,7 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
       />
 
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: theme.spacing[4] + bottomInset }]}>
-        {isLoading ? (
+        {!breathingTransitionsEnabled && isLoading ? (
           <ModeCard variant="tinted" style={styles.loadingCard}>
             <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
             <ModeText variant="bodySm" tone="secondary">Generating insight cards...</ModeText>
@@ -173,6 +176,15 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
           />
         ) : null}
       </ScrollView>
+      {breathingTransitionsEnabled ? (
+        <BreathingTransitionOverlay
+          active={isLoading}
+          context={BREATHING_CONTEXT.INSIGHTS_LOAD}
+          variant="overlay"
+          progressLabel="Generating insight cards..."
+          testID="coach-insights-breathing-loader"
+        />
+      ) : null}
     </SafeScreen>
   );
 }

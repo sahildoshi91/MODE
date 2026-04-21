@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  Keyboard,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -62,6 +64,7 @@ const WEEKDAY_OPTIONS = [
   { value: 5, label: 'Fri' },
   { value: 6, label: 'Sat' },
 ];
+const SHEET_KEYBOARD_GAP = theme.spacing[1];
 
 const PANEL_META_BY_TYPE = {
   draft_review: {
@@ -1662,6 +1665,8 @@ export default function CoachPanelHost({
   onRejectDraft,
   onSystemEvent,
 }) {
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const isPanelVisible = Boolean(activePanel);
   const selectedDraft = useMemo(() => {
     if (activePanel !== 'draft_review') {
       return null;
@@ -1702,17 +1707,47 @@ export default function CoachPanelHost({
     () => resolvePanelMeta(activePanel, panelContext),
     [activePanel, panelContext],
   );
+  const sheetKeyboardLift = keyboardHeight > 0
+    ? keyboardHeight + SHEET_KEYBOARD_GAP
+    : 0;
+
+  useEffect(() => {
+    if (!isPanelVisible) {
+      setKeyboardHeight(0);
+      return undefined;
+    }
+    const openEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const closeEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const openSubscription = Keyboard.addListener(openEvent, (event) => {
+      const nextHeight = Number(event?.endCoordinates?.height) || 0;
+      setKeyboardHeight(Math.max(0, nextHeight));
+    });
+    const closeSubscription = Keyboard.addListener(closeEvent, () => {
+      setKeyboardHeight(0);
+    });
+
+    return () => {
+      openSubscription.remove();
+      closeSubscription.remove();
+    };
+  }, [isPanelVisible]);
 
   return (
     <Modal
-      visible={Boolean(activePanel)}
+      visible={isPanelVisible}
       animationType="slide"
       transparent
       onRequestClose={onClose}
     >
       <View style={styles.modalRoot}>
         <Pressable style={styles.backdrop} onPress={onClose} />
-        <View style={styles.sheet}>
+        <View
+          testID="trainer-coach-panel-sheet"
+          style={[
+            styles.sheet,
+            { marginBottom: sheetKeyboardLift },
+          ]}
+        >
           <View style={styles.sheetHeader}>
             <View style={styles.sheetHeaderCopy}>
               <ModeText variant="label" tone="tertiary" style={styles.sheetCommandLabel}>{panelMeta.commandLabel}</ModeText>

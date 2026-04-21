@@ -1,6 +1,14 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { Pressable, Text, TextInput, View } from 'react-native';
+import {
+  Keyboard,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 jest.mock('../../../../../lib/components', () => {
   const React = require('react');
@@ -130,8 +138,24 @@ async function flushEffects() {
 }
 
 describe('CoachPanelHost', () => {
+  const openEventName = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+  const closeEventName = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+  let keyboardListeners = {};
+  let keyboardRemoveMocks = [];
+  let keyboardAddListenerSpy;
+
   beforeEach(() => {
     jest.clearAllMocks();
+    keyboardListeners = {};
+    keyboardRemoveMocks = [];
+    keyboardAddListenerSpy = jest.spyOn(Keyboard, 'addListener').mockImplementation((eventName, callback) => {
+      keyboardListeners[eventName] = callback;
+      const remove = jest.fn(() => {
+        delete keyboardListeners[eventName];
+      });
+      keyboardRemoveMocks.push(remove);
+      return { remove };
+    });
 
     listTrainerProgramTemplates.mockResolvedValue({ items: [] });
     listTrainerClientMemory.mockResolvedValue([]);
@@ -161,6 +185,10 @@ describe('CoachPanelHost', () => {
       internal_only_memory_count: 0,
       context_preview_text: 'Context preview',
     });
+  });
+
+  afterEach(() => {
+    keyboardAddListenerSpy?.mockRestore();
   });
 
   it('renders command-aware compact shell header and sticky footer action', async () => {
@@ -321,6 +349,118 @@ describe('CoachPanelHost', () => {
 
     await act(async () => {
       tree.unmount();
+    });
+  });
+
+  it('lifts the sheet above the keyboard and resets when keyboard closes', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachPanelHost
+          accessToken="token"
+          activePanel="program"
+          panelContext={null}
+          queue={buildQueue()}
+          onClose={jest.fn()}
+          onOpenTrainerCoach={jest.fn()}
+          onApproveDraft={jest.fn()}
+          onEditDraft={jest.fn()}
+          onRejectDraft={jest.fn()}
+          onSystemEvent={jest.fn()}
+        />,
+      );
+    });
+    await flushEffects();
+
+    let sheet = tree.root.findByProps({ testID: 'trainer-coach-panel-sheet' });
+    let flattenedStyle = StyleSheet.flatten(sheet.props.style);
+    expect(flattenedStyle.marginBottom).toBe(0);
+
+    act(() => {
+      keyboardListeners[openEventName]?.({
+        endCoordinates: { height: 220 },
+      });
+    });
+
+    sheet = tree.root.findByProps({ testID: 'trainer-coach-panel-sheet' });
+    flattenedStyle = StyleSheet.flatten(sheet.props.style);
+    expect(flattenedStyle.marginBottom).toBeGreaterThan(220);
+
+    act(() => {
+      keyboardListeners[closeEventName]?.();
+    });
+
+    sheet = tree.root.findByProps({ testID: 'trainer-coach-panel-sheet' });
+    flattenedStyle = StyleSheet.flatten(sheet.props.style);
+    expect(flattenedStyle.marginBottom).toBe(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('cleans up keyboard listeners when panel closes and when component unmounts', async () => {
+    const sharedProps = {
+      accessToken: 'token',
+      panelContext: null,
+      queue: buildQueue(),
+      onClose: jest.fn(),
+      onOpenTrainerCoach: jest.fn(),
+      onApproveDraft: jest.fn(),
+      onEditDraft: jest.fn(),
+      onRejectDraft: jest.fn(),
+      onSystemEvent: jest.fn(),
+    };
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachPanelHost
+          {...sharedProps}
+          activePanel="program"
+        />,
+      );
+    });
+    await flushEffects();
+
+    const closeCleanupRemovers = [...keyboardRemoveMocks];
+    expect(closeCleanupRemovers).toHaveLength(2);
+
+    await act(async () => {
+      tree.update(
+        <CoachPanelHost
+          {...sharedProps}
+          activePanel={null}
+        />,
+      );
+    });
+    closeCleanupRemovers.forEach((removeMock) => {
+      expect(removeMock).toHaveBeenCalledTimes(1);
+    });
+
+    await act(async () => {
+      tree.unmount();
+    });
+
+    let secondTree;
+    await act(async () => {
+      secondTree = renderer.create(
+        <CoachPanelHost
+          {...sharedProps}
+          activePanel="program"
+        />,
+      );
+    });
+    await flushEffects();
+
+    const unmountCleanupRemovers = keyboardRemoveMocks.slice(2);
+    expect(unmountCleanupRemovers).toHaveLength(2);
+
+    await act(async () => {
+      secondTree.unmount();
+    });
+    unmountCleanupRemovers.forEach((removeMock) => {
+      expect(removeMock).toHaveBeenCalledTimes(1);
     });
   });
 });

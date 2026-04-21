@@ -26,10 +26,8 @@ import { buildTrainerRouteDiagnosticsBundle } from '../../trainerPlatform/utils/
 import CoachComposerWithCommands from '../components/CoachComposerWithCommands';
 import CoachPanelHost from '../components/CoachPanelHost';
 import CoachStreamList from '../components/CoachStreamList';
-import TodaySummaryBar from '../components/TodaySummaryBar';
 import { useTrainerCoachWorkspace } from '../hooks/useTrainerCoachWorkspace';
 
-const SUMMARY_COLLAPSE_SCROLL_THRESHOLD = 72;
 const COPY_FEEDBACK_TIMEOUT_MS = 2200;
 const KEYBOARD_OPEN_COMPOSER_OFFSET = theme.spacing[1];
 const LIST_BOTTOM_BREATHING_ROOM = theme.spacing[2];
@@ -64,7 +62,6 @@ export default function TrainerCoachScreen({
   const [composerDockHeight, setComposerDockHeight] = useState(0);
   const [streamForceScrollSignal, setStreamForceScrollSignal] = useState(0);
   const [anchorToLatestSignal, setAnchorToLatestSignal] = useState(1);
-  const [isSummaryCollapsed, setIsSummaryCollapsed] = useState(true);
   const [copyFeedback, setCopyFeedback] = useState(null);
   const [assistantDisplayName, setAssistantDisplayName] = useState(DEFAULT_ASSISTANT_DISPLAY_NAME);
   const copyFeedbackTimerRef = useRef(null);
@@ -84,7 +81,6 @@ export default function TrainerCoachScreen({
     trainerId,
     assistantDisplayName,
   });
-  const setSummaryCollapsedAction = actions.setSummaryCollapsed;
   const staleRouteError = state.errorDetails?.isStaleBackendRoute
     ? state.errorDetails
     : null;
@@ -197,11 +193,6 @@ export default function TrainerCoachScreen({
   }, [trainerId]);
 
   useEffect(() => {
-    setIsSummaryCollapsed(true);
-    setSummaryCollapsedAction(true);
-  }, [setSummaryCollapsedAction, trainerId]);
-
-  useEffect(() => {
     const openEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const closeEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
     const keyboardOpenSubscription = Keyboard.addListener(openEvent, () => {
@@ -230,26 +221,6 @@ export default function TrainerCoachScreen({
       copyFeedbackTimerRef.current = null;
     }
   }, []);
-
-  const handleSummaryAction = async (summaryAction) => {
-    const target = summaryAction?.target;
-    if (target === 'panel_rules') {
-      actions.openPanel('rules', null);
-      return;
-    }
-    if (target === 'sync') {
-      await actions.retryPendingOps();
-      return;
-    }
-    if (target === 'command' && summaryAction?.payload?.command) {
-      await actions.sendIntentMessage(summaryAction.payload.command);
-      return;
-    }
-    if (target === 'coach_training') {
-      await actions.sendIntentMessage('Resume coach calibration');
-      return;
-    }
-  };
 
   const handleSubmitComposer = async () => {
     const submitted = composerValue.trim();
@@ -309,12 +280,6 @@ export default function TrainerCoachScreen({
     setStreamForceScrollSignal((value) => value + 1);
     setAnchorToLatestSignal((value) => value + 1);
   }, []);
-
-  const handleSummaryCollapsedToggle = useCallback((collapsed) => {
-    const normalized = Boolean(collapsed);
-    setIsSummaryCollapsed(normalized);
-    setSummaryCollapsedAction(normalized);
-  }, [setSummaryCollapsedAction]);
 
   return (
     <SafeScreen
@@ -442,13 +407,6 @@ export default function TrainerCoachScreen({
               </ModeCard>
             ) : null}
 
-            <TodaySummaryBar
-              summary={state.summary}
-              collapsed={isSummaryCollapsed}
-              onActionPress={handleSummaryAction}
-              onToggleCollapsed={handleSummaryCollapsedToggle}
-            />
-
             <View style={styles.streamViewport}>
               <CoachStreamList
                 streamItems={visibleStream}
@@ -486,12 +444,6 @@ export default function TrainerCoachScreen({
                     ...latestScrollMetricsRef.current,
                     nearBottom: normalized,
                   };
-                }}
-                onScrollDepthChange={(offsetY) => {
-                  const shouldCollapseSummary = offsetY > SUMMARY_COLLAPSE_SCROLL_THRESHOLD;
-                  if (shouldCollapseSummary !== isSummaryCollapsed) {
-                    handleSummaryCollapsedToggle(shouldCollapseSummary);
-                  }
                 }}
               />
               {showJumpToLatest ? (

@@ -770,7 +770,7 @@ export function useChatConversation(accessToken, launchContext = null) {
 
   const sendMessage = async (text) => {
     const trimmed = String(text || '').trim();
-    if (!trimmed || !accessToken || isBootstrapping) {
+    if (!trimmed || !accessToken || isBootstrapping || isHistoryLoading) {
       return false;
     }
 
@@ -839,10 +839,14 @@ export function useChatConversation(accessToken, launchContext = null) {
     return failedItem?.text || null;
   }, [failedRequest, messages]);
 
+  const isConversationInitializing = isBootstrapping || isHistoryLoading;
+  const isSending = isQueueProcessing || activeAssistantRequests > 0;
+
   return {
     messages,
     quickReplies,
-    isSending: isQueueProcessing || activeAssistantRequests > 0 || isBootstrapping || isHistoryLoading,
+    isSending,
+    isConversationInitializing,
     error,
     errorDetails,
     lastFailedMessage,

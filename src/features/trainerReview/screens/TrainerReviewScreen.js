@@ -9,6 +9,8 @@ import {
   SafeScreen,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { BREATHING_TRANSITIONS_ENABLED } from '../../../config/featureFlags';
+import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/loading';
 import {
   buildRegenerationLaunchContext,
   rebuildJSON,
@@ -50,6 +52,10 @@ export default function TrainerReviewScreen({
   const selectedOutput = detailPayload?.output || null;
   const feedbackEvents = Array.isArray(detailPayload?.feedback_events) ? detailPayload.feedback_events : [];
   const outputItems = Array.isArray(outputsPayload?.items) ? outputsPayload.items : [];
+  const breathingTransitionsEnabled = Boolean(BREATHING_TRANSITIONS_ENABLED);
+  const isBreathingTransitionActive = !selectedOutputId
+    ? isLoadingOutputs
+    : isLoadingDetail;
 
   const loadOutputs = useCallback(async () => {
     if (!accessToken) {
@@ -255,7 +261,7 @@ export default function TrainerReviewScreen({
               onRefresh={loadOutputs}
             />
 
-            {isLoadingOutputs ? (
+            {!breathingTransitionsEnabled && isLoadingOutputs ? (
               <View style={styles.loadingState}>
                 <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
                 <ModeText variant="caption" tone="secondary">Loading review queue...</ModeText>
@@ -286,7 +292,7 @@ export default function TrainerReviewScreen({
           </>
         ) : (
           <>
-            {isLoadingDetail ? (
+            {!breathingTransitionsEnabled && isLoadingDetail ? (
               <View style={styles.loadingState}>
                 <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
                 <ModeText variant="caption" tone="secondary">Loading output detail...</ModeText>
@@ -324,6 +330,15 @@ export default function TrainerReviewScreen({
           </>
         )}
       </ScrollView>
+      {breathingTransitionsEnabled ? (
+        <BreathingTransitionOverlay
+          active={isBreathingTransitionActive}
+          context={BREATHING_CONTEXT.TRAINER_REVIEW_LOAD}
+          variant="overlay"
+          progressLabel={selectedOutputId ? 'Loading output detail...' : 'Loading review queue...'}
+          testID="trainer-review-breathing-loader"
+        />
+      ) : null}
     </SafeScreen>
   );
 }

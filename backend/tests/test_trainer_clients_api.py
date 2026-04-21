@@ -503,6 +503,7 @@ class TrainerClientsApiTests(unittest.TestCase):
         self.assertEqual(list_response.json()["count"], 1)
         self.assertEqual(len(list_response.json()["items"]), 1)
         self.assertEqual(list_response.json()["items"][0]["client_id"], "client-1")
+        self.assertIn("is_pending_user", list_response.json()["items"][0])
 
         patch_response = self.client.patch(
             "/api/v1/trainer-clients/client-1",

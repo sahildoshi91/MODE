@@ -191,6 +191,38 @@ class TrainerClientRepository:
         )
         return response.data[0] if response.data else None
 
+    def list_profile_onboarding_status_for_clients(self, client_ids: list[str]) -> dict[str, str | None]:
+        normalized_client_ids = [
+            str(client_id).strip()
+            for client_id in client_ids
+            if str(client_id).strip()
+        ]
+        if not normalized_client_ids:
+            return {}
+
+        response = (
+            self.supabase
+            .table("user_fitness_profiles")
+            .select("client_id, onboarding_status")
+            .in_("client_id", normalized_client_ids)
+            .execute()
+        )
+        rows = response.data or []
+
+        status_by_client_id: dict[str, str | None] = {}
+        for row in rows:
+            client_id = str(row.get("client_id") or "").strip()
+            if not client_id:
+                continue
+            raw_status = row.get("onboarding_status")
+            if isinstance(raw_status, str):
+                status_by_client_id[client_id] = raw_status.strip().lower() or None
+            elif raw_status is None:
+                status_by_client_id[client_id] = None
+            else:
+                status_by_client_id[client_id] = str(raw_status).strip().lower() or None
+        return status_by_client_id
+
     def create_empty_profile(self, client_id: str) -> dict[str, Any]:
         response = self.supabase.table("user_fitness_profiles").insert({"client_id": client_id}).execute()
         return (response.data or [None])[0] or {"client_id": client_id}

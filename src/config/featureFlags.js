@@ -41,3 +41,7 @@ export const AI_RESPONSE_RENDERING_V1_ENABLED = parseBooleanFlag(
   process.env.EXPO_PUBLIC_AI_RESPONSE_RENDERING_V1_ENABLED,
   true,
 );
+export const BREATHING_TRANSITIONS_ENABLED = parseBooleanFlag(
+  process.env.EXPO_PUBLIC_BREATHING_TRANSITIONS_ENABLED,
+  true,
+);

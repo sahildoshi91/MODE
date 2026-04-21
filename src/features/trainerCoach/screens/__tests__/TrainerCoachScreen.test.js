@@ -55,13 +55,6 @@ jest.mock('../../components/DraftQueueDock', () => {
   };
 });
 
-jest.mock('../../components/TodaySummaryBar', () => {
-  const React = require('react');
-  return function MockTodaySummaryBar(props) {
-    return React.createElement('MockTodaySummaryBar', props);
-  };
-});
-
 import TrainerCoachScreen from '../TrainerCoachScreen';
 
 function createDeferred() {
@@ -1047,7 +1040,7 @@ describe('TrainerCoachScreen', () => {
     });
   });
 
-  it('defaults the summary strip to collapsed and keeps jump visible for pending below-fold messages', async () => {
+  it('keeps jump visible for pending below-fold messages', async () => {
     const snapshot = buildWorkspaceSnapshot({
       state: {
         ...buildWorkspaceSnapshot().state,
@@ -1079,9 +1072,6 @@ describe('TrainerCoachScreen', () => {
         />,
       );
     });
-
-    const summaryBar = tree.root.findByType('MockTodaySummaryBar');
-    expect(summaryBar.props.collapsed).toBe(true);
 
     const streamList = tree.root.findByType('MockCoachStreamList');
     act(() => {

@@ -392,6 +392,14 @@ class OnboardingService:
             completed_at=(existing_state or {}).get("completed_at"),
         )
 
+        consumed = self.repository.deactivate_invite_code(
+            invite_id=str(code_row.get("id") or ""),
+            trainer_id=str(code_row.get("trainer_id") or ""),
+            tenant_id=str(code_row.get("tenant_id") or ""),
+        )
+        if not consumed:
+            raise OnboardingServiceError("Unable to consume invite code", status_code=500)
+
         return self.get_bootstrap(user)
 
     def _normalize_onboarding_status(self, state: dict[str, Any] | None) -> str:

@@ -19,7 +19,9 @@ import {
   SafeScreen,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { BREATHING_TRANSITIONS_ENABLED } from '../../../config/featureFlags';
 import { getAIProgressLabel } from '../../messaging';
+import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/loading';
 import { buildTrainerRouteDiagnosticsBundle } from '../../trainerPlatform/utils/trainerRouteDiagnostics';
 import {
   approveTrainerAssistantDraft,
@@ -530,6 +532,14 @@ export default function TrainerAssistantScreen({
   const executionAttemptedHosts = Array.isArray(executionErrorDetails?.attemptedBaseUrls)
     ? executionErrorDetails.attemptedBaseUrls.filter(Boolean)
     : [];
+  const breathingTransitionsEnabled = Boolean(BREATHING_TRANSITIONS_ENABLED);
+  const isBreathingTransitionActive = isLoadingBootstrap || isExecuting;
+  const breathingTransitionContext = isExecuting
+    ? BREATHING_CONTEXT.TRAINER_ASSISTANT_EXECUTE
+    : BREATHING_CONTEXT.TRAINER_ASSISTANT_BOOTSTRAP;
+  const breathingProgressLabel = isExecuting
+    ? (executionProgressLabel || 'Generating draft response.')
+    : 'Loading assistant context...';
 
   const renderEditor = () => {
     const actionType = draftOutput?.action_type;
@@ -660,7 +670,7 @@ export default function TrainerAssistantScreen({
               disabled={isLoadingBootstrap}
             />
           </View>
-          {isLoadingBootstrap ? (
+          {!breathingTransitionsEnabled && isLoadingBootstrap ? (
             <View style={styles.loadingRow} testID="trainer-assistant-loading">
               <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
               <ModeText variant="caption" tone="secondary">Loading assistant context...</ModeText>
@@ -815,7 +825,7 @@ export default function TrainerAssistantScreen({
               onPress={() => runExecution()}
               disabled={isExecuting}
             />
-            {isExecuting && executionProgressLabel ? (
+            {!breathingTransitionsEnabled && isExecuting && executionProgressLabel ? (
               <ModeText variant="caption" tone="secondary">
                 {executionProgressLabel}
               </ModeText>
@@ -938,6 +948,15 @@ export default function TrainerAssistantScreen({
           ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
+      {breathingTransitionsEnabled ? (
+        <BreathingTransitionOverlay
+          active={isBreathingTransitionActive}
+          context={breathingTransitionContext}
+          variant="overlay"
+          progressLabel={breathingProgressLabel}
+          testID="trainer-assistant-breathing-loader"
+        />
+      ) : null}
     </SafeScreen>
   );
 }

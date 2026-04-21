@@ -63,9 +63,15 @@ import {
   recordDraftReviewAction,
 } from '../storage/draftReviewTrackerStorage';
 import {
+  loadTrainerClientsSummaryVisibility,
+  saveTrainerClientsSummaryVisibility,
+} from '../storage/trainerClientsSummaryVisibilityStorage';
+import {
   FilterBar,
   FilterBottomSheet,
 } from '../components/CommandCenterFilters';
+import { BREATHING_TRANSITIONS_ENABLED } from '../../../config/featureFlags';
+import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/loading';
 
 const VIEW_MODE = {
   COMMAND_CENTER: 'command_center',
@@ -109,6 +115,43 @@ const FILTER_SHEET = {
   SESSION: 'session',
   PRIORITY: 'priority',
 };
+
+function deriveSummaryStatus({
+  trainerOnboardingCompleted,
+  draftQueueCount,
+  highPriorityClients,
+  criticalPriorityClients,
+}) {
+  if (!trainerOnboardingCompleted) {
+    return {
+      title: 'Calibration incomplete',
+      subtitle: 'Finish coach setup so drafts and rules stay in your voice.',
+    };
+  }
+
+  if (draftQueueCount > 0) {
+    return {
+      title: `${draftQueueCount} drafts pending review`,
+      subtitle: 'Resolve pending drafts to keep client delivery on track.',
+    };
+  }
+
+  const clientsNeedAttention = Math.max(
+    Number(criticalPriorityClients) || 0,
+    Number(highPriorityClients) || 0,
+  );
+  if (clientsNeedAttention > 0) {
+    return {
+      title: `${clientsNeedAttention} clients need attention`,
+      subtitle: 'High-risk clients should get a proactive touchpoint today.',
+    };
+  }
+
+  return {
+    title: 'All clients are on track',
+    subtitle: 'No blockers are open. You can run a proactive sweep.',
+  };
+}
 
 function buildDraftReviewIdempotencyKey(prefix = 'clients-draft-review') {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 12)}`;
@@ -1156,7 +1199,8 @@ export default function TrainerClientsScreen({
   const [commandCenterPayload, setCommandCenterPayload] = useState(null);
   const [isLoadingCommandCenter, setIsLoadingCommandCenter] = useState(true);
   const [hasLoadedCommandCenter, setHasLoadedCommandCenter] = useState(false);
-  const [isRefreshingTalkingPoints, setIsRefreshingTalkingPoints] = useState(false);
+  const [, setIsRefreshingTalkingPoints] = useState(false);
+  const [isTopSummaryCollapsed, setIsTopSummaryCollapsed] = useState(false);
   const [commandCenterError, setCommandCenterError] = useState(null);
   const [scheduleBaseByClient, setScheduleBaseByClient] = useState({});
   const [scheduleDraftByClient, setScheduleDraftByClient] = useState({});
@@ -1224,6 +1268,7 @@ export default function TrainerClientsScreen({
     updated_at: null,
   });
   const [isLoadingDraftReviewTracker, setIsLoadingDraftReviewTracker] = useState(true);
+  const breathingTransitionsEnabled = Boolean(BREATHING_TRANSITIONS_ENABLED);
 
   const selectedDayConfig = useMemo(
     () => DAY_FILTERS.find((option) => option.key === dayFilter) || DAY_FILTERS[0],
@@ -1269,6 +1314,13 @@ export default function TrainerClientsScreen({
     }
     return 'default';
   }, [commandCenterPayload?.trainer?.trainer_id]);
+  const summaryVisibilityTrainerId = useMemo(() => {
+    const trainerId = commandCenterPayload?.trainer?.trainer_id;
+    if (typeof trainerId === 'string' && trainerId.trim()) {
+      return trainerId.trim();
+    }
+    return null;
+  }, [commandCenterPayload?.trainer?.trainer_id]);
 
   const activeDraft = useMemo(() => {
     if (!Array.isArray(draftQueueItems) || draftQueueItems.length === 0) {
@@ -1289,12 +1341,18 @@ export default function TrainerClientsScreen({
   }, [activeDraft?.output_id, draftQueueItems]);
 
   const draftQueueCount = Array.isArray(draftQueueItems) ? draftQueueItems.length : 0;
+  const shouldShowDraftReviewCard = draftQueueCount > 0 || Boolean(draftQueueError);
   const draftReviewDailyCount = Number(draftReviewTracker?.daily_count) || 0;
   const draftReviewLifetimeCount = Number(draftReviewTracker?.lifetime_count) || 0;
-  const draftReviewDailyProgress = Math.max(
-    0,
-    Math.min(1, draftReviewDailyCount / DRAFT_REVIEW_DAILY_GOAL),
-  );
+  const draftReviewGoalDenominator = draftQueueCount > 0
+    ? Math.min(draftQueueCount, DRAFT_REVIEW_DAILY_GOAL)
+    : 0;
+  const draftReviewDisplayDailyCount = draftReviewGoalDenominator > 0
+    ? Math.min(draftReviewDailyCount, draftReviewGoalDenominator)
+    : 0;
+  const draftReviewDailyProgress = draftReviewGoalDenominator > 0
+    ? Math.max(0, Math.min(1, draftReviewDisplayDailyCount / draftReviewGoalDenominator))
+    : 0;
 
   const visibleClientItems = useMemo(() => {
     const baseItems = sessionFilter === 'scheduled'
@@ -1482,6 +1540,32 @@ export default function TrainerClientsScreen({
   useEffect(() => {
     loadDraftReviewTrackerState();
   }, [loadDraftReviewTrackerState]);
+
+  useEffect(() => {
+    let isActive = true;
+    if (!summaryVisibilityTrainerId) {
+      setIsTopSummaryCollapsed(false);
+      return () => {
+        isActive = false;
+      };
+    }
+    loadTrainerClientsSummaryVisibility(summaryVisibilityTrainerId)
+      .then((snapshot) => {
+        if (!isActive) {
+          return;
+        }
+        setIsTopSummaryCollapsed(Boolean(snapshot?.collapsed));
+      })
+      .catch(() => {
+        if (!isActive) {
+          return;
+        }
+        setIsTopSummaryCollapsed(false);
+      });
+    return () => {
+      isActive = false;
+    };
+  }, [summaryVisibilityTrainerId]);
 
   useEffect(() => {
     setActiveDraftModel(activeDraft ? transformPlan(activeDraft) : null);
@@ -2355,6 +2439,19 @@ export default function TrainerClientsScreen({
     ]);
   };
 
+  const handleSetTopSummaryCollapsed = useCallback(async (nextCollapsed) => {
+    const normalized = Boolean(nextCollapsed);
+    setIsTopSummaryCollapsed(normalized);
+    if (!summaryVisibilityTrainerId) {
+      return;
+    }
+    try {
+      await saveTrainerClientsSummaryVisibility(summaryVisibilityTrainerId, { collapsed: normalized });
+    } catch (_error) {
+      // Keep UI responsive even if local preference persistence fails.
+    }
+  }, [summaryVisibilityTrainerId]);
+
   const runDraftReviewMutation = async (
     actionType,
     {
@@ -2478,6 +2575,13 @@ export default function TrainerClientsScreen({
     high_priority_clients: 0,
     critical_priority_clients: 0,
   };
+  const trainerOnboardingCompleted = commandCenterPayload?.trainer?.trainer_onboarding_completed !== false;
+  const summaryStatus = deriveSummaryStatus({
+    trainerOnboardingCompleted,
+    draftQueueCount,
+    highPriorityClients: totals.high_priority_clients,
+    criticalPriorityClients: totals.critical_priority_clients,
+  });
   const plannerDayLabel = selectedDayConfig.label;
   const plannerDateLabel = formatPlannerDateLabel(commandCenterPayload?.date || plannerDate);
   const setupClientName = (
@@ -2575,7 +2679,7 @@ export default function TrainerClientsScreen({
             { paddingBottom: theme.spacing[4] + bottomInset },
           ]}
         >
-          {isLoadingDetail ? (
+          {!breathingTransitionsEnabled && isLoadingDetail ? (
             <View style={styles.loadingContainer}>
               <ActivityIndicator size="large" color={theme.colors.accent.primary} />
               <ModeText variant="bodySm" tone="secondary">Loading client detail...</ModeText>
@@ -2874,6 +2978,15 @@ export default function TrainerClientsScreen({
             </>
           ) : null}
         </ScrollView>
+        {breathingTransitionsEnabled ? (
+          <BreathingTransitionOverlay
+            active={isLoadingDetail}
+            context={BREATHING_CONTEXT.CLIENT_CONTEXT_LOAD}
+            variant="overlay"
+            progressLabel="Loading client detail..."
+            testID="trainer-clients-detail-breathing-loader"
+          />
+        ) : null}
         <MemoryEditSheet
           visible={Boolean(editingMemoryId && editingMemoryRecord)}
           record={editingMemoryRecord}
@@ -2911,191 +3024,218 @@ export default function TrainerClientsScreen({
           { paddingBottom: theme.spacing[4] + bottomInset },
         ]}
       >
-        <ModeCard variant="hero" style={styles.heroTierCard}>
-          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>
-            {plannerDayLabel}{plannerDateLabel ? ` · ${plannerDateLabel}` : ''}
-          </ModeText>
-          <ModeText variant="bodySm">
-            {totals.assigned_clients} assigned clients · {totals.scheduled_today} scheduled {plannerDayLabel.toLowerCase()}
-          </ModeText>
-          <ModeText variant="bodySm" tone="secondary">
-            {totals.checkins_completed_today} check-ins completed {plannerDayLabel.toLowerCase()} · {totals.high_priority_clients} high-priority
-          </ModeText>
-          <ModeText variant="bodySm" tone="secondary">
-            {totals.critical_priority_clients} critical priority
-          </ModeText>
-          <View style={styles.summaryActionRow}>
-            <ModeButton
-              title="Refresh"
-              variant="secondary"
-              onPress={() => handleRefreshCommandCenter()}
-              style={styles.summaryActionButton}
-            />
-            <ModeButton
-              title={isRefreshingTalkingPoints ? 'Refreshing...' : 'Refresh Talking Points'}
-              variant="ghost"
-              disabled={isRefreshingTalkingPoints}
-              onPress={() => handleRefreshCommandCenter({ refreshTalkingPoints: true })}
-              style={styles.summaryActionButton}
-            />
-          </View>
-        </ModeCard>
-
-        <ModeCard
-          variant="surface"
-          testID="trainer-clients-draft-review-card"
-          style={[styles.draftReviewCard, styles.actionsTierCard]}
+        <Pressable
+          testID={isTopSummaryCollapsed ? 'trainer-clients-summary-surface-collapsed' : 'trainer-clients-summary-surface-expanded'}
+          onPress={() => {
+            handleSetTopSummaryCollapsed(!isTopSummaryCollapsed);
+          }}
+          style={({ pressed }) => [pressed && styles.summaryTogglePressed]}
+          accessibilityRole="button"
+          accessibilityLabel={isTopSummaryCollapsed ? 'Expand command center summary' : 'Collapse command center summary'}
         >
-          <View style={styles.draftReviewHeader}>
-            <View>
-              <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Draft Review Queue</ModeText>
-              <ModeText variant="bodySm">{draftQueueCount} pending</ModeText>
-            </View>
-            <View style={styles.draftReviewTrackerSummary}>
-              <ModeText
-                testID="trainer-clients-draft-review-daily-count"
-                variant="bodySm"
-                tone="accent"
-                style={styles.draftReviewTrackerValue}
-              >
-                {draftReviewDailyCount} / {DRAFT_REVIEW_DAILY_GOAL} today
-              </ModeText>
-              <ModeText
-                testID="trainer-clients-draft-review-lifetime-count"
-                variant="caption"
-                tone="secondary"
-              >
-                {draftReviewLifetimeCount} total
-              </ModeText>
-            </View>
-          </View>
-
-          <ProgressBar
-            testID="trainer-clients-draft-review-progress"
-            progress={draftReviewDailyProgress}
-            trackColor={theme.colors.surface.base}
-            fillColor={theme.colors.accent.primary}
-            style={styles.draftReviewProgress}
-          />
-
-          {isLoadingDraftReviewTracker ? (
-            <ModeText variant="caption" tone="secondary">Loading review tracker...</ModeText>
-          ) : null}
-
-          {isLoadingDraftQueue ? (
-            <View style={styles.draftReviewLoadingRow}>
-              <ActivityIndicator size="small" color={theme.colors.accent.primary} />
-              <ModeText variant="caption" tone="secondary">Loading draft queue...</ModeText>
-            </View>
-          ) : null}
-
-          {!isLoadingDraftQueue && draftQueueError ? (
-            <View style={styles.draftReviewMessageBlock}>
-              <ModeText variant="bodySm" tone="error">{draftQueueError.message}</ModeText>
-              <ModeButton
-                title="Retry Queue"
-                size="sm"
-                variant="secondary"
-                onPress={() => loadDraftQueue()}
-              />
-            </View>
-          ) : null}
-
-          {!isLoadingDraftQueue && !draftQueueError && draftQueueCount === 0 ? (
-            <ModeText variant="bodySm" tone="secondary">No pending drafts right now.</ModeText>
-          ) : null}
-
-          {!isLoadingDraftQueue && !draftQueueError && draftQueueCount > 0 && !activeDraft ? (
-            <View style={styles.draftReviewMessageBlock}>
-              <ModeText variant="bodySm" tone="secondary">
-                Great pass complete. Start from top to run another review loop.
-              </ModeText>
-              <ModeButton
-                testID="trainer-clients-draft-review-start-over"
-                title="Start From Top"
-                size="sm"
-                variant="secondary"
-                onPress={handleStartDraftQueueFromTop}
-              />
-            </View>
-          ) : null}
-
-          {!isLoadingDraftQueue && !draftQueueError && activeDraft ? (
-            <View style={styles.draftReviewBody}>
-              <ModeText variant="caption" tone="tertiary">Structured Draft Review</ModeText>
-              <ModeText
-                testID="trainer-clients-draft-review-active-title"
-                variant="bodySm"
-                style={styles.draftReviewDraftTitle}
-              >
-                {activeDraftModel?.title || activeDraft.headline || activeDraft.summary || 'Untitled draft'}
-              </ModeText>
-              <ModeText variant="caption" tone="secondary">
-                {activeDraft.client_name || 'Client'} · {activeDraft.priority_tier || 'normal'} priority · {activeDraft.action_type || activeDraft.source_type}
-              </ModeText>
-              {activeDraftPosition ? (
-                <ModeText variant="caption" tone="tertiary">
-                  Reviewing {activeDraftPosition} of {draftQueueCount}
+          <ModeCard
+            variant="hero"
+            style={styles.heroTierCard}
+            testID="trainer-clients-summary-card"
+          >
+            {isTopSummaryCollapsed ? (
+              <View testID="trainer-clients-summary-collapsed-row" style={styles.summaryCollapsedRow}>
+                <View style={styles.summaryCollapsedCopy}>
+                  <ModeText variant="label" tone="tertiary" style={styles.summaryCollapsedLabel}>
+                    {plannerDayLabel}{plannerDateLabel ? ` · ${plannerDateLabel}` : ''}
+                  </ModeText>
+                  <ModeText variant="caption" tone="secondary" numberOfLines={1}>
+                    {summaryStatus.title}
+                  </ModeText>
+                </View>
+              </View>
+            ) : (
+              <>
+                <View style={styles.summaryHeaderRow}>
+                  <ModeText variant="label" tone="tertiary" style={styles.summaryHeaderLabel}>
+                    {plannerDayLabel}{plannerDateLabel ? ` · ${plannerDateLabel}` : ''}
+                  </ModeText>
+                </View>
+                <ModeText testID="trainer-clients-summary-status-title" variant="bodySm" style={styles.summaryStatusTitle}>
+                  {summaryStatus.title}
                 </ModeText>
-              ) : null}
+                <ModeText
+                  testID="trainer-clients-summary-status-subtitle"
+                  variant="caption"
+                  tone="secondary"
+                  style={styles.summaryStatusSubtitle}
+                >
+                  {summaryStatus.subtitle}
+                </ModeText>
+                <ModeText variant="bodySm">
+                  {totals.assigned_clients} assigned clients · {totals.scheduled_today} scheduled {plannerDayLabel.toLowerCase()}
+                </ModeText>
+                <ModeText variant="bodySm" tone="secondary">
+                  {totals.checkins_completed_today} check-ins completed {plannerDayLabel.toLowerCase()} · {totals.high_priority_clients} high-priority
+                </ModeText>
+                <ModeText variant="bodySm" tone="secondary">
+                  {totals.critical_priority_clients} critical priority
+                </ModeText>
+              </>
+            )}
+          </ModeCard>
+        </Pressable>
 
-              <DraftReviewStructuredCard
-                model={activeDraftModel}
-                modelKey={activeDraft.output_id}
-                onModelChange={setActiveDraftModel}
-                onRetryRender={handleRetryDraftRender}
-                onRegeneratePlan={handleRegenerateDraft}
-                testIDPrefix="trainer-clients-draft-review"
-              />
+        {shouldShowDraftReviewCard ? (
+          <ModeCard
+            variant="surface"
+            testID="trainer-clients-draft-review-card"
+            style={[styles.draftReviewCard, styles.actionsTierCard]}
+          >
+            <View style={styles.draftReviewHeader}>
+              <View>
+                <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Draft Review Queue</ModeText>
+                <ModeText variant="bodySm">{draftQueueCount} pending</ModeText>
+              </View>
+              <View style={styles.draftReviewTrackerSummary}>
+                {draftReviewGoalDenominator > 0 ? (
+                  <ModeText
+                    testID="trainer-clients-draft-review-daily-count"
+                    variant="bodySm"
+                    tone="accent"
+                    style={styles.draftReviewTrackerValue}
+                  >
+                    {draftReviewDisplayDailyCount} / {draftReviewGoalDenominator} today
+                  </ModeText>
+                ) : null}
+                <ModeText
+                  testID="trainer-clients-draft-review-lifetime-count"
+                  variant="caption"
+                  tone="secondary"
+                >
+                  {draftReviewLifetimeCount} total
+                </ModeText>
+              </View>
+            </View>
 
-              <View style={styles.draftReviewActionRow}>
+            <ProgressBar
+              testID="trainer-clients-draft-review-progress"
+              progress={draftReviewDailyProgress}
+              trackColor={theme.colors.surface.base}
+              fillColor={theme.colors.accent.primary}
+              style={styles.draftReviewProgress}
+            />
+
+            {isLoadingDraftReviewTracker ? (
+              <ModeText variant="caption" tone="secondary">Loading review tracker...</ModeText>
+            ) : null}
+
+            {isLoadingDraftQueue ? (
+              <View style={styles.draftReviewLoadingRow}>
+                <ActivityIndicator size="small" color={theme.colors.accent.primary} />
+                <ModeText variant="caption" tone="secondary">Loading draft queue...</ModeText>
+              </View>
+            ) : null}
+
+            {!isLoadingDraftQueue && draftQueueError ? (
+              <View style={styles.draftReviewMessageBlock}>
+                <ModeText variant="bodySm" tone="error">{draftQueueError.message}</ModeText>
                 <ModeButton
-                  testID="trainer-clients-draft-review-save-next"
-                  title={isMutatingDraftReview ? 'Working...' : 'Save & Next'}
+                  title="Retry Queue"
                   size="sm"
                   variant="secondary"
-                  disabled={isMutatingDraftReview}
-                  onPress={() => runDraftReviewMutation(DRAFT_REVIEW_ACTION_TYPE.SAVE_EDIT)}
-                  style={styles.draftReviewActionButton}
-                />
-                <ModeButton
-                  testID="trainer-clients-draft-review-approve-next"
-                  title={isMutatingDraftReview ? 'Working...' : 'Approve & Next'}
-                  size="sm"
-                  disabled={isMutatingDraftReview}
-                  onPress={() => runDraftReviewMutation(DRAFT_REVIEW_ACTION_TYPE.APPROVE)}
-                  style={styles.draftReviewActionButton}
-                />
-              </View>
-              <View style={styles.draftReviewActionRow}>
-                <ModeButton
-                  testID="trainer-clients-draft-review-reject-next"
-                  title={isMutatingDraftReview ? 'Working...' : 'Reject & Next'}
-                  size="sm"
-                  variant="destructive"
-                  disabled={isMutatingDraftReview}
-                  onPress={() => runDraftReviewMutation(DRAFT_REVIEW_ACTION_TYPE.REJECT)}
-                  style={styles.draftReviewActionButton}
-                />
-                <ModeButton
-                  title="Refresh Queue"
-                  size="sm"
-                  variant="ghost"
-                  disabled={isMutatingDraftReview}
                   onPress={() => loadDraftQueue()}
-                  style={styles.draftReviewActionButton}
                 />
               </View>
-            </View>
-          ) : null}
+            ) : null}
 
-          {draftReviewMutationError ? (
-            <ModeText variant="caption" tone="error">{draftReviewMutationError}</ModeText>
-          ) : null}
-          {draftReviewMutationSuccess ? (
-            <ModeText variant="caption" tone="secondary">{draftReviewMutationSuccess}</ModeText>
-          ) : null}
-        </ModeCard>
+            {!isLoadingDraftQueue && !draftQueueError && draftQueueCount > 0 && !activeDraft ? (
+              <View style={styles.draftReviewMessageBlock}>
+                <ModeText variant="bodySm" tone="secondary">
+                  Great pass complete. Start from top to run another review loop.
+                </ModeText>
+                <ModeButton
+                  testID="trainer-clients-draft-review-start-over"
+                  title="Start From Top"
+                  size="sm"
+                  variant="secondary"
+                  onPress={handleStartDraftQueueFromTop}
+                />
+              </View>
+            ) : null}
+
+            {!isLoadingDraftQueue && !draftQueueError && activeDraft ? (
+              <View style={styles.draftReviewBody}>
+                <ModeText variant="caption" tone="tertiary">Structured Draft Review</ModeText>
+                <ModeText
+                  testID="trainer-clients-draft-review-active-title"
+                  variant="bodySm"
+                  style={styles.draftReviewDraftTitle}
+                >
+                  {activeDraftModel?.title || activeDraft.headline || activeDraft.summary || 'Untitled draft'}
+                </ModeText>
+                <ModeText variant="caption" tone="secondary">
+                  {activeDraft.client_name || 'Client'} · {activeDraft.priority_tier || 'normal'} priority · {activeDraft.action_type || activeDraft.source_type}
+                </ModeText>
+                {activeDraftPosition ? (
+                  <ModeText variant="caption" tone="tertiary">
+                    Reviewing {activeDraftPosition} of {draftQueueCount}
+                  </ModeText>
+                ) : null}
+
+                <DraftReviewStructuredCard
+                  model={activeDraftModel}
+                  modelKey={activeDraft.output_id}
+                  onModelChange={setActiveDraftModel}
+                  onRetryRender={handleRetryDraftRender}
+                  onRegeneratePlan={handleRegenerateDraft}
+                  testIDPrefix="trainer-clients-draft-review"
+                />
+
+                <View style={styles.draftReviewActionRow}>
+                  <ModeButton
+                    testID="trainer-clients-draft-review-save-next"
+                    title={isMutatingDraftReview ? 'Working...' : 'Save & Next'}
+                    size="sm"
+                    variant="secondary"
+                    disabled={isMutatingDraftReview}
+                    onPress={() => runDraftReviewMutation(DRAFT_REVIEW_ACTION_TYPE.SAVE_EDIT)}
+                    style={styles.draftReviewActionButton}
+                  />
+                  <ModeButton
+                    testID="trainer-clients-draft-review-approve-next"
+                    title={isMutatingDraftReview ? 'Working...' : 'Approve & Next'}
+                    size="sm"
+                    disabled={isMutatingDraftReview}
+                    onPress={() => runDraftReviewMutation(DRAFT_REVIEW_ACTION_TYPE.APPROVE)}
+                    style={styles.draftReviewActionButton}
+                  />
+                </View>
+                <View style={styles.draftReviewActionRow}>
+                  <ModeButton
+                    testID="trainer-clients-draft-review-reject-next"
+                    title={isMutatingDraftReview ? 'Working...' : 'Reject & Next'}
+                    size="sm"
+                    variant="destructive"
+                    disabled={isMutatingDraftReview}
+                    onPress={() => runDraftReviewMutation(DRAFT_REVIEW_ACTION_TYPE.REJECT)}
+                    style={styles.draftReviewActionButton}
+                  />
+                  <ModeButton
+                    title="Refresh Queue"
+                    size="sm"
+                    variant="ghost"
+                    disabled={isMutatingDraftReview}
+                    onPress={() => loadDraftQueue()}
+                    style={styles.draftReviewActionButton}
+                  />
+                </View>
+              </View>
+            ) : null}
+
+            {draftReviewMutationError ? (
+              <ModeText variant="caption" tone="error">{draftReviewMutationError}</ModeText>
+            ) : null}
+            {draftReviewMutationSuccess ? (
+              <ModeText variant="caption" tone="secondary">{draftReviewMutationSuccess}</ModeText>
+            ) : null}
+          </ModeCard>
+        ) : null}
 
         <FilterBar
           dayLabel={selectedDayConfig.label}
@@ -3109,7 +3249,7 @@ export default function TrainerClientsScreen({
           isPriorityCustom={priorityFilter !== DEFAULT_PRIORITY_FILTER}
         />
 
-        {isLoadingCommandCenter ? (
+        {!breathingTransitionsEnabled && isLoadingCommandCenter ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={theme.colors.accent.primary} />
             <ModeText variant="bodySm" tone="secondary">Loading Command Center...</ModeText>
@@ -3189,6 +3329,15 @@ export default function TrainerClientsScreen({
           </View>
         ) : null}
       </ScrollView>
+      {breathingTransitionsEnabled ? (
+        <BreathingTransitionOverlay
+          active={isLoadingCommandCenter}
+          context={BREATHING_CONTEXT.CLIENT_CONTEXT_LOAD}
+          variant="overlay"
+          progressLabel="Loading Command Center..."
+          testID="trainer-clients-command-center-breathing-loader"
+        />
+      ) : null}
       <FilterBottomSheet
         visible={Boolean(activeFilterSheetConfig)}
         title={activeFilterSheetConfig?.title || ''}
@@ -3238,16 +3387,38 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 6 },
     elevation: 4,
   },
+  summaryStatusTitle: {
+    fontWeight: '700',
+  },
+  summaryStatusSubtitle: {
+    marginTop: 2,
+  },
+  summaryHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  summaryHeaderLabel: {
+    marginBottom: 0,
+  },
+  summaryCollapsedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[2],
+  },
+  summaryCollapsedCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  summaryCollapsedLabel: {
+    marginBottom: 0,
+  },
+  summaryTogglePressed: {
+    opacity: theme.interaction.pressedOpacity,
+  },
   actionsTierCard: {
     paddingTop: theme.spacing[1],
-  },
-  summaryActionRow: {
-    flexDirection: 'row',
-    gap: theme.spacing[2],
-    marginTop: theme.spacing[2],
-  },
-  summaryActionButton: {
-    flex: 1,
   },
   draftReviewCard: {
     gap: theme.spacing[2],

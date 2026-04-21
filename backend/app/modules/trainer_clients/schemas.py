@@ -18,6 +18,7 @@ class TrainerClientIdentity(BaseModel):
     user_id: str | None = None
     created_at: datetime | None = None
     is_assigned_to_trainer: bool = True
+    is_pending_user: bool = False
 
 
 class TrainerClientListResponse(BaseModel):

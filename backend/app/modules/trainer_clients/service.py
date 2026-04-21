@@ -66,8 +66,22 @@ class TrainerClientService:
             and self._client_matches_search(row, normalized_search)
         ]
         paginated_rows = filtered_rows[offset:offset + limit]
+        client_ids = [
+            str(row.get("id") or "").strip()
+            for row in paginated_rows
+            if str(row.get("id") or "").strip()
+        ]
+        profile_status_by_client_id = self.repository.list_profile_onboarding_status_for_clients(client_ids)
         return TrainerClientListResponse(
-            items=[self._to_client_identity(row) for row in paginated_rows],
+            items=[
+                self._to_client_identity(
+                    row,
+                    is_pending_user=self._is_pending_user(
+                        profile_status_by_client_id.get(str(row.get("id") or "").strip()),
+                    ),
+                )
+                for row in paginated_rows
+            ],
             count=len(filtered_rows),
             limit=limit,
             offset=offset,
@@ -861,7 +875,12 @@ class TrainerClientService:
             updated_at=self._coerce_datetime(row.get("updated_at")),
         )
 
-    def _to_client_identity(self, row: dict[str, Any]) -> TrainerClientIdentity:
+    def _to_client_identity(
+        self,
+        row: dict[str, Any],
+        *,
+        is_pending_user: bool = False,
+    ) -> TrainerClientIdentity:
         return TrainerClientIdentity(
             client_id=str(row.get("id") or ""),
             client_name=self._client_name(row),
@@ -869,6 +888,7 @@ class TrainerClientService:
             user_id=str(row.get("user_id")) if row.get("user_id") else None,
             created_at=self._coerce_datetime(row.get("created_at")),
             is_assigned_to_trainer=bool(row.get("assigned_trainer_id")),
+            is_pending_user=bool(is_pending_user),
         )
 
     def _to_invite_code_record(self, row: dict[str, Any]) -> TrainerClientInviteCodeRecord:
@@ -1013,6 +1033,10 @@ class TrainerClientService:
             return None
         normalized = value.strip().lower()
         return normalized or None
+
+    def _is_pending_user(self, onboarding_status: str | None) -> bool:
+        normalized_status = str(onboarding_status or "").strip().lower()
+        return normalized_status != "completed"
 
     def _normalize_invite_code_for_write(self, value: Any) -> str | None:
         if value is None:

@@ -36,7 +36,20 @@ class FakeTrainerClientRepository:
                 "assigned_trainer_id": "trainer-123",
                 "created_at": "2026-04-09T10:00:00+00:00",
             },
+            {
+                "id": "client-3",
+                "tenant_id": "tenant-1",
+                "user_id": "client-user-3",
+                "client_name": "Morgan",
+                "assigned_trainer_id": "trainer-123",
+                "created_at": "2026-04-08T10:00:00+00:00",
+            },
         ]
+        self.profile_status_by_client_id = {
+            "client-1": "completed",
+            "client-2": "in_progress",
+            # client-3 intentionally missing profile to validate default pending behavior.
+        }
         self.assignments = [
             {
                 "id": "assign-old",
@@ -140,6 +153,13 @@ class FakeTrainerClientRepository:
                 return dict(row)
         return None
 
+    def list_profile_onboarding_status_for_clients(self, client_ids: list[str]):
+        return {
+            client_id: self.profile_status_by_client_id.get(client_id)
+            for client_id in client_ids
+            if client_id in self.profile_status_by_client_id
+        }
+
 
 class TrainerClientManagementServiceTests(unittest.TestCase):
     def setUp(self):
@@ -194,6 +214,15 @@ class TrainerClientManagementServiceTests(unittest.TestCase):
                 self.trainer_context,
                 TrainerClientInviteCodeCreateRequest(code="mode1234"),
             )
+
+    def test_list_clients_marks_pending_users_from_onboarding_status(self):
+        listing = self.service.list_clients(self.trainer_context, limit=10, offset=0)
+        self.assertEqual(listing.count, 3)
+
+        by_client_id = {item.client_id: item for item in listing.items}
+        self.assertFalse(by_client_id["client-1"].is_pending_user)
+        self.assertTrue(by_client_id["client-2"].is_pending_user)
+        self.assertTrue(by_client_id["client-3"].is_pending_user)
 
     def test_cross_tenant_context_cannot_mutate_clients(self):
         cross_tenant_context = TrainerContext(

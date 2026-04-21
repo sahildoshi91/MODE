@@ -36,8 +36,10 @@ import { getTrainerAssignmentStatus } from '../features/trainerAssignment/servic
 import {
   AUTH_PASSWORD_ENABLED,
   AUTH_SOCIAL_ENABLED,
+  BREATHING_TRANSITIONS_ENABLED,
   TRAINER_ROUTE_FOUNDATION_ENABLED,
 } from '../config/featureFlags';
+import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../features/shared/loading';
 import { supabase } from '../services/supabaseClient';
 
 const FLOATING_NAV_BOTTOM_OFFSET = NAV_BOTTOM_OFFSET;
@@ -63,7 +65,28 @@ function resolveOAuthRedirectUrl() {
   return process.env.EXPO_PUBLIC_SUPABASE_REDIRECT_URL || 'mode://auth/callback';
 }
 
-function ShellLoadingState({ title, subtitle }) {
+function ShellLoadingState({
+  title,
+  subtitle,
+  context = BREATHING_CONTEXT.SHELL_BOOTSTRAP,
+  active = true,
+  onExitComplete = null,
+}) {
+  if (BREATHING_TRANSITIONS_ENABLED) {
+    return (
+      <SafeScreen style={styles.loadingScreen} includeTopInset={false} includeBottomInset={false}>
+        <BreathingTransitionOverlay
+          active={active}
+          context={context}
+          variant="screen"
+          progressLabel={subtitle}
+          onExitComplete={onExitComplete}
+          testID="app-shell-breathing-loader"
+        />
+      </SafeScreen>
+    );
+  }
+
   return (
     <SafeScreen style={styles.loadingScreen}>
       <ModeCard variant="tinted" noShadow style={styles.loadingCard}>
@@ -133,6 +156,7 @@ function AppShell() {
   const [coachOverlayContext, setCoachOverlayContext] = useState(null);
   const [progressRoute, setProgressRoute] = useState('progress');
   const [insightsOrigin, setInsightsOrigin] = useState('progress');
+  const [shellLoadingState, setShellLoadingState] = useState(null);
 
   const tabOpacity = useRef(new Animated.Value(1)).current;
   const tabTranslateY = useRef(new Animated.Value(0)).current;
@@ -768,7 +792,97 @@ function AppShell() {
     }
   }, [authStage, trackEvent]);
 
-  if (isSessionLoading) {
+  const isBlockingAssignmentLoad = isAssignmentStatusLoading
+    && isTrainerViewer
+    && !assignmentStatus
+    && !assignmentStatusError;
+  const shellLoadingConfig = useMemo(() => {
+    if (isSessionLoading) {
+      return {
+        context: BREATHING_CONTEXT.SHELL_BOOTSTRAP,
+        title: 'Preparing MODE',
+        subtitle: 'Checking your session and loading your training workspace.',
+      };
+    }
+    if (isBootstrapLoading) {
+      return {
+        context: BREATHING_CONTEXT.SHELL_BOOTSTRAP,
+        title: 'Preparing MODE',
+        subtitle: 'Loading your role and onboarding state.',
+      };
+    }
+    if (isBlockingAssignmentLoad) {
+      return {
+        context: BREATHING_CONTEXT.SHELL_BOOTSTRAP,
+        title: 'Syncing Your Coach',
+        subtitle: 'Loading assignment status before we open your dashboard.',
+      };
+    }
+    return null;
+  }, [isBlockingAssignmentLoad, isBootstrapLoading, isSessionLoading]);
+
+  useEffect(() => {
+    if (!BREATHING_TRANSITIONS_ENABLED) {
+      setShellLoadingState(null);
+      return;
+    }
+
+    if (shellLoadingConfig) {
+      setShellLoadingState((current) => {
+        if (
+          current
+          && current.active
+          && current.context === shellLoadingConfig.context
+          && current.title === shellLoadingConfig.title
+          && current.subtitle === shellLoadingConfig.subtitle
+        ) {
+          return current;
+        }
+        return {
+          ...shellLoadingConfig,
+          active: true,
+        };
+      });
+      return;
+    }
+
+    setShellLoadingState((current) => {
+      if (!current || !current.active) {
+        return current;
+      }
+      return {
+        ...current,
+        active: false,
+      };
+    });
+  }, [shellLoadingConfig]);
+
+  if (BREATHING_TRANSITIONS_ENABLED && shellLoadingState) {
+    return (
+      <ShellLoadingState
+        title={shellLoadingState.title}
+        subtitle={shellLoadingState.subtitle}
+        context={shellLoadingState.context}
+        active={shellLoadingState.active}
+        onExitComplete={() => {
+          setShellLoadingState((current) => {
+            if (shellLoadingConfig) {
+              return {
+                ...shellLoadingConfig,
+                active: true,
+              };
+            }
+            if (current && !current.active) {
+              return null;
+            }
+            return current;
+          });
+        }}
+      />
+    );
+  }
+
+  if (!BREATHING_TRANSITIONS_ENABLED && isSessionLoading) {
     return (
       <ShellLoadingState
         title="Preparing MODE"
@@ -813,7 +927,7 @@ function AppShell() {
     );
   }
 
-  if (isBootstrapLoading) {
+  if (!BREATHING_TRANSITIONS_ENABLED && isBootstrapLoading) {
     return (
       <ShellLoadingState
         title="Preparing MODE"
@@ -873,11 +987,10 @@ function AppShell() {
   const floatingNavClearance = navBottomInset + FLOATING_NAV_BOTTOM_OFFSET + FLOATING_NAV_PILL_HEIGHT;
   const contentBottomInset = navBottomInset + 108;
   const coachChatBottomInset = navBottomInset + COACH_CHAT_DOCK_CLEARANCE;
-  const isBlockingAssignmentLoad = isAssignmentStatusLoading && isTrainerViewer && !assignmentStatus && !assignmentStatusError;
   const shouldUseTrainerRouteFoundation = useCoachOsTrainerNav;
   const hasAssignedTrainer = Boolean(assignmentStatus?.assigned_trainer_id || bootstrap?.assigned_trainer_id);
 
-  if (isBlockingAssignmentLoad) {
+  if (!BREATHING_TRANSITIONS_ENABLED && isBlockingAssignmentLoad) {
     return (
       <ShellLoadingState
         title="Syncing Your Coach"
