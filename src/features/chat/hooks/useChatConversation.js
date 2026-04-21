@@ -58,6 +58,9 @@ const STALE_CHAT_HISTORY_ROUTE_MESSAGE = (
   'The running backend is missing chat history route support (/api/v1/chat/history). '
   + 'Restart or redeploy backend from current repo code, then tap Retry.'
 );
+const MEMORY_SUGGESTION_MIN_CONFIDENCE = 0.78;
+const MEMORY_SUGGESTION_CATEGORIES = new Set(['preference', 'injury', 'goal', 'constraint']);
+const MEMORY_SUGGESTION_VISIBILITIES = new Set(['ai_usable', 'internal_only']);
 
 function normalizeOnboardingAction(value) {
   if (typeof value !== 'string') {
@@ -103,7 +106,57 @@ function mapHydratedHistoryMessages(payload) {
       visibility: typeof item?.visibility === 'string' ? item.visibility : 'trainer_private',
       status: typeof item?.status === 'string' ? item.status : 'confirmed',
       createdAt: item?.created_at || null,
+      memorySuggestions: normalizeMemorySuggestions(
+        item?.structured_payload?.memory_suggestions || item?.memory_suggestions,
+      ),
     }));
+}
+
+function normalizeMemorySuggestions(rawSuggestions) {
+  if (!Array.isArray(rawSuggestions)) {
+    return [];
+  }
+  return rawSuggestions
+    .map((suggestion, index) => {
+      const text = typeof suggestion?.suggested_text === 'string'
+        ? suggestion.suggested_text.trim()
+        : '';
+      if (!text) {
+        return null;
+      }
+      const confidenceRaw = Number(suggestion?.confidence);
+      const confidence = Number.isFinite(confidenceRaw)
+        ? Math.max(0, Math.min(1, confidenceRaw))
+        : 0;
+      const detectedCategory = typeof suggestion?.detected_category === 'string'
+        ? suggestion.detected_category.trim().toLowerCase()
+        : null;
+      const sourceMessageId = typeof suggestion?.source_message_id === 'string'
+        ? suggestion.source_message_id.trim()
+        : '';
+      const sourceRole = typeof suggestion?.source_role === 'string'
+        ? suggestion.source_role.trim().toLowerCase()
+        : 'assistant';
+      const defaultVisibility = typeof suggestion?.default_visibility === 'string'
+        ? suggestion.default_visibility.trim().toLowerCase()
+        : 'ai_usable';
+      return {
+        id: typeof suggestion?.id === 'string' && suggestion.id.trim().length > 0
+          ? suggestion.id.trim()
+          : `memory-suggestion-${sourceMessageId || 'assistant'}-${index}`,
+        source_message_id: sourceMessageId || null,
+        source_role: sourceRole === 'user' ? 'user' : 'assistant',
+        suggested_text: text,
+        detected_category: MEMORY_SUGGESTION_CATEGORIES.has(detectedCategory || '')
+          ? detectedCategory
+          : null,
+        confidence,
+        default_visibility: MEMORY_SUGGESTION_VISIBILITIES.has(defaultVisibility)
+          ? defaultVisibility
+          : 'ai_usable',
+      };
+    })
+    .filter((suggestion) => suggestion && suggestion.confidence >= MEMORY_SUGGESTION_MIN_CONFIDENCE);
 }
 
 function isStaleChatHistoryRouteError(error) {
@@ -182,6 +235,9 @@ function buildLaunchContextPayload(launchContext) {
   return {
     ...(entrypoint ? { entrypoint } : {}),
     ...(onboardingAction ? { onboarding_action: onboardingAction } : {}),
+    ...(typeof launchContext.client_id === 'string' && launchContext.client_id.trim().length > 0
+      ? { client_id: launchContext.client_id.trim() }
+      : {}),
     ...(Object.keys(checkinContext).length > 0
       ? {
         checkin_context: {
@@ -449,6 +505,7 @@ export function useChatConversation(accessToken, launchContext = null) {
           text: payload.assistant_message,
           fallbackTriggered: payload.fallback_triggered,
           profilePatch: normalizeProfilePatch(payload.profile_patch),
+          memorySuggestions: normalizeMemorySuggestions(payload?.memory_suggestions),
         },
       ];
       setMessages(bootstrapMessages);
@@ -720,6 +777,7 @@ export function useChatConversation(accessToken, launchContext = null) {
           text: finalAssistantText,
           fallbackTriggered: Boolean(responsePayload?.fallback_triggered),
           profilePatch: normalizeProfilePatch(responsePayload?.profile_patch),
+          memorySuggestions: normalizeMemorySuggestions(responsePayload?.memory_suggestions),
           requestId,
         },
       ];

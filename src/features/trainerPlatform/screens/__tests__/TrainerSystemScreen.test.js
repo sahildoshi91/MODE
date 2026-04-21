@@ -151,6 +151,7 @@ jest.mock('expo-constants', () => ({
 
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
+import { Alert, StyleSheet } from 'react-native';
 
 import { fetchWithApiFallback } from '../../../../services/apiRequest';
 import {
@@ -172,6 +173,7 @@ import {
 import { getTrainerSettingsMe, listTrainerPersonas } from '../../../profile/services/profileApi';
 import { getTrainerCoachQueue } from '../../../trainerCoach/services/trainerCoachApi';
 import { getTrainerReviewOutputs } from '../../../trainerReview/services/trainerReviewApi';
+import { theme } from '../../../../../lib/theme';
 import { generateKnowledgeNoteTitle } from '../../utils/knowledgeNoteTitleSummary';
 import TrainerSystemScreen from '../TrainerSystemScreen';
 
@@ -363,7 +365,7 @@ describe('TrainerSystemScreen', () => {
       tree = renderer.create(
         <TrainerSystemScreen
           accessToken="trainer-token"
-          bottomInset={12}
+          bottomInset={typeof overrides.bottomInset === 'number' ? overrides.bottomInset : 12}
           assignmentStatus={{
             viewer_display_name: 'Coach Maya',
             trainer_onboarding_completed: true,
@@ -382,6 +384,17 @@ describe('TrainerSystemScreen', () => {
     });
     await flushEffects();
     return tree;
+  }
+
+  async function revealMemoryRowSwipe(tree, memoryId, direction = 'left') {
+    const rowSwipeHost = tree.root.findByProps({ testID: `trainer-system-client-memory-row-swipe-${memoryId}` });
+    await act(async () => {
+      if (direction === 'left') {
+        rowSwipeHost.props.onPress();
+      } else {
+        rowSwipeHost.props.onLongPress();
+      }
+    });
   }
 
   it('renders the compact trainer system hub and loads summary counts', async () => {
@@ -632,7 +645,7 @@ describe('TrainerSystemScreen', () => {
     const detailRendered = JSON.stringify(tree.toJSON());
     expect(detailRendered).toContain('Client detail management');
     expect(detailRendered).toContain('Build strength');
-    expect(detailRendered).toContain('Taylor responds well to concise coaching prompts.');
+    expect(detailRendered).not.toContain('Taylor responds well to concise coaching prompts.');
 
     await act(async () => {
       findBackButton(tree.root).props.onPress();
@@ -682,7 +695,7 @@ describe('TrainerSystemScreen', () => {
     ).toHaveLength(0);
   });
 
-  it('creates client memory as ai_usable by default', async () => {
+  it('renders two-row memory composer and removes legacy memory summary/context copy', async () => {
     const tree = await renderScreen();
 
     await act(async () => {
@@ -695,12 +708,98 @@ describe('TrainerSystemScreen', () => {
     });
     await flushEffects();
 
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-input' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-submit' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-ai-toggle' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-internal-toggle' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-add-tags' })).not.toThrow();
+
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-client-memory-summary'),
+    ).toHaveLength(0);
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-client-memory-filter-recent'),
+    ).toHaveLength(0);
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).not.toContain('Capture new memory in Coach Chat using long-press or `/mem`.');
+    expect(rendered).not.toContain('2 memories • 1 AI-usable • 1 internal');
+    expect(rendered).not.toContain('Taylor responds well to concise coaching prompts.');
+  });
+
+  it('applies all/ai/internal filter chips in client detail memory workspace', async () => {
+    const tree = await renderScreen();
+
     await act(async () => {
-      tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-input' })
-        .props.onChangeText('Client is vegetarian and needs high-protein options.');
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-filter-all' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-filter-ai' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-filter-internal' })).not.toThrow();
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-client-memory-filter-recent'),
+    ).toHaveLength(0);
+
+    const findMemoryRows = (rowTestId) => tree.root.findAll(
+      (node) => node.props?.testID === rowTestId && typeof node.props?.onPress === 'function',
+    );
+
+    expect(findMemoryRows('trainer-system-client-memory-row-memory-1').length).toBeGreaterThan(0);
+    expect(findMemoryRows('trainer-system-client-memory-row-memory-2').length).toBeGreaterThan(0);
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-filter-internal').props.onPress();
+    });
+
+    expect(findMemoryRows('trainer-system-client-memory-row-memory-1')).toHaveLength(0);
+    expect(findMemoryRows('trainer-system-client-memory-row-memory-2').length).toBeGreaterThan(0);
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-filter-ai').props.onPress();
+    });
+
+    expect(findMemoryRows('trainer-system-client-memory-row-memory-1').length).toBeGreaterThan(0);
+    expect(findMemoryRows('trainer-system-client-memory-row-memory-2')).toHaveLength(0);
+  });
+
+  it('creates memory from inline plus submit and clears tags after save', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    const composerInput = tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-input' });
+    await act(async () => {
+      composerInput.props.onChangeText('Needs lower-impact cardio before heavy lower-body days.');
+    });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-composer-add-tags').props.onPress();
     });
     await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-client-memory-composer-save').props.onPress();
+      tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-tags-input' })
+        .props.onChangeText('cardio, readiness');
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-composer-tags-done').props.onPress();
+    });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-composer-submit').props.onPress();
     });
     await flushEffects();
 
@@ -708,13 +807,46 @@ describe('TrainerSystemScreen', () => {
       accessToken: 'trainer-token',
       clientId: 'client-1',
       memoryType: 'note',
-      text: 'Client is vegetarian and needs high-protein options.',
+      text: 'Needs lower-impact cardio before heavy lower-body days.',
       visibility: 'ai_usable',
-      tags: [],
+      tags: ['cardio', 'readiness'],
+    }));
+
+    const refreshedComposerInput = tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-input' });
+    expect(refreshedComposerInput.props.value).toBe('');
+  });
+
+  it('creates memory from return key submit', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    const composerInput = tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-input' });
+    await act(async () => {
+      composerInput.props.onChangeText('Sleep quality dips after late sessions.');
+    });
+    await act(async () => {
+      composerInput.props.onSubmitEditing();
+    });
+    await flushEffects();
+
+    expect(createTrainerClientMemory).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+      text: 'Sleep quality dips after late sessions.',
+      visibility: 'ai_usable',
     }));
   });
 
-  it('supports switching memory visibility to internal_only for create and edit', async () => {
+  it('supports switching memory visibility to internal_only in edit flow', async () => {
     const tree = await renderScreen();
 
     await act(async () => {
@@ -728,28 +860,13 @@ describe('TrainerSystemScreen', () => {
     await flushEffects();
 
     await act(async () => {
-      tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-input' })
-        .props.onChangeText('Internal-only check-in note');
-      tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-ai-toggle' })
-        .props.onValueChange(false);
+      await revealMemoryRowSwipe(tree, 'memory-1', 'left');
     });
     await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-client-memory-composer-save').props.onPress();
-    });
-    await flushEffects();
-
-    expect(createTrainerClientMemory).toHaveBeenCalledWith(expect.objectContaining({
-      clientId: 'client-1',
-      visibility: 'internal_only',
-    }));
-
-    await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-client-memory-edit-memory-1').props.onPress({
-        stopPropagation: jest.fn(),
-      });
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-edit-memory-1').props.onPress();
     });
     await act(async () => {
-      tree.root.findByProps({ testID: 'trainer-system-client-memory-edit-ai-toggle' }).props.onValueChange(false);
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-edit-internal-toggle').props.onPress();
     });
     await act(async () => {
       findPressableByTestID(tree.root, 'trainer-system-client-memory-edit-save').props.onPress();
@@ -778,17 +895,46 @@ describe('TrainerSystemScreen', () => {
     await flushEffects();
 
     await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-client-memory-archive-memory-1').props.onPress({
-        stopPropagation: jest.fn(),
-      });
+      await revealMemoryRowSwipe(tree, 'memory-1', 'right');
+    });
+
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons = []) => {
+      const archiveAction = buttons.find((item) => item?.text === 'Archive');
+      archiveAction?.onPress?.();
+    });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-archive-memory-1').props.onPress();
     });
     await flushEffects();
 
+    expect(alertSpy).toHaveBeenCalled();
     expect(archiveTrainerClientMemory).toHaveBeenCalledWith({
       accessToken: 'trainer-token',
       clientId: 'client-1',
       memoryId: 'memory-1',
     });
+    alertSpy.mockRestore();
+  });
+
+  it('applies client detail bottom inset once in scroll content padding', async () => {
+    const tree = await renderScreen({ bottomInset: 40 });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    const scrollNode = tree.root.find(
+      (node) => Array.isArray(node.props?.contentContainerStyle),
+    );
+    const flattened = StyleSheet.flatten(scrollNode.props.contentContainerStyle);
+    expect(flattened.paddingBottom).toBe(theme.spacing[4] + 40);
   });
 
   it('hides inactive invite codes and removes a row after deactivate in client management', async () => {

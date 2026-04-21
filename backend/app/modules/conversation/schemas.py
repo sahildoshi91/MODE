@@ -85,11 +85,25 @@ class ConversationUsage(BaseModel):
     last_usage_at: str | None = None
 
 
+MemorySuggestionCategory = Literal["preference", "injury", "goal", "constraint"]
+MemorySuggestionVisibility = Literal["ai_usable", "internal_only"]
+
+
+class MemorySuggestion(BaseModel):
+    source_message_id: str
+    source_role: Literal["user", "assistant"] = "user"
+    suggested_text: str
+    detected_category: MemorySuggestionCategory
+    confidence: float = Field(default=0.0, ge=0, le=1)
+    default_visibility: MemorySuggestionVisibility = "ai_usable"
+
+
 class ChatResponse(BaseModel):
     conversation_id: str | None
     request_id: str | None = None
     assistant_message: str
     quick_replies: list[str] = Field(default_factory=list)
+    memory_suggestions: list[MemorySuggestion] = Field(default_factory=list)
     conversation_state: ConversationState
     profile_patch: dict[str, Any] = Field(default_factory=dict)
     trainer_context: dict[str, Any] = Field(default_factory=dict)

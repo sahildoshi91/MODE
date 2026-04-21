@@ -7,6 +7,11 @@ const mockRetryFailedRequest = jest.fn();
 const mockSendMessage = jest.fn();
 const mockSetStringAsync = jest.fn();
 const mockChatBubble = jest.fn();
+const mockCreateTrainerClientMemory = jest.fn();
+const mockListTrainerClients = jest.fn();
+const mockUpdateTrainerClientMemory = jest.fn();
+const mockLoadCoachChatLastMemoryClientId = jest.fn();
+const mockSaveCoachChatLastMemoryClientId = jest.fn();
 
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react');
@@ -19,6 +24,17 @@ jest.mock('react-native-safe-area-context', () => {
 
 jest.mock('../../hooks/useChatConversation', () => ({
   useChatConversation: (...args) => mockUseChatConversation(...args),
+}));
+
+jest.mock('../../../trainerClients/services/trainerHomeApi', () => ({
+  createTrainerClientMemory: (...args) => mockCreateTrainerClientMemory(...args),
+  listTrainerClients: (...args) => mockListTrainerClients(...args),
+  updateTrainerClientMemory: (...args) => mockUpdateTrainerClientMemory(...args),
+}));
+
+jest.mock('../../storage/chatMemoryStorage', () => ({
+  loadCoachChatLastMemoryClientId: (...args) => mockLoadCoachChatLastMemoryClientId(...args),
+  saveCoachChatLastMemoryClientId: (...args) => mockSaveCoachChatLastMemoryClientId(...args),
 }));
 
 jest.mock('expo-clipboard', () => ({
@@ -63,13 +79,15 @@ describe('CoachChatScreen', () => {
   let keyboardListeners = {};
   let keyboardAddListenerSpy;
 
-  function renderScreen() {
+  function renderScreen({
+    launchContext = { entrypoint: 'trainer_agent_training', onboarding_action: 'review' },
+  } = {}) {
     let tree;
     act(() => {
       tree = renderer.create(
         <CoachChatScreen
           accessToken="trainer-token"
-          launchContext={{ entrypoint: 'trainer_agent_training', onboarding_action: 'review' }}
+          launchContext={launchContext}
         />,
       );
     });
@@ -125,6 +143,15 @@ describe('CoachChatScreen', () => {
     });
     mockRetryFailedRequest.mockResolvedValue(true);
     mockSendMessage.mockResolvedValue(true);
+    mockCreateTrainerClientMemory.mockResolvedValue({
+      id: 'memory-1',
+      visibility: 'ai_usable',
+      tags: [],
+    });
+    mockListTrainerClients.mockResolvedValue({ items: [] });
+    mockUpdateTrainerClientMemory.mockResolvedValue({ id: 'memory-1' });
+    mockLoadCoachChatLastMemoryClientId.mockResolvedValue(null);
+    mockSaveCoachChatLastMemoryClientId.mockResolvedValue(undefined);
     mockSetStringAsync.mockResolvedValue(undefined);
     mockUseChatConversation.mockReturnValue({
       messages: [
@@ -490,6 +517,57 @@ describe('CoachChatScreen', () => {
     });
 
     act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('intercepts /mem command and saves memory without sending a chat turn', async () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        {
+          id: 'assistant-msg-1',
+          role: 'assistant',
+          text: 'Share your constraints and preferences.',
+          isError: false,
+        },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen({
+      launchContext: {
+        entrypoint: 'trainer_agent_training',
+        onboarding_action: 'review',
+        client_id: 'client-123',
+      },
+    });
+    const composer = tree.root.findByType('MockCoachComposer');
+    act(() => {
+      composer.props.onChangeText?.('/mem Avoid deep knee flexion on heavy days');
+    });
+    const updatedComposer = tree.root.findByType('MockCoachComposer');
+
+    await act(async () => {
+      await updatedComposer.props.onSend?.();
+    });
+
+    expect(mockCreateTrainerClientMemory).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      clientId: 'client-123',
+      memoryType: 'note',
+      text: 'Avoid deep knee flexion on heavy days',
+      visibility: 'ai_usable',
+    }));
+    expect(mockSendMessage).not.toHaveBeenCalled();
+    expect(mockSaveCoachChatLastMemoryClientId).toHaveBeenCalledWith('client-123');
+
+    await act(async () => {
       tree.unmount();
     });
   });

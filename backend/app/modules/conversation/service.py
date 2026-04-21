@@ -50,6 +50,59 @@ logger = logging.getLogger(__name__)
 TRAINER_ONBOARDING_STORAGE_UNAVAILABLE_DETAIL = (
     "Trainer onboarding storage is not available. Apply onboarding migrations and retry."
 )
+MEMORY_SUGGESTION_MIN_CONFIDENCE = 0.78
+MEMORY_SUGGESTION_MAX_TEXT_LENGTH = 280
+MEMORY_CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "injury": (
+        "injury",
+        "injured",
+        "pain",
+        "hurts",
+        "hurt",
+        "sprain",
+        "strain",
+        "tendon",
+        "back pain",
+        "knee pain",
+        "shoulder pain",
+    ),
+    "goal": (
+        "goal",
+        "goals",
+        "target",
+        "aiming",
+        "want to",
+        "fat loss",
+        "lose weight",
+        "build muscle",
+        "get stronger",
+        "performance",
+        "run faster",
+    ),
+    "constraint": (
+        "cannot",
+        "can't",
+        "unable",
+        "limited",
+        "constraint",
+        "busy",
+        "time",
+        "schedule",
+        "no equipment",
+        "travel",
+    ),
+    "preference": (
+        "prefer",
+        "preference",
+        "like",
+        "love",
+        "dislike",
+        "hate",
+        "favorite",
+        "enjoy",
+        "don't like",
+    ),
+}
 
 
 @dataclass
@@ -64,6 +117,7 @@ class StreamResultState:
     conversation_usage: ConversationUsage | None = None
     token_usage: TokenUsage = field(default_factory=TokenUsage)
     assistant_message_id: str | None = None
+    memory_suggestions: list[dict[str, Any]] = field(default_factory=list)
 
 
 class ConversationProcessingError(RuntimeError):
@@ -847,6 +901,82 @@ class ConversationService:
         except Exception:
             logger.exception("Failed to queue trainer review for conversation_id=%s", conversation_id)
 
+    def _normalize_memory_candidate_text(self, message_text: str) -> str | None:
+        normalized = " ".join(str(message_text or "").split())
+        if len(normalized) < 12:
+            return None
+        if len(normalized) <= MEMORY_SUGGESTION_MAX_TEXT_LENGTH:
+            return normalized
+        clipped = normalized[:MEMORY_SUGGESTION_MAX_TEXT_LENGTH].rstrip()
+        if not clipped:
+            return None
+        return f"{clipped}…"
+
+    def _score_memory_detection_category(
+        self,
+        *,
+        normalized_text: str,
+        keywords: tuple[str, ...],
+        base: float,
+    ) -> float:
+        lowered = normalized_text.lower()
+        score = base
+        for keyword in keywords:
+            if keyword in lowered:
+                score += 0.09
+        return min(0.98, score)
+
+    def _detect_memory_suggestions(
+        self,
+        *,
+        message_text: str,
+        source_message_id: str | None,
+        source_role: str = "user",
+    ) -> list[dict[str, Any]]:
+        if not source_message_id:
+            return []
+        normalized_text = self._normalize_memory_candidate_text(message_text)
+        if not normalized_text:
+            return []
+
+        category_scores = {
+            "preference": self._score_memory_detection_category(
+                normalized_text=normalized_text,
+                keywords=MEMORY_CATEGORY_KEYWORDS["preference"],
+                base=0.62,
+            ),
+            "injury": self._score_memory_detection_category(
+                normalized_text=normalized_text,
+                keywords=MEMORY_CATEGORY_KEYWORDS["injury"],
+                base=0.60,
+            ),
+            "goal": self._score_memory_detection_category(
+                normalized_text=normalized_text,
+                keywords=MEMORY_CATEGORY_KEYWORDS["goal"],
+                base=0.60,
+            ),
+            "constraint": self._score_memory_detection_category(
+                normalized_text=normalized_text,
+                keywords=MEMORY_CATEGORY_KEYWORDS["constraint"],
+                base=0.58,
+            ),
+        }
+        detected_category = max(category_scores, key=category_scores.get)
+        confidence = category_scores.get(detected_category, 0.0)
+        if confidence < MEMORY_SUGGESTION_MIN_CONFIDENCE:
+            return []
+
+        return [
+            {
+                "source_message_id": source_message_id,
+                "source_role": "assistant" if source_role == "assistant" else "user",
+                "suggested_text": normalized_text,
+                "detected_category": detected_category,
+                "confidence": round(confidence, 2),
+                "default_visibility": "ai_usable",
+            },
+        ]
+
     def _mark_conversation_failed(self, conversation_id: str) -> None:
         with suppress(Exception):
             self.repository.update_conversation_state(
@@ -1006,8 +1136,14 @@ class ConversationService:
         fallback_reason: str | None = None,
         orchestration_metadata: dict[str, Any] | None = None,
         source_request_id: str | None = None,
+        memory_suggestions: list[dict[str, Any]] | None = None,
     ) -> tuple[RouteDebug, ConversationUsage, dict[str, Any]]:
         route_debug = self._build_route_debug(route, execution_provider, execution_model, fallback_reason)
+        serialized_memory_suggestions = (
+            memory_suggestions
+            if isinstance(memory_suggestions, list)
+            else []
+        )
         try:
             saved_message = self.repository.save_message(
                 conversation_id,
@@ -1024,6 +1160,7 @@ class ConversationService:
                     },
                     "route": self._serialize_route_metadata(route, execution_provider, execution_model, fallback_reason),
                     "orchestration": orchestration_metadata or {},
+                    "memory_suggestions": serialized_memory_suggestions,
                 },
                 request_id=source_request_id,
             )
@@ -1043,6 +1180,7 @@ class ConversationService:
                     },
                     "route": self._serialize_route_metadata(route, execution_provider, execution_model, fallback_reason),
                     "orchestration": orchestration_metadata or {},
+                    "memory_suggestions": serialized_memory_suggestions,
                 },
             )
         try:
@@ -1152,6 +1290,7 @@ class ConversationService:
         route_debug: RouteDebug,
         conversation_usage: ConversationUsage,
         request_id: str | None = None,
+        memory_suggestions: list[dict[str, Any]] | None = None,
     ) -> ChatResponse:
         is_trainer_only = self._is_trainer_only_context(trainer_context)
         onboarding_status = (
@@ -1169,6 +1308,7 @@ class ConversationService:
             request_id=request_id,
             assistant_message=assistant_message,
             quick_replies=[],
+            memory_suggestions=memory_suggestions or [],
             conversation_state=ConversationState(
                 current_stage=route.flow,
                 onboarding_complete=bool(trainer_context.trainer_onboarding_completed) if is_trainer_only else False,
@@ -1335,6 +1475,11 @@ class ConversationService:
         except Exception as exc:
             self._mark_conversation_failed(conversation["id"])
             raise ConversationProcessingError("Chat response could not be completed") from exc
+        memory_suggestions = self._detect_memory_suggestions(
+            message_text=request.message,
+            source_message_id=str(user_message.get("id") or "") or None,
+            source_role="user",
+        )
 
         if route.provider == "anthropic" and self.anthropic_client:
             route_debug = self._build_route_debug(route, "anthropic", ANTHROPIC_SONNET_MODEL)
@@ -1368,9 +1513,11 @@ class ConversationService:
                         completion,
                         orchestration_metadata=prompt.orchestration_metadata,
                         source_request_id=self._request_id_text(request),
+                        memory_suggestions=memory_suggestions,
                     )
                     result_state.conversation_usage = conversation_usage
                     result_state.assistant_message_id = str(saved_assistant_message.get("id") or "") or None
+                    result_state.memory_suggestions = memory_suggestions
                     self._log_generated_chat_output_safely(
                         trainer_context=trainer_context,
                         conversation_id=conversation["id"],
@@ -1427,9 +1574,11 @@ class ConversationService:
                         fallback_reason,
                         orchestration_metadata=prompt.orchestration_metadata,
                         source_request_id=self._request_id_text(request),
+                        memory_suggestions=memory_suggestions,
                     )
                     result_state.conversation_usage = conversation_usage
                     result_state.assistant_message_id = str(saved_assistant_message.get("id") or "") or None
+                    result_state.memory_suggestions = memory_suggestions
                     self._log_generated_chat_output_safely(
                         trainer_context=trainer_context,
                         conversation_id=conversation["id"],
@@ -1488,9 +1637,11 @@ class ConversationService:
                     completion,
                     orchestration_metadata=prompt.orchestration_metadata,
                     source_request_id=self._request_id_text(request),
+                    memory_suggestions=memory_suggestions,
                 )
                 result_state.conversation_usage = conversation_usage
                 result_state.assistant_message_id = str(saved_assistant_message.get("id") or "") or None
+                result_state.memory_suggestions = memory_suggestions
                 self._log_generated_chat_output_safely(
                     trainer_context=trainer_context,
                     conversation_id=conversation["id"],
@@ -1544,6 +1695,11 @@ class ConversationService:
                 request=request,
                 route_metadata=route.as_dict(),
             )
+            memory_suggestions = self._detect_memory_suggestions(
+                message_text=request.message,
+                source_message_id=str(user_message.get("id") or "") or None,
+                source_role="user",
+            )
 
             completion, execution_provider, execution_model, fallback_reason = self._execute_route(route, prompt)
             assistant_message = (completion.text or "").strip()
@@ -1560,6 +1716,7 @@ class ConversationService:
                 fallback_reason,
                 orchestration_metadata=prompt.orchestration_metadata,
                 source_request_id=self._request_id_text(request),
+                memory_suggestions=memory_suggestions,
             )
         except ConversationProcessingError:
             self._mark_conversation_failed(conversation["id"])
@@ -1600,4 +1757,5 @@ class ConversationService:
             route_debug=route_debug,
             conversation_usage=conversation_usage,
             request_id=self._request_id_text(request),
+            memory_suggestions=memory_suggestions,
         )

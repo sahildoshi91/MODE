@@ -315,6 +315,7 @@ async def chat_stream(
                     result_state.conversation_usage.model_dump()
                     if result_state.conversation_usage else None
                 ),
+                "memory_suggestions": getattr(result_state, "memory_suggestions", []) or [],
             }
             if route_debug_payload is not None:
                 completed_payload["route_debug"] = route_debug_payload

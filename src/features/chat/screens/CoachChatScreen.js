@@ -12,14 +12,27 @@ import * as Clipboard from 'expo-clipboard';
 
 import {
   HeaderBar,
+  ModeButton,
+  ModeChip,
+  ModeInput,
   ModeText,
   SafeScreen,
   GlassSurface,
   HeroOverlayCard,
+  SystemActionSheet,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { BREATHING_TRANSITIONS_ENABLED } from '../../../config/featureFlags';
 import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/loading';
+import {
+  createTrainerClientMemory,
+  listTrainerClients,
+  updateTrainerClientMemory,
+} from '../../trainerClients/services/trainerHomeApi';
+import {
+  loadCoachChatLastMemoryClientId,
+  saveCoachChatLastMemoryClientId,
+} from '../storage/chatMemoryStorage';
 import ChatBubble from '../components/ChatBubble';
 import CoachComposer from '../components/CoachComposer';
 import QuickReplies from '../components/QuickReplies';
@@ -32,6 +45,84 @@ const COPY_FEEDBACK_TIMEOUT_MS = 2200;
 const NEAR_BOTTOM_THRESHOLD_PX = 120;
 const SAME_SENDER_MESSAGE_GAP = 5;
 const DIFFERENT_SENDER_MESSAGE_GAP = 14;
+const MEMORY_SUGGESTION_MIN_CONFIDENCE = 0.78;
+const MEMORY_CAPTURE_TAG_OPTIONS = ['Goal', 'Injury', 'Preference', 'Constraint'];
+
+const MEMORY_CAPTURE_PHASE = {
+  IDLE: 'idle',
+  SUGGESTED: 'suggested',
+  SAVING: 'saving',
+  SAVED: 'saved',
+  EDITING: 'editing',
+  DISMISSED: 'dismissed',
+};
+
+function parseMemoryVisibilityLabel(visibility) {
+  return visibility === 'internal_only' ? 'Internal' : 'AI';
+}
+
+function normalizeMemoryVisibility(value) {
+  return value === 'internal_only' ? 'internal_only' : 'ai_usable';
+}
+
+function parseClientIdFromLaunchContext(launchContext) {
+  if (!launchContext || typeof launchContext !== 'object') {
+    return null;
+  }
+  const candidateList = [
+    launchContext.client_id,
+    launchContext.clientId,
+    launchContext?.checkin_context?.client_id,
+    launchContext?.workout_context?.client_id,
+    launchContext?.nutrition_context?.client_id,
+  ];
+  for (const candidate of candidateList) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+function normalizeMemorySuggestion(rawSuggestion = {}) {
+  const text = typeof rawSuggestion?.suggested_text === 'string'
+    ? rawSuggestion.suggested_text.trim()
+    : '';
+  if (!text) {
+    return null;
+  }
+  const confidenceValue = Number(rawSuggestion?.confidence);
+  const confidence = Number.isFinite(confidenceValue)
+    ? Math.max(0, Math.min(1, confidenceValue))
+    : 0;
+  if (confidence < MEMORY_SUGGESTION_MIN_CONFIDENCE) {
+    return null;
+  }
+  const detectedCategory = typeof rawSuggestion?.detected_category === 'string'
+    ? rawSuggestion.detected_category.trim().toLowerCase()
+    : null;
+  return {
+    sourceMessageId: typeof rawSuggestion?.source_message_id === 'string'
+      ? rawSuggestion.source_message_id
+      : null,
+    suggestedText: text,
+    detectedCategory: detectedCategory || null,
+    confidence,
+    defaultVisibility: normalizeMemoryVisibility(rawSuggestion?.default_visibility),
+    source: 'ai_detected',
+  };
+}
+
+function buildMemorySuggestionHash(suggestion) {
+  if (!suggestion) {
+    return null;
+  }
+  return [
+    suggestion.sourceMessageId || '',
+    suggestion.suggestedText || '',
+    suggestion.detectedCategory || '',
+  ].join('|').toLowerCase();
+}
 
 function normalizeMessageRole(role) {
   if (role === 'user') {
@@ -131,6 +222,126 @@ function buildChatErrorSupportBundle({ error, errorDetails, launchContext }) {
   ].join('\n');
 }
 
+function MemorySuggestionRow({
+  visibility = 'ai_usable',
+  onVisibilityChange,
+  onSave,
+  onDismiss,
+  isSaving = false,
+  error = null,
+}) {
+  return (
+    <View style={styles.memorySuggestionRail}>
+      <ModeText variant="caption" tone="secondary" style={styles.memorySuggestionLabel}>
+        Save as memory?
+      </ModeText>
+      <View style={styles.memorySuggestionActions}>
+        <ModeChip
+          testID="coach-chat-memory-suggestion-ai"
+          label="AI"
+          selected={visibility === 'ai_usable'}
+          onPress={() => onVisibilityChange?.('ai_usable')}
+          disabled={isSaving}
+        />
+        <ModeChip
+          testID="coach-chat-memory-suggestion-internal"
+          label="Internal"
+          selected={visibility === 'internal_only'}
+          onPress={() => onVisibilityChange?.('internal_only')}
+          disabled={isSaving}
+        />
+        <Pressable
+          testID="coach-chat-memory-suggestion-save"
+          accessibilityRole="button"
+          accessibilityLabel={isSaving ? 'Saving memory' : 'Save memory'}
+          onPress={onSave}
+          disabled={isSaving}
+          style={({ pressed }) => [
+            styles.memorySaveButton,
+            pressed && !isSaving && styles.memorySaveButtonPressed,
+            isSaving && styles.memorySaveButtonDisabled,
+          ]}
+        >
+          <ModeText variant="caption" tone="accent" style={styles.memorySaveButtonLabel}>
+            {isSaving ? 'Saving…' : 'Save'}
+          </ModeText>
+        </Pressable>
+        <Pressable
+          testID="coach-chat-memory-suggestion-dismiss"
+          accessibilityRole="button"
+          accessibilityLabel="Dismiss memory suggestion"
+          onPress={onDismiss}
+          disabled={isSaving}
+          style={({ pressed }) => [
+            styles.memoryDismissButton,
+            pressed && !isSaving && styles.memorySaveButtonPressed,
+            isSaving && styles.memorySaveButtonDisabled,
+          ]}
+        >
+          <ModeText variant="caption" tone="secondary">Dismiss</ModeText>
+        </Pressable>
+      </View>
+      {error ? (
+        <ModeText variant="caption" tone="error" style={styles.memoryRailFeedback}>
+          {error}
+        </ModeText>
+      ) : null}
+    </View>
+  );
+}
+
+function MemorySavedRow({
+  visibility = 'ai_usable',
+  tags = [],
+  onPress,
+  onTagPress,
+  isTagging = false,
+  feedback = null,
+}) {
+  return (
+    <View style={styles.memorySavedRail}>
+      <Pressable
+        testID="coach-chat-memory-saved-event"
+        accessibilityRole="button"
+        accessibilityLabel="Edit saved memory"
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.memorySavedEvent,
+          pressed && styles.memorySavedEventPressed,
+        ]}
+      >
+        <ModeText variant="caption" tone="secondary" style={styles.memorySavedEventText}>
+          {`Saved to memory • ${parseMemoryVisibilityLabel(visibility)}`}
+        </ModeText>
+      </Pressable>
+      <View style={styles.memoryTagPromptRow}>
+        <ModeText variant="caption" tone="tertiary">Add tag?</ModeText>
+        <View style={styles.memoryTagChipsWrap}>
+          {MEMORY_CAPTURE_TAG_OPTIONS.map((label) => {
+            const normalizedLabel = label.toLowerCase();
+            const alreadyTagged = tags.includes(normalizedLabel);
+            return (
+              <ModeChip
+                key={label}
+                testID={`coach-chat-memory-add-tag-${normalizedLabel}`}
+                label={label}
+                selected={alreadyTagged}
+                onPress={() => onTagPress?.(normalizedLabel)}
+                disabled={isTagging || alreadyTagged}
+              />
+            );
+          })}
+        </View>
+      </View>
+      {feedback ? (
+        <ModeText variant="caption" tone="secondary" style={styles.memoryRailFeedback}>
+          {feedback}
+        </ModeText>
+      ) : null}
+    </View>
+  );
+}
+
 export default function CoachChatScreen({
   accessToken,
   launchContext,
@@ -142,10 +353,37 @@ export default function CoachChatScreen({
   const [dockHeight, setDockHeight] = useState(0);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [copyFeedback, setCopyFeedback] = useState(null);
+  const [memoryCapture, setMemoryCapture] = useState({
+    phase: MEMORY_CAPTURE_PHASE.IDLE,
+    anchorMessageId: null,
+    text: '',
+    visibility: 'ai_usable',
+    source: 'explicit',
+    detectedCategory: null,
+    confidence: null,
+    error: null,
+    memoryId: null,
+    tags: [],
+    clientId: null,
+  });
+  const [memorySavedFeedback, setMemorySavedFeedback] = useState(null);
+  const [isMemoryTagSaving, setIsMemoryTagSaving] = useState(false);
+  const [isMemoryEditVisible, setIsMemoryEditVisible] = useState(false);
+  const [memoryEditText, setMemoryEditText] = useState('');
+  const [memoryEditVisibility, setMemoryEditVisibility] = useState('ai_usable');
+  const [memoryEditError, setMemoryEditError] = useState(null);
+  const [isMemoryEditSaving, setIsMemoryEditSaving] = useState(false);
+  const [memoryClientPickerVisible, setMemoryClientPickerVisible] = useState(false);
+  const [memoryClientOptions, setMemoryClientOptions] = useState([]);
+  const [isMemoryClientLoading, setIsMemoryClientLoading] = useState(false);
+  const [memoryClientError, setMemoryClientError] = useState(null);
+  const [selectedMemoryClientId, setSelectedMemoryClientId] = useState(null);
+  const [pendingMemorySave, setPendingMemorySave] = useState(null);
   const listRef = useRef(null);
   const pendingScrollRef = useRef(false);
   const copyFeedbackTimerRef = useRef(null);
   const scrollTimeoutsRef = useRef([]);
+  const seenMemorySuggestionHashesRef = useRef(new Set());
   const scrollMetricsRef = useRef({
     offset: 0,
     contentHeight: 0,
@@ -159,6 +397,11 @@ export default function CoachChatScreen({
     : dockAnchorInset;
   const chatListPaddingBottom = dockHeight + activeComposerOffset + LIST_BOTTOM_BREATHING_ROOM;
   const sessionIntro = useMemo(() => resolveSessionIntro(launchContext), [launchContext]);
+  const activeLaunchClientId = useMemo(
+    () => parseClientIdFromLaunchContext(launchContext),
+    [launchContext],
+  );
+  const resolvedMemoryClientId = activeLaunchClientId || selectedMemoryClientId;
   const backAccessibilityLabel =
     launchContext?.entrypoint === 'generated_nutrition'
       ? 'Back to generated nutrition plan'
@@ -281,11 +524,352 @@ export default function CoachChatScreen({
     scrollToOffset(nextOffset, false);
   }, [scrollToOffset]);
 
+  const resetMemoryCapture = useCallback(() => {
+    setMemoryCapture({
+      phase: MEMORY_CAPTURE_PHASE.IDLE,
+      anchorMessageId: null,
+      text: '',
+      visibility: 'ai_usable',
+      source: 'explicit',
+      detectedCategory: null,
+      confidence: null,
+      error: null,
+      memoryId: null,
+      tags: [],
+      clientId: null,
+    });
+    setMemorySavedFeedback(null);
+  }, []);
+
+  const dismissMemoryCaptureOnNextMessage = useCallback(() => {
+    setMemoryCapture((current) => {
+      if (
+        current.phase !== MEMORY_CAPTURE_PHASE.SUGGESTED
+        && current.phase !== MEMORY_CAPTURE_PHASE.SAVING
+        && current.phase !== MEMORY_CAPTURE_PHASE.SAVED
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        phase: MEMORY_CAPTURE_PHASE.DISMISSED,
+        anchorMessageId: null,
+        error: null,
+      };
+    });
+    setMemorySavedFeedback(null);
+  }, []);
+
+  const suggestMemoryForMessage = useCallback(({
+    anchorMessageId,
+    suggestedText,
+    source = 'explicit',
+    detectedCategory = null,
+    confidence = null,
+    defaultVisibility = 'ai_usable',
+  }) => {
+    const trimmedText = String(suggestedText || '').trim();
+    if (!trimmedText || !anchorMessageId) {
+      return;
+    }
+    setMemoryCapture({
+      phase: MEMORY_CAPTURE_PHASE.SUGGESTED,
+      anchorMessageId,
+      text: trimmedText,
+      visibility: normalizeMemoryVisibility(defaultVisibility),
+      source,
+      detectedCategory,
+      confidence: Number.isFinite(Number(confidence)) ? Number(confidence) : null,
+      error: null,
+      memoryId: null,
+      tags: [],
+      clientId: resolvedMemoryClientId,
+    });
+    setMemorySavedFeedback(null);
+  }, [resolvedMemoryClientId]);
+
+  const loadMemoryClients = useCallback(async () => {
+    if (!accessToken || isMemoryClientLoading) {
+      return;
+    }
+    setIsMemoryClientLoading(true);
+    setMemoryClientError(null);
+    try {
+      const payload = await listTrainerClients({ accessToken, limit: 50, offset: 0 });
+      const options = Array.isArray(payload?.items)
+        ? payload.items
+        : (Array.isArray(payload) ? payload : []);
+      setMemoryClientOptions(options);
+      if (options.length === 0) {
+        setMemoryClientError('No clients available to save memory.');
+      }
+    } catch (nextError) {
+      setMemoryClientError(nextError?.message || 'Unable to load clients.');
+    } finally {
+      setIsMemoryClientLoading(false);
+    }
+  }, [accessToken, isMemoryClientLoading]);
+
+  const persistMemoryCapture = useCallback(async ({
+    text,
+    visibility,
+    anchorMessageId,
+    source,
+    detectedCategory,
+    confidence,
+    clientIdOverride = null,
+  }) => {
+    const trimmedText = String(text || '').trim();
+    if (!trimmedText) {
+      setMemoryCapture((current) => ({
+        ...current,
+        phase: MEMORY_CAPTURE_PHASE.SUGGESTED,
+        error: 'Add memory text before saving.',
+      }));
+      return { saved: false, deferred: false };
+    }
+
+    const targetClientId = clientIdOverride || resolvedMemoryClientId;
+    if (!targetClientId) {
+      setPendingMemorySave({
+        text: trimmedText,
+        visibility: normalizeMemoryVisibility(visibility),
+        anchorMessageId,
+        source,
+        detectedCategory,
+        confidence,
+      });
+      setMemoryClientPickerVisible(true);
+      await loadMemoryClients();
+      setMemoryCapture((current) => ({
+        ...current,
+        phase: MEMORY_CAPTURE_PHASE.SUGGESTED,
+        error: null,
+      }));
+      return { saved: false, deferred: true };
+    }
+
+    try {
+      const created = await createTrainerClientMemory({
+        accessToken,
+        clientId: targetClientId,
+        memoryType: 'note',
+        text: trimmedText,
+        visibility: normalizeMemoryVisibility(visibility),
+        tags: [],
+        structuredData: {
+          capture_source: source || 'explicit',
+          detected_category: detectedCategory || null,
+          confidence: Number.isFinite(Number(confidence)) ? Number(confidence) : null,
+          source_message_id: anchorMessageId || null,
+          channel: 'coach_chat',
+        },
+      });
+      const createdTags = Array.isArray(created?.tags)
+        ? created.tags.map((tag) => String(tag || '').trim().toLowerCase()).filter(Boolean)
+        : [];
+      setMemoryCapture({
+        phase: MEMORY_CAPTURE_PHASE.SAVED,
+        anchorMessageId,
+        text: trimmedText,
+        visibility: normalizeMemoryVisibility(created?.visibility || visibility),
+        source: source || 'explicit',
+        detectedCategory: detectedCategory || null,
+        confidence: Number.isFinite(Number(confidence)) ? Number(confidence) : null,
+        error: null,
+        memoryId: created?.id || null,
+        tags: createdTags,
+        clientId: targetClientId,
+      });
+      await saveCoachChatLastMemoryClientId(targetClientId);
+      setSelectedMemoryClientId(targetClientId);
+      setMemorySavedFeedback('Saved to memory.');
+      return { saved: true, deferred: false };
+    } catch (nextError) {
+      setMemoryCapture((current) => ({
+        ...current,
+        phase: MEMORY_CAPTURE_PHASE.SUGGESTED,
+        error: nextError?.message || 'Unable to save memory.',
+      }));
+      return { saved: false, deferred: false };
+    }
+  }, [accessToken, loadMemoryClients, resolvedMemoryClientId]);
+
+  const handleSaveMemorySuggestion = useCallback(async () => {
+    const activeSuggestion = memoryCapture;
+    if (
+      activeSuggestion.phase !== MEMORY_CAPTURE_PHASE.SUGGESTED
+      && activeSuggestion.phase !== MEMORY_CAPTURE_PHASE.SAVING
+    ) {
+      return;
+    }
+    setMemoryCapture((current) => ({
+      ...current,
+      phase: MEMORY_CAPTURE_PHASE.SAVING,
+      error: null,
+    }));
+    await persistMemoryCapture({
+      text: activeSuggestion.text,
+      visibility: activeSuggestion.visibility,
+      anchorMessageId: activeSuggestion.anchorMessageId,
+      source: activeSuggestion.source,
+      detectedCategory: activeSuggestion.detectedCategory,
+      confidence: activeSuggestion.confidence,
+    });
+  }, [memoryCapture, persistMemoryCapture]);
+
+  const handleMemoryTagPress = useCallback(async (tagLabel) => {
+    if (!tagLabel || isMemoryTagSaving) {
+      return;
+    }
+    const memoryId = memoryCapture?.memoryId;
+    const clientId = memoryCapture?.clientId || resolvedMemoryClientId;
+    if (!accessToken || !clientId || !memoryId) {
+      return;
+    }
+    const normalizedTag = String(tagLabel).trim().toLowerCase();
+    if (!normalizedTag) {
+      return;
+    }
+    const existingTags = Array.isArray(memoryCapture?.tags) ? memoryCapture.tags : [];
+    if (existingTags.includes(normalizedTag)) {
+      return;
+    }
+    setIsMemoryTagSaving(true);
+    setMemorySavedFeedback(null);
+    try {
+      await updateTrainerClientMemory({
+        accessToken,
+        clientId,
+        memoryId,
+        tags: [...existingTags, normalizedTag],
+      });
+      setMemoryCapture((current) => ({
+        ...current,
+        tags: [...existingTags, normalizedTag],
+      }));
+      setMemorySavedFeedback(`Tag added: ${normalizedTag}`);
+    } catch (nextError) {
+      setMemorySavedFeedback(nextError?.message || 'Unable to add tag.');
+    } finally {
+      setIsMemoryTagSaving(false);
+    }
+  }, [accessToken, isMemoryTagSaving, memoryCapture, resolvedMemoryClientId]);
+
+  const openMemoryEditSheet = useCallback(() => {
+    if (memoryCapture.phase !== MEMORY_CAPTURE_PHASE.SAVED || !memoryCapture.memoryId) {
+      return;
+    }
+    setMemoryEditText(memoryCapture.text || '');
+    setMemoryEditVisibility(memoryCapture.visibility || 'ai_usable');
+    setMemoryEditError(null);
+    setMemoryCapture((current) => ({
+      ...current,
+      phase: MEMORY_CAPTURE_PHASE.EDITING,
+    }));
+    setIsMemoryEditVisible(true);
+  }, [memoryCapture]);
+
+  const closeMemoryEditSheet = useCallback(() => {
+    setIsMemoryEditVisible(false);
+    setMemoryEditError(null);
+    setMemoryCapture((current) => (
+      current.phase === MEMORY_CAPTURE_PHASE.EDITING
+        ? { ...current, phase: MEMORY_CAPTURE_PHASE.SAVED }
+        : current
+    ));
+  }, []);
+
+  const handleSaveMemoryEdit = useCallback(async () => {
+    const memoryId = memoryCapture?.memoryId;
+    const clientId = memoryCapture?.clientId || resolvedMemoryClientId;
+    const trimmedText = String(memoryEditText || '').trim();
+    if (!accessToken || !clientId || !memoryId) {
+      setMemoryEditError('Select a client before saving.');
+      return;
+    }
+    if (!trimmedText) {
+      setMemoryEditError('Memory text cannot be empty.');
+      return;
+    }
+
+    setIsMemoryEditSaving(true);
+    setMemoryEditError(null);
+    try {
+      await updateTrainerClientMemory({
+        accessToken,
+        clientId,
+        memoryId,
+        text: trimmedText,
+        visibility: normalizeMemoryVisibility(memoryEditVisibility),
+      });
+      setMemoryCapture((current) => ({
+        ...current,
+        phase: MEMORY_CAPTURE_PHASE.SAVED,
+        text: trimmedText,
+        visibility: normalizeMemoryVisibility(memoryEditVisibility),
+        error: null,
+      }));
+      setMemorySavedFeedback('Memory updated.');
+      setIsMemoryEditVisible(false);
+    } catch (nextError) {
+      setMemoryEditError(nextError?.message || 'Unable to update memory.');
+    } finally {
+      setIsMemoryEditSaving(false);
+    }
+  }, [accessToken, memoryCapture, memoryEditText, memoryEditVisibility, resolvedMemoryClientId]);
+
+  const handleSaveMemoryCommand = useCallback(async (commandText) => {
+    const trimmedText = String(commandText || '').trim();
+    if (!trimmedText) {
+      showCopyFeedback('Use /mem <text> to save memory.');
+      return false;
+    }
+    const anchorMessageId = messages[messages.length - 1]?.id || null;
+    if (!anchorMessageId) {
+      showCopyFeedback('Unable to anchor memory right now.');
+      return false;
+    }
+    setMemoryCapture({
+      phase: MEMORY_CAPTURE_PHASE.SAVING,
+      anchorMessageId,
+      text: trimmedText,
+      visibility: 'ai_usable',
+      source: 'explicit',
+      detectedCategory: null,
+      confidence: null,
+      error: null,
+      memoryId: null,
+      tags: [],
+      clientId: resolvedMemoryClientId,
+    });
+    const result = await persistMemoryCapture({
+      text: trimmedText,
+      visibility: 'ai_usable',
+      anchorMessageId,
+      source: 'explicit',
+      detectedCategory: null,
+      confidence: null,
+    });
+    return result.saved || result.deferred;
+  }, [messages, persistMemoryCapture, resolvedMemoryClientId, showCopyFeedback]);
+
   const handleSend = async () => {
     const message = draft.trim();
     if (!message) {
       return;
     }
+    if (message.toLowerCase().startsWith('/mem')) {
+      const memoryText = message.replace(/^\/mem\b/i, '').trim();
+      queueAutoScroll();
+      const handled = await handleSaveMemoryCommand(memoryText);
+      if (handled) {
+        setDraft('');
+        scrollToLatestWithRetries(true);
+      }
+      return;
+    }
+    dismissMemoryCaptureOnNextMessage();
     queueAutoScroll();
     const sent = await sendMessage(message);
     if (sent) {
@@ -295,6 +879,7 @@ export default function CoachChatScreen({
   };
 
   const handleQuickReply = async (reply) => {
+    dismissMemoryCaptureOnNextMessage();
     queueAutoScroll();
     const sent = await sendMessage(reply);
     if (sent) {
@@ -304,6 +889,7 @@ export default function CoachChatScreen({
   };
 
   const handleRetryLastMessage = async () => {
+    dismissMemoryCaptureOnNextMessage();
     queueAutoScroll();
     const sent = await retryFailedRequest();
     if (sent) {
@@ -313,6 +899,7 @@ export default function CoachChatScreen({
   };
 
   const handleChecklistCommand = async (command) => {
+    dismissMemoryCaptureOnNextMessage();
     queueAutoScroll();
     const sent = await sendMessage(command);
     if (sent) {
@@ -334,6 +921,123 @@ export default function CoachChatScreen({
       showCopyFeedback('Unable to copy error details');
     }
   };
+
+  const handleMessageLongPress = useCallback((item) => {
+    if (!item?.id || typeof item?.text !== 'string') {
+      return;
+    }
+    if (item?.kind === 'assistant_progress' || item?.kind === 'assistant_stream') {
+      return;
+    }
+    suggestMemoryForMessage({
+      anchorMessageId: item.id,
+      suggestedText: item.text,
+      source: 'explicit',
+      detectedCategory: null,
+      confidence: null,
+      defaultVisibility: 'ai_usable',
+    });
+  }, [suggestMemoryForMessage]);
+
+  const handleSelectMemoryClient = useCallback(async (clientId) => {
+    const normalizedClientId = typeof clientId === 'string' ? clientId.trim() : '';
+    if (!normalizedClientId) {
+      return;
+    }
+    setSelectedMemoryClientId(normalizedClientId);
+    await saveCoachChatLastMemoryClientId(normalizedClientId);
+    setMemoryClientPickerVisible(false);
+    setMemoryClientError(null);
+    const pendingPayload = pendingMemorySave;
+    setPendingMemorySave(null);
+    if (!pendingPayload) {
+      return;
+    }
+    setMemoryCapture((current) => ({
+      ...current,
+      phase: MEMORY_CAPTURE_PHASE.SAVING,
+      clientId: normalizedClientId,
+      error: null,
+    }));
+    await persistMemoryCapture({
+      ...pendingPayload,
+      clientIdOverride: normalizedClientId,
+    });
+  }, [pendingMemorySave, persistMemoryCapture]);
+
+  const closeMemoryClientPicker = useCallback(() => {
+    setMemoryClientPickerVisible(false);
+    setPendingMemorySave(null);
+    setMemoryClientError(null);
+    setMemoryCapture((current) => (
+      current.phase === MEMORY_CAPTURE_PHASE.SAVING
+        ? { ...current, phase: MEMORY_CAPTURE_PHASE.SUGGESTED }
+        : current
+    ));
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    loadCoachChatLastMemoryClientId().then((clientId) => {
+      if (!active || !clientId) {
+        return;
+      }
+      setSelectedMemoryClientId(clientId);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activeLaunchClientId) {
+      return;
+    }
+    setSelectedMemoryClientId(activeLaunchClientId);
+    saveCoachChatLastMemoryClientId(activeLaunchClientId);
+  }, [activeLaunchClientId]);
+
+  useEffect(() => {
+    if (
+      memoryCapture.phase !== MEMORY_CAPTURE_PHASE.IDLE
+      && memoryCapture.phase !== MEMORY_CAPTURE_PHASE.DISMISSED
+    ) {
+      return;
+    }
+    const knownMessageIds = new Set(messages.map((message) => message?.id).filter(Boolean));
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const candidateMessage = messages[index];
+      if (candidateMessage?.role !== 'assistant' || !Array.isArray(candidateMessage?.memorySuggestions)) {
+        continue;
+      }
+      for (const rawSuggestion of candidateMessage.memorySuggestions) {
+        const normalizedSuggestion = normalizeMemorySuggestion(rawSuggestion);
+        if (!normalizedSuggestion) {
+          continue;
+        }
+        const suggestionHash = buildMemorySuggestionHash(normalizedSuggestion);
+        if (!suggestionHash || seenMemorySuggestionHashesRef.current.has(suggestionHash)) {
+          continue;
+        }
+        seenMemorySuggestionHashesRef.current.add(suggestionHash);
+        const resolvedAnchorId = (
+          normalizedSuggestion.sourceMessageId
+          && knownMessageIds.has(normalizedSuggestion.sourceMessageId)
+        )
+          ? normalizedSuggestion.sourceMessageId
+          : candidateMessage.id;
+        suggestMemoryForMessage({
+          anchorMessageId: resolvedAnchorId,
+          suggestedText: normalizedSuggestion.suggestedText,
+          source: normalizedSuggestion.source,
+          detectedCategory: normalizedSuggestion.detectedCategory,
+          confidence: normalizedSuggestion.confidence,
+          defaultVisibility: normalizedSuggestion.defaultVisibility,
+        });
+        return;
+      }
+    }
+  }, [memoryCapture.phase, messages, suggestMemoryForMessage]);
 
   useEffect(() => {
     scrollToLatest(false);
@@ -435,17 +1139,38 @@ export default function CoachChatScreen({
               const totalCount = Number.isFinite(Number(checklist?.total))
                 ? Number(checklist.total)
                 : samples.length;
+              const isMemoryAnchorMessage = memoryCapture.anchorMessageId === item?.id;
+              const showMemorySuggestion = (
+                isMemoryAnchorMessage
+                && (
+                  memoryCapture.phase === MEMORY_CAPTURE_PHASE.SUGGESTED
+                  || memoryCapture.phase === MEMORY_CAPTURE_PHASE.SAVING
+                )
+              );
+              const showMemorySaved = (
+                isMemoryAnchorMessage
+                && memoryCapture.phase === MEMORY_CAPTURE_PHASE.SAVED
+              );
               return (
                 <View style={[styles.messageItem, { marginBottom: messageSpacing }]}>
-                  <ChatBubble
-                    role={item.role}
-                    text={item.text}
-                    isError={item.isError}
-                    fallbackTriggered={item.fallbackTriggered}
-                    showSpeakerLabel={showSpeakerLabel}
-                    groupPosition={groupPosition}
-                    messageKind={item?.kind || null}
-                  />
+                  <Pressable
+                    onLongPress={() => handleMessageLongPress(item)}
+                    delayLongPress={220}
+                    style={styles.chatBubblePressable}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open message actions"
+                    testID={`coach-chat-message-longpress-${item?.id || index}`}
+                  >
+                    <ChatBubble
+                      role={item.role}
+                      text={item.text}
+                      isError={item.isError}
+                      fallbackTriggered={item.fallbackTriggered}
+                      showSpeakerLabel={showSpeakerLabel}
+                      groupPosition={groupPosition}
+                      messageKind={item?.kind || null}
+                    />
+                  </Pressable>
                   {stepPreview ? (
                     <View style={styles.previewCard}>
                       <ModeText variant="caption" tone="tertiary">Sample reply preview</ModeText>
@@ -526,6 +1251,31 @@ export default function CoachChatScreen({
                         <ModeText variant="caption" tone="accent">Approve all</ModeText>
                       </Pressable>
                     </View>
+                  ) : null}
+                  {showMemorySuggestion ? (
+                    <MemorySuggestionRow
+                      visibility={memoryCapture.visibility}
+                      isSaving={memoryCapture.phase === MEMORY_CAPTURE_PHASE.SAVING}
+                      error={memoryCapture.error}
+                      onVisibilityChange={(visibility) => {
+                        setMemoryCapture((current) => ({
+                          ...current,
+                          visibility: normalizeMemoryVisibility(visibility),
+                        }));
+                      }}
+                      onSave={handleSaveMemorySuggestion}
+                      onDismiss={resetMemoryCapture}
+                    />
+                  ) : null}
+                  {showMemorySaved ? (
+                    <MemorySavedRow
+                      visibility={memoryCapture.visibility}
+                      tags={memoryCapture.tags}
+                      onPress={openMemoryEditSheet}
+                      onTagPress={handleMemoryTagPress}
+                      isTagging={isMemoryTagSaving}
+                      feedback={memorySavedFeedback}
+                    />
                   ) : null}
                 </View>
               );
@@ -660,6 +1410,119 @@ export default function CoachChatScreen({
           </View>
         </View>
       </KeyboardAvoidingView>
+      <SystemActionSheet
+        visible={memoryClientPickerVisible}
+        onClose={closeMemoryClientPicker}
+        testID="coach-chat-memory-client-picker-sheet"
+      >
+        <View style={styles.memorySheetContent}>
+          <ModeText variant="label" tone="tertiary">Choose Client</ModeText>
+          <ModeText variant="caption" tone="secondary">
+            Select a client before saving this memory.
+          </ModeText>
+          {isMemoryClientLoading ? (
+            <ModeText variant="caption" tone="secondary">Loading clients…</ModeText>
+          ) : null}
+          {!isMemoryClientLoading && memoryClientOptions.length === 0 ? (
+            <ModeText variant="caption" tone="secondary">No clients available.</ModeText>
+          ) : null}
+          <View style={styles.memoryClientList}>
+            {memoryClientOptions.map((client) => {
+              const clientOptionId = client?.client_id || client?.id;
+              const clientName = client?.client_name || client?.name || clientOptionId || 'Client';
+              if (!clientOptionId) {
+                return null;
+              }
+              return (
+                <Pressable
+                  key={clientOptionId}
+                  testID={`coach-chat-memory-client-option-${clientOptionId}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Select ${clientName}`}
+                  onPress={() => handleSelectMemoryClient(clientOptionId)}
+                  style={({ pressed }) => [
+                    styles.memoryClientOption,
+                    pressed && styles.memoryClientOptionPressed,
+                  ]}
+                >
+                  <ModeText variant="bodySm">{clientName}</ModeText>
+                </Pressable>
+              );
+            })}
+          </View>
+          {memoryClientError ? (
+            <ModeText variant="caption" tone="error">{memoryClientError}</ModeText>
+          ) : null}
+          <View style={styles.memorySheetButtons}>
+            <ModeButton
+              testID="coach-chat-memory-client-refresh"
+              title="Refresh"
+              variant="ghost"
+              size="sm"
+              onPress={loadMemoryClients}
+            />
+            <ModeButton
+              testID="coach-chat-memory-client-cancel"
+              title="Cancel"
+              variant="ghost"
+              size="sm"
+              onPress={closeMemoryClientPicker}
+            />
+          </View>
+        </View>
+      </SystemActionSheet>
+      <SystemActionSheet
+        visible={isMemoryEditVisible}
+        onClose={closeMemoryEditSheet}
+        testID="coach-chat-memory-edit-sheet"
+      >
+        <View style={styles.memorySheetContent}>
+          <ModeText variant="label" tone="tertiary">Edit Memory</ModeText>
+          <ModeInput
+            testID="coach-chat-memory-edit-input"
+            value={memoryEditText}
+            onChangeText={setMemoryEditText}
+            placeholder="Update memory"
+            style={styles.memoryEditInput}
+          />
+          <View style={styles.memoryEditVisibilityRow}>
+            <ModeChip
+              testID="coach-chat-memory-edit-ai-toggle"
+              label="AI"
+              selected={memoryEditVisibility === 'ai_usable'}
+              onPress={() => setMemoryEditVisibility('ai_usable')}
+              disabled={isMemoryEditSaving}
+            />
+            <ModeChip
+              testID="coach-chat-memory-edit-internal-toggle"
+              label="Internal"
+              selected={memoryEditVisibility === 'internal_only'}
+              onPress={() => setMemoryEditVisibility('internal_only')}
+              disabled={isMemoryEditSaving}
+            />
+          </View>
+          {memoryEditError ? (
+            <ModeText variant="caption" tone="error">{memoryEditError}</ModeText>
+          ) : null}
+          <View style={styles.memorySheetButtons}>
+            <ModeButton
+              testID="coach-chat-memory-edit-cancel"
+              title="Cancel"
+              variant="ghost"
+              size="sm"
+              disabled={isMemoryEditSaving}
+              onPress={closeMemoryEditSheet}
+            />
+            <ModeButton
+              testID="coach-chat-memory-edit-save"
+              title={isMemoryEditSaving ? 'Saving…' : 'Save'}
+              size="sm"
+              disabled={isMemoryEditSaving}
+              onPress={handleSaveMemoryEdit}
+            />
+          </View>
+        </View>
+      </SystemActionSheet>
       {breathingTransitionsEnabled ? (
         <BreathingTransitionOverlay
           active={isConversationInitializing}
@@ -702,6 +1565,95 @@ const styles = StyleSheet.create({
   messageItem: {
     width: '100%',
     marginBottom: 0,
+  },
+  chatBubblePressable: {
+    width: '100%',
+  },
+  memorySuggestionRail: {
+    alignSelf: 'flex-start',
+    marginTop: 6,
+    marginLeft: theme.spacing[1],
+    width: '90%',
+    borderRadius: theme.radii.m,
+    borderWidth: 1,
+    borderColor: 'rgba(218, 233, 255, 0.22)',
+    backgroundColor: 'rgba(12, 23, 40, 0.72)',
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    gap: 6,
+    overflow: 'hidden',
+  },
+  memorySuggestionLabel: {
+    fontWeight: '600',
+  },
+  memorySuggestionActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  memorySaveButton: {
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+    borderColor: theme.colors.accent.primary,
+    backgroundColor: 'rgba(79, 139, 237, 0.18)',
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 5,
+    overflow: 'hidden',
+  },
+  memoryDismissButton: {
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(215, 229, 252, 0.26)',
+    backgroundColor: 'rgba(224, 237, 255, 0.10)',
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 5,
+    overflow: 'hidden',
+  },
+  memorySaveButtonLabel: {
+    fontWeight: '700',
+  },
+  memorySaveButtonPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
+  },
+  memorySaveButtonDisabled: {
+    opacity: theme.interaction.disabledOpacity,
+  },
+  memorySavedRail: {
+    alignSelf: 'flex-start',
+    marginTop: 6,
+    marginLeft: theme.spacing[1],
+    width: '90%',
+    gap: 6,
+  },
+  memorySavedEvent: {
+    alignSelf: 'flex-start',
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(182, 213, 255, 0.28)',
+    backgroundColor: 'rgba(13, 24, 40, 0.72)',
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 5,
+    overflow: 'hidden',
+  },
+  memorySavedEventPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
+  },
+  memorySavedEventText: {
+    fontWeight: '600',
+  },
+  memoryTagPromptRow: {
+    gap: 4,
+  },
+  memoryTagChipsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  memoryRailFeedback: {
+    marginTop: 1,
   },
   threadSpacer: {
     height: theme.spacing[1],
@@ -850,5 +1802,40 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing[1],
     color: theme.colors.text.secondary,
     fontWeight: '600',
+  },
+  memorySheetContent: {
+    gap: theme.spacing[1],
+    paddingTop: theme.spacing[1],
+  },
+  memoryClientList: {
+    maxHeight: 240,
+    gap: 6,
+  },
+  memoryClientOption: {
+    borderRadius: theme.radii.m,
+    borderWidth: 1,
+    borderColor: 'rgba(214, 230, 255, 0.2)',
+    backgroundColor: 'rgba(13, 24, 40, 0.68)',
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    overflow: 'hidden',
+  },
+  memoryClientOptionPressed: {
+    opacity: theme.interaction.pressedOpacity,
+  },
+  memorySheetButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  memoryEditInput: {
+    marginBottom: 0,
+  },
+  memoryEditVisibilityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
   },
 });
