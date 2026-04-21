@@ -966,17 +966,10 @@ function KnowledgeWorkspaceScreen({
   return (
     <SectionShell
       title="Knowledge Workspace"
-      subtitle="Trainer notes library for AI memory and coaching context."
+      subtitle="Trainer knowledge for AI memory and coaching context."
       onBack={onBack}
       bottomInset={bottomInset}
     >
-      <ModeCard variant="hero">
-        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Notes Library</ModeText>
-        <ModeText variant="bodySm" tone="secondary">
-          Save, refine, and manage notes that guide your trainer AI context.
-        </ModeText>
-      </ModeCard>
-
       <View style={styles.knowledgeWorkspaceTopActions}>
         <ModeButton
           title="New Note"

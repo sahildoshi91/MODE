@@ -398,7 +398,8 @@ describe('TrainerSystemScreen', () => {
 
     const rendered = JSON.stringify(tree.toJSON());
     expect(rendered).toContain('Knowledge Workspace');
-    expect(rendered).toContain('Notes Library');
+    expect(rendered).toContain('Trainer knowledge for AI memory and coaching context.');
+    expect(rendered).not.toContain('Notes Library');
     expect(rendered).toContain('Saved Notes');
     expect(
       tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-row-doc-1').length,
