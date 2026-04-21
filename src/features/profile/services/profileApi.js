@@ -86,6 +86,10 @@ export async function patchTrainerSettingsMe({
   });
 }
 
+export async function listTrainerPersonas({ accessToken }) {
+  return requestProfileApi('/api/v1/trainer-personas', { accessToken });
+}
+
 export async function getMyTrainerSchedule({ accessToken }) {
   return requestProfileApi('/api/v1/profiles/me/trainer-schedule', { accessToken });
 }

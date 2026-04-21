@@ -2,6 +2,7 @@ import React from 'react';
 
 import TrainerClientsScreen from '../../trainerClients/screens/TrainerClientsScreen';
 import TrainerCoachScreen from '../../trainerCoach/screens/TrainerCoachScreen';
+import TrainerCoachWorkspace from '../screens/TrainerCoachWorkspace';
 import TrainerSystemScreen from '../screens/TrainerSystemScreen';
 
 function resolveTrainerTab(activeTab) {
@@ -26,8 +27,26 @@ export default function TrainerRouteHost({
   onSignOut,
 }) {
   const resolvedTab = resolveTrainerTab(activeTab);
+  const shouldUseOnboardingCoachWorkspace = (
+    chatLaunchContext
+    && typeof chatLaunchContext === 'object'
+    && chatLaunchContext.entrypoint === 'trainer_agent_training'
+  );
 
   if (resolvedTab === 'coach') {
+    if (shouldUseOnboardingCoachWorkspace) {
+      return (
+        <TrainerCoachWorkspace
+          accessToken={accessToken}
+          chatLaunchContext={chatLaunchContext}
+          coachChatBottomInset={coachChatBottomInset}
+          trainerOnboardingCompleted={Boolean(assignmentStatus?.trainer_onboarding_completed)}
+          trainerOnboardingStatus={assignmentStatus?.trainer_onboarding_status || 'not_started'}
+          trainerOnboardingCompletedSteps={assignmentStatus?.trainer_onboarding_completed_steps ?? 0}
+          onOpenTrainerCoach={onOpenTrainerCoach}
+        />
+      );
+    }
     return (
       <TrainerCoachScreen
         accessToken={accessToken}
