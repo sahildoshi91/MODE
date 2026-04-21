@@ -37,7 +37,10 @@ export default function CoachStreamList({
   onScrollDepthChange,
   onScrollMetricsChange,
   onNearBottomChange,
+  onNewItemsWhileAwayFromBottom,
   forceScrollSignal = 0,
+  anchorToLatestSignal = 0,
+  threadKey = 'default',
   restoreScrollOffset = null,
   restoreScrollSignal = 0,
   listRef = null,
@@ -61,6 +64,8 @@ export default function CoachStreamList({
   const itemCountRef = useRef(items.length);
   const previousLengthRef = useRef(0);
   const previousForceSignalRef = useRef(forceScrollSignal);
+  const previousAnchorSignalRef = useRef(anchorToLatestSignal);
+  const previousThreadKeyRef = useRef(threadKey);
   const previousRestoreSignalRef = useRef(null);
   const previousContentBottomPaddingRef = useRef(normalizedContentBottomPadding);
   const scrollTimeoutsRef = useRef([]);
@@ -143,13 +148,25 @@ export default function CoachStreamList({
   }, [onNearBottomChange, onScrollMetricsChange]);
   const keyExtractor = useCallback((item) => item.id, []);
   const renderItem = useCallback(
-    ({ item }) => (
-      <CoachStreamItem
-        item={item}
-        assistantDisplayName={resolvedAssistantDisplayName}
-      />
-    ),
-    [resolvedAssistantDisplayName],
+    ({ item, index }) => {
+      const previousItem = index > 0 ? items[index - 1] : null;
+      const currentSpeakerKey = item?.kind === 'trainer_input'
+        ? 'trainer'
+        : (item?.kind === 'internal_ai_private' ? `assistant:${resolvedAssistantDisplayName}` : item?.kind);
+      const previousSpeakerKey = previousItem?.kind === 'trainer_input'
+        ? 'trainer'
+        : (previousItem?.kind === 'internal_ai_private'
+          ? `assistant:${resolvedAssistantDisplayName}`
+          : previousItem?.kind);
+      return (
+        <CoachStreamItem
+          item={item}
+          assistantDisplayName={resolvedAssistantDisplayName}
+          showRoleLabel={currentSpeakerKey !== previousSpeakerKey}
+        />
+      );
+    },
+    [items, resolvedAssistantDisplayName],
   );
 
   const updateScrollMetrics = useCallback((partial = {}) => {
@@ -314,9 +331,52 @@ export default function CoachStreamList({
   }, [restoreScrollOffset, restoreScrollSignal, scrollToOffsetWithRetries]);
 
   useEffect(() => {
+    if (previousThreadKeyRef.current === threadKey) {
+      return;
+    }
+    previousThreadKeyRef.current = threadKey;
+    didInitialAutoScrollRef.current = false;
+    suppressNextAutoScrollRef.current = false;
+    previousLengthRef.current = 0;
+    scrollMetricsRef.current = {
+      offset: 0,
+      contentHeight: 0,
+      layoutHeight: 0,
+      nearBottom: true,
+    };
+    emitScrollMetrics(scrollMetricsRef.current);
+    if (items.length <= 0) {
+      markInitialPositionSettled(true);
+      return;
+    }
+    markInitialPositionSettled(false);
+  }, [emitScrollMetrics, items.length, markInitialPositionSettled, threadKey]);
+
+  useEffect(() => {
+    if (previousAnchorSignalRef.current === anchorToLatestSignal) {
+      return;
+    }
+    previousAnchorSignalRef.current = anchorToLatestSignal;
+    if (items.length <= 0) {
+      return;
+    }
+    didInitialAutoScrollRef.current = true;
+    markInitialPositionSettled(false);
+    scrollToLatestWithRetries(false);
+    scheduleInitialPositionReveal();
+  }, [
+    anchorToLatestSignal,
+    items.length,
+    markInitialPositionSettled,
+    scheduleInitialPositionReveal,
+    scrollToLatestWithRetries,
+  ]);
+
+  useEffect(() => {
     itemCountRef.current = items.length;
     const previousLength = previousLengthRef.current;
     const hasNewItems = items.length > previousLength;
+    const isNearBottom = scrollMetricsRef.current.nearBottom;
     if (suppressNextAutoScrollRef.current && hasNewItems) {
       suppressNextAutoScrollRef.current = false;
     } else if (
@@ -324,15 +384,25 @@ export default function CoachStreamList({
       && hasNewItems
       && didInitialAutoScrollRef.current
       && initialPositionSettledRef.current
-      && scrollMetricsRef.current.nearBottom
+      && isNearBottom
     ) {
       scrollToLatestWithRetries(true);
+    } else if (
+      hasNewItems
+      && didInitialAutoScrollRef.current
+      && initialPositionSettledRef.current
+      && !isNearBottom
+    ) {
+      onNewItemsWhileAwayFromBottom?.({
+        addedCount: items.length - previousLength,
+      });
     }
     previousLengthRef.current = items.length;
   }, [
     autoScrollOnContentChange,
     items,
     items.length,
+    onNewItemsWhileAwayFromBottom,
     scrollToLatestWithRetries,
   ]);
 
@@ -390,7 +460,7 @@ export default function CoachStreamList({
         }}
         contentContainerStyle={[
           styles.listContent,
-          { paddingBottom: theme.spacing[2] + normalizedContentBottomPadding },
+          { paddingBottom: normalizedContentBottomPadding },
           items.length === 0 && styles.emptyContent,
         ]}
         ListEmptyComponent={(

@@ -9,6 +9,12 @@ from app.core.tenancy import TrainerContext
 from app.modules.trainer_clients.schemas import (
     TrainerAIContextResponse,
     TrainerClientDetailResponse,
+    TrainerClientIdentity,
+    TrainerClientInviteCodeCreateRequest,
+    TrainerClientInviteCodeListResponse,
+    TrainerClientInviteCodeRecord,
+    TrainerClientListResponse,
+    TrainerClientUpdateRequest,
     TrainerMeetingLocationRecord,
     TrainerMeetingLocationUpdateRequest,
     TrainerMemoryCreateRequest,
@@ -29,11 +35,109 @@ def _handle_service_value_error(exc: ValueError) -> None:
     if detail.lower() in {
         "client not found for trainer",
         "memory not found",
+        "invite code not found",
         "no scheduled session found for client on requested date",
         "schedule exception not found",
     }:
         raise HTTPException(status_code=404, detail=detail) from exc
     raise HTTPException(status_code=400, detail=detail) from exc
+
+
+@router.get("", response_model=TrainerClientListResponse)
+async def list_trainer_clients(
+    search: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.list_clients(
+            trainer_context,
+            search=search,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        _handle_service_value_error(exc)
+
+
+@router.get("/invite-codes", response_model=TrainerClientInviteCodeListResponse)
+async def list_trainer_client_invite_codes(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.list_invite_codes(
+            trainer_context,
+            limit=limit,
+            offset=offset,
+        )
+    except ValueError as exc:
+        _handle_service_value_error(exc)
+
+
+@router.post("/invite-codes", response_model=TrainerClientInviteCodeRecord)
+async def create_trainer_client_invite_code(
+    request: TrainerClientInviteCodeCreateRequest,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.create_invite_code(trainer_context, request)
+    except ValueError as exc:
+        _handle_service_value_error(exc)
+
+
+@router.delete("/invite-codes/{invite_id}", response_model=TrainerClientInviteCodeRecord)
+async def deactivate_trainer_client_invite_code(
+    invite_id: str,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.deactivate_invite_code(trainer_context, invite_id)
+    except ValueError as exc:
+        _handle_service_value_error(exc)
+
+
+@router.patch("/{client_id}", response_model=TrainerClientIdentity)
+async def patch_trainer_client(
+    client_id: str,
+    request: TrainerClientUpdateRequest,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.update_client(trainer_context, client_id, request)
+    except ValueError as exc:
+        _handle_service_value_error(exc)
+
+
+@router.delete("/{client_id}", response_model=TrainerClientIdentity)
+async def delete_trainer_client(
+    client_id: str,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.remove_client(trainer_context, client_id)
+    except ValueError as exc:
+        _handle_service_value_error(exc)
 
 
 @router.get("/{client_id}/detail", response_model=TrainerClientDetailResponse)

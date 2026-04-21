@@ -70,7 +70,11 @@ function shouldRenderStructuredStreamItem(kind, status) {
   return kind === 'internal_ai_private' || kind === 'client_message_draft';
 }
 
-function CoachStreamItem({ item, assistantDisplayName }) {
+function CoachStreamItem({
+  item,
+  assistantDisplayName,
+  showRoleLabel = true,
+}) {
   const kind = item?.kind || 'system_confirmation';
   const style = styleByKind(kind);
   const streamStatus = typeof item?.status === 'string' ? item.status : 'confirmed';
@@ -78,6 +82,7 @@ function CoachStreamItem({ item, assistantDisplayName }) {
     () => stripEmojiForDisplay(String(item?.text || '')),
     [item?.text],
   );
+  const isTrainerCommand = kind === 'trainer_input' && safeText.trim().startsWith('/');
   const structuredModel = useMemo(() => {
     if (!shouldRenderStructuredStreamItem(kind, streamStatus)) {
       return null;
@@ -91,21 +96,31 @@ function CoachStreamItem({ item, assistantDisplayName }) {
   );
   return (
     <View style={styles.row}>
-      <ModeText variant="caption" tone="tertiary" style={styles.label}>
-        {resolveKindLabel(kind, assistantDisplayName)}
-      </ModeText>
-      <View style={[styles.bubble, style.container]}>
-        {hasStructuredBlocks ? (
-          <AIResponseRenderer
-            model={structuredModel}
-            testIDPrefix="coach-stream-ai-response"
-          />
-        ) : (
-          <ModeText variant="bodySm" tone={style.textTone} style={style.textStyle}>
+      {showRoleLabel ? (
+        <ModeText variant="caption" tone="tertiary" style={styles.label}>
+          {resolveKindLabel(kind, assistantDisplayName)}
+        </ModeText>
+      ) : null}
+      {isTrainerCommand ? (
+        <View style={styles.commandBubble}>
+          <ModeText variant="caption" tone="secondary" style={styles.commandText}>
             {safeText}
           </ModeText>
-        )}
-      </View>
+        </View>
+      ) : (
+        <View style={[styles.bubble, style.container]}>
+          {hasStructuredBlocks ? (
+            <AIResponseRenderer
+              model={structuredModel}
+              testIDPrefix="coach-stream-ai-response"
+            />
+          ) : (
+            <ModeText variant="bodySm" tone={style.textTone} style={style.textStyle}>
+              {safeText}
+            </ModeText>
+          )}
+        </View>
+      )}
     </View>
   );
 }
@@ -120,6 +135,7 @@ function areEqualCoachStreamItemProps(previousProps, nextProps) {
   }
   return (
     previousAssistantDisplayName === nextAssistantDisplayName
+    && Boolean(previousProps?.showRoleLabel) === Boolean(nextProps?.showRoleLabel)
     && previousItem.id === nextItem.id
     && previousItem.kind === nextItem.kind
     && previousItem.text === nextItem.text
@@ -135,27 +151,28 @@ export default MemoizedCoachStreamItem;
 
 const styles = StyleSheet.create({
   row: {
-    gap: 3,
+    gap: 2,
   },
   label: {
     fontWeight: '600',
+    letterSpacing: 0.28,
   },
   bubble: {
     borderRadius: theme.radii.lg,
     borderWidth: 1,
     paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1] + 1,
+    paddingVertical: theme.spacing[1],
   },
   trainerInput: {
-    backgroundColor: theme.colors.nav.activeBg,
-    borderColor: theme.colors.nav.activeBorder,
+    backgroundColor: 'rgba(95, 141, 231, 0.18)',
+    borderColor: 'rgba(157, 196, 255, 0.34)',
   },
   trainerInputText: {
-    color: '#FFFFFF',
+    color: 'rgba(245, 250, 255, 0.96)',
   },
   internal: {
-    backgroundColor: theme.colors.surface.elevated,
-    borderColor: theme.colors.border.default,
+    backgroundColor: 'rgba(11, 20, 34, 0.76)',
+    borderColor: 'rgba(229, 241, 255, 0.14)',
   },
   system: {
     backgroundColor: theme.colors.surface.base,
@@ -168,5 +185,18 @@ const styles = StyleSheet.create({
   clientSent: {
     backgroundColor: theme.colors.feedback.successBg,
     borderColor: theme.colors.feedback.successBorder,
+  },
+  commandBubble: {
+    alignSelf: 'flex-start',
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(220, 236, 255, 0.2)',
+    backgroundColor: 'rgba(14, 24, 41, 0.72)',
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 5,
+    maxWidth: '82%',
+  },
+  commandText: {
+    fontWeight: '600',
   },
 });

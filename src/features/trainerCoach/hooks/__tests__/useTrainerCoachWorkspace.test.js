@@ -169,6 +169,25 @@ describe('useTrainerCoachWorkspace', () => {
     expect(latestSnapshot.state.panels.context).toEqual(expect.objectContaining({
       clientId: 'client-1',
     }));
+
+    await act(async () => {
+      await latestSnapshot.actions.sendIntentMessage('/memory');
+    });
+    await flushEffects();
+    expect(latestSnapshot.state.panels.active).toBe('memory');
+    expect(latestSnapshot.state.panels.context).toEqual(expect.objectContaining({
+      clientId: 'client-1',
+    }));
+
+    await act(async () => {
+      await latestSnapshot.actions.sendIntentMessage('/flag');
+    });
+    await flushEffects();
+    expect(latestSnapshot.state.panels.active).toBe('client_context');
+    expect(latestSnapshot.state.panels.context).toEqual(expect.objectContaining({
+      clientId: 'client-1',
+      filter: 'risk_flags',
+    }));
   });
 
   it('marks unknown slash commands as failed system confirmations', async () => {

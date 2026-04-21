@@ -17,7 +17,11 @@ class TrainerRouteSurfaceContractTests(unittest.TestCase):
         paths = app.openapi().get("paths", {})
         required_paths = {
             "/api/v1/trainer-home/command-center",
+            "/api/v1/trainer-clients",
+            "/api/v1/trainer-clients/{client_id}",
             "/api/v1/trainer-clients/{client_id}/detail",
+            "/api/v1/trainer-clients/invite-codes",
+            "/api/v1/trainer-clients/invite-codes/{invite_id}",
             "/api/v1/trainer-clients/{client_id}/memory",
             "/api/v1/trainer-clients/{client_id}/memory/{memory_id}",
             "/api/v1/trainer-clients/{client_id}/ai-context",
@@ -53,7 +57,13 @@ class TrainerRouteSurfaceContractTests(unittest.TestCase):
         )
 
         self.assertIn("get", paths["/api/v1/trainer-home/command-center"])
+        self.assertIn("get", paths["/api/v1/trainer-clients"])
+        self.assertIn("patch", paths["/api/v1/trainer-clients/{client_id}"])
+        self.assertIn("delete", paths["/api/v1/trainer-clients/{client_id}"])
         self.assertIn("get", paths["/api/v1/trainer-clients/{client_id}/detail"])
+        self.assertIn("get", paths["/api/v1/trainer-clients/invite-codes"])
+        self.assertIn("post", paths["/api/v1/trainer-clients/invite-codes"])
+        self.assertIn("delete", paths["/api/v1/trainer-clients/invite-codes/{invite_id}"])
         self.assertIn("get", paths["/api/v1/trainer-clients/{client_id}/memory"])
         self.assertIn("post", paths["/api/v1/trainer-clients/{client_id}/memory"])
         self.assertIn("patch", paths["/api/v1/trainer-clients/{client_id}/memory/{memory_id}"])

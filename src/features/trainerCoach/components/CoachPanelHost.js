@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
@@ -15,6 +15,7 @@ import {
   ModeChip,
   ModeInput,
   ModeText,
+  SystemSearchBar,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import DraftReviewStructuredCard from '../../draftReview/components/DraftReviewStructuredCard';
@@ -40,6 +41,7 @@ import {
   deleteTrainerClientScheduleException,
   getTrainerClientAIContext,
   getTrainerClientDetail,
+  listTrainerClients,
   listTrainerClientMemory,
   patchTrainerClientSchedulePreferences,
   updateTrainerClientMeetingLocation,
@@ -60,6 +62,270 @@ const WEEKDAY_OPTIONS = [
   { value: 5, label: 'Fri' },
   { value: 6, label: 'Sat' },
 ];
+
+const PANEL_META_BY_TYPE = {
+  draft_review: {
+    commandLabel: '/drafts',
+    title: 'Draft Review',
+    subtitle: 'Review and approve generated drafts.',
+  },
+  memory: {
+    commandLabel: '/memory',
+    title: 'Client Memory',
+    subtitle: 'Capture reusable coaching memory quickly.',
+  },
+  client_context: {
+    commandLabel: '/client',
+    title: 'Client Context',
+    subtitle: 'Client detail and day-level schedule controls.',
+  },
+  program: {
+    commandLabel: '/program',
+    title: 'Program Templates',
+    subtitle: 'Manage quick templates and advanced JSON edits.',
+  },
+  rules: {
+    commandLabel: '/rules',
+    title: 'Rules',
+    subtitle: 'Edit and archive trainer coaching rules.',
+  },
+};
+
+function resolvePanelMeta(activePanel, panelContext = null) {
+  const base = PANEL_META_BY_TYPE[activePanel] || {
+    commandLabel: '/coach',
+    title: 'Coach Panel',
+    subtitle: null,
+  };
+  if (activePanel === 'client_context' && panelContext?.filter === 'risk_flags') {
+    return {
+      commandLabel: '/flag',
+      title: 'Risk Flags',
+      subtitle: 'Focused client context for risk-flag review.',
+    };
+  }
+  return base;
+}
+
+function buildClientOptionsFromQueue(queue) {
+  const items = Array.isArray(queue) ? queue : [];
+  const seen = new Set();
+  const options = [];
+  items.forEach((item) => {
+    const clientId = typeof item?.client_id === 'string' ? item.client_id.trim() : '';
+    if (!clientId || seen.has(clientId)) {
+      return;
+    }
+    seen.add(clientId);
+    const clientName = typeof item?.client_name === 'string' && item.client_name.trim()
+      ? item.client_name.trim()
+      : `Client (${clientId.slice(0, 8)})`;
+    options.push({
+      client_id: clientId,
+      client_name: clientName,
+    });
+  });
+  return options;
+}
+
+function mergeClientOptions(...optionLists) {
+  const merged = [];
+  const seen = new Set();
+  optionLists.forEach((list) => {
+    const items = Array.isArray(list) ? list : [];
+    items.forEach((option) => {
+      const clientId = typeof option?.client_id === 'string' ? option.client_id.trim() : '';
+      if (!clientId || seen.has(clientId)) {
+        return;
+      }
+      seen.add(clientId);
+      const clientName = typeof option?.client_name === 'string' && option.client_name.trim()
+        ? option.client_name.trim()
+        : `Client (${clientId.slice(0, 8)})`;
+      merged.push({
+        client_id: clientId,
+        client_name: clientName,
+      });
+    });
+  });
+  return merged;
+}
+
+function resolveClientNameById(clientOptions, clientId) {
+  const targetId = typeof clientId === 'string' ? clientId.trim() : '';
+  if (!targetId) {
+    return null;
+  }
+  const match = (Array.isArray(clientOptions) ? clientOptions : []).find(
+    (option) => option?.client_id === targetId,
+  );
+  if (match?.client_name) {
+    return match.client_name;
+  }
+  return `Client (${targetId.slice(0, 8)})`;
+}
+
+function AdvancedSection({
+  title = 'Advanced',
+  expanded = false,
+  onToggle,
+  testID,
+  children,
+}) {
+  return (
+    <ModeCard variant="surface" style={styles.inlineCard}>
+      <Pressable
+        testID={testID}
+        onPress={() => onToggle?.(!expanded)}
+        style={({ pressed }) => [
+          styles.advancedToggle,
+          pressed && styles.advancedTogglePressed,
+        ]}
+      >
+        <ModeText variant="bodySm" style={styles.advancedToggleTitle}>{title}</ModeText>
+        <ModeText variant="caption" tone="secondary">{expanded ? 'Hide' : 'Show'}</ModeText>
+      </Pressable>
+      {expanded ? children : null}
+    </ModeCard>
+  );
+}
+
+function ClientPicker({
+  accessToken,
+  queue = [],
+  selectedClientId = null,
+  onSelectClientId,
+  testIDPrefix = 'trainer-coach-client-picker',
+}) {
+  const fallbackOptions = useMemo(() => buildClientOptionsFromQueue(queue), [queue]);
+  const [options, setOptions] = useState(fallbackOptions);
+  const [searchValue, setSearchValue] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const loadOptions = async (query = '') => {
+    if (!accessToken) {
+      setOptions(fallbackOptions);
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    try {
+      const payload = await listTrainerClients({
+        accessToken,
+        query,
+        limit: 80,
+        offset: 0,
+      });
+      const remoteOptions = Array.isArray(payload?.items) ? payload.items : [];
+      setOptions(mergeClientOptions(remoteOptions, fallbackOptions));
+    } catch (requestError) {
+      setError(requestError?.message || 'Unable to load clients.');
+      setOptions(fallbackOptions);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setOptions((current) => mergeClientOptions(current, fallbackOptions));
+  }, [fallbackOptions]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+    const timeoutId = setTimeout(() => {
+      loadOptions(searchValue.trim());
+    }, 180);
+    return () => clearTimeout(timeoutId);
+    // Intentional: lightweight debounced lookup while selector is open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, searchValue]);
+
+  const selectedClientName = resolveClientNameById(options, selectedClientId)
+    || resolveClientNameById(fallbackOptions, selectedClientId);
+
+  const normalizedSearch = searchValue.trim().toLowerCase();
+  const filteredOptions = useMemo(() => {
+    if (!normalizedSearch) {
+      return options;
+    }
+    return options.filter((option) => {
+      const name = String(option?.client_name || '').toLowerCase();
+      const id = String(option?.client_id || '').toLowerCase();
+      return name.includes(normalizedSearch) || id.includes(normalizedSearch);
+    });
+  }, [normalizedSearch, options]);
+
+  return (
+    <View style={styles.clientPickerWrap}>
+      <ModeText variant="caption" tone="tertiary">Client</ModeText>
+      <Pressable
+        testID={`${testIDPrefix}-toggle`}
+        onPress={() => {
+          const nextOpen = !isOpen;
+          setIsOpen(nextOpen);
+          if (nextOpen) {
+            loadOptions(searchValue.trim());
+          }
+        }}
+        style={({ pressed }) => [
+          styles.clientPickerField,
+          pressed && styles.clientPickerFieldPressed,
+        ]}
+      >
+        <ModeText variant="bodySm" tone={selectedClientName ? 'primary' : 'secondary'}>
+          {selectedClientName || 'Select a client'}
+        </ModeText>
+      </Pressable>
+      {isOpen ? (
+        <ModeCard variant="surface" style={styles.clientPickerListCard}>
+          <SystemSearchBar
+            testID={`${testIDPrefix}-search`}
+            value={searchValue}
+            onChangeText={setSearchValue}
+            placeholder="Search clients by name"
+          />
+          {isLoading ? (
+            <View style={styles.loadingRow}>
+              <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
+              <ModeText variant="caption" tone="secondary">Searching clients...</ModeText>
+            </View>
+          ) : null}
+          {error ? (
+            <ModeText variant="caption" tone="error">{error}</ModeText>
+          ) : null}
+          <ScrollView style={styles.clientPickerList} contentContainerStyle={styles.clientPickerListContent}>
+            {filteredOptions.length === 0 ? (
+              <ModeText variant="caption" tone="secondary">No clients found.</ModeText>
+            ) : filteredOptions.map((option) => {
+              const selected = option.client_id === selectedClientId;
+              return (
+                <Pressable
+                  key={option.client_id}
+                  testID={`${testIDPrefix}-option-${option.client_id}`}
+                  onPress={() => {
+                    onSelectClientId?.(option.client_id);
+                    setIsOpen(false);
+                  }}
+                  style={({ pressed }) => [
+                    styles.clientPickerOption,
+                    selected && styles.clientPickerOptionSelected,
+                    pressed && styles.clientPickerOptionPressed,
+                  ]}
+                >
+                  <ModeText variant="bodySm">{option.client_name}</ModeText>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </ModeCard>
+      ) : null}
+    </View>
+  );
+}
 
 function buildEventKey(prefix = 'coach-event') {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
@@ -257,17 +523,28 @@ function DraftReviewPanel({
 function MemoryPanel({
   accessToken,
   clientId,
+  queue,
   onSystemEvent,
 }) {
+  const [activeClientId, setActiveClientId] = useState(clientId || '');
   const [records, setRecords] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState(null);
   const [draftText, setDraftText] = useState('');
   const [draftVisibility, setDraftVisibility] = useState('internal_only');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  useEffect(() => {
+    setActiveClientId(clientId || '');
+  }, [clientId]);
+
+  const queueOptions = useMemo(() => buildClientOptionsFromQueue(queue), [queue]);
+  const activeClientName = resolveClientNameById(queueOptions, activeClientId);
 
   const loadMemory = async () => {
-    if (!accessToken || !clientId) {
+    const normalizedClientId = String(activeClientId || '').trim();
+    if (!accessToken || !normalizedClientId) {
       setRecords([]);
       return;
     }
@@ -276,7 +553,7 @@ function MemoryPanel({
     try {
       const payload = await listTrainerClientMemory({
         accessToken,
-        clientId,
+        clientId: normalizedClientId,
         includeArchived: false,
       });
       setRecords(Array.isArray(payload) ? payload : []);
@@ -291,10 +568,11 @@ function MemoryPanel({
     loadMemory();
     // Intentional panel lifecycle load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, clientId]);
+  }, [accessToken, activeClientId]);
 
   const handleCreateMemory = async () => {
-    if (!accessToken || !clientId || isSaving) {
+    const normalizedClientId = String(activeClientId || '').trim();
+    if (!accessToken || !normalizedClientId || isSaving) {
       return;
     }
     const text = draftText.trim();
@@ -307,7 +585,7 @@ function MemoryPanel({
     try {
       const created = await createTrainerClientMemory({
         accessToken,
-        clientId,
+        clientId: normalizedClientId,
         memoryType: 'note',
         text,
         visibility: draftVisibility,
@@ -321,8 +599,8 @@ function MemoryPanel({
         message: 'Memory saved',
         severity: 'success',
         visibility: 'system',
-        clientId,
-        payload: { client_id: clientId, memory_id: created?.id || null },
+        clientId: normalizedClientId,
+        payload: { client_id: normalizedClientId, memory_id: created?.id || null },
       });
     } catch (requestError) {
       setError(requestError?.message || 'Unable to save memory.');
@@ -332,7 +610,8 @@ function MemoryPanel({
   };
 
   const toggleVisibility = async (memory) => {
-    if (!accessToken || !clientId || !memory?.id || isSaving) {
+    const normalizedClientId = String(activeClientId || '').trim();
+    if (!accessToken || !normalizedClientId || !memory?.id || isSaving) {
       return;
     }
     const nextVisibility = memory.visibility === 'ai_usable' ? 'internal_only' : 'ai_usable';
@@ -341,7 +620,7 @@ function MemoryPanel({
     try {
       await updateTrainerClientMemory({
         accessToken,
-        clientId,
+        clientId: normalizedClientId,
         memoryId: memory.id,
         visibility: nextVisibility,
       });
@@ -352,9 +631,9 @@ function MemoryPanel({
         message: 'Memory visibility updated',
         severity: 'success',
         visibility: 'system',
-        clientId,
+        clientId: normalizedClientId,
         payload: {
-          client_id: clientId,
+          client_id: normalizedClientId,
           memory_id: memory.id,
           visibility: nextVisibility,
         },
@@ -366,68 +645,83 @@ function MemoryPanel({
     }
   };
 
-  if (!clientId) {
-    return (
-      <PlaceholderPanel
-        title="Memory Panel"
-        detail="Select a client (or open from a draft) to manage memory."
-      />
-    );
-  }
-
   return (
     <View style={styles.panelBody}>
-      <ModeText variant="label" tone="tertiary" style={styles.panelLabel}>Memory Panel</ModeText>
-      <ModeText variant="caption" tone="secondary">Client: {clientId}</ModeText>
-      {isLoading ? (
-        <View style={styles.loadingRow}>
-          <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
-          <ModeText variant="caption" tone="secondary">Loading memory...</ModeText>
-        </View>
-      ) : null}
-      {!isLoading ? (
-        <View style={styles.memoryList}>
-          {records.length === 0 ? (
-            <ModeText variant="caption" tone="secondary">No memory records yet.</ModeText>
-          ) : (
-            records.slice(0, 8).map((record) => (
-              <Pressable
-                key={record.id}
-                style={styles.memoryRow}
-                onPress={() => toggleVisibility(record)}
-              >
-                <ModeText variant="bodySm">{record.text || record.memory_key}</ModeText>
-                <ModeText variant="caption" tone="secondary">{record.visibility}</ModeText>
-              </Pressable>
-            ))
-          )}
-        </View>
-      ) : null}
-      <ModeInput
-        value={draftText}
-        onChangeText={setDraftText}
-        placeholder="Add memory text"
-        multiline
-        style={styles.multilineInput}
+      <ClientPicker
+        accessToken={accessToken}
+        queue={queue}
+        selectedClientId={activeClientId}
+        onSelectClientId={setActiveClientId}
+        testIDPrefix="trainer-coach-memory-client-picker"
       />
-      <View style={styles.visibilityRow}>
-        {MEMORY_VISIBILITY_OPTIONS.map((option) => (
-          <ModeChip
-            key={option.key}
-            label={option.label}
-            selected={draftVisibility === option.key}
-            onPress={() => setDraftVisibility(option.key)}
-          />
-        ))}
-      </View>
-      {error ? (
-        <ModeText variant="caption" tone="error">{error}</ModeText>
-      ) : null}
-      <ModeButton
-        title={isSaving ? 'Saving...' : 'Save Memory'}
-        onPress={handleCreateMemory}
-        disabled={isSaving}
-      />
+      {activeClientId ? (
+        <ModeText variant="caption" tone="secondary">
+          {`Working on ${activeClientName || 'selected client'}`}
+        </ModeText>
+      ) : (
+        <ModeText variant="caption" tone="secondary">Select a client to add memory.</ModeText>
+      )}
+
+      <ModeCard variant="surface" style={styles.inlineCard}>
+        <ModeText variant="bodySm" style={styles.panelTitle}>Quick Add Memory</ModeText>
+        <ModeInput
+          value={draftText}
+          onChangeText={setDraftText}
+          placeholder="Add memory note"
+          multiline
+          style={styles.multilineInputCompact}
+        />
+        <View style={styles.visibilityRow}>
+          {MEMORY_VISIBILITY_OPTIONS.map((option) => (
+            <ModeChip
+              key={option.key}
+              label={option.label}
+              selected={draftVisibility === option.key}
+              onPress={() => setDraftVisibility(option.key)}
+            />
+          ))}
+        </View>
+        {error ? (
+          <ModeText variant="caption" tone="error">{error}</ModeText>
+        ) : null}
+        <ModeButton
+          title={isSaving ? 'Saving...' : 'Save Memory'}
+          onPress={handleCreateMemory}
+          disabled={isSaving || !activeClientId}
+        />
+      </ModeCard>
+
+      <AdvancedSection
+        title="Advanced Memory Controls"
+        expanded={showAdvanced}
+        onToggle={setShowAdvanced}
+        testID="trainer-coach-memory-advanced-toggle"
+      >
+        {isLoading ? (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
+            <ModeText variant="caption" tone="secondary">Loading memory...</ModeText>
+          </View>
+        ) : null}
+        {!isLoading ? (
+          <View style={styles.memoryList}>
+            {records.length === 0 ? (
+              <ModeText variant="caption" tone="secondary">No memory records yet.</ModeText>
+            ) : (
+              records.slice(0, 10).map((record) => (
+                <Pressable
+                  key={record.id}
+                  style={styles.memoryRow}
+                  onPress={() => toggleVisibility(record)}
+                >
+                  <ModeText variant="bodySm">{record.text || record.memory_key}</ModeText>
+                  <ModeText variant="caption" tone="secondary">{record.visibility}</ModeText>
+                </Pressable>
+              ))
+            )}
+          </View>
+        ) : null}
+      </AdvancedSection>
     </View>
   );
 }
@@ -443,6 +737,7 @@ function RulesPanel({
   const [editingRuleId, setEditingRuleId] = useState(null);
   const [editingRuleText, setEditingRuleText] = useState('');
   const [editingRuleCategory, setEditingRuleCategory] = useState('general_coaching');
+  const [showEditingAdvanced, setShowEditingAdvanced] = useState(false);
 
   const loadRules = async () => {
     if (!accessToken) {
@@ -471,6 +766,7 @@ function RulesPanel({
     setEditingRuleId(rule.id);
     setEditingRuleText(rule.rule_text || '');
     setEditingRuleCategory(rule.category || 'general_coaching');
+    setShowEditingAdvanced(false);
     setError(null);
   };
 
@@ -478,6 +774,7 @@ function RulesPanel({
     setEditingRuleId(null);
     setEditingRuleText('');
     setEditingRuleCategory('general_coaching');
+    setShowEditingAdvanced(false);
     setError(null);
   };
 
@@ -547,7 +844,6 @@ function RulesPanel({
 
   return (
     <View style={styles.panelBody}>
-      <ModeText variant="label" tone="tertiary" style={styles.panelLabel}>Rules Panel</ModeText>
       <ModeText variant="caption" tone="secondary">
         Edit and archive extracted rules. Ingest new knowledge in System to generate more rules.
       </ModeText>
@@ -572,17 +868,24 @@ function RulesPanel({
               {isEditing ? (
                 <>
                   <ModeInput
-                    value={editingRuleCategory}
-                    onChangeText={setEditingRuleCategory}
-                    placeholder="Rule category"
-                  />
-                  <ModeInput
                     value={editingRuleText}
                     onChangeText={setEditingRuleText}
                     placeholder="Rule text"
                     multiline
-                    style={styles.multilineInput}
+                    style={styles.multilineInputCompact}
                   />
+                  <AdvancedSection
+                    title="Advanced Rule Metadata"
+                    expanded={showEditingAdvanced}
+                    onToggle={setShowEditingAdvanced}
+                    testID="trainer-coach-rules-advanced-toggle"
+                  >
+                    <ModeInput
+                      value={editingRuleCategory}
+                      onChangeText={setEditingRuleCategory}
+                      placeholder="Rule category"
+                    />
+                  </AdvancedSection>
                   <View style={styles.actionRow}>
                     <ModeButton
                       title={isSaving ? 'Saving...' : 'Save Rule'}
@@ -601,7 +904,7 @@ function RulesPanel({
                 </>
               ) : (
                 <>
-                  <ModeText variant="bodySm">{rule.rule_text}</ModeText>
+                  <ModeText variant="bodySm" numberOfLines={3}>{rule.rule_text}</ModeText>
                   <ModeText variant="caption" tone="secondary">
                     {normalizeRuleCategory(rule.category)} · v{rule.current_version || 1}
                   </ModeText>
@@ -642,10 +945,12 @@ function ProgramPanel({
   const [newName, setNewName] = useState('');
   const [newFrequency, setNewFrequency] = useState('');
   const [newTemplateJson, setNewTemplateJson] = useState('{\n  "blocks": []\n}');
+  const [showAdvancedCreateJson, setShowAdvancedCreateJson] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editName, setEditName] = useState('');
   const [editFrequency, setEditFrequency] = useState('');
   const [editTemplateJson, setEditTemplateJson] = useState('{\n  "blocks": []\n}');
+  const [showAdvancedEditJson, setShowAdvancedEditJson] = useState(false);
 
   const loadTemplates = async () => {
     if (!accessToken) {
@@ -704,6 +1009,7 @@ function ProgramPanel({
     setEditName(template.name || '');
     setEditFrequency(typeof template.frequency === 'number' ? String(template.frequency) : '');
     setEditTemplateJson(JSON.stringify(template.template_json || {}, null, 2));
+    setShowAdvancedEditJson(false);
     setError(null);
   };
 
@@ -712,6 +1018,7 @@ function ProgramPanel({
     setEditName('');
     setEditFrequency('');
     setEditTemplateJson('{\n  "blocks": []\n}');
+    setShowAdvancedEditJson(false);
   };
 
   const handleCreateTemplate = async () => {
@@ -741,6 +1048,7 @@ function ProgramPanel({
       setNewName('');
       setNewFrequency('');
       setNewTemplateJson('{\n  "blocks": []\n}');
+      setShowAdvancedCreateJson(false);
       await loadTemplates();
       onSystemEvent?.({
         eventKey: buildEventKey('program-created'),
@@ -828,13 +1136,12 @@ function ProgramPanel({
 
   return (
     <View style={styles.panelBody}>
-      <ModeText variant="label" tone="tertiary" style={styles.panelLabel}>Program Review Panel</ModeText>
       <ModeText variant="caption" tone="secondary">
         Templates are trainer-scoped and can be applied in transactional approvals.
       </ModeText>
 
       <ModeCard variant="surface" style={styles.inlineCard}>
-        <ModeText variant="bodySm" style={styles.panelTitle}>Create Template</ModeText>
+        <ModeText variant="bodySm" style={styles.panelTitle}>Quick Template</ModeText>
         <ModeInput
           value={newName}
           onChangeText={setNewName}
@@ -846,13 +1153,20 @@ function ProgramPanel({
           placeholder="Frequency (1-14)"
           keyboardType="number-pad"
         />
-        <ModeInput
-          value={newTemplateJson}
-          onChangeText={setNewTemplateJson}
-          placeholder="Template JSON"
-          multiline
-          style={styles.jsonInput}
-        />
+        <AdvancedSection
+          title="Advanced JSON"
+          expanded={showAdvancedCreateJson}
+          onToggle={setShowAdvancedCreateJson}
+          testID="trainer-coach-program-create-advanced-toggle"
+        >
+          <ModeInput
+            value={newTemplateJson}
+            onChangeText={setNewTemplateJson}
+            placeholder="Template JSON"
+            multiline
+            style={styles.jsonInput}
+          />
+        </AdvancedSection>
         <ModeButton
           title={isSaving ? 'Saving...' : 'Create Template'}
           onPress={handleCreateTemplate}
@@ -891,13 +1205,20 @@ function ProgramPanel({
                     placeholder="Frequency (1-14)"
                     keyboardType="number-pad"
                   />
-                  <ModeInput
-                    value={editTemplateJson}
-                    onChangeText={setEditTemplateJson}
-                    placeholder="Template JSON"
-                    multiline
-                    style={styles.jsonInput}
-                  />
+                  <AdvancedSection
+                    title="Advanced JSON"
+                    expanded={showAdvancedEditJson}
+                    onToggle={setShowAdvancedEditJson}
+                    testID="trainer-coach-program-edit-advanced-toggle"
+                  >
+                    <ModeInput
+                      value={editTemplateJson}
+                      onChangeText={setEditTemplateJson}
+                      placeholder="Template JSON"
+                      multiline
+                      style={styles.jsonInput}
+                    />
+                  </AdvancedSection>
                   <View style={styles.actionRow}>
                     <ModeButton
                       title={isSaving ? 'Saving...' : 'Save Template'}
@@ -949,9 +1270,11 @@ function ProgramPanel({
 function ClientContextPanel({
   accessToken,
   initialClientId,
+  initialFilter,
+  queue,
   onSystemEvent,
 }) {
-  const [clientId, setClientId] = useState(initialClientId || '');
+  const [activeClientId, setActiveClientId] = useState(initialClientId || '');
   const [detail, setDetail] = useState(null);
   const [aiContext, setAiContext] = useState(null);
   const [scheduleDate, setScheduleDate] = useState(new Date().toISOString().slice(0, 10));
@@ -962,10 +1285,14 @@ function ClientContextPanel({
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [showAdvancedSchedule, setShowAdvancedSchedule] = useState(false);
+  const [showAdvancedContext, setShowAdvancedContext] = useState(false);
 
   useEffect(() => {
-    setClientId(initialClientId || '');
+    setActiveClientId(initialClientId || '');
   }, [initialClientId]);
+
+  const queueOptions = useMemo(() => buildClientOptionsFromQueue(queue), [queue]);
 
   const hydrateDraftFields = (detailPayload) => {
     const schedule = detailPayload?.schedule_preferences || {};
@@ -975,8 +1302,8 @@ function ClientContextPanel({
     setMeetingLocation(String(detailPayload?.activity_summary?.meeting_location || ''));
   };
 
-  const loadClientContext = async () => {
-    const normalizedClientId = String(clientId || '').trim();
+  const loadClientContext = useCallback(async () => {
+    const normalizedClientId = String(activeClientId || '').trim();
     if (!accessToken || !normalizedClientId) {
       setDetail(null);
       setAiContext(null);
@@ -1005,15 +1332,16 @@ function ClientContextPanel({
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [accessToken, activeClientId, scheduleDate]);
 
   useEffect(() => {
-    if (initialClientId) {
-      loadClientContext();
-    }
-    // Intentional panel lifecycle load.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accessToken, initialClientId, scheduleDate]);
+    loadClientContext();
+  }, [loadClientContext]);
+
+  useEffect(() => {
+    setShowAdvancedSchedule(false);
+    setShowAdvancedContext(false);
+  }, [activeClientId]);
 
   const toggleWeekday = (weekday) => {
     setRecurringWeekdays((current) => {
@@ -1041,9 +1369,9 @@ function ClientContextPanel({
   };
 
   const handleSaveSchedulePreferences = () => {
-    const normalizedClientId = String(clientId || '').trim();
+    const normalizedClientId = String(activeClientId || '').trim();
     if (!normalizedClientId) {
-      setError('Client id is required.');
+      setError('Select a client first.');
       return;
     }
     runMutation(async () => {
@@ -1070,9 +1398,9 @@ function ClientContextPanel({
   };
 
   const handleSaveMeetingLocation = () => {
-    const normalizedClientId = String(clientId || '').trim();
+    const normalizedClientId = String(activeClientId || '').trim();
     if (!normalizedClientId) {
-      setError('Client id is required.');
+      setError('Select a client first.');
       return;
     }
     runMutation(async () => {
@@ -1099,9 +1427,9 @@ function ClientContextPanel({
   };
 
   const handleMarkSkip = () => {
-    const normalizedClientId = String(clientId || '').trim();
+    const normalizedClientId = String(activeClientId || '').trim();
     if (!normalizedClientId) {
-      setError('Client id is required.');
+      setError('Select a client first.');
       return;
     }
     runMutation(async () => {
@@ -1129,9 +1457,9 @@ function ClientContextPanel({
   };
 
   const handleClearException = () => {
-    const normalizedClientId = String(clientId || '').trim();
+    const normalizedClientId = String(activeClientId || '').trim();
     if (!normalizedClientId) {
-      setError('Client id is required.');
+      setError('Select a client first.');
       return;
     }
     runMutation(async () => {
@@ -1155,28 +1483,44 @@ function ClientContextPanel({
     });
   };
 
+  const selectedClientName = detail?.client?.client_name
+    || resolveClientNameById(queueOptions, activeClientId);
+
   return (
     <View style={styles.panelBody}>
-      <ModeText variant="label" tone="tertiary" style={styles.panelLabel}>Client Context Panel</ModeText>
-      <ModeText variant="caption" tone="secondary">
-        Manage client detail, schedule preferences, and day-level meeting location.
-      </ModeText>
+      <ClientPicker
+        accessToken={accessToken}
+        queue={queue}
+        selectedClientId={activeClientId}
+        onSelectClientId={setActiveClientId}
+        testIDPrefix="trainer-coach-client-context-picker"
+      />
+      {activeClientId ? (
+        <ModeText variant="caption" tone="secondary">
+          {`Working on ${selectedClientName || 'selected client'}`}
+        </ModeText>
+      ) : (
+        <ModeText variant="caption" tone="secondary">
+          Select a client by name to open context controls.
+        </ModeText>
+      )}
 
       <ModeCard variant="surface" style={styles.inlineCard}>
-        <ModeInput
-          value={clientId}
-          onChangeText={setClientId}
-          placeholder="Client id"
-        />
+        <ModeText variant="bodySm" style={styles.panelTitle}>Quick Actions</ModeText>
         <ModeInput
           value={scheduleDate}
           onChangeText={setScheduleDate}
           placeholder="Session date (YYYY-MM-DD)"
         />
+        {initialFilter === 'risk_flags' ? (
+          <ModeText variant="caption" tone="secondary">
+            Risk-flag focus enabled for this client context.
+          </ModeText>
+        ) : null}
         <ModeButton
           title={isLoading ? 'Loading...' : 'Load Client Context'}
           onPress={loadClientContext}
-          disabled={isLoading || isSaving}
+          disabled={isLoading || isSaving || !activeClientId}
         />
       </ModeCard>
 
@@ -1200,38 +1544,6 @@ function ClientContextPanel({
           <ModeText variant="caption" tone="secondary">
             Current session status: {detail?.activity_summary?.session_status || 'unscheduled'}
           </ModeText>
-
-          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Recurring Schedule</ModeText>
-          <View style={styles.chipRow}>
-            {WEEKDAY_OPTIONS.map((weekday) => {
-              const selected = recurringWeekdays.includes(weekday.value);
-              return (
-                <ModeChip
-                  key={weekday.value}
-                  label={weekday.label}
-                  selected={selected}
-                  onPress={() => toggleWeekday(weekday.value)}
-                />
-              );
-            })}
-          </View>
-          <ModeInput
-            value={preferredMeetingLocation}
-            onChangeText={setPreferredMeetingLocation}
-            placeholder="Preferred meeting location"
-          />
-          <View style={styles.inlineToggle}>
-            <ModeText variant="bodySm">Use trainer default location fallback</ModeText>
-            <GlassToggle
-              value={Boolean(autoUseTrainerDefaultLocation)}
-              onValueChange={setAutoUseTrainerDefaultLocation}
-            />
-          </View>
-          <ModeButton
-            title={isSaving ? 'Saving...' : 'Save Schedule Preferences'}
-            onPress={handleSaveSchedulePreferences}
-            disabled={isSaving}
-          />
 
           <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Selected Date Controls</ModeText>
           <ModeInput
@@ -1262,21 +1574,78 @@ function ClientContextPanel({
             />
           </View>
         </ModeCard>
-      ) : (
-        <ModeText variant="caption" tone="secondary">Load a client to view structured context controls.</ModeText>
-      )}
-
-      {aiContext ? (
-        <ModeCard variant="surface" style={styles.inlineCard}>
-          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>AI Context Preview</ModeText>
-          <ModeText variant="caption" tone="secondary">
-            AI-usable memory: {Array.isArray(aiContext.applied_ai_usable_memory) ? aiContext.applied_ai_usable_memory.length : 0}
-            {' · '}
-            Internal-only memory count: {aiContext.internal_only_memory_count ?? 0}
-          </ModeText>
-          <ModeText variant="bodySm" tone="secondary">{aiContext.context_preview_text || 'No context preview available.'}</ModeText>
-        </ModeCard>
+      ) : activeClientId && !isLoading ? (
+        <ModeText variant="caption" tone="secondary">No client detail found for this date.</ModeText>
       ) : null}
+
+      <AdvancedSection
+        title="Advanced Schedule Preferences"
+        expanded={showAdvancedSchedule}
+        onToggle={setShowAdvancedSchedule}
+        testID="trainer-coach-client-context-advanced-schedule-toggle"
+      >
+        {detail ? (
+          <>
+            <View style={styles.chipRow}>
+              {WEEKDAY_OPTIONS.map((weekday) => {
+                const selected = recurringWeekdays.includes(weekday.value);
+                return (
+                  <ModeChip
+                    key={weekday.value}
+                    label={weekday.label}
+                    selected={selected}
+                    onPress={() => toggleWeekday(weekday.value)}
+                  />
+                );
+              })}
+            </View>
+            <ModeInput
+              value={preferredMeetingLocation}
+              onChangeText={setPreferredMeetingLocation}
+              placeholder="Preferred meeting location"
+            />
+            <View style={styles.inlineToggle}>
+              <ModeText variant="bodySm">Use trainer default location fallback</ModeText>
+              <GlassToggle
+                value={Boolean(autoUseTrainerDefaultLocation)}
+                onValueChange={setAutoUseTrainerDefaultLocation}
+              />
+            </View>
+            <ModeButton
+              title={isSaving ? 'Saving...' : 'Save Schedule Preferences'}
+              onPress={handleSaveSchedulePreferences}
+              disabled={isSaving}
+            />
+          </>
+        ) : (
+          <ModeText variant="caption" tone="secondary">
+            Select a client to load schedule preferences.
+          </ModeText>
+        )}
+      </AdvancedSection>
+
+      <AdvancedSection
+        title="Advanced AI Context"
+        expanded={showAdvancedContext}
+        onToggle={setShowAdvancedContext}
+        testID="trainer-coach-client-context-advanced-ai-toggle"
+      >
+        {aiContext ? (
+          <ModeCard variant="surface" style={styles.inlineCard}>
+            <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>AI Context Preview</ModeText>
+            <ModeText variant="caption" tone="secondary">
+              AI-usable memory: {Array.isArray(aiContext.applied_ai_usable_memory) ? aiContext.applied_ai_usable_memory.length : 0}
+              {' · '}
+              Internal-only memory count: {aiContext.internal_only_memory_count ?? 0}
+            </ModeText>
+            <ModeText variant="bodySm" tone="secondary">{aiContext.context_preview_text || 'No context preview available.'}</ModeText>
+          </ModeCard>
+        ) : (
+          <ModeText variant="caption" tone="secondary">
+            AI context preview loads after a client is selected.
+          </ModeText>
+        )}
+      </AdvancedSection>
     </View>
   );
 }
@@ -1329,6 +1698,11 @@ export default function CoachPanelHost({
     return firstClientDraft?.client_id || null;
   }, [activePanel, panelContext?.clientId, queue]);
 
+  const panelMeta = useMemo(
+    () => resolvePanelMeta(activePanel, panelContext),
+    [activePanel, panelContext],
+  );
+
   return (
     <Modal
       visible={Boolean(activePanel)}
@@ -1340,47 +1714,70 @@ export default function CoachPanelHost({
         <Pressable style={styles.backdrop} onPress={onClose} />
         <View style={styles.sheet}>
           <View style={styles.sheetHeader}>
-            <ModeText variant="h4">Panel</ModeText>
+            <View style={styles.sheetHeaderCopy}>
+              <ModeText variant="label" tone="tertiary" style={styles.sheetCommandLabel}>{panelMeta.commandLabel}</ModeText>
+              <ModeText variant="h4">{panelMeta.title}</ModeText>
+              {panelMeta.subtitle ? (
+                <ModeText variant="caption" tone="secondary">{panelMeta.subtitle}</ModeText>
+              ) : null}
+            </View>
             <ModeButton title="Close" variant="ghost" size="sm" onPress={onClose} />
           </View>
-          <ScrollView contentContainerStyle={styles.sheetContent}>
-            {activePanel === 'draft_review' ? (
-              <DraftReviewPanel
-                draft={selectedDraft}
-                onOpenTrainerCoach={onOpenTrainerCoach}
-                onApprove={onApproveDraft}
-                onEdit={onEditDraft}
-                onReject={onRejectDraft}
-                onClose={onClose}
-              />
-            ) : null}
-            {activePanel === 'memory' ? (
-              <MemoryPanel
-                accessToken={accessToken}
-                clientId={memoryClientId}
-                onSystemEvent={onSystemEvent}
-              />
-            ) : null}
-            {activePanel === 'rules' ? (
-              <RulesPanel
-                accessToken={accessToken}
-                onSystemEvent={onSystemEvent}
-              />
-            ) : null}
-            {activePanel === 'program' ? (
-              <ProgramPanel
-                accessToken={accessToken}
-                onSystemEvent={onSystemEvent}
-              />
-            ) : null}
-            {activePanel === 'client_context' ? (
-              <ClientContextPanel
-                accessToken={accessToken}
-                initialClientId={clientContextClientId}
-                onSystemEvent={onSystemEvent}
-              />
-            ) : null}
-          </ScrollView>
+          <View style={styles.sheetBody}>
+            <ScrollView
+              style={styles.sheetScroll}
+              contentContainerStyle={styles.sheetContent}
+              keyboardShouldPersistTaps="handled"
+            >
+              {activePanel === 'draft_review' ? (
+                <DraftReviewPanel
+                  draft={selectedDraft}
+                  onOpenTrainerCoach={onOpenTrainerCoach}
+                  onApprove={onApproveDraft}
+                  onEdit={onEditDraft}
+                  onReject={onRejectDraft}
+                  onClose={onClose}
+                />
+              ) : null}
+              {activePanel === 'memory' ? (
+                <MemoryPanel
+                  accessToken={accessToken}
+                  clientId={memoryClientId}
+                  queue={queue}
+                  onSystemEvent={onSystemEvent}
+                />
+              ) : null}
+              {activePanel === 'rules' ? (
+                <RulesPanel
+                  accessToken={accessToken}
+                  onSystemEvent={onSystemEvent}
+                />
+              ) : null}
+              {activePanel === 'program' ? (
+                <ProgramPanel
+                  accessToken={accessToken}
+                  onSystemEvent={onSystemEvent}
+                />
+              ) : null}
+              {activePanel === 'client_context' ? (
+                <ClientContextPanel
+                  accessToken={accessToken}
+                  initialClientId={clientContextClientId}
+                  initialFilter={panelContext?.filter || null}
+                  queue={queue}
+                  onSystemEvent={onSystemEvent}
+                />
+              ) : null}
+            </ScrollView>
+          </View>
+          <View style={styles.sheetFooter}>
+            <ModeButton
+              title="Close Panel"
+              variant="ghost"
+              onPress={onClose}
+              style={styles.sheetFooterButton}
+            />
+          </View>
         </View>
       </View>
     </Modal>
@@ -1397,25 +1794,59 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(11,16,24,0.42)',
   },
   sheet: {
-    maxHeight: '90%',
-    minHeight: '54%',
+    maxHeight: '88%',
+    minHeight: '58%',
     borderTopLeftRadius: theme.radii.xl,
     borderTopRightRadius: theme.radii.xl,
     backgroundColor: theme.colors.surface.canvas,
     borderWidth: 1,
     borderColor: theme.colors.border.default,
-    paddingHorizontal: theme.spacing[3],
-    paddingTop: theme.spacing[2],
-    paddingBottom: theme.spacing[3],
+    overflow: 'hidden',
   },
   sheetHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    gap: theme.spacing[2],
+    paddingHorizontal: theme.spacing[3],
+    paddingTop: theme.spacing[2],
+    paddingBottom: theme.spacing[2],
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border.subtle,
+    backgroundColor: 'rgba(8, 16, 29, 0.88)',
+  },
+  sheetHeaderCopy: {
+    flex: 1,
+    gap: 2,
+    paddingRight: theme.spacing[2],
+  },
+  sheetCommandLabel: {
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  sheetBody: {
+    flex: 1,
+    minHeight: 220,
+  },
+  sheetScroll: {
+    flex: 1,
   },
   sheetContent: {
+    paddingHorizontal: theme.spacing[3],
     paddingTop: theme.spacing[2],
+    paddingBottom: theme.spacing[3],
     gap: theme.spacing[2],
+  },
+  sheetFooter: {
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border.subtle,
+    paddingHorizontal: theme.spacing[3],
+    paddingTop: theme.spacing[2],
+    paddingBottom: theme.spacing[3],
+    backgroundColor: 'rgba(7, 13, 25, 0.92)',
+  },
+  sheetFooterButton: {
+    alignSelf: 'flex-end',
   },
   panelBody: {
     gap: theme.spacing[2],
@@ -1438,6 +1869,9 @@ const styles = StyleSheet.create({
   },
   multilineInput: {
     minHeight: 96,
+  },
+  multilineInputCompact: {
+    minHeight: 72,
   },
   jsonInput: {
     minHeight: 132,
@@ -1477,6 +1911,7 @@ const styles = StyleSheet.create({
   },
   visibilityRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: theme.spacing[1],
   },
   listStack: {
@@ -1489,5 +1924,62 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: theme.spacing[1],
+  },
+  advancedToggle: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderRadius: theme.radii.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border.default,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    backgroundColor: 'rgba(12, 22, 40, 0.42)',
+  },
+  advancedTogglePressed: {
+    opacity: 0.86,
+  },
+  advancedToggleTitle: {
+    fontWeight: '600',
+  },
+  clientPickerWrap: {
+    gap: theme.spacing[1],
+  },
+  clientPickerField: {
+    borderRadius: theme.radii.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border.default,
+    backgroundColor: 'rgba(13, 23, 42, 0.56)',
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[2],
+  },
+  clientPickerFieldPressed: {
+    opacity: 0.9,
+  },
+  clientPickerListCard: {
+    gap: theme.spacing[1],
+    maxHeight: 260,
+  },
+  clientPickerList: {
+    maxHeight: 186,
+  },
+  clientPickerListContent: {
+    gap: theme.spacing[1],
+    paddingBottom: theme.spacing[1],
+  },
+  clientPickerOption: {
+    borderRadius: theme.radii.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border.default,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    backgroundColor: 'rgba(9, 18, 34, 0.58)',
+  },
+  clientPickerOptionSelected: {
+    borderColor: theme.colors.border.focus,
+    backgroundColor: 'rgba(18, 33, 60, 0.64)',
+  },
+  clientPickerOptionPressed: {
+    opacity: 0.88,
   },
 });

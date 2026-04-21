@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import Counter
+import secrets
+import string
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
@@ -13,6 +15,11 @@ from app.modules.trainer_clients.schemas import (
     TrainerClientActivitySummary,
     TrainerClientDetailResponse,
     TrainerClientIdentity,
+    TrainerClientInviteCodeCreateRequest,
+    TrainerClientInviteCodeListResponse,
+    TrainerClientInviteCodeRecord,
+    TrainerClientListResponse,
+    TrainerClientUpdateRequest,
     TrainerScheduleExceptionCreateRequest,
     TrainerScheduleExceptionRecord,
     TrainerSchedulePreferencesRecord,
@@ -35,8 +42,148 @@ LEGACY_TO_CANONICAL_MODE = {
 
 
 class TrainerClientService:
+    INVITE_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    INVITE_CODE_LENGTH = 8
+
     def __init__(self, repository: TrainerClientRepository):
         self.repository = repository
+
+    def list_clients(
+        self,
+        trainer_context: TrainerContext,
+        *,
+        search: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> TrainerClientListResponse:
+        trainer_id, tenant_id = self._require_trainer_context(trainer_context)
+        normalized_search = self._normalize_search_term(search)
+        rows = self.repository.list_clients_for_trainer(trainer_id)
+        filtered_rows = [
+            row
+            for row in rows
+            if self._client_belongs_to_tenant(row, tenant_id)
+            and self._client_matches_search(row, normalized_search)
+        ]
+        paginated_rows = filtered_rows[offset:offset + limit]
+        return TrainerClientListResponse(
+            items=[self._to_client_identity(row) for row in paginated_rows],
+            count=len(filtered_rows),
+            limit=limit,
+            offset=offset,
+            search=normalized_search,
+        )
+
+    def update_client(
+        self,
+        trainer_context: TrainerContext,
+        client_id: str,
+        request: TrainerClientUpdateRequest,
+    ) -> TrainerClientIdentity:
+        trainer_id, tenant_id = self._require_trainer_context(trainer_context)
+        existing = self._require_client_assignment(trainer_context, client_id)
+        if not self._client_belongs_to_tenant(existing, tenant_id):
+            raise ValueError("Client not found for trainer")
+        client_name = self._normalize_client_name_for_write(request.client_name)
+        updated = self.repository.update_client_for_trainer(
+            trainer_id,
+            client_id,
+            {"client_name": client_name},
+        )
+        if not updated:
+            raise ValueError("Client not found for trainer")
+        return self._to_client_identity(updated)
+
+    def remove_client(
+        self,
+        trainer_context: TrainerContext,
+        client_id: str,
+    ) -> TrainerClientIdentity:
+        trainer_id, tenant_id = self._require_trainer_context(trainer_context)
+        client_row = self._require_client_assignment(trainer_context, client_id)
+        if not self._client_belongs_to_tenant(client_row, tenant_id):
+            raise ValueError("Client not found for trainer")
+        updated = self.repository.update_client_for_trainer(
+            trainer_id,
+            client_id,
+            {"assigned_trainer_id": None},
+        )
+        if not updated:
+            raise ValueError("Client remove failed")
+
+        active_assignment = self.repository.get_latest_active_assignment(trainer_id, client_id)
+        if active_assignment and active_assignment.get("id"):
+            unassigned = self.repository.mark_assignment_unassigned(
+                str(active_assignment["id"]),
+                unassigned_at=datetime.now(timezone.utc).isoformat(),
+            )
+            if not unassigned:
+                raise ValueError("Client remove failed")
+
+        detached = dict(client_row)
+        detached["assigned_trainer_id"] = None
+        detached["created_at"] = updated.get("created_at", client_row.get("created_at"))
+        return self._to_client_identity(detached)
+
+    def list_invite_codes(
+        self,
+        trainer_context: TrainerContext,
+        *,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> TrainerClientInviteCodeListResponse:
+        trainer_id, tenant_id = self._require_trainer_context(trainer_context)
+        rows = self.repository.list_invite_codes_for_trainer(trainer_id, tenant_id)
+        paginated_rows = rows[offset:offset + limit]
+        return TrainerClientInviteCodeListResponse(
+            items=[self._to_invite_code_record(row) for row in paginated_rows],
+            count=len(rows),
+            limit=limit,
+            offset=offset,
+        )
+
+    def create_invite_code(
+        self,
+        trainer_context: TrainerContext,
+        request: TrainerClientInviteCodeCreateRequest,
+    ) -> TrainerClientInviteCodeRecord:
+        trainer_id, tenant_id = self._require_trainer_context(trainer_context)
+        code = self._normalize_invite_code_for_write(request.code) or self._generate_invite_code()
+        if self.repository.get_invite_code_by_code(code=code):
+            raise ValueError("Invite code already exists")
+
+        created = self.repository.create_invite_code(
+            {
+                "code": code,
+                "trainer_id": trainer_id,
+                "tenant_id": tenant_id,
+                "is_active": True,
+                "expires_at": request.expires_at.isoformat() if request.expires_at else None,
+                "metadata": request.metadata or {},
+            }
+        )
+        if not created:
+            raise ValueError("Invite code create failed")
+        return self._to_invite_code_record(created)
+
+    def deactivate_invite_code(
+        self,
+        trainer_context: TrainerContext,
+        invite_id: str,
+    ) -> TrainerClientInviteCodeRecord:
+        trainer_id, tenant_id = self._require_trainer_context(trainer_context)
+        existing = self.repository.get_invite_code_for_trainer(trainer_id, tenant_id, invite_id)
+        if not existing:
+            raise ValueError("Invite code not found")
+        updated = self.repository.update_invite_code_for_trainer(
+            trainer_id,
+            tenant_id,
+            invite_id,
+            {"is_active": False},
+        )
+        if not updated:
+            raise ValueError("Invite code deactivate failed")
+        return self._to_invite_code_record(updated)
 
     def get_client_detail(
         self,
@@ -424,14 +571,39 @@ class TrainerClientService:
             resolved_default_meeting_location=resolved_default_location,
         )
 
-    def _require_client_assignment(self, trainer_context: TrainerContext, client_id: str) -> dict[str, Any]:
-        trainer_id = trainer_context.trainer_id
+    def _require_trainer_context(self, trainer_context: TrainerContext) -> tuple[str, str]:
+        trainer_id = str(trainer_context.trainer_id or "").strip()
+        tenant_id = str(trainer_context.tenant_id or "").strip()
         if not trainer_id:
             raise ValueError("No trainer context found")
+        if not tenant_id:
+            raise ValueError("No tenant context found")
+        return trainer_id, tenant_id
+
+    def _require_client_assignment(self, trainer_context: TrainerContext, client_id: str) -> dict[str, Any]:
+        trainer_id, _tenant_id = self._require_trainer_context(trainer_context)
         client_row = self.repository.get_client_for_trainer(trainer_id, client_id)
         if not client_row:
             raise ValueError("Client not found for trainer")
         return client_row
+
+    def _client_matches_search(
+        self,
+        client_row: dict[str, Any],
+        normalized_search: str | None,
+    ) -> bool:
+        if not normalized_search:
+            return True
+        haystacks = [
+            self._client_name(client_row).lower(),
+            str(client_row.get("id") or "").strip().lower(),
+            str(client_row.get("user_id") or "").strip().lower(),
+        ]
+        return any(normalized_search in haystack for haystack in haystacks if haystack)
+
+    def _client_belongs_to_tenant(self, client_row: dict[str, Any], tenant_id: str) -> bool:
+        row_tenant_id = str(client_row.get("tenant_id") or "").strip()
+        return not row_tenant_id or row_tenant_id == tenant_id
 
     def _get_or_create_profile(self, client_id: str) -> dict[str, Any]:
         profile = self.repository.get_profile(client_id)
@@ -689,6 +861,30 @@ class TrainerClientService:
             updated_at=self._coerce_datetime(row.get("updated_at")),
         )
 
+    def _to_client_identity(self, row: dict[str, Any]) -> TrainerClientIdentity:
+        return TrainerClientIdentity(
+            client_id=str(row.get("id") or ""),
+            client_name=self._client_name(row),
+            tenant_id=str(row.get("tenant_id")) if row.get("tenant_id") else None,
+            user_id=str(row.get("user_id")) if row.get("user_id") else None,
+            created_at=self._coerce_datetime(row.get("created_at")),
+            is_assigned_to_trainer=bool(row.get("assigned_trainer_id")),
+        )
+
+    def _to_invite_code_record(self, row: dict[str, Any]) -> TrainerClientInviteCodeRecord:
+        metadata = row.get("metadata")
+        return TrainerClientInviteCodeRecord(
+            id=str(row.get("id") or ""),
+            code=str(row.get("code") or ""),
+            trainer_id=str(row.get("trainer_id") or ""),
+            tenant_id=str(row.get("tenant_id") or ""),
+            is_active=bool(row.get("is_active", True)),
+            expires_at=self._coerce_datetime(row.get("expires_at")),
+            metadata=metadata if isinstance(metadata, dict) else {},
+            created_at=self._coerce_datetime(row.get("created_at")),
+            updated_at=self._coerce_datetime(row.get("updated_at")),
+        )
+
     def _to_memory_record(self, row: dict[str, Any]) -> TrainerMemoryRecord:
         value_json = row.get("value_json")
         value = value_json if isinstance(value_json, dict) else {}
@@ -803,6 +999,43 @@ class TrainerClientService:
             return None
         normalized = value.strip()
         return normalized or None
+
+    def _normalize_client_name_for_write(self, value: Any) -> str:
+        normalized = self._normalize_display_name(value)
+        if not normalized:
+            raise ValueError("Client name cannot be empty")
+        if len(normalized) > 160:
+            raise ValueError("Client name must be 160 characters or fewer")
+        return normalized
+
+    def _normalize_search_term(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip().lower()
+        return normalized or None
+
+    def _normalize_invite_code_for_write(self, value: Any) -> str | None:
+        if value is None:
+            return None
+        normalized = str(value).strip().upper()
+        if not normalized:
+            return None
+        allowed = set(string.ascii_uppercase + string.digits + "-_")
+        if any(ch not in allowed for ch in normalized):
+            raise ValueError("Invite code must use only letters, numbers, '-' or '_'")
+        if len(normalized) > 32:
+            raise ValueError("Invite code must be 32 characters or fewer")
+        return normalized
+
+    def _generate_invite_code(self) -> str:
+        for _attempt in range(10):
+            candidate = "".join(
+                secrets.choice(self.INVITE_CODE_ALPHABET)
+                for _ in range(self.INVITE_CODE_LENGTH)
+            )
+            if not self.repository.get_invite_code_by_code(code=candidate):
+                return candidate
+        raise ValueError("Unable to generate unique invite code")
 
     def _normalize_mode(self, mode: Any) -> str | None:
         if not mode:

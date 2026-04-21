@@ -16,6 +16,45 @@ class TrainerClientIdentity(BaseModel):
     client_name: str
     tenant_id: str | None = None
     user_id: str | None = None
+    created_at: datetime | None = None
+    is_assigned_to_trainer: bool = True
+
+
+class TrainerClientListResponse(BaseModel):
+    items: list[TrainerClientIdentity] = Field(default_factory=list)
+    count: int = 0
+    limit: int = 50
+    offset: int = 0
+    search: str | None = None
+
+
+class TrainerClientUpdateRequest(BaseModel):
+    client_name: str
+
+
+class TrainerClientInviteCodeRecord(BaseModel):
+    id: str
+    code: str
+    trainer_id: str
+    tenant_id: str
+    is_active: bool = True
+    expires_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class TrainerClientInviteCodeListResponse(BaseModel):
+    items: list[TrainerClientInviteCodeRecord] = Field(default_factory=list)
+    count: int = 0
+    limit: int = 50
+    offset: int = 0
+
+
+class TrainerClientInviteCodeCreateRequest(BaseModel):
+    code: str | None = None
+    expires_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class TrainerClientActivitySummary(BaseModel):

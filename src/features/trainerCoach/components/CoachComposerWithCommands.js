@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -14,6 +14,9 @@ import { theme } from '../../../../lib/theme';
 import { resolveAssistantDisplayName } from '../../messaging';
 
 const COMPOSER_SURFACE_BORDER = 'rgba(255, 255, 255, 0.05)';
+const COMPOSER_SURFACE_BASE = 'rgba(13, 22, 38, 0.86)';
+const COMPOSER_SURFACE_FOCUSED_BORDER = 'rgba(143, 178, 255, 0.4)';
+const COMPOSER_PLACEHOLDER = 'rgba(199, 214, 243, 0.74)';
 
 const COMMANDS = [
   '/program',
@@ -36,6 +39,7 @@ export default function CoachComposerWithCommands({
     () => resolveAssistantDisplayName(assistantDisplayName),
     [assistantDisplayName],
   );
+  const [isFocused, setIsFocused] = useState(false);
   const normalized = String(value || '').trim().toLowerCase();
   const commandSuggestions = useMemo(() => {
     if (!normalized.startsWith('/')) {
@@ -82,9 +86,9 @@ export default function CoachComposerWithCommands({
               <LinearGradient
                 pointerEvents="none"
                 colors={[
-                  'rgba(247, 251, 255, 0.12)',
-                  'rgba(247, 251, 255, 0.03)',
-                  'rgba(7, 13, 24, 0.20)',
+                  'rgba(241, 248, 255, 0.1)',
+                  'rgba(241, 248, 255, 0.02)',
+                  'rgba(7, 13, 24, 0.26)',
                 ]}
                 locations={[0, 0.52, 1]}
                 start={{ x: 0.5, y: 0 }}
@@ -92,18 +96,25 @@ export default function CoachComposerWithCommands({
                 style={StyleSheet.absoluteFill}
               />
               <View pointerEvents="none" style={styles.commandChipTopLight} />
-              <ModeText variant="caption" tone="secondary" style={styles.commandChipText}>{command}</ModeText>
+              <ModeText variant="caption" tone="secondary" style={styles.commandChipText}>
+                {command}
+              </ModeText>
             </Pressable>
           ))}
         </View>
       ) : null}
       <View style={styles.composerShadowWrap}>
-        <View style={styles.composerSurface}>
+        <View
+          style={[
+            styles.composerSurface,
+            isFocused && styles.composerSurfaceFocused,
+          ]}
+        >
           <LinearGradient
             pointerEvents="none"
             colors={[
-              'rgba(244, 250, 255, 0.05)',
-              'rgba(166, 198, 246, 0.035)',
+              'rgba(244, 250, 255, 0.065)',
+              'rgba(166, 198, 246, 0.025)',
               'rgba(5, 10, 19, 0.24)',
             ]}
             locations={[0.12, 0.56, 1]}
@@ -111,6 +122,7 @@ export default function CoachComposerWithCommands({
             end={{ x: 0.5, y: 1 }}
             style={StyleSheet.absoluteFill}
           />
+          <View pointerEvents="none" style={styles.composerSeparator} />
           <LinearGradient
             pointerEvents="none"
             colors={[
@@ -135,12 +147,15 @@ export default function CoachComposerWithCommands({
             value={value}
             onChangeText={onChangeText}
             placeholder={`Message ${resolvedAssistantDisplayName} or type / for commands`}
-            placeholderTextColor={theme.colors.text.tertiary}
+            placeholderTextColor={COMPOSER_PLACEHOLDER}
             style={styles.input}
             multiline
             editable={!disabled && !isSubmitting}
             maxLength={1400}
             textAlignVertical="top"
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            selectionColor={theme.colors.accent.primary}
           />
           <Pressable
             onPress={onSubmit}
@@ -200,9 +215,11 @@ const styles = StyleSheet.create({
   },
   commandChip: {
     borderRadius: theme.radii.pill,
-    backgroundColor: theme.colors.surface.base,
+    borderWidth: 1,
+    borderColor: 'rgba(220, 236, 255, 0.18)',
+    backgroundColor: 'rgba(10, 19, 33, 0.82)',
     paddingHorizontal: theme.spacing[2],
-    paddingVertical: 6,
+    paddingVertical: 5,
     overflow: 'hidden',
   },
   commandChipTopLight: {
@@ -212,10 +229,11 @@ const styles = StyleSheet.create({
     top: 2,
     height: 1,
     borderRadius: 1,
-    backgroundColor: 'rgba(248, 252, 255, 0.2)',
+    backgroundColor: 'rgba(248, 252, 255, 0.16)',
   },
   commandChipText: {
     zIndex: 2,
+    fontWeight: '600',
   },
   commandChipPressed: {
     opacity: theme.interaction.pressedOpacity,
@@ -225,19 +243,34 @@ const styles = StyleSheet.create({
   },
   composerShadowWrap: {
     borderRadius: theme.radii.xl,
-    ...theme.shadows.soft,
+    shadowColor: '#020A14',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 18,
+    elevation: 6,
   },
   composerSurface: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     gap: theme.spacing[1],
     borderRadius: theme.radii.xl,
-    backgroundColor: theme.colors.surface.hero,
+    backgroundColor: COMPOSER_SURFACE_BASE,
     borderWidth: 1,
     borderColor: COMPOSER_SURFACE_BORDER,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     overflow: 'hidden',
+  },
+  composerSurfaceFocused: {
+    borderColor: COMPOSER_SURFACE_FOCUSED_BORDER,
+  },
+  composerSeparator: {
+    position: 'absolute',
+    left: theme.spacing[2],
+    right: theme.spacing[2],
+    top: 0,
+    height: 1,
+    backgroundColor: 'rgba(232, 243, 255, 0.11)',
   },
   composerAmbientLight: {
     position: 'absolute',
@@ -252,11 +285,11 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    minHeight: 44,
+    minHeight: 42,
     maxHeight: 120,
     fontSize: theme.typography.body1.fontSize,
     lineHeight: theme.typography.body1.lineHeight,
-    color: theme.colors.text.primary,
+    color: 'rgba(235, 243, 255, 0.96)',
     paddingTop: theme.spacing[1],
     paddingBottom: theme.spacing[1],
   },

@@ -10,14 +10,161 @@ class TrainerClientRepository:
     def __init__(self, supabase: Client):
         self.supabase = supabase
 
+    def list_clients_for_trainer(self, trainer_id: str) -> list[dict[str, Any]]:
+        response = (
+            self.supabase
+            .table("clients")
+            .select("id, tenant_id, user_id, client_name, assigned_trainer_id, created_at")
+            .eq("assigned_trainer_id", trainer_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return response.data or []
+
     def get_client_for_trainer(self, trainer_id: str, client_id: str) -> dict[str, Any] | None:
         response = (
             self.supabase
             .table("clients")
-            .select("id, tenant_id, user_id, client_name, assigned_trainer_id")
+            .select("id, tenant_id, user_id, client_name, assigned_trainer_id, created_at")
             .eq("assigned_trainer_id", trainer_id)
             .eq("id", client_id)
             .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def update_client_for_trainer(
+        self,
+        trainer_id: str,
+        client_id: str,
+        fields: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("clients")
+            .update(fields)
+            .eq("assigned_trainer_id", trainer_id)
+            .eq("id", client_id)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def get_latest_active_assignment(
+        self,
+        trainer_id: str,
+        client_id: str,
+    ) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("client_trainer_assignments")
+            .select("id, client_id, trainer_id, assigned_at, unassigned_at")
+            .eq("trainer_id", trainer_id)
+            .eq("client_id", client_id)
+            .is_("unassigned_at", "null")
+            .order("assigned_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def mark_assignment_unassigned(
+        self,
+        assignment_id: str,
+        *,
+        unassigned_at: str,
+    ) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("client_trainer_assignments")
+            .update({"unassigned_at": unassigned_at})
+            .eq("id", assignment_id)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def list_invite_codes_for_trainer(
+        self,
+        trainer_id: str,
+        tenant_id: str,
+    ) -> list[dict[str, Any]]:
+        response = (
+            self.supabase
+            .table("trainer_invite_codes")
+            .select("id, code, trainer_id, tenant_id, is_active, expires_at, metadata, created_at, updated_at")
+            .eq("trainer_id", trainer_id)
+            .eq("tenant_id", tenant_id)
+            .order("is_active", desc=True)
+            .order("created_at", desc=True)
+            .execute()
+        )
+        return response.data or []
+
+    def get_invite_code_for_trainer(
+        self,
+        trainer_id: str,
+        tenant_id: str,
+        invite_id: str,
+    ) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("trainer_invite_codes")
+            .select("id, code, trainer_id, tenant_id, is_active, expires_at, metadata, created_at, updated_at")
+            .eq("trainer_id", trainer_id)
+            .eq("tenant_id", tenant_id)
+            .eq("id", invite_id)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def get_invite_code_by_code(
+        self,
+        *,
+        code: str,
+    ) -> dict[str, Any] | None:
+        normalized = code.strip().lower()
+        rows = (
+            self.supabase
+            .table("trainer_invite_codes")
+            .select("id, code, trainer_id, tenant_id, is_active, expires_at, metadata, created_at, updated_at")
+            .eq("code", code.strip())
+            .limit(1)
+            .execute()
+        ).data or []
+        if rows:
+            return rows[0]
+
+        fallback_rows = (
+            self.supabase
+            .table("trainer_invite_codes")
+            .select("id, code, trainer_id, tenant_id, is_active, expires_at, metadata, created_at, updated_at")
+            .execute()
+        ).data or []
+        for row in fallback_rows:
+            if str(row.get("code") or "").strip().lower() == normalized:
+                return row
+        return None
+
+    def create_invite_code(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        response = self.supabase.table("trainer_invite_codes").insert(payload).execute()
+        return (response.data or [None])[0]
+
+    def update_invite_code_for_trainer(
+        self,
+        trainer_id: str,
+        tenant_id: str,
+        invite_id: str,
+        fields: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        payload = dict(fields)
+        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        response = (
+            self.supabase
+            .table("trainer_invite_codes")
+            .update(payload)
+            .eq("trainer_id", trainer_id)
+            .eq("tenant_id", tenant_id)
+            .eq("id", invite_id)
             .execute()
         )
         return response.data[0] if response.data else None

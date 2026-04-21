@@ -541,7 +541,7 @@ describe('TrainerCoachScreen', () => {
     expect(safeScreen.props.includeBottomInset).toBe(false);
 
     const streamList = tree.root.findByType('MockCoachStreamList');
-    expect(streamList.props.contentBottomPadding).toBe(136);
+    expect(streamList.props.contentBottomPadding).toBe(148);
 
     await act(async () => {
       tree.unmount();
@@ -589,7 +589,7 @@ describe('TrainerCoachScreen', () => {
 
     let jumpButton = tree.root.findByProps({ testID: 'trainer-coach-jump-latest' });
     let jumpStyle = StyleSheet.flatten(jumpButton.props.style({ pressed: false }));
-    expect(jumpStyle.bottom).toBe(148);
+    expect(jumpStyle.bottom).toBe(158);
 
     act(() => {
       keyboardListeners[openEventName]?.({});
@@ -597,10 +597,10 @@ describe('TrainerCoachScreen', () => {
 
     jumpButton = tree.root.findByProps({ testID: 'trainer-coach-jump-latest' });
     jumpStyle = StyleSheet.flatten(jumpButton.props.style({ pressed: false }));
-    expect(jumpStyle.bottom).toBe(72);
+    expect(jumpStyle.bottom).toBe(82);
 
     const updatedStreamList = tree.root.findByType('MockCoachStreamList');
-    expect(updatedStreamList.props.contentBottomPadding).toBe(60);
+    expect(updatedStreamList.props.contentBottomPadding).toBe(72);
 
     await act(async () => {
       keyboardListeners[closeEventName]?.();
@@ -992,6 +992,116 @@ describe('TrainerCoachScreen', () => {
 
     streamList = tree.root.findByType('MockCoachStreamList');
     expect(streamList.props.forceScrollSignal).toBe(postSendSignal);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('passes threadKey and increments anchor signal when trainer thread changes', async () => {
+    mockUseTrainerCoachWorkspace.mockReturnValue(buildWorkspaceSnapshot({
+      state: {
+        ...buildWorkspaceSnapshot().state,
+        stream: [
+          {
+            id: 'assistant-thread-change',
+            kind: 'internal_ai_private',
+            text: 'Thread context.',
+            status: 'confirmed',
+          },
+        ],
+      },
+    }));
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-a"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    let streamList = tree.root.findByType('MockCoachStreamList');
+    const initialAnchorSignal = streamList.props.anchorToLatestSignal;
+    expect(streamList.props.threadKey).toBe('trainer-a');
+
+    await act(async () => {
+      tree.update(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-b"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    streamList = tree.root.findByType('MockCoachStreamList');
+    expect(streamList.props.threadKey).toBe('trainer-b');
+    expect(streamList.props.anchorToLatestSignal).toBeGreaterThan(initialAnchorSignal);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('defaults the summary strip to collapsed and keeps jump visible for pending below-fold messages', async () => {
+    const snapshot = buildWorkspaceSnapshot({
+      state: {
+        ...buildWorkspaceSnapshot().state,
+        summary: {
+          title: '3 items need attention',
+          subtitle: 'Pending review',
+          actions: [],
+          state: 'drafts_pending',
+        },
+        stream: [
+          {
+            id: 'assistant-pending',
+            kind: 'internal_ai_private',
+            text: 'New draft is ready.',
+            status: 'confirmed',
+          },
+        ],
+      },
+    });
+    mockUseTrainerCoachWorkspace.mockReturnValue(snapshot);
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-pending"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    const summaryBar = tree.root.findByType('MockTodaySummaryBar');
+    expect(summaryBar.props.collapsed).toBe(true);
+
+    const streamList = tree.root.findByType('MockCoachStreamList');
+    act(() => {
+      streamList.props.onScrollMetricsChange?.({
+        offset: 280,
+        contentHeight: 1320,
+        layoutHeight: 500,
+        nearBottom: false,
+      });
+      streamList.props.onNearBottomChange?.(false);
+      streamList.props.onNewItemsWhileAwayFromBottom?.({ addedCount: 1 });
+    });
+
+    expect(() => tree.root.findByProps({ testID: 'trainer-coach-jump-latest' })).not.toThrow();
+
+    act(() => {
+      streamList.props.onNearBottomChange?.(true);
+    });
+
+    expect(() => tree.root.findByProps({ testID: 'trainer-coach-jump-latest' })).toThrow();
 
     await act(async () => {
       tree.unmount();

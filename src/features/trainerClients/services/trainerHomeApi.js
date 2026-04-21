@@ -104,6 +104,99 @@ export async function getTrainerClientDetail({
   return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}/detail${suffix}`, { accessToken });
 }
 
+export async function listTrainerClients({
+  accessToken,
+  query = null,
+  limit = 50,
+  offset = 0,
+} = {}) {
+  const params = [];
+  if (typeof query === 'string' && query.trim().length > 0) {
+    params.push(`search=${encodeURIComponent(query.trim())}`);
+  }
+  if (typeof limit === 'number') {
+    params.push(`limit=${encodeURIComponent(String(limit))}`);
+  }
+  if (typeof offset === 'number') {
+    params.push(`offset=${encodeURIComponent(String(offset))}`);
+  }
+  const suffix = params.length > 0 ? `?${params.join('&')}` : '';
+  return requestTrainerApi(`/api/v1/trainer-clients${suffix}`, { accessToken });
+}
+
+export async function updateTrainerClient({
+  accessToken,
+  clientId,
+  clientName,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}`, {
+    accessToken,
+    method: 'PATCH',
+    body: {
+      client_name: clientName,
+    },
+  });
+}
+
+export async function removeTrainerClient({
+  accessToken,
+  clientId,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}`, {
+    accessToken,
+    method: 'DELETE',
+  });
+}
+
+export async function listTrainerInviteCodes({
+  accessToken,
+} = {}) {
+  return requestTrainerApi('/api/v1/trainer-clients/invite-codes', { accessToken });
+}
+
+export async function createTrainerInviteCode({
+  accessToken,
+  code,
+  label,
+  expiresAt,
+  maxUses,
+  metadata,
+} = {}) {
+  const body = {};
+  if (typeof code === 'string' && code.trim().length > 0) {
+    body.code = code.trim();
+  }
+  if (typeof label === 'string' && label.trim().length > 0) {
+    body.label = label.trim();
+  }
+  if (typeof expiresAt === 'string' && expiresAt.trim().length > 0) {
+    body.expires_at = expiresAt.trim();
+  }
+  if (typeof maxUses === 'number') {
+    body.max_uses = maxUses;
+  }
+  if (metadata && typeof metadata === 'object') {
+    body.metadata = metadata;
+  }
+  return requestTrainerApi('/api/v1/trainer-clients/invite-codes', {
+    accessToken,
+    method: 'POST',
+    body,
+  });
+}
+
+export async function deactivateTrainerInviteCode({
+  accessToken,
+  inviteId,
+}) {
+  return requestTrainerApi(`/api/v1/trainer-clients/invite-codes/${encodeURIComponent(inviteId)}`, {
+    accessToken,
+    method: 'DELETE',
+  });
+}
+
 export async function listTrainerClientMemory({
   accessToken,
   clientId,

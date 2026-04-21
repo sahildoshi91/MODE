@@ -198,6 +198,44 @@ describe('CoachStreamList', () => {
     });
   });
 
+  it('reports appended items below fold when user is away from bottom', async () => {
+    const listHandle = buildListHandle();
+    const listRef = { current: listHandle };
+    const onNewItemsWhileAwayFromBottom = jest.fn();
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachStreamList
+          streamItems={[{ id: 'item-1', kind: 'system_confirmation', text: 'one' }]}
+          listRef={listRef}
+          onNewItemsWhileAwayFromBottom={onNewItemsWhileAwayFromBottom}
+        />,
+      );
+    });
+    markListReady(tree, { offset: 0 });
+    listHandle.scrollToEnd.mockClear();
+
+    await act(async () => {
+      tree.update(
+        <CoachStreamList
+          streamItems={[
+            { id: 'item-1', kind: 'system_confirmation', text: 'one' },
+            { id: 'item-2', kind: 'system_confirmation', text: 'two' },
+          ]}
+          listRef={listRef}
+          onNewItemsWhileAwayFromBottom={onNewItemsWhileAwayFromBottom}
+        />,
+      );
+    });
+
+    expect(onNewItemsWhileAwayFromBottom).toHaveBeenCalledWith({ addedCount: 1 });
+    expect(listHandle.scrollToEnd).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('supports force-scroll triggers via forceScrollSignal updates', async () => {
     const listHandle = buildListHandle();
     const listRef = { current: listHandle };
@@ -223,6 +261,73 @@ describe('CoachStreamList', () => {
         />,
       );
     });
+
+    expect(listHandle.scrollToEnd).toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('supports explicit anchor-to-latest signals independent of force-scroll signal', async () => {
+    const listHandle = buildListHandle();
+    const listRef = { current: listHandle };
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachStreamList
+          streamItems={[{ id: 'item-1', kind: 'system_confirmation', text: 'one' }]}
+          listRef={listRef}
+          anchorToLatestSignal={0}
+        />,
+      );
+    });
+    markListReady(tree);
+    listHandle.scrollToEnd.mockClear();
+
+    await act(async () => {
+      tree.update(
+        <CoachStreamList
+          streamItems={[{ id: 'item-1', kind: 'system_confirmation', text: 'one' }]}
+          listRef={listRef}
+          anchorToLatestSignal={1}
+        />,
+      );
+    });
+
+    expect(listHandle.scrollToEnd).toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('resets initial anchor flow when threadKey changes', async () => {
+    const listHandle = buildListHandle();
+    const listRef = { current: listHandle };
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachStreamList
+          streamItems={[{ id: 'item-1', kind: 'system_confirmation', text: 'one' }]}
+          listRef={listRef}
+          threadKey="thread-a"
+        />,
+      );
+    });
+    markListReady(tree);
+    listHandle.scrollToEnd.mockClear();
+
+    await act(async () => {
+      tree.update(
+        <CoachStreamList
+          streamItems={[{ id: 'item-1', kind: 'system_confirmation', text: 'one' }]}
+          listRef={listRef}
+          threadKey="thread-b"
+        />,
+      );
+    });
+    markListReady(tree);
 
     expect(listHandle.scrollToEnd).toHaveBeenCalled();
 
@@ -300,6 +405,31 @@ describe('CoachStreamList', () => {
       expect.objectContaining({ offset: 180 }),
     );
     expect(listHandle.scrollToEnd).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('suppresses duplicate role labels for consecutive messages from the same speaker', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachStreamList
+          streamItems={[
+            { id: 'item-1', kind: 'trainer_input', text: 'First trainer message' },
+            { id: 'item-2', kind: 'trainer_input', text: 'Second trainer message' },
+            { id: 'item-3', kind: 'internal_ai_private', text: 'Coach reply' },
+          ]}
+        />,
+      );
+    });
+
+    const renderedItems = tree.root.findAllByType('MockCoachStreamItem');
+    expect(renderedItems).toHaveLength(3);
+    expect(renderedItems[0].props.showRoleLabel).toBe(true);
+    expect(renderedItems[1].props.showRoleLabel).toBe(false);
+    expect(renderedItems[2].props.showRoleLabel).toBe(true);
 
     await act(async () => {
       tree.unmount();

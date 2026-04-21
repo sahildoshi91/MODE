@@ -19,6 +19,37 @@ from app.main import app
 
 class FakeTrainerClientService:
     def __init__(self):
+        self.client_rows = [
+            {
+                "client_id": "client-1",
+                "client_name": "Taylor",
+                "tenant_id": "tenant-1",
+                "user_id": "client-user-1",
+                "created_at": "2026-04-10T10:00:00+00:00",
+                "is_assigned_to_trainer": True,
+            },
+            {
+                "client_id": "client-2",
+                "client_name": "Jordan",
+                "tenant_id": "tenant-1",
+                "user_id": "client-user-2",
+                "created_at": "2026-04-09T10:00:00+00:00",
+                "is_assigned_to_trainer": True,
+            },
+        ]
+        self.invite_code_rows = [
+            {
+                "id": "invite-1",
+                "code": "MODE1234",
+                "trainer_id": "trainer-123",
+                "tenant_id": "tenant-1",
+                "is_active": True,
+                "expires_at": None,
+                "metadata": {"source": "system"},
+                "created_at": "2026-04-11T09:00:00+00:00",
+                "updated_at": "2026-04-11T09:00:00+00:00",
+            }
+        ]
         self.meeting_locations = {
             ("client-1", "2026-04-11"): "Downtown Performance Lab",
         }
@@ -50,19 +81,97 @@ class FakeTrainerClientService:
             }
         ]
 
+    def _get_client_row(self, client_id):
+        for row in self.client_rows:
+            if row["client_id"] == client_id:
+                return row
+        raise ValueError("Client not found for trainer")
+
+    def list_clients(self, trainer_context, search=None, limit=50, offset=0):
+        del trainer_context
+        normalized_search = search.strip().lower() if isinstance(search, str) and search.strip() else None
+        rows = self.client_rows
+        if normalized_search:
+            rows = [
+                row
+                for row in rows
+                if normalized_search in row["client_name"].lower()
+                or normalized_search in row["client_id"].lower()
+                or normalized_search in row["user_id"].lower()
+            ]
+        return {
+            "items": rows[offset:offset + limit],
+            "count": len(rows),
+            "limit": limit,
+            "offset": offset,
+            "search": normalized_search,
+        }
+
+    def update_client(self, trainer_context, client_id, request):
+        del trainer_context
+        row = self._get_client_row(client_id)
+        normalized_name = request.client_name.strip()
+        if not normalized_name:
+            raise ValueError("Client name cannot be empty")
+        row["client_name"] = normalized_name
+        return row
+
+    def remove_client(self, trainer_context, client_id):
+        del trainer_context
+        row = self._get_client_row(client_id)
+        row["is_assigned_to_trainer"] = False
+        return row
+
+    def list_invite_codes(self, trainer_context, limit=50, offset=0):
+        del trainer_context
+        return {
+            "items": self.invite_code_rows[offset:offset + limit],
+            "count": len(self.invite_code_rows),
+            "limit": limit,
+            "offset": offset,
+        }
+
+    def create_invite_code(self, trainer_context, request):
+        del trainer_context
+        code = request.code or "AUTO1234"
+        normalized_code = code.strip().upper()
+        if any(row["code"].upper() == normalized_code for row in self.invite_code_rows):
+            raise ValueError("Invite code already exists")
+        created = {
+            "id": f"invite-{len(self.invite_code_rows) + 1}",
+            "code": normalized_code,
+            "trainer_id": "trainer-123",
+            "tenant_id": "tenant-1",
+            "is_active": True,
+            "expires_at": request.expires_at.isoformat() if request.expires_at else None,
+            "metadata": request.metadata,
+            "created_at": "2026-04-12T09:00:00+00:00",
+            "updated_at": "2026-04-12T09:00:00+00:00",
+        }
+        self.invite_code_rows = [created, *self.invite_code_rows]
+        return created
+
+    def deactivate_invite_code(self, trainer_context, invite_id):
+        del trainer_context
+        for row in self.invite_code_rows:
+            if row["id"] == invite_id:
+                row["is_active"] = False
+                row["updated_at"] = "2026-04-12T10:00:00+00:00"
+                return row
+        raise ValueError("Invite code not found")
+
     def get_client_detail(self, trainer_context, client_id, target_date=None):
         del trainer_context, target_date
-        if client_id != "client-1":
-            raise ValueError("Client not found for trainer")
+        client = self._get_client_row(client_id)
         return {
             "client": {
-                "client_id": "client-1",
-                "client_name": "Taylor",
-                "tenant_id": "tenant-1",
-                "user_id": "client-user-1",
+                "client_id": client["client_id"],
+                "client_name": client["client_name"],
+                "tenant_id": client["tenant_id"],
+                "user_id": client["user_id"],
             },
             "profile_snapshot": {
-                "client_id": "client-1",
+                "client_id": client["client_id"],
                 "primary_goal": "Build strength",
                 "onboarding_status": "completed",
             },
@@ -79,7 +188,7 @@ class FakeTrainerClientService:
                 "session_type": "strength",
                 "session_start_at": "2026-04-11T17:00:00+00:00",
                 "session_end_at": "2026-04-11T18:00:00+00:00",
-                "meeting_location": self.meeting_locations.get(("client-1", "2026-04-11")),
+                "meeting_location": self.meeting_locations.get((client["client_id"], "2026-04-11")),
             },
             "memory_counts": {
                 "total": len(self.memory_rows),
@@ -385,6 +494,58 @@ class TrainerClientsApiTests(unittest.TestCase):
         self.assertEqual(location_response.status_code, 200)
         self.assertEqual(location_response.json()["meeting_location"], "Midtown Strength Studio")
 
+    def test_list_update_remove_and_invite_code_routes(self):
+        list_response = self.client.get(
+            "/api/v1/trainer-clients?search=tay&limit=1&offset=0",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.json()["count"], 1)
+        self.assertEqual(len(list_response.json()["items"]), 1)
+        self.assertEqual(list_response.json()["items"][0]["client_id"], "client-1")
+
+        patch_response = self.client.patch(
+            "/api/v1/trainer-clients/client-1",
+            json={"client_name": "Taylor Swift"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(patch_response.status_code, 200)
+        self.assertEqual(patch_response.json()["client_name"], "Taylor Swift")
+        self.assertTrue(patch_response.json()["is_assigned_to_trainer"])
+
+        delete_response = self.client.delete(
+            "/api/v1/trainer-clients/client-1",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(delete_response.json()["client_id"], "client-1")
+        self.assertFalse(delete_response.json()["is_assigned_to_trainer"])
+
+        invite_list_response = self.client.get(
+            "/api/v1/trainer-clients/invite-codes",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(invite_list_response.status_code, 200)
+        self.assertEqual(invite_list_response.json()["count"], 1)
+        self.assertEqual(invite_list_response.json()["items"][0]["code"], "MODE1234")
+
+        invite_create_response = self.client.post(
+            "/api/v1/trainer-clients/invite-codes",
+            json={"code": "newcode42", "metadata": {"source": "hub"}},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(invite_create_response.status_code, 200)
+        self.assertEqual(invite_create_response.json()["code"], "NEWCODE42")
+        self.assertTrue(invite_create_response.json()["is_active"])
+
+        invite_delete_response = self.client.delete(
+            "/api/v1/trainer-clients/invite-codes/invite-1",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(invite_delete_response.status_code, 200)
+        self.assertEqual(invite_delete_response.json()["id"], "invite-1")
+        self.assertFalse(invite_delete_response.json()["is_active"])
+
     def test_trainer_endpoints_reject_non_trainer_actor(self):
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
             id="not-the-trainer",
@@ -406,6 +567,14 @@ class TrainerClientsApiTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "Memory not found")
+
+    def test_invite_code_not_found_maps_to_404(self):
+        response = self.client.delete(
+            "/api/v1/trainer-clients/invite-codes/missing-id",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "Invite code not found")
 
     def test_meeting_location_requires_existing_scheduled_session(self):
         response = self.client.patch(

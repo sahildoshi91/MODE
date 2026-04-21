@@ -31,7 +31,7 @@ describe('CoachStreamItem', () => {
     await expectLabelForKind('client_message_sent', 'Client Sent');
   });
 
-  it('renders trainer input text in white for readability on trainer bubbles', async () => {
+  it('renders trainer input text with high-contrast color for readability', async () => {
     let tree;
     await act(async () => {
       tree = renderer.create(
@@ -43,7 +43,7 @@ describe('CoachStreamItem', () => {
       (node) => node.type === Text && node?.props?.children === 'Sample text',
     );
     const flattened = StyleSheet.flatten(messageNode.props.style);
-    expect(flattened?.color).toBe('#FFFFFF');
+    expect(flattened?.color).toBe('rgba(245, 250, 255, 0.96)');
 
     await act(async () => {
       tree.unmount();
@@ -81,6 +81,50 @@ describe('CoachStreamItem', () => {
       (node) => node.type === Text && node?.props?.children === '**Streaming** update',
     );
     expect(pendingTextNode).toBeTruthy();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('suppresses role labels when showRoleLabel is false', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachStreamItem
+          item={{ kind: 'trainer_input', text: 'Follow-up message' }}
+          showRoleLabel={false}
+        />,
+      );
+    });
+
+    const labelNodes = tree.root.findAll((node) => node?.props?.children === 'Trainer');
+    expect(labelNodes).toHaveLength(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('renders trainer slash commands as compact utility chips', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachStreamItem item={{ kind: 'trainer_input', text: '/program' }} />,
+      );
+    });
+
+    const commandTextNode = tree.root.find(
+      (node) => node.type === Text && node?.props?.children === '/program',
+    );
+    expect(commandTextNode).toBeTruthy();
+
+    const commandChipNode = tree.root.find(
+      (node) => node?.props?.style && StyleSheet.flatten(node.props.style)?.maxWidth === '82%',
+    );
+    const commandChipStyle = StyleSheet.flatten(commandChipNode.props.style);
+    expect(commandChipStyle?.borderRadius).toBeGreaterThan(100);
+    expect(commandChipStyle?.borderWidth).toBe(1);
 
     await act(async () => {
       tree.unmount();

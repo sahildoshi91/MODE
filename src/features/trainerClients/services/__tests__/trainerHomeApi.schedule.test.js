@@ -8,13 +8,19 @@ jest.mock('../../../../services/apiNetworkError', () => ({
 
 import { fetchWithApiFallback } from '../../../../services/apiRequest';
 import {
+  createTrainerInviteCode,
   createTrainerClientScheduleException,
+  deactivateTrainerInviteCode,
   deleteTrainerClientScheduleException,
   getMyTrainerSchedule,
   getTrainerClientSchedulePreferences,
   getTrainerSettingsMe,
+  listTrainerClients,
+  listTrainerInviteCodes,
   patchTrainerClientSchedulePreferences,
   patchTrainerSettingsMe,
+  removeTrainerClient,
+  updateTrainerClient,
 } from '../trainerHomeApi';
 
 function createJsonResponse(payload = {}, { ok = true, status = 200 } = {}) {
@@ -143,6 +149,82 @@ describe('trainerHomeApi schedule endpoints', () => {
         headers: expect.objectContaining({
           Authorization: 'Bearer client-token',
         }),
+      }),
+    );
+  });
+
+  it('calls trainer client management and invite-code endpoints', async () => {
+    await listTrainerClients({
+      accessToken: 'trainer-token',
+      query: 'tay',
+      limit: 1,
+      offset: 0,
+    });
+    await updateTrainerClient({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+      clientName: 'Taylor Swift',
+    });
+    await removeTrainerClient({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+    });
+    await listTrainerInviteCodes({
+      accessToken: 'trainer-token',
+    });
+    await createTrainerInviteCode({
+      accessToken: 'trainer-token',
+      code: 'newcode42',
+      metadata: { source: 'hub' },
+    });
+    await deactivateTrainerInviteCode({
+      accessToken: 'trainer-token',
+      inviteId: 'invite-1',
+    });
+
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/trainer-clients?search=tay&limit=1&offset=0',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/trainer-clients/client-1',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({
+          client_name: 'Taylor Swift',
+        }),
+      }),
+    );
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/trainer-clients/client-1',
+      expect.objectContaining({
+        method: 'DELETE',
+      }),
+    );
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      4,
+      '/api/v1/trainer-clients/invite-codes',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      5,
+      '/api/v1/trainer-clients/invite-codes',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          code: 'newcode42',
+          metadata: { source: 'hub' },
+        }),
+      }),
+    );
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      6,
+      '/api/v1/trainer-clients/invite-codes/invite-1',
+      expect.objectContaining({
+        method: 'DELETE',
       }),
     );
   });

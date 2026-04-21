@@ -8,9 +8,9 @@ import {
   View,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { BlurView } from 'expo-blur';
 
 import {
-  HeaderBar,
   ModeButton,
   ModeCard,
   ModeText,
@@ -32,7 +32,9 @@ import { useTrainerCoachWorkspace } from '../hooks/useTrainerCoachWorkspace';
 const SUMMARY_COLLAPSE_SCROLL_THRESHOLD = 72;
 const COPY_FEEDBACK_TIMEOUT_MS = 2200;
 const KEYBOARD_OPEN_COMPOSER_OFFSET = theme.spacing[1];
-const JUMP_TO_LATEST_BOTTOM_OFFSET = theme.spacing[2];
+const LIST_BOTTOM_BREATHING_ROOM = theme.spacing[2];
+const JUMP_TO_LATEST_BOTTOM_OFFSET = theme.spacing[1] + 2;
+const COMPOSER_DOCK_BACKDROP_MIN_HEIGHT = 92;
 const VISIBLE_CONVERSATION_KINDS = new Set(['trainer_input', 'internal_ai_private']);
 
 function asNonNegativeNumber(value, fallback = 0) {
@@ -58,12 +60,16 @@ export default function TrainerCoachScreen({
   const [isSendingMessage, setIsSendingMessage] = useState(false);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [isNearBottom, setIsNearBottom] = useState(true);
+  const [pendingNewMessagesBelowFold, setPendingNewMessagesBelowFold] = useState(false);
   const [composerDockHeight, setComposerDockHeight] = useState(0);
   const [streamForceScrollSignal, setStreamForceScrollSignal] = useState(0);
+  const [anchorToLatestSignal, setAnchorToLatestSignal] = useState(1);
+  const [isSummaryCollapsed, setIsSummaryCollapsed] = useState(true);
   const [copyFeedback, setCopyFeedback] = useState(null);
   const [assistantDisplayName, setAssistantDisplayName] = useState(DEFAULT_ASSISTANT_DISPLAY_NAME);
   const copyFeedbackTimerRef = useRef(null);
   const visibleStreamLengthRef = useRef(0);
+  const previousTrainerIdRef = useRef(trainerId);
   const latestScrollMetricsRef = useRef({
     offset: 0,
     contentHeight: 0,
@@ -78,6 +84,7 @@ export default function TrainerCoachScreen({
     trainerId,
     assistantDisplayName,
   });
+  const setSummaryCollapsedAction = actions.setSummaryCollapsed;
   const staleRouteError = state.errorDetails?.isStaleBackendRoute
     ? state.errorDetails
     : null;
@@ -88,13 +95,18 @@ export default function TrainerCoachScreen({
     () => (Array.isArray(state.stream) ? state.stream.filter(shouldDisplayStreamItem) : []),
     [state.stream],
   );
-  const showJumpToLatest = visibleStream.length > 0 && !isNearBottom;
+  const showJumpToLatest = visibleStream.length > 0 && (!isNearBottom || pendingNewMessagesBelowFold);
   const dockAnchorInset = Math.max(bottomInset, 0);
   const activeComposerOffset = isKeyboardVisible
     ? KEYBOARD_OPEN_COMPOSER_OFFSET
     : dockAnchorInset;
-  const trainerStreamContentBottomPadding = composerDockHeight + activeComposerOffset;
+  const trainerStreamContentBottomPadding =
+    composerDockHeight + activeComposerOffset + LIST_BOTTOM_BREATHING_ROOM;
   const jumpToLatestBottom = trainerStreamContentBottomPadding + JUMP_TO_LATEST_BOTTOM_OFFSET;
+  const composerDockBackdropHeight = Math.max(
+    COMPOSER_DOCK_BACKDROP_MIN_HEIGHT,
+    composerDockHeight + theme.spacing[1],
+  );
 
   const helperLabel = useMemo(() => {
     if (isSendingMessage) {
@@ -122,6 +134,15 @@ export default function TrainerCoachScreen({
     staleRouteError,
     assistantDisplayName,
   ]);
+  const headerStatusLabel = useMemo(() => {
+    if (isSendingMessage || state.loading || state.sync.replaying) {
+      return 'Syncing';
+    }
+    if (state.hasPendingSync) {
+      return 'Pending';
+    }
+    return 'Ready';
+  }, [isSendingMessage, state.hasPendingSync, state.loading, state.sync.replaying]);
 
   useEffect(() => {
     let isActive = true;
@@ -166,6 +187,21 @@ export default function TrainerCoachScreen({
   }, [visibleStream.length]);
 
   useEffect(() => {
+    if (previousTrainerIdRef.current === trainerId) {
+      return;
+    }
+    previousTrainerIdRef.current = trainerId;
+    setIsNearBottom(true);
+    setPendingNewMessagesBelowFold(false);
+    setAnchorToLatestSignal((value) => value + 1);
+  }, [trainerId]);
+
+  useEffect(() => {
+    setIsSummaryCollapsed(true);
+    setSummaryCollapsedAction(true);
+  }, [setSummaryCollapsedAction, trainerId]);
+
+  useEffect(() => {
     const openEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const closeEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
     const keyboardOpenSubscription = Keyboard.addListener(openEvent, () => {
@@ -175,6 +211,7 @@ export default function TrainerCoachScreen({
         && visibleStreamLengthRef.current > 0
       ) {
         setStreamForceScrollSignal((value) => value + 1);
+        setAnchorToLatestSignal((value) => value + 1);
       }
     });
     const keyboardCloseSubscription = Keyboard.addListener(closeEvent, () => {
@@ -221,6 +258,7 @@ export default function TrainerCoachScreen({
     }
     setIsSendingMessage(true);
     setStreamForceScrollSignal((value) => value + 1);
+    setAnchorToLatestSignal((value) => value + 1);
     try {
       const didSend = await actions.sendIntentMessage(submitted);
       if (didSend) {
@@ -238,6 +276,7 @@ export default function TrainerCoachScreen({
     setComposerValue(command);
     setIsSendingMessage(true);
     setStreamForceScrollSignal((value) => value + 1);
+    setAnchorToLatestSignal((value) => value + 1);
     try {
       const didSend = await actions.sendIntentMessage(command);
       if (didSend) {
@@ -266,21 +305,38 @@ export default function TrainerCoachScreen({
   }, [showCopyFeedback, staleRouteError, workspaceNetworkError]);
 
   const handleJumpToLatest = useCallback(() => {
+    setPendingNewMessagesBelowFold(false);
     setStreamForceScrollSignal((value) => value + 1);
+    setAnchorToLatestSignal((value) => value + 1);
   }, []);
+
+  const handleSummaryCollapsedToggle = useCallback((collapsed) => {
+    const normalized = Boolean(collapsed);
+    setIsSummaryCollapsed(normalized);
+    setSummaryCollapsedAction(normalized);
+  }, [setSummaryCollapsedAction]);
 
   return (
     <SafeScreen
       includeBottomInset={false}
-      includeTopInset={false}
+      includeTopInset
       style={styles.screen}
       atmosphere="coach"
       atmosphereOverlayStrength={0.96}
     >
-      <HeaderBar
-        title="Coach"
-        subtitle={`Conversation with ${assistantDisplayName}`}
-      />
+      <View testID="trainer-coach-compact-header" style={styles.compactHeader}>
+        <View style={styles.compactHeaderRow}>
+          <ModeText variant="h3" style={styles.compactHeaderTitle}>Coach</ModeText>
+          <View style={styles.compactStatusChip}>
+            <ModeText variant="caption" tone="secondary" style={styles.compactStatusChipLabel}>
+              {headerStatusLabel}
+            </ModeText>
+          </View>
+        </View>
+        <ModeText variant="caption" tone="secondary" style={styles.compactHeaderSubtitle}>
+          {`Conversation with ${assistantDisplayName}`}
+        </ModeText>
+      </View>
       <KeyboardAvoidingView
         style={styles.keyboardWrap}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -388,9 +444,9 @@ export default function TrainerCoachScreen({
 
             <TodaySummaryBar
               summary={state.summary}
-              collapsed={state.ui.summaryCollapsed}
+              collapsed={isSummaryCollapsed}
               onActionPress={handleSummaryAction}
-              onToggleCollapsed={actions.setSummaryCollapsed}
+              onToggleCollapsed={handleSummaryCollapsedToggle}
             />
 
             <View style={styles.streamViewport}>
@@ -398,7 +454,15 @@ export default function TrainerCoachScreen({
                 streamItems={visibleStream}
                 assistantDisplayName={assistantDisplayName}
                 forceScrollSignal={streamForceScrollSignal}
+                anchorToLatestSignal={anchorToLatestSignal}
+                threadKey={trainerId || 'trainer-coach-default-thread'}
                 contentBottomPadding={trainerStreamContentBottomPadding}
+                onNewItemsWhileAwayFromBottom={() => {
+                  if (latestScrollMetricsRef.current.nearBottom) {
+                    return;
+                  }
+                  setPendingNewMessagesBelowFold(true);
+                }}
                 onScrollMetricsChange={(metrics) => {
                   if (!metrics || typeof metrics !== 'object') {
                     return;
@@ -415,6 +479,9 @@ export default function TrainerCoachScreen({
                 onNearBottomChange={(nearBottom) => {
                   const normalized = Boolean(nearBottom);
                   setIsNearBottom((current) => (current === normalized ? current : normalized));
+                  if (normalized) {
+                    setPendingNewMessagesBelowFold(false);
+                  }
                   latestScrollMetricsRef.current = {
                     ...latestScrollMetricsRef.current,
                     nearBottom: normalized,
@@ -422,8 +489,8 @@ export default function TrainerCoachScreen({
                 }}
                 onScrollDepthChange={(offsetY) => {
                   const shouldCollapseSummary = offsetY > SUMMARY_COLLAPSE_SCROLL_THRESHOLD;
-                  if (shouldCollapseSummary !== state.ui.summaryCollapsed) {
-                    actions.setSummaryCollapsed(shouldCollapseSummary);
+                  if (shouldCollapseSummary !== isSummaryCollapsed) {
+                    handleSummaryCollapsedToggle(shouldCollapseSummary);
                   }
                 }}
               />
@@ -442,6 +509,23 @@ export default function TrainerCoachScreen({
                   </ModeText>
                 </Pressable>
               ) : null}
+
+              <View
+                pointerEvents="none"
+                style={[
+                  styles.composerDockBackdrop,
+                  {
+                    bottom: activeComposerOffset,
+                    height: composerDockBackdropHeight,
+                  },
+                ]}
+              >
+                {Platform.OS === 'ios' ? (
+                  <BlurView intensity={24} tint="dark" style={StyleSheet.absoluteFill} />
+                ) : null}
+                <View pointerEvents="none" style={styles.composerDockBackdropTint} />
+                <View pointerEvents="none" style={styles.composerDockBackdropSeparator} />
+              </View>
 
               <View
                 pointerEvents="box-none"
@@ -505,13 +589,45 @@ const styles = StyleSheet.create({
   screen: {
     backgroundColor: theme.colors.surface.canvas,
   },
+  compactHeader: {
+    paddingHorizontal: theme.spacing[3],
+    paddingTop: theme.spacing[1],
+    paddingBottom: theme.spacing[1],
+    gap: 4,
+  },
+  compactHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[2],
+  },
+  compactHeaderTitle: {
+    fontSize: 22,
+    lineHeight: 26,
+    fontWeight: '700',
+    color: theme.colors.text.primary,
+  },
+  compactHeaderSubtitle: {
+    color: theme.colors.text.secondary,
+  },
+  compactStatusChip: {
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(232, 243, 255, 0.16)',
+    backgroundColor: 'rgba(12, 22, 38, 0.78)',
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 4,
+  },
+  compactStatusChipLabel: {
+    fontWeight: '600',
+  },
   keyboardWrap: {
     flex: 1,
   },
   content: {
     flex: 1,
     paddingHorizontal: theme.spacing[3],
-    paddingTop: theme.spacing[2],
+    paddingTop: theme.spacing[1],
     gap: theme.spacing[2],
   },
   routeDiagnosticBlock: {
@@ -529,11 +645,11 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     borderRadius: theme.radii.pill,
     borderWidth: 1,
-    borderColor: theme.colors.nav.activeBorder,
-    backgroundColor: theme.colors.nav.activeBg,
+    borderColor: 'rgba(226, 240, 255, 0.24)',
+    backgroundColor: 'rgba(17, 30, 49, 0.92)',
     paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
-    zIndex: 2,
+    paddingVertical: 7,
+    zIndex: 7,
   },
   jumpToLatestButtonPressed: {
     opacity: theme.interaction.pressedOpacity,
@@ -542,11 +658,30 @@ const styles = StyleSheet.create({
   jumpToLatestLabel: {
     fontWeight: '600',
   },
+  composerDockBackdrop: {
+    position: 'absolute',
+    left: -theme.spacing[3],
+    right: -theme.spacing[3],
+    zIndex: 5,
+    overflow: 'hidden',
+  },
+  composerDockBackdropTint: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(7, 13, 24, 0.92)',
+  },
+  composerDockBackdropSeparator: {
+    position: 'absolute',
+    left: theme.spacing[3],
+    right: theme.spacing[3],
+    top: 0,
+    height: 1,
+    backgroundColor: 'rgba(232, 243, 255, 0.1)',
+  },
   composerDock: {
     position: 'absolute',
     left: 0,
     right: 0,
-    zIndex: 3,
+    zIndex: 6,
   },
   composerDockStack: {
     paddingTop: theme.spacing[1],
