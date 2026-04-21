@@ -7,6 +7,7 @@ import {
   Switch,
   View,
 } from 'react-native';
+import Feather from '@expo/vector-icons/Feather';
 import Constants from 'expo-constants';
 
 import {
@@ -33,14 +34,11 @@ import {
   resolveAssistantDisplayName,
 } from '../../messaging';
 import {
-  archiveTrainerRule,
   createTrainerKnowledgeDocument,
   deleteTrainerKnowledgeDocument,
   listTrainerKnowledgeDocuments,
-  listTrainerRules,
   saveTrainerKnowledgeDocumentWithFallback,
   updateTrainerKnowledgeDocument,
-  updateTrainerRule,
 } from '../../trainerHome/services/trainerKnowledgeApi';
 import {
   createTrainerInviteCode,
@@ -54,6 +52,7 @@ import {
 } from '../../trainerClients/services/trainerHomeApi';
 import {
   getTrainerSettingsMe,
+  listTrainerPersonas,
   patchTrainerSettingsMe,
 } from '../../profile/services/profileApi';
 import {
@@ -69,27 +68,12 @@ import {
   rejectTrainerReviewOutput,
 } from '../../trainerReview/services/trainerReviewApi';
 import { formatIsoWeekdaySummary } from '../../trainerClients/utils/scheduleResolver';
-
-const RULE_CATEGORY_LABELS = {
-  training_philosophy: 'Training Philosophy',
-  nutrition_philosophy: 'Nutrition Philosophy',
-  progression_logic: 'Progression Logic',
-  recovery_deload_logic: 'Recovery / Deload Logic',
-  motivational_style: 'Motivational Style',
-  communication_tone: 'Communication Tone',
-  adjustment_rules: 'Adjustment Rules',
-  contraindications: 'Contraindications',
-  general_coaching: 'General Coaching',
-};
+import { generateKnowledgeNoteTitle } from '../utils/knowledgeNoteTitleSummary';
 
 const SYSTEM_VIEW = {
   HUB: 'hub',
-  COACH_PROFILE: 'coach_profile',
-  COACH_SETTINGS: 'coach_settings',
-  COACH_RETRAIN_REVIEW: 'coach_retrain_review',
-  KNOWLEDGE_MEMORY_BANK: 'knowledge_memory_bank',
-  KNOWLEDGE_METHODOLOGY_RULES: 'knowledge_methodology_rules',
-  KNOWLEDGE_QUICK_CAPTURES: 'knowledge_quick_captures',
+  COACH_WORKSPACE: 'coach_workspace',
+  KNOWLEDGE_WORKSPACE: 'knowledge_workspace',
   DEFAULTS_SESSION: 'defaults_session',
   DEFAULTS_COMMUNICATION: 'defaults_communication',
   CLIENTS_LIST: 'clients_list',
@@ -162,15 +146,6 @@ function formatExceptionDate(value) {
   });
 }
 
-function formatRuleCategory(value) {
-  if (typeof value !== 'string' || !value.trim()) {
-    return RULE_CATEGORY_LABELS.general_coaching;
-  }
-  const normalized = value.trim().toLowerCase();
-  return RULE_CATEGORY_LABELS[normalized]
-    || normalized.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
 function normalizeListPayload(payload) {
   if (Array.isArray(payload)) {
     return {
@@ -235,6 +210,68 @@ function buildOnboardingState({
     totalSteps,
     lastStep: trainerOnboardingLastStep,
     primaryAction: onboardingInProgress ? 'resume' : 'continue',
+  };
+}
+
+function asRecord(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function firstNonEmptyString(...values) {
+  for (let index = 0; index < values.length; index += 1) {
+    const candidate = values[index];
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return null;
+}
+
+function pickDefaultTrainerPersona(payload) {
+  if (!Array.isArray(payload) || payload.length === 0) {
+    return null;
+  }
+  return payload.find((row) => row?.is_default) || payload[0];
+}
+
+function buildCoachWorkspaceSummary({
+  trainerName,
+  trainerSettings,
+  trainerPersona,
+}) {
+  const persona = asRecord(trainerPersona);
+  const communicationRules = asRecord(persona.communication_rules);
+  const onboardingPreferences = asRecord(persona.onboarding_preferences);
+  const onboardingAnswers = asRecord(onboardingPreferences.trainer_onboarding_answers);
+  const coachingIdentity = asRecord(onboardingAnswers.coaching_identity);
+  const tone = asRecord(onboardingAnswers.tone);
+  const philosophy = asRecord(onboardingAnswers.philosophy);
+
+  const aiName = firstNonEmptyString(
+    coachingIdentity.agent_name,
+    persona.persona_name,
+    trainerSettings?.assistant_display_name,
+    trainerName,
+  ) || 'Not set yet';
+  const style = firstNonEmptyString(
+    coachingIdentity.summary,
+    asRecord(communicationRules.identity).summary,
+    asRecord(onboardingAnswers.communication_preferences).style,
+  ) || 'Not set yet';
+  const voice = firstNonEmptyString(
+    tone.style,
+    persona.tone_description,
+  ) || 'Not set yet';
+  const soul = firstNonEmptyString(
+    philosophy.summary,
+    persona.coaching_philosophy,
+  ) || 'Not set yet';
+
+  return {
+    aiName,
+    style,
+    voice,
+    soul,
   };
 }
 
@@ -436,24 +473,12 @@ function TrainerSystemHubScreen({
   counts,
   onboardingState,
   onNavigate,
-  isRefreshing,
-  onRefresh,
 }) {
   return (
     <SectionShell
       title="System"
       subtitle="Trainer control center"
       bottomInset={bottomInset}
-      rightSlot={(
-        <ModeButton
-          title={isRefreshing ? 'Refreshing...' : 'Refresh'}
-          variant="ghost"
-          size="sm"
-          onPress={onRefresh}
-          disabled={isRefreshing}
-          testID="trainer-system-refresh"
-        />
-      )}
     >
       <SystemIdentityHeader
         name={trainerName}
@@ -465,62 +490,28 @@ function TrainerSystemHubScreen({
       />
 
       <SystemSectionCard>
-        <SystemSectionHeader title="Coach" />
+        <SystemSectionHeader title="Build" />
         <SystemNavRow
           icon="user"
-          title="Coach Profile"
+          title="Coach Workspace"
           subtitle={onboardingState.onboardingComplete
             ? 'Coach profile is calibrated and ready.'
             : onboardingState.onboardingInProgress
               ? `${onboardingState.completedSteps} of ${onboardingState.totalSteps} steps completed`
-              : 'Complete onboarding and define your coaching layer.'}
+              : 'Review onboarding progress, coaching identity, and launch actions.'}
           badge={onboardingState.onboardingComplete ? null : `${onboardingState.completedSteps}/${onboardingState.totalSteps}`}
           badgeVariant="accent"
-          onPress={() => onNavigate(SYSTEM_VIEW.COACH_PROFILE)}
-          testID="trainer-system-nav-coach-profile"
+          onPress={() => onNavigate(SYSTEM_VIEW.COACH_WORKSPACE)}
+          testID="trainer-system-nav-coach-workspace"
         />
-        <SystemNavRow
-          icon="sliders"
-          title="Coach Settings"
-          subtitle="Centralize profile calibration and workspace behavior."
-          onPress={() => onNavigate(SYSTEM_VIEW.COACH_SETTINGS)}
-          testID="trainer-system-nav-coach-settings"
-        />
-        <SystemNavRow
-          icon="refresh-cw"
-          title="Review / Retrain Coach"
-          subtitle="Open review, retrain, or resume onboarding with the same launch context."
-          badge={onboardingState.onboardingComplete ? null : 'Live'}
-          badgeVariant={onboardingState.onboardingComplete ? 'default' : 'warning'}
-          onPress={() => onNavigate(SYSTEM_VIEW.COACH_RETRAIN_REVIEW)}
-          testID="trainer-system-nav-coach-retrain-review"
-        />
-      </SystemSectionCard>
-
-      <SystemSectionCard>
-        <SystemSectionHeader title="Knowledge" />
         <SystemNavRow
           icon="database"
-          title="Memory Bank"
-          subtitle="Search, edit, and archive saved knowledge documents."
+          title="Knowledge Workspace"
+          subtitle="Notes library for trainer memory and client-facing AI context."
           badge={counts.knowledge > 0 ? counts.knowledge : null}
           badgeVariant="accent"
-          onPress={() => onNavigate(SYSTEM_VIEW.KNOWLEDGE_MEMORY_BANK)}
-          testID="trainer-system-nav-knowledge-memory-bank"
-        />
-        <SystemNavRow
-          icon="book-open"
-          title="Methodology / Rules"
-          subtitle="Manage long-form methodology and extracted coaching rules."
-          onPress={() => onNavigate(SYSTEM_VIEW.KNOWLEDGE_METHODOLOGY_RULES)}
-          testID="trainer-system-nav-knowledge-methodology-rules"
-        />
-        <SystemNavRow
-          icon="zap"
-          title="Quick Captures"
-          subtitle="Save fast coaching cues without leaving the workflow."
-          onPress={() => onNavigate(SYSTEM_VIEW.KNOWLEDGE_QUICK_CAPTURES)}
-          testID="trainer-system-nav-knowledge-quick-captures"
+          onPress={() => onNavigate(SYSTEM_VIEW.KNOWLEDGE_WORKSPACE)}
+          testID="trainer-system-nav-knowledge-workspace"
         />
       </SystemSectionCard>
 
@@ -589,7 +580,14 @@ function TrainerSystemHubScreen({
   );
 }
 
-function CoachProfileScreen({ bottomInset, onBack, trainerName, onboardingState, onOpenTrainerCoach }) {
+function CoachWorkspaceScreen({
+  bottomInset,
+  onBack,
+  trainerName,
+  onboardingState,
+  coachSummary,
+  onOpenTrainerCoach,
+}) {
   const statusLabel = onboardingState.onboardingComplete
     ? 'Completed'
     : onboardingState.onboardingInProgress
@@ -598,15 +596,15 @@ function CoachProfileScreen({ bottomInset, onBack, trainerName, onboardingState,
 
   return (
     <SectionShell
-      title="Coach Profile"
-      subtitle="Train how your AI coach should sound and decide."
+      title="Coach Workspace"
+      subtitle="Onboarding progress, coaching profile summary, and launch actions in one place."
       onBack={onBack}
       bottomInset={bottomInset}
     >
       <ModeCard variant="hero">
-        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Status</ModeText>
+        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Onboarding</ModeText>
         <DetailRow label="Trainer" value={trainerName} />
-        <DetailRow label="Onboarding" value={statusLabel} />
+        <DetailRow label="Status" value={statusLabel} />
         <DetailRow
           label="Progress"
           value={`${onboardingState.completedSteps} of ${onboardingState.totalSteps} steps completed`}
@@ -620,101 +618,46 @@ function CoachProfileScreen({ bottomInset, onBack, trainerName, onboardingState,
       </ModeCard>
 
       <ModeCard variant="surface">
-        <ModeText variant="bodySm">Build the system prompt, methodology, review loop, and decision style your coach should apply.</ModeText>
-        <ModeText variant="caption" tone="secondary">
-          Use this when you want to continue calibration without hunting through stacked cards.
-        </ModeText>
-        <ModeButton
-          title={onboardingState.onboardingInProgress ? 'Resume coach onboarding' : 'Continue coach onboarding'}
-          variant="secondary"
-          onPress={() => onOpenTrainerCoach?.({
-            entrypoint: 'trainer_agent_training',
-            onboarding_action: onboardingState.primaryAction,
-          })}
-          testID="trainer-system-coach-profile-primary"
-        />
-      </ModeCard>
-    </SectionShell>
-  );
-}
-
-function CoachSettingsScreen({ bottomInset, onBack, onboardingState, onNavigate }) {
-  return (
-    <SectionShell
-      title="Coach Settings"
-      subtitle="Centralized calibration entry points for your AI coaching layer."
-      onBack={onBack}
-      bottomInset={bottomInset}
-    >
-      <ModeCard variant="hero">
-        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Calibration</ModeText>
-        <ModeText variant="bodySm">
-          {onboardingState.onboardingComplete
-            ? 'Your coach profile is complete. Review or retrain when your methodology shifts.'
-            : 'Your coach profile is still being calibrated. Continue from where you left off.'}
-        </ModeText>
+        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Coach Summary</ModeText>
+        <DetailRow label="AI Name" value={valueOrFallback(coachSummary?.aiName, 'Not set yet')} />
+        <DetailRow label="Style" value={valueOrFallback(coachSummary?.style, 'Not set yet')} />
+        <DetailRow label="Voice" value={valueOrFallback(coachSummary?.voice, 'Not set yet')} />
+        <DetailRow label="Soul / Philosophy" value={valueOrFallback(coachSummary?.soul, 'Not set yet')} />
       </ModeCard>
 
-      <SystemSectionCard>
-        <SystemSectionHeader title="Actions" />
-        <SystemNavRow
-          icon="refresh-cw"
-          title="Review / Retrain Coach"
-          subtitle="Open the dedicated action screen with review, retrain, and resume controls."
-          onPress={() => onNavigate(SYSTEM_VIEW.COACH_RETRAIN_REVIEW)}
-          testID="trainer-system-coach-settings-review"
-        />
-        <SystemNavRow
-          icon="user"
-          title="Coach Profile"
-          subtitle="See onboarding progress and launch the next calibration step."
-          onPress={() => onNavigate(SYSTEM_VIEW.COACH_PROFILE)}
-          testID="trainer-system-coach-settings-profile"
-        />
-      </SystemSectionCard>
-    </SectionShell>
-  );
-}
-
-function CoachRetrainReviewScreen({ bottomInset, onBack, onboardingState, onOpenTrainerCoach }) {
-  return (
-    <SectionShell
-      title="Review / Retrain"
-      subtitle="Preserve existing coach-launch payloads while giving them a cleaner home."
-      onBack={onBack}
-      bottomInset={bottomInset}
-    >
       <ModeCard variant="surface">
-        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Coach Actions</ModeText>
+        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Actions</ModeText>
         <ModeText variant="bodySm" tone="secondary">
-          Continue or resume onboarding, open coach review, or retrain your coach after methodology changes.
+          Review your onboarding summary first, then resume or retrain when needed.
         </ModeText>
         <View style={styles.buttonStack}>
           <ModeButton
-            title={onboardingState.onboardingInProgress ? 'Resume onboarding' : 'Continue onboarding'}
-            onPress={() => onOpenTrainerCoach?.({
-              entrypoint: 'trainer_agent_training',
-              onboarding_action: onboardingState.primaryAction,
-            })}
-            testID="trainer-system-coach-review-primary"
-          />
-          <ModeButton
-            title="Review coach"
-            variant="ghost"
+            title="Review Coach Onboarding"
             onPress={() => onOpenTrainerCoach?.({
               entrypoint: 'trainer_agent_training',
               onboarding_action: 'review',
             })}
-            testID="trainer-system-coach-review-button"
+            testID="trainer-system-coach-workspace-review"
           />
+          {!onboardingState.onboardingComplete ? (
+            <ModeButton
+              title="Resume Coach Onboarding"
+              variant="secondary"
+              onPress={() => onOpenTrainerCoach?.({
+                entrypoint: 'trainer_agent_training',
+                onboarding_action: 'resume',
+              })}
+              testID="trainer-system-coach-workspace-resume"
+            />
+          ) : null}
           <ModeButton
-            title="Retrain coach"
-            variant="secondary"
+            title="Retrain Coach"
+            variant="ghost"
             onPress={() => onOpenTrainerCoach?.({
               entrypoint: 'trainer_agent_training',
               onboarding_action: 'retrain',
             })}
-            testID="trainer-system-coach-retrain-button"
+            testID="trainer-system-coach-workspace-retrain"
           />
         </View>
       </ModeCard>
@@ -722,104 +665,31 @@ function CoachRetrainReviewScreen({ bottomInset, onBack, onboardingState, onOpen
   );
 }
 
-function KnowledgeQuickCapturesScreen({
-  accessToken,
-  bottomInset,
-  onBack,
-  onKnowledgeMutated,
-}) {
-  const [quickCaptureText, setQuickCaptureText] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
-  const [feedback, setFeedback] = useState({ error: null, note: null, success: null });
-
-  const handleSave = async () => {
-    const trimmed = quickCaptureText.trim();
-    if (!trimmed) {
-      setFeedback({
-        error: 'Share one coaching principle before saving quick capture.',
-        note: null,
-        success: null,
-      });
-      return;
-    }
-    if (!accessToken || isSaving) {
-      return;
-    }
-    setIsSaving(true);
-    setFeedback({ error: null, note: null, success: null });
-    try {
-      const payload = await saveTrainerKnowledgeDocumentWithFallback({
-        accessToken,
-        title: `Quick Capture - ${new Date().toLocaleString()}`,
-        rawText: trimmed,
-        metadata: {
-          source: 'agent_lab_quick_capture',
-        },
-      });
-      const createdCount = payload?.extraction?.rules_created;
-      const extractionFallbackReason = payload?.extraction?.fallback_reason;
-      setFeedback({
-        error: null,
-        note: isExtractionSoftNote(extractionFallbackReason)
-          ? 'Rule extraction is still processing. You can retry later.'
-          : null,
-        success: typeof createdCount === 'number'
-          ? `Saved and extracted ${createdCount} coaching rule${createdCount === 1 ? '' : 's'}.`
-          : 'Saved and extracted coaching rules for review.',
-      });
-      setQuickCaptureText('');
-      onKnowledgeMutated?.();
-    } catch (error) {
-      setFeedback({
-        error: error?.message || 'Unable to save trainer knowledge.',
-        note: null,
-        success: null,
-      });
-    } finally {
-      setIsSaving(false);
-    }
+function normalizeKnowledgeDocument(document) {
+  return {
+    id: document?.id || null,
+    title: String(document?.title || ''),
+    raw_text: String(document?.raw_text || ''),
+    document_type: document?.document_type || 'text',
+    file_url: document?.file_url || null,
+    metadata: document?.metadata || {},
+    created_at: document?.created_at || null,
   };
-
-  return (
-    <SectionShell
-      title="Quick Captures"
-      subtitle="Save one rule, principle, or cue without expanding the whole workspace."
-      onBack={onBack}
-      bottomInset={bottomInset}
-    >
-      <ModeCard variant="surface">
-        <ModeText variant="bodySm" tone="secondary">
-          Quick captures land in your memory bank and kick off rule extraction when available.
-        </ModeText>
-        <ModeInput
-          value={quickCaptureText}
-          onChangeText={setQuickCaptureText}
-          placeholder="Example: If stress is high, lower intensity before changing frequency."
-          multiline
-          style={styles.quickCaptureInput}
-          testID="trainer-system-quick-capture-input"
-        />
-        {feedback.error ? (
-          <ModeText variant="caption" tone="error">{feedback.error}</ModeText>
-        ) : null}
-        {feedback.note ? (
-          <ModeText variant="caption" tone="secondary">{feedback.note}</ModeText>
-        ) : null}
-        {feedback.success ? (
-          <ModeText variant="caption" tone="success">{feedback.success}</ModeText>
-        ) : null}
-        <ModeButton
-          title={isSaving ? 'Saving...' : 'Save quick capture'}
-          onPress={handleSave}
-          disabled={isSaving}
-          testID="trainer-system-quick-capture-save"
-        />
-      </ModeCard>
-    </SectionShell>
-  );
 }
 
-function KnowledgeMemoryBankScreen({
+function noteRowDisplayTitle(document) {
+  const explicitTitle = String(document?.title || '').trim();
+  if (explicitTitle) {
+    return explicitTitle;
+  }
+  return generateKnowledgeNoteTitle(document?.raw_text || '');
+}
+
+function buildKnowledgeNoteSubtitle(document) {
+  return `${document?.document_type || 'text'} · ${formatSavedDate(document?.created_at)}`;
+}
+
+function KnowledgeWorkspaceScreen({
   accessToken,
   bottomInset,
   onBack,
@@ -829,18 +699,36 @@ function KnowledgeMemoryBankScreen({
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [error, setError] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   const [selectedDocument, setSelectedDocument] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
   const [draftRawText, setDraftRawText] = useState('');
   const [mutationState, setMutationState] = useState({
     isSaving: false,
-    isDeleting: false,
+    deletingId: null,
     error: null,
+    errorDocumentId: null,
     note: null,
     success: null,
   });
+
+  const closeSheet = useCallback(() => {
+    setSelectedDocument(null);
+    setIsEditing(false);
+    setIsCreating(false);
+    setDraftTitle('');
+    setDraftRawText('');
+    setMutationState((current) => ({
+      ...current,
+      isSaving: false,
+      error: null,
+      errorDocumentId: null,
+      note: null,
+      success: null,
+    }));
+  }, []);
 
   const loadDocuments = useCallback(async ({ refresh = false } = {}) => {
     if (!accessToken) {
@@ -853,12 +741,15 @@ function KnowledgeMemoryBankScreen({
     } else {
       setIsLoading(true);
     }
-    setError(null);
+    setLoadError(null);
     try {
       const payload = await listTrainerKnowledgeDocuments({ accessToken });
-      setDocuments(Array.isArray(payload) ? payload : []);
+      const normalized = Array.isArray(payload)
+        ? payload.map((document) => normalizeKnowledgeDocument(document))
+        : [];
+      setDocuments(normalized);
     } catch (nextError) {
-      setError(nextError?.message || 'Unable to load trainer knowledge.');
+      setLoadError(nextError?.message || 'Unable to load notes.');
     } finally {
       if (refresh) {
         setIsRefreshing(false);
@@ -886,188 +777,340 @@ function KnowledgeMemoryBankScreen({
     ));
   }, [documents, query]);
 
-  const openDocument = (document) => {
-    setSelectedDocument(document);
-    setDraftTitle(String(document?.title || ''));
-    setDraftRawText(String(document?.raw_text || ''));
-    setIsEditing(false);
-    setMutationState({
-      isSaving: false,
-      isDeleting: false,
+  const openDocument = useCallback((document, { editing = false } = {}) => {
+    const normalized = normalizeKnowledgeDocument(document);
+    setSelectedDocument(normalized);
+    setIsEditing(editing);
+    setIsCreating(false);
+    setDraftTitle(String(normalized?.title || ''));
+    setDraftRawText(String(normalized?.raw_text || ''));
+    setMutationState((current) => ({
+      ...current,
       error: null,
+      errorDocumentId: null,
       note: null,
       success: null,
+    }));
+  }, []);
+
+  const handleOpenNewNote = useCallback(() => {
+    setSelectedDocument({
+      id: null,
+      title: '',
+      raw_text: '',
+      document_type: 'text',
+      file_url: null,
+      metadata: { source: 'system_notes_workspace' },
+      created_at: null,
     });
-  };
+    setIsCreating(true);
+    setIsEditing(true);
+    setDraftTitle('');
+    setDraftRawText('');
+    setMutationState((current) => ({
+      ...current,
+      error: null,
+      errorDocumentId: null,
+      note: null,
+      success: null,
+    }));
+  }, []);
 
   const handleSaveDocument = async () => {
-    if (!selectedDocument?.id || !accessToken || mutationState.isSaving) {
+    if (!accessToken || mutationState.isSaving || !selectedDocument) {
       return;
     }
-    const normalizedTitle = draftTitle.trim();
     const normalizedRawText = draftRawText.trim();
-    if (!normalizedTitle) {
-      setMutationState((current) => ({
-        ...current,
-        error: 'Add a title before saving.',
-      }));
-      return;
-    }
     if (!normalizedRawText) {
       setMutationState((current) => ({
         ...current,
-        error: 'Add coaching content before saving.',
+        error: 'Add note content before saving.',
+        errorDocumentId: null,
       }));
       return;
     }
-    setMutationState({
+    const normalizedTitle = draftTitle.trim();
+    const resolvedTitle = normalizedTitle || generateKnowledgeNoteTitle(normalizedRawText);
+    setMutationState((current) => ({
+      ...current,
       isSaving: true,
-      isDeleting: false,
       error: null,
+      errorDocumentId: null,
       note: null,
       success: null,
-    });
+    }));
+
     try {
-      const payload = await updateTrainerKnowledgeDocument({
-        accessToken,
-        documentId: selectedDocument.id,
-        title: normalizedTitle,
-        rawText: normalizedRawText,
-        documentType: selectedDocument.document_type || 'text',
-        fileUrl: selectedDocument.file_url || null,
-        metadata: selectedDocument.metadata || {},
-      });
-      const updatedDocument = payload?.document || {
-        ...selectedDocument,
-        title: normalizedTitle,
-        raw_text: normalizedRawText,
-      };
-      const extractionFallbackReason = payload?.extraction?.fallback_reason;
-      setSelectedDocument(updatedDocument);
-      setDocuments((current) => current.map((document) => (
-        document?.id === updatedDocument?.id ? updatedDocument : document
-      )));
-      setIsEditing(false);
-      setMutationState({
-        isSaving: false,
-        isDeleting: false,
-        error: null,
-        note: isExtractionSoftNote(extractionFallbackReason)
-          ? 'Rule extraction is still processing. You can retry later.'
-          : null,
-        success: 'Saved changes.',
-      });
+      let payload;
+      if (isCreating || !selectedDocument?.id) {
+        const requestPayload = {
+          accessToken,
+          title: resolvedTitle,
+          rawText: normalizedRawText,
+          documentType: selectedDocument?.document_type || 'text',
+          fileUrl: selectedDocument?.file_url || null,
+          metadata: selectedDocument?.metadata || { source: 'system_notes_workspace' },
+        };
+        payload = TRAINER_AGENT_LAB_ENABLED
+          ? await saveTrainerKnowledgeDocumentWithFallback(requestPayload)
+          : await createTrainerKnowledgeDocument(requestPayload);
+        const createdDocument = normalizeKnowledgeDocument(payload?.document || payload);
+        const extractionFallbackReason = payload?.extraction?.fallback_reason;
+        setDocuments((current) => {
+          const withoutDuplicate = current.filter((document) => document?.id !== createdDocument?.id);
+          return [createdDocument, ...withoutDuplicate];
+        });
+        setSelectedDocument(createdDocument);
+        setDraftTitle(String(createdDocument?.title || resolvedTitle));
+        setDraftRawText(String(createdDocument?.raw_text || normalizedRawText));
+        setIsCreating(false);
+        setIsEditing(false);
+        setMutationState({
+          isSaving: false,
+          deletingId: null,
+          error: null,
+          errorDocumentId: null,
+          note: isExtractionSoftNote(extractionFallbackReason)
+            ? 'Rule extraction is still processing. You can retry later.'
+            : null,
+          success: 'Note saved.',
+        });
+      } else {
+        payload = await updateTrainerKnowledgeDocument({
+          accessToken,
+          documentId: selectedDocument.id,
+          title: resolvedTitle,
+          rawText: normalizedRawText,
+          documentType: selectedDocument.document_type || 'text',
+          fileUrl: selectedDocument.file_url || null,
+          metadata: selectedDocument.metadata || {},
+        });
+        const updatedDocument = normalizeKnowledgeDocument(payload?.document || {
+          ...selectedDocument,
+          title: resolvedTitle,
+          raw_text: normalizedRawText,
+        });
+        const extractionFallbackReason = payload?.extraction?.fallback_reason;
+        setSelectedDocument(updatedDocument);
+        setDraftTitle(String(updatedDocument?.title || resolvedTitle));
+        setDraftRawText(String(updatedDocument?.raw_text || normalizedRawText));
+        setDocuments((current) => current.map((document) => (
+          document?.id === updatedDocument?.id ? updatedDocument : document
+        )));
+        setIsEditing(false);
+        setMutationState({
+          isSaving: false,
+          deletingId: null,
+          error: null,
+          errorDocumentId: null,
+          note: isExtractionSoftNote(extractionFallbackReason)
+            ? 'Rule extraction is still processing. You can retry later.'
+            : null,
+          success: 'Note updated.',
+        });
+      }
       onKnowledgeMutated?.();
     } catch (nextError) {
-      setMutationState({
+      setMutationState((current) => ({
+        ...current,
         isSaving: false,
-        isDeleting: false,
-        error: nextError?.message || 'Unable to save document changes.',
+        error: nextError?.message || 'Unable to save note.',
+        errorDocumentId: null,
         note: null,
         success: null,
-      });
+      }));
     }
   };
 
-  const handleDeleteDocument = async () => {
-    if (!selectedDocument?.id || !accessToken || mutationState.isDeleting) {
+  const handleDeleteDocument = async (documentId) => {
+    if (!documentId || !accessToken || mutationState.deletingId || mutationState.isSaving) {
       return;
     }
-    setMutationState({
-      isSaving: false,
-      isDeleting: true,
+    setMutationState((current) => ({
+      ...current,
+      deletingId: documentId,
       error: null,
+      errorDocumentId: null,
       note: null,
       success: null,
-    });
+    }));
     try {
       await deleteTrainerKnowledgeDocument({
         accessToken,
-        documentId: selectedDocument.id,
+        documentId,
       });
-      setDocuments((current) => current.filter((document) => document?.id !== selectedDocument.id));
-      setSelectedDocument(null);
+      setDocuments((current) => current.filter((document) => document?.id !== documentId));
+      if (selectedDocument?.id === documentId) {
+        closeSheet();
+      } else {
+        setMutationState((current) => ({
+          ...current,
+          deletingId: null,
+          error: null,
+          errorDocumentId: null,
+          note: null,
+          success: 'Note deleted.',
+        }));
+      }
       onKnowledgeMutated?.();
     } catch (nextError) {
-      setMutationState({
-        isSaving: false,
-        isDeleting: false,
-        error: nextError?.message || 'Unable to delete document.',
-        note: null,
-        success: null,
-      });
+      setMutationState((current) => ({
+        ...current,
+        deletingId: null,
+        error: nextError?.message || 'Unable to delete note.',
+        errorDocumentId: documentId,
+      }));
     }
   };
 
   return (
     <SectionShell
-      title="Memory Bank"
-      subtitle="Compact search and maintenance for saved trainer knowledge."
+      title="Knowledge Workspace"
+      subtitle="Trainer notes library for AI memory and coaching context."
       onBack={onBack}
       bottomInset={bottomInset}
-      rightSlot={(
+    >
+      <ModeCard variant="hero">
+        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Notes Library</ModeText>
+        <ModeText variant="bodySm" tone="secondary">
+          Save, refine, and manage notes that guide your trainer AI context.
+        </ModeText>
+      </ModeCard>
+
+      <View style={styles.knowledgeWorkspaceTopActions}>
+        <ModeButton
+          title="New Note"
+          size="sm"
+          onPress={handleOpenNewNote}
+          testID="trainer-system-notes-new"
+        />
         <ModeButton
           title={isRefreshing ? 'Refreshing...' : 'Refresh'}
-          variant="ghost"
           size="sm"
+          variant="ghost"
           onPress={() => loadDocuments({ refresh: true })}
-          disabled={isRefreshing || isLoading}
-          testID="trainer-system-memory-bank-refresh"
+          disabled={isLoading || isRefreshing}
+          testID="trainer-system-notes-refresh"
         />
-      )}
-    >
+      </View>
+
       <SystemSearchBar
         value={query}
         onChangeText={setQuery}
-        placeholder="Search memory bank"
-        testID="trainer-system-memory-bank-search"
+        placeholder="Search notes"
+        testID="trainer-system-notes-search"
       />
 
       <SystemSectionCard>
-        <SystemSectionHeader title="Saved Knowledge" />
+        <SystemSectionHeader title="Saved Notes" />
         {isLoading ? (
           <View style={styles.loadingRow}>
             <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
-            <ModeText variant="bodySm" tone="secondary">Loading memory bank...</ModeText>
+            <ModeText variant="bodySm" tone="secondary">Loading notes...</ModeText>
           </View>
         ) : null}
-        {!isLoading && error ? (
-          <ModeText variant="bodySm" tone="error">{error}</ModeText>
+        {!isLoading && loadError ? (
+          <ModeText variant="bodySm" tone="error">{loadError}</ModeText>
         ) : null}
-        {!isLoading && !error && filteredDocuments.length === 0 ? (
+        {!isLoading && !loadError && filteredDocuments.length === 0 ? (
           <EmptyListState
-            title="No knowledge documents found"
-            detail="Save methodology or quick captures to populate the memory bank."
+            title="No notes yet"
+            detail="Create your first trainer note to shape assistant context."
           />
         ) : null}
-        {!isLoading && !error && filteredDocuments.length > 0 ? filteredDocuments.map((document, index) => (
-          <SystemNavRow
-            key={document?.id || `${document?.title || 'document'}-${index}`}
-            icon="file-text"
-            title={document?.title || 'Untitled document'}
-            subtitle={`${document?.document_type || 'text'} · ${formatSavedDate(document?.created_at)}`}
-            onPress={() => openDocument(document)}
-            testID={`trainer-system-memory-bank-doc-${document?.id || index}`}
-          />
-        )) : null}
+        {!isLoading && !loadError && filteredDocuments.length > 0 ? filteredDocuments.map((document, index) => {
+          const documentId = document?.id || `note-${index}`;
+          const isDeleting = mutationState.deletingId === documentId;
+          const hasDeleteError = mutationState.errorDocumentId === documentId && Boolean(mutationState.error);
+          return (
+            <View
+              key={document?.id || `${document?.title || 'note'}-${index}`}
+              style={styles.noteRowGroup}
+            >
+              <Pressable
+                style={({ pressed }) => [
+                  styles.noteRow,
+                  pressed && styles.noteRowPressed,
+                ]}
+                onPress={() => openDocument(document)}
+                testID={`trainer-system-note-row-${documentId}`}
+                accessibilityRole="button"
+                accessibilityLabel="Open note details"
+              >
+                <View style={styles.noteRowCopy}>
+                  <ModeText variant="bodySm" style={styles.noteRowTitle} numberOfLines={1}>
+                    {noteRowDisplayTitle(document)}
+                  </ModeText>
+                  <ModeText variant="caption" tone="secondary" numberOfLines={1}>
+                    {buildKnowledgeNoteSubtitle(document)}
+                  </ModeText>
+                </View>
+                <View style={styles.noteRowActions}>
+                  <Pressable
+                    testID={`trainer-system-note-edit-${documentId}`}
+                    onPress={(event) => {
+                      event?.stopPropagation?.();
+                      openDocument(document, { editing: true });
+                    }}
+                    style={({ pressed }) => [
+                      styles.noteRowIconButton,
+                      pressed && styles.noteRowIconButtonPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Edit note"
+                    hitSlop={8}
+                  >
+                    <Feather name="edit-2" size={14} color={theme.colors.text.secondary} />
+                  </Pressable>
+                  <Pressable
+                    testID={`trainer-system-note-delete-${documentId}`}
+                    onPress={(event) => {
+                      event?.stopPropagation?.();
+                      handleDeleteDocument(document?.id);
+                    }}
+                    style={({ pressed }) => [
+                      styles.noteRowIconButton,
+                      pressed && styles.noteRowIconButtonPressed,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Delete note"
+                    hitSlop={8}
+                    disabled={isDeleting}
+                  >
+                    {isDeleting ? (
+                      <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+                    ) : (
+                      <Feather name="trash-2" size={14} color={theme.colors.text.secondary} />
+                    )}
+                  </Pressable>
+                </View>
+              </Pressable>
+              {hasDeleteError ? (
+                <ModeText variant="caption" tone="error">{mutationState.error}</ModeText>
+              ) : null}
+            </View>
+          );
+        }) : null}
       </SystemSectionCard>
 
       <SystemActionSheet
         visible={Boolean(selectedDocument)}
-        onClose={() => setSelectedDocument(null)}
-        testID="trainer-system-memory-bank-sheet"
+        onClose={closeSheet}
+        testID="trainer-system-notes-sheet"
       >
         {selectedDocument ? (
           <View style={styles.sheetContent}>
-            <ModeText variant="label" tone="tertiary">Memory Bank Item</ModeText>
+            <ModeText variant="label" tone="tertiary">{isCreating ? 'New Note' : 'Note Detail'}</ModeText>
             {!isEditing ? (
               <>
-                <ModeText variant="bodySm" style={styles.sheetTitle}>{selectedDocument.title || 'Untitled document'}</ModeText>
+                <ModeText variant="bodySm" style={styles.sheetTitle}>
+                  {noteRowDisplayTitle(selectedDocument)}
+                </ModeText>
                 <ModeText variant="caption" tone="tertiary">
-                  {selectedDocument.document_type || 'text'} · {formatSavedDate(selectedDocument.created_at)}
+                  {buildKnowledgeNoteSubtitle(selectedDocument)}
                 </ModeText>
                 <ModeText variant="bodySm" tone="secondary">
-                  {selectedDocument.raw_text || 'No content available for this document.'}
+                  {selectedDocument.raw_text || 'No content available for this note.'}
                 </ModeText>
               </>
             ) : (
@@ -1075,20 +1118,20 @@ function KnowledgeMemoryBankScreen({
                 <ModeInput
                   value={draftTitle}
                   onChangeText={setDraftTitle}
-                  placeholder="Document title"
-                  testID="trainer-system-memory-bank-title-input"
+                  placeholder="Short note title (optional)"
+                  testID="trainer-system-note-sheet-title-input"
                 />
                 <ModeInput
                   value={draftRawText}
                   onChangeText={setDraftRawText}
-                  placeholder="Document content"
+                  placeholder="Write a detailed note for your trainer AI..."
                   multiline
                   style={styles.multilineInput}
-                  testID="trainer-system-memory-bank-raw-input"
+                  testID="trainer-system-note-sheet-raw-input"
                 />
               </>
             )}
-            {mutationState.error ? (
+            {mutationState.error && !mutationState.errorDocumentId ? (
               <ModeText variant="caption" tone="error">{mutationState.error}</ModeText>
             ) : null}
             {mutationState.note ? (
@@ -1100,41 +1143,47 @@ function KnowledgeMemoryBankScreen({
             {!isEditing ? (
               <View style={styles.buttonStack}>
                 <ModeButton
-                  title="Edit document"
+                  title="Edit note"
                   variant="secondary"
                   onPress={() => setIsEditing(true)}
-                  testID="trainer-system-memory-bank-edit"
+                  testID="trainer-system-note-sheet-edit"
                 />
                 <ModeButton
-                  title={mutationState.isDeleting ? 'Deleting...' : 'Delete document'}
-                  variant="destructive"
-                  onPress={handleDeleteDocument}
-                  disabled={mutationState.isDeleting}
-                  testID="trainer-system-memory-bank-delete"
+                  title="Close"
+                  variant="ghost"
+                  onPress={closeSheet}
+                  testID="trainer-system-note-sheet-close"
                 />
               </View>
             ) : (
               <View style={styles.buttonStack}>
                 <ModeButton
-                  title={mutationState.isSaving ? 'Saving...' : 'Save changes'}
+                  title={mutationState.isSaving ? 'Saving...' : isCreating ? 'Create note' : 'Save note'}
                   onPress={handleSaveDocument}
                   disabled={mutationState.isSaving}
-                  testID="trainer-system-memory-bank-save"
+                  testID="trainer-system-note-sheet-save"
                 />
                 <ModeButton
                   title="Cancel"
                   variant="ghost"
                   onPress={() => {
+                    if (isCreating) {
+                      closeSheet();
+                      return;
+                    }
                     setIsEditing(false);
                     setDraftTitle(String(selectedDocument?.title || ''));
                     setDraftRawText(String(selectedDocument?.raw_text || ''));
                     setMutationState((current) => ({
                       ...current,
                       error: null,
+                      errorDocumentId: null,
+                      note: null,
+                      success: null,
                     }));
                   }}
                   disabled={mutationState.isSaving}
-                  testID="trainer-system-memory-bank-cancel"
+                  testID="trainer-system-note-sheet-cancel"
                 />
               </View>
             )}
@@ -1144,300 +1193,6 @@ function KnowledgeMemoryBankScreen({
     </SectionShell>
   );
 }
-
-function KnowledgeMethodologyRulesScreen({
-  accessToken,
-  bottomInset,
-  onBack,
-  onKnowledgeMutated,
-}) {
-  const [title, setTitle] = useState('');
-  const [rawText, setRawText] = useState('');
-  const [feedback, setFeedback] = useState({ error: null, note: null, success: null });
-  const [isSaving, setIsSaving] = useState(false);
-  const [rules, setRules] = useState([]);
-  const [isLoadingRules, setIsLoadingRules] = useState(true);
-  const [rulesError, setRulesError] = useState(null);
-  const [selectedRule, setSelectedRule] = useState(null);
-  const [editingRuleCategory, setEditingRuleCategory] = useState('');
-  const [editingRuleText, setEditingRuleText] = useState('');
-  const [isMutatingRule, setIsMutatingRule] = useState(false);
-  const [ruleMutationError, setRuleMutationError] = useState(null);
-
-  const loadRules = useCallback(async () => {
-    if (!accessToken || !TRAINER_AGENT_LAB_ENABLED) {
-      setRules([]);
-      setIsLoadingRules(false);
-      return;
-    }
-    setIsLoadingRules(true);
-    setRulesError(null);
-    try {
-      const payload = await listTrainerRules({ accessToken });
-      setRules(Array.isArray(payload) ? payload : []);
-    } catch (error) {
-      setRulesError(error?.message || 'Unable to load extracted rules.');
-    } finally {
-      setIsLoadingRules(false);
-    }
-  }, [accessToken]);
-
-  useEffect(() => {
-    loadRules();
-  }, [loadRules]);
-
-  const visibleRules = useMemo(
-    () => rules.filter((rule) => !rule?.is_archived),
-    [rules],
-  );
-
-  const handleSaveMethodology = async () => {
-    const normalizedTitle = title.trim();
-    const normalizedRawText = rawText.trim();
-    if (!normalizedTitle) {
-      setFeedback({ error: 'Add a title before saving.', note: null, success: null });
-      return;
-    }
-    if (!normalizedRawText) {
-      setFeedback({ error: 'Add coaching content before saving.', note: null, success: null });
-      return;
-    }
-    if (!accessToken || isSaving) {
-      return;
-    }
-    setIsSaving(true);
-    setFeedback({ error: null, note: null, success: null });
-    try {
-      const payload = TRAINER_AGENT_LAB_ENABLED
-        ? await saveTrainerKnowledgeDocumentWithFallback({
-          accessToken,
-          title: normalizedTitle,
-          rawText: normalizedRawText,
-          metadata: { source: 'agent_lab_long_form' },
-        })
-        : await createTrainerKnowledgeDocument({
-          accessToken,
-          title: normalizedTitle,
-          rawText: normalizedRawText,
-          metadata: { source: 'agent_lab_long_form' },
-        });
-      const createdCount = payload?.extraction?.rules_created;
-      const extractionFallbackReason = payload?.extraction?.fallback_reason;
-      setFeedback({
-        error: null,
-        note: isExtractionSoftNote(extractionFallbackReason)
-          ? 'Rule extraction is still processing. You can retry later.'
-          : null,
-        success: typeof createdCount === 'number'
-          ? `Saved and extracted ${createdCount} coaching rule${createdCount === 1 ? '' : 's'}.`
-          : 'Saved. Your methodology is available in the memory bank.',
-      });
-      setTitle('');
-      setRawText('');
-      await loadRules();
-      onKnowledgeMutated?.();
-    } catch (error) {
-      setFeedback({
-        error: error?.message || 'Unable to save trainer knowledge.',
-        note: null,
-        success: null,
-      });
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const openRule = (rule) => {
-    setSelectedRule(rule);
-    setEditingRuleCategory(rule?.category || 'general_coaching');
-    setEditingRuleText(rule?.rule_text || '');
-    setRuleMutationError(null);
-  };
-
-  const handleSaveRule = async () => {
-    if (!selectedRule?.id || !accessToken || isMutatingRule) {
-      return;
-    }
-    const normalizedCategory = editingRuleCategory.trim();
-    const normalizedText = editingRuleText.trim();
-    if (!normalizedCategory) {
-      setRuleMutationError('Category cannot be empty.');
-      return;
-    }
-    if (!normalizedText) {
-      setRuleMutationError('Rule text cannot be empty.');
-      return;
-    }
-    setIsMutatingRule(true);
-    setRuleMutationError(null);
-    try {
-      await updateTrainerRule({
-        accessToken,
-        ruleId: selectedRule.id,
-        category: normalizedCategory,
-        ruleText: normalizedText,
-      });
-      await loadRules();
-      setSelectedRule(null);
-      onKnowledgeMutated?.();
-    } catch (error) {
-      setRuleMutationError(error?.message || 'Unable to update rule.');
-    } finally {
-      setIsMutatingRule(false);
-    }
-  };
-
-  const handleArchiveRule = async () => {
-    if (!selectedRule?.id || !accessToken || isMutatingRule) {
-      return;
-    }
-    setIsMutatingRule(true);
-    setRuleMutationError(null);
-    try {
-      await archiveTrainerRule({
-        accessToken,
-        ruleId: selectedRule.id,
-      });
-      await loadRules();
-      setSelectedRule(null);
-      onKnowledgeMutated?.();
-    } catch (error) {
-      setRuleMutationError(error?.message || 'Unable to archive rule.');
-    } finally {
-      setIsMutatingRule(false);
-    }
-  };
-
-  return (
-    <SectionShell
-      title="Methodology / Rules"
-      subtitle="Long-form methodology entry plus compact rule maintenance."
-      onBack={onBack}
-      bottomInset={bottomInset}
-      rightSlot={(
-        <ModeButton
-          title={isLoadingRules ? 'Loading...' : 'Refresh'}
-          variant="ghost"
-          size="sm"
-          onPress={loadRules}
-          disabled={isLoadingRules}
-          testID="trainer-system-rules-refresh"
-        />
-      )}
-    >
-      <ModeCard variant="surface">
-        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Methodology</ModeText>
-        <ModeText variant="bodySm" tone="secondary">
-          Paste progression logic, nutrition philosophy, deload rules, communication style, and constraints.
-        </ModeText>
-        <ModeInput
-          value={title}
-          onChangeText={setTitle}
-          placeholder="Document title"
-          testID="trainer-system-methodology-title-input"
-        />
-        <ModeInput
-          value={rawText}
-          onChangeText={setRawText}
-          placeholder="Paste your methodology here..."
-          multiline
-          style={styles.multilineInput}
-          testID="trainer-system-methodology-raw-input"
-        />
-        {feedback.error ? (
-          <ModeText variant="caption" tone="error">{feedback.error}</ModeText>
-        ) : null}
-        {feedback.note ? (
-          <ModeText variant="caption" tone="secondary">{feedback.note}</ModeText>
-        ) : null}
-        {feedback.success ? (
-          <ModeText variant="caption" tone="success">{feedback.success}</ModeText>
-        ) : null}
-        <ModeButton
-          title={isSaving ? 'Saving...' : 'Save methodology'}
-          onPress={handleSaveMethodology}
-          disabled={isSaving}
-          testID="trainer-system-methodology-save"
-        />
-      </ModeCard>
-
-      <SystemSectionCard>
-        <SystemSectionHeader title="Extracted Rules" />
-        {isLoadingRules ? (
-          <View style={styles.loadingRow}>
-            <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
-            <ModeText variant="bodySm" tone="secondary">Loading extracted rules...</ModeText>
-          </View>
-        ) : null}
-        {!isLoadingRules && rulesError ? (
-          <ModeText variant="bodySm" tone="error">{rulesError}</ModeText>
-        ) : null}
-        {!isLoadingRules && !rulesError && visibleRules.length === 0 ? (
-          <EmptyListState
-            title="No extracted rules yet"
-            detail="Save methodology or quick captures to generate coaching rules."
-          />
-        ) : null}
-        {!isLoadingRules && !rulesError && visibleRules.length > 0 ? visibleRules.map((rule) => (
-          <SystemNavRow
-            key={rule.id}
-            icon="sliders"
-            title={rule.rule_text || 'Untitled rule'}
-            subtitle={`${formatRuleCategory(rule.category)}${typeof rule.confidence === 'number' ? ` · ${(rule.confidence * 100).toFixed(0)}% confidence` : ''}`}
-            badge={rule.current_version ? `v${rule.current_version}` : null}
-            onPress={() => openRule(rule)}
-            testID={`trainer-system-rule-${rule.id}`}
-          />
-        )) : null}
-      </SystemSectionCard>
-
-      <SystemActionSheet
-        visible={Boolean(selectedRule)}
-        onClose={() => setSelectedRule(null)}
-        testID="trainer-system-rule-sheet"
-      >
-        {selectedRule ? (
-          <View style={styles.sheetContent}>
-            <ModeText variant="label" tone="tertiary">Rule Detail</ModeText>
-            <ModeInput
-              value={editingRuleCategory}
-              onChangeText={setEditingRuleCategory}
-              placeholder="Rule category"
-              testID="trainer-system-rule-category-input"
-            />
-            <ModeInput
-              value={editingRuleText}
-              onChangeText={setEditingRuleText}
-              placeholder="Rule text"
-              multiline
-              style={styles.ruleEditInput}
-              testID="trainer-system-rule-text-input"
-            />
-            {ruleMutationError ? (
-              <ModeText variant="caption" tone="error">{ruleMutationError}</ModeText>
-            ) : null}
-            <View style={styles.buttonStack}>
-              <ModeButton
-                title={isMutatingRule ? 'Saving...' : 'Save rule'}
-                onPress={handleSaveRule}
-                disabled={isMutatingRule}
-                testID="trainer-system-rule-save"
-              />
-              <ModeButton
-                title={isMutatingRule ? 'Archiving...' : 'Archive rule'}
-                variant="ghost"
-                onPress={handleArchiveRule}
-                disabled={isMutatingRule}
-                testID="trainer-system-rule-archive"
-              />
-            </View>
-          </View>
-        ) : null}
-      </SystemActionSheet>
-    </SectionShell>
-  );
-}
-
 function DefaultsSessionScreen({
   accessToken,
   bottomInset,
@@ -2593,8 +2348,8 @@ export default function TrainerSystemScreen({
 }) {
   const [viewStack, setViewStack] = useState([{ key: SYSTEM_VIEW.HUB, params: null }]);
   const [hubCounts, setHubCounts] = useState({ clients: 0, knowledge: 0, review: 0 });
-  const [isRefreshingHub, setIsRefreshingHub] = useState(false);
   const [trainerSettings, setTrainerSettings] = useState(null);
+  const [trainerPersona, setTrainerPersona] = useState(null);
   const [isLoadingTrainerSettings, setIsLoadingTrainerSettings] = useState(false);
 
   const onboardingState = useMemo(
@@ -2628,6 +2383,12 @@ export default function TrainerSystemScreen({
     return 'Build your AI coaching layer with compact, drill-down controls.';
   }, [onboardingState, trainerSettings]);
 
+  const coachSummary = useMemo(() => buildCoachWorkspaceSummary({
+    trainerName,
+    trainerSettings,
+    trainerPersona,
+  }), [trainerName, trainerPersona, trainerSettings]);
+
   const currentView = viewStack[viewStack.length - 1] || { key: SYSTEM_VIEW.HUB, params: null };
 
   const pushView = useCallback((key, params = null) => {
@@ -2643,7 +2404,6 @@ export default function TrainerSystemScreen({
       setHubCounts({ clients: 0, knowledge: 0, review: 0 });
       return;
     }
-    setIsRefreshingHub(true);
     try {
       const [knowledgeResponse, clientsResponse, draftResponse, outputResponse, qaResponse] = await Promise.all([
         listTrainerKnowledgeDocuments({ accessToken }),
@@ -2664,8 +2424,6 @@ export default function TrainerSystemScreen({
       });
     } catch (_error) {
       setHubCounts((current) => current);
-    } finally {
-      setIsRefreshingHub(false);
     }
   }, [accessToken]);
 
@@ -2685,10 +2443,24 @@ export default function TrainerSystemScreen({
     }
   }, [accessToken]);
 
+  const loadTrainerPersona = useCallback(async () => {
+    if (!accessToken) {
+      setTrainerPersona(null);
+      return;
+    }
+    try {
+      const payload = await listTrainerPersonas({ accessToken });
+      setTrainerPersona(pickDefaultTrainerPersona(payload));
+    } catch (_error) {
+      setTrainerPersona(null);
+    }
+  }, [accessToken]);
+
   useEffect(() => {
     refreshHubCounts();
     loadTrainerSettings();
-  }, [refreshHubCounts, loadTrainerSettings]);
+    loadTrainerPersona();
+  }, [loadTrainerPersona, refreshHubCounts, loadTrainerSettings]);
 
   const handleTrainerSettingsSaved = useCallback((payload) => {
     setTrainerSettings(payload);
@@ -2699,63 +2471,22 @@ export default function TrainerSystemScreen({
     bottomInset,
   };
 
-  if (currentView.key === SYSTEM_VIEW.COACH_PROFILE) {
+  if (currentView.key === SYSTEM_VIEW.COACH_WORKSPACE) {
     return (
-      <CoachProfileScreen
+      <CoachWorkspaceScreen
         bottomInset={bottomInset}
         onBack={popView}
         trainerName={trainerName}
         onboardingState={onboardingState}
+        coachSummary={coachSummary}
         onOpenTrainerCoach={onOpenTrainerCoach}
       />
     );
   }
 
-  if (currentView.key === SYSTEM_VIEW.COACH_SETTINGS) {
+  if (currentView.key === SYSTEM_VIEW.KNOWLEDGE_WORKSPACE) {
     return (
-      <CoachSettingsScreen
-        bottomInset={bottomInset}
-        onBack={popView}
-        onboardingState={onboardingState}
-        onNavigate={pushView}
-      />
-    );
-  }
-
-  if (currentView.key === SYSTEM_VIEW.COACH_RETRAIN_REVIEW) {
-    return (
-      <CoachRetrainReviewScreen
-        bottomInset={bottomInset}
-        onBack={popView}
-        onboardingState={onboardingState}
-        onOpenTrainerCoach={onOpenTrainerCoach}
-      />
-    );
-  }
-
-  if (currentView.key === SYSTEM_VIEW.KNOWLEDGE_MEMORY_BANK) {
-    return (
-      <KnowledgeMemoryBankScreen
-        {...commonViewProps}
-        onBack={popView}
-        onKnowledgeMutated={refreshHubCounts}
-      />
-    );
-  }
-
-  if (currentView.key === SYSTEM_VIEW.KNOWLEDGE_METHODOLOGY_RULES) {
-    return (
-      <KnowledgeMethodologyRulesScreen
-        {...commonViewProps}
-        onBack={popView}
-        onKnowledgeMutated={refreshHubCounts}
-      />
-    );
-  }
-
-  if (currentView.key === SYSTEM_VIEW.KNOWLEDGE_QUICK_CAPTURES) {
-    return (
-      <KnowledgeQuickCapturesScreen
+      <KnowledgeWorkspaceScreen
         {...commonViewProps}
         onBack={popView}
         onKnowledgeMutated={refreshHubCounts}
@@ -2852,11 +2583,6 @@ export default function TrainerSystemScreen({
       counts={hubCounts}
       onboardingState={onboardingState}
       onNavigate={pushView}
-      isRefreshing={isRefreshingHub}
-      onRefresh={() => {
-        refreshHubCounts();
-        loadTrainerSettings();
-      }}
     />
   );
 }
@@ -2943,14 +2669,58 @@ const styles = StyleSheet.create({
   buttonStack: {
     gap: theme.spacing[1],
   },
-  quickCaptureInput: {
-    minHeight: 104,
+  knowledgeWorkspaceTopActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: theme.spacing[1],
+  },
+  noteRowGroup: {
+    gap: 4,
+  },
+  noteRow: {
+    minHeight: 56,
+    borderRadius: theme.radii.s,
+    borderWidth: 1,
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[2],
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[2],
+  },
+  noteRowPressed: {
+    opacity: theme.interaction.pressedOpacity,
+  },
+  noteRowCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  noteRowTitle: {
+    fontWeight: '600',
+  },
+  noteRowActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  noteRowIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: theme.colors.glass.base,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  noteRowIconButtonPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
   },
   multilineInput: {
     minHeight: 150,
-  },
-  ruleEditInput: {
-    minHeight: 110,
   },
   sheetContent: {
     gap: theme.spacing[2],

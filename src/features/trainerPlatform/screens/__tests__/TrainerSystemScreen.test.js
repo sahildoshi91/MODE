@@ -82,6 +82,7 @@ jest.mock('../../../trainerClients/services/trainerHomeApi', () => ({
 
 jest.mock('../../../profile/services/profileApi', () => ({
   getTrainerSettingsMe: jest.fn(),
+  listTrainerPersonas: jest.fn(),
   patchTrainerSettingsMe: jest.fn().mockResolvedValue({
     default_meeting_location: 'HQ Gym',
     auto_fill_meeting_location: true,
@@ -113,15 +114,22 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 
 import { fetchWithApiFallback } from '../../../../services/apiRequest';
-import { listTrainerKnowledgeDocuments } from '../../../trainerHome/services/trainerKnowledgeApi';
+import {
+  createTrainerKnowledgeDocument,
+  deleteTrainerKnowledgeDocument,
+  listTrainerKnowledgeDocuments,
+  saveTrainerKnowledgeDocumentWithFallback,
+  updateTrainerKnowledgeDocument,
+} from '../../../trainerHome/services/trainerKnowledgeApi';
 import {
   deactivateTrainerInviteCode,
   listTrainerClients,
   listTrainerInviteCodes,
 } from '../../../trainerClients/services/trainerHomeApi';
-import { getTrainerSettingsMe } from '../../../profile/services/profileApi';
+import { getTrainerSettingsMe, listTrainerPersonas } from '../../../profile/services/profileApi';
 import { getTrainerCoachQueue } from '../../../trainerCoach/services/trainerCoachApi';
 import { getTrainerReviewOutputs } from '../../../trainerReview/services/trainerReviewApi';
+import { generateKnowledgeNoteTitle } from '../../utils/knowledgeNoteTitleSummary';
 import TrainerSystemScreen from '../TrainerSystemScreen';
 
 function createJsonResponse(payload = {}, { ok = true, status = 200 } = {}) {
@@ -165,9 +173,49 @@ describe('TrainerSystemScreen', () => {
       is_active: false,
     });
     listTrainerKnowledgeDocuments.mockResolvedValue([
-      { id: 'doc-1', title: 'Methodology' },
-      { id: 'doc-2', title: 'Quick Capture' },
+      {
+        id: 'doc-1',
+        title: '',
+        raw_text: 'Lower load on high stress weeks and prioritize movement quality.',
+        document_type: 'text',
+        created_at: '2026-04-20T15:00:00.000Z',
+      },
+      {
+        id: 'doc-2',
+        title: 'Peak Week Strategy',
+        raw_text: 'Peak week check-in cadence and hydration guardrails.',
+        document_type: 'text',
+        created_at: '2026-04-19T15:00:00.000Z',
+      },
     ]);
+    saveTrainerKnowledgeDocumentWithFallback.mockResolvedValue({
+      document: {
+        id: 'doc-new',
+        title: 'Auto Title',
+        raw_text: 'Default note text',
+        document_type: 'text',
+        created_at: '2026-04-20T20:00:00.000Z',
+      },
+      extraction: { rules_created: 0, fallback_reason: null },
+    });
+    createTrainerKnowledgeDocument.mockResolvedValue({
+      id: 'doc-new',
+      title: 'Auto Title',
+      raw_text: 'Default note text',
+      document_type: 'text',
+      created_at: '2026-04-20T20:00:00.000Z',
+    });
+    updateTrainerKnowledgeDocument.mockResolvedValue({
+      document: {
+        id: 'doc-1',
+        title: 'Edited Title',
+        raw_text: 'Edited note text',
+        document_type: 'text',
+        created_at: '2026-04-20T15:00:00.000Z',
+      },
+      extraction: { rules_created: 0, fallback_reason: null },
+    });
+    deleteTrainerKnowledgeDocument.mockResolvedValue({});
     listTrainerClients.mockResolvedValue({
       count: 3,
       items: [
@@ -180,6 +228,26 @@ describe('TrainerSystemScreen', () => {
       auto_fill_meeting_location: true,
       assistant_display_name: 'Atlas',
     });
+    listTrainerPersonas.mockResolvedValue([
+      {
+        id: 'persona-default',
+        trainer_id: 'trainer-1',
+        persona_name: 'Nova',
+        tone_description: 'Confident and calm',
+        coaching_philosophy: 'Consistency over intensity.',
+        communication_rules: {
+          identity: { summary: 'Calm accountability with high standards.' },
+        },
+        onboarding_preferences: {
+          trainer_onboarding_answers: {
+            coaching_identity: { summary: 'Calm accountability with high standards.' },
+            tone: { style: 'Warm and direct' },
+            philosophy: { summary: 'Consistency over intensity.' },
+          },
+        },
+        is_default: true,
+      },
+    ]);
     getTrainerCoachQueue.mockResolvedValue({
       count: 1,
       items: [
@@ -252,8 +320,8 @@ describe('TrainerSystemScreen', () => {
     const rendered = JSON.stringify(tree.toJSON());
 
     expect(rendered).toContain('System');
-    expect(rendered).toContain('Coach Profile');
-    expect(rendered).toContain('Memory Bank');
+    expect(rendered).toContain('Coach Workspace');
+    expect(rendered).toContain('Knowledge Workspace');
     expect(rendered).toContain('Review Hub');
     expect(rendered).toContain('Coach Maya');
     expect(rendered).toContain('Atlas is calibrated and ready for trainer-controlled coaching.');
@@ -275,9 +343,10 @@ describe('TrainerSystemScreen', () => {
       '/api/v1/trainer-review/queue',
       expect.objectContaining({ method: 'GET' }),
     );
+    expect(listTrainerPersonas).toHaveBeenCalledWith({ accessToken: 'trainer-token' });
   });
 
-  it('navigates into review/retrain and preserves coach launch payloads', async () => {
+  it('opens coach workspace and preserves coach launch payloads', async () => {
     const onOpenTrainerCoach = jest.fn();
     const tree = await renderScreen({
       onOpenTrainerCoach,
@@ -290,16 +359,19 @@ describe('TrainerSystemScreen', () => {
     });
 
     await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-nav-coach-retrain-review').props.onPress();
+      findPressableByTestID(tree.root, 'trainer-system-nav-coach-workspace').props.onPress();
     });
 
-    expect(JSON.stringify(tree.toJSON())).toContain('Review / Retrain');
+    expect(JSON.stringify(tree.toJSON())).toContain('Coach Workspace');
 
     await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-coach-review-button').props.onPress();
+      findPressableByTestID(tree.root, 'trainer-system-coach-workspace-review').props.onPress();
     });
     await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-coach-retrain-button').props.onPress();
+      findPressableByTestID(tree.root, 'trainer-system-coach-workspace-resume').props.onPress();
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-coach-workspace-retrain').props.onPress();
     });
 
     expect(onOpenTrainerCoach).toHaveBeenNthCalledWith(1, {
@@ -308,8 +380,167 @@ describe('TrainerSystemScreen', () => {
     });
     expect(onOpenTrainerCoach).toHaveBeenNthCalledWith(2, {
       entrypoint: 'trainer_agent_training',
+      onboarding_action: 'resume',
+    });
+    expect(onOpenTrainerCoach).toHaveBeenNthCalledWith(3, {
+      entrypoint: 'trainer_agent_training',
       onboarding_action: 'retrain',
     });
+  });
+
+  it('opens knowledge workspace and shows notes-first controls', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-knowledge-workspace').props.onPress();
+    });
+    await flushEffects();
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Knowledge Workspace');
+    expect(rendered).toContain('Notes Library');
+    expect(rendered).toContain('Saved Notes');
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-row-doc-1').length,
+    ).toBeGreaterThan(0);
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-edit-doc-1').length,
+    ).toBeGreaterThan(0);
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-delete-doc-1').length,
+    ).toBeGreaterThan(0);
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-notes-new').length,
+    ).toBeGreaterThan(0);
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-knowledge-toggle-memory-bank'),
+    ).toHaveLength(0);
+  });
+
+  it('creates a new note with generated title when title is blank', async () => {
+    const tree = await renderScreen();
+    const rawText = 'If stress is high, lower intensity before changing frequency.';
+    const expectedTitle = generateKnowledgeNoteTitle(rawText);
+    saveTrainerKnowledgeDocumentWithFallback.mockImplementationOnce(async ({ title, rawText: nextRawText }) => ({
+      document: {
+        id: 'doc-created',
+        title,
+        raw_text: nextRawText,
+        document_type: 'text',
+        created_at: '2026-04-20T21:00:00.000Z',
+      },
+      extraction: { rules_created: 0, fallback_reason: null },
+    }));
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-knowledge-workspace').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-notes-new').props.onPress();
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'trainer-system-note-sheet-raw-input' }).props.onChangeText(rawText);
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-note-sheet-save').props.onPress();
+    });
+    await flushEffects();
+
+    expect(saveTrainerKnowledgeDocumentWithFallback).toHaveBeenLastCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      title: expectedTitle,
+      rawText,
+    }));
+    expect(JSON.stringify(tree.toJSON())).toContain(expectedTitle);
+  });
+
+  it('edits a note from inline edit icon and saves changes', async () => {
+    const tree = await renderScreen();
+    updateTrainerKnowledgeDocument.mockResolvedValueOnce({
+      document: {
+        id: 'doc-1',
+        title: 'High Stress Deload',
+        raw_text: 'Updated load management instructions.',
+        document_type: 'text',
+        created_at: '2026-04-20T15:00:00.000Z',
+      },
+      extraction: { rules_created: 0, fallback_reason: null },
+    });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-knowledge-workspace').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-note-edit-doc-1').props.onPress({
+        stopPropagation: jest.fn(),
+      });
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'trainer-system-note-sheet-title-input' }).props.onChangeText('High Stress Deload');
+      tree.root.findByProps({ testID: 'trainer-system-note-sheet-raw-input' }).props.onChangeText('Updated load management instructions.');
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-note-sheet-save').props.onPress();
+    });
+    await flushEffects();
+
+    expect(updateTrainerKnowledgeDocument).toHaveBeenLastCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      documentId: 'doc-1',
+      title: 'High Stress Deload',
+      rawText: 'Updated load management instructions.',
+    }));
+    expect(JSON.stringify(tree.toJSON())).toContain('High Stress Deload');
+  });
+
+  it('deletes a note instantly from the inline delete icon', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-knowledge-workspace').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-note-delete-doc-1').props.onPress({
+        stopPropagation: jest.fn(),
+      });
+    });
+    await flushEffects();
+
+    expect(deleteTrainerKnowledgeDocument).toHaveBeenCalledWith({
+      accessToken: 'trainer-token',
+      documentId: 'doc-1',
+    });
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-row-doc-1'),
+    ).toHaveLength(0);
+  });
+
+  it('maps coach summary fields from persona with settings fallback', async () => {
+    listTrainerPersonas.mockResolvedValueOnce([]);
+    const fallbackTree = await renderScreen();
+    await act(async () => {
+      findPressableByTestID(fallbackTree.root, 'trainer-system-nav-coach-workspace').props.onPress();
+    });
+    let rendered = JSON.stringify(fallbackTree.toJSON());
+    expect(rendered).toContain('AI Name');
+    expect(rendered).toContain('Atlas');
+    expect(rendered).toContain('Not set yet');
+
+    const personaTree = await renderScreen();
+    await act(async () => {
+      findPressableByTestID(personaTree.root, 'trainer-system-nav-coach-workspace').props.onPress();
+    });
+    rendered = JSON.stringify(personaTree.toJSON());
+    expect(rendered).toContain('Nova');
+    expect(rendered).toContain('Calm accountability with high standards.');
+    expect(rendered).toContain('Warm and direct');
+    expect(rendered).toContain('Consistency over intensity.');
   });
 
   it('drills into client list and client detail, then supports back navigation', async () => {
