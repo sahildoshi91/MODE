@@ -31,6 +31,15 @@ jest.mock('../../../trainerHome/services/trainerKnowledgeApi', () => ({
 }));
 
 jest.mock('../../../trainerClients/services/trainerHomeApi', () => ({
+  archiveTrainerClientMemory: jest.fn().mockResolvedValue({}),
+  createTrainerClientMemory: jest.fn().mockResolvedValue({
+    id: 'memory-new',
+    memory_type: 'note',
+    memory_key: 'note_20260420000000',
+    visibility: 'ai_usable',
+    text: 'New memory',
+    tags: [],
+  }),
   createTrainerInviteCode: jest.fn().mockResolvedValue({
     id: 'invite-1',
     code: 'MODE1234',
@@ -74,9 +83,39 @@ jest.mock('../../../trainerClients/services/trainerHomeApi', () => ({
       upcoming_exceptions: [],
     },
   }),
+  listTrainerClientMemory: jest.fn().mockResolvedValue([
+    {
+      id: 'memory-1',
+      trainer_id: 'trainer-1',
+      client_id: 'client-1',
+      memory_type: 'note',
+      memory_key: 'knee_injury',
+      visibility: 'ai_usable',
+      text: 'Client has a prior knee injury.',
+      tags: ['injury', 'knee'],
+      created_at: '2026-04-18T15:00:00.000Z',
+      updated_at: '2026-04-19T12:00:00.000Z',
+    },
+    {
+      id: 'memory-2',
+      trainer_id: 'trainer-1',
+      client_id: 'client-1',
+      memory_type: 'preference',
+      memory_key: 'diet_pref',
+      visibility: 'internal_only',
+      text: 'Vegetarian nutrition preference.',
+      tags: ['nutrition'],
+      created_at: '2026-04-17T15:00:00.000Z',
+      updated_at: '2026-04-17T15:00:00.000Z',
+    },
+  ]),
   listTrainerClients: jest.fn(),
   listTrainerInviteCodes: jest.fn().mockResolvedValue({ items: [], count: 0 }),
   removeTrainerClient: jest.fn().mockResolvedValue({ client_id: 'client-1' }),
+  updateTrainerClientMemory: jest.fn().mockResolvedValue({
+    id: 'memory-1',
+    visibility: 'internal_only',
+  }),
   updateTrainerClient: jest.fn().mockResolvedValue({ client_id: 'client-1', client_name: 'Taylor Swift' }),
 }));
 
@@ -122,9 +161,13 @@ import {
   updateTrainerKnowledgeDocument,
 } from '../../../trainerHome/services/trainerKnowledgeApi';
 import {
+  archiveTrainerClientMemory,
+  createTrainerClientMemory,
   deactivateTrainerInviteCode,
+  listTrainerClientMemory,
   listTrainerClients,
   listTrainerInviteCodes,
+  updateTrainerClientMemory,
 } from '../../../trainerClients/services/trainerHomeApi';
 import { getTrainerSettingsMe, listTrainerPersonas } from '../../../profile/services/profileApi';
 import { getTrainerCoachQueue } from '../../../trainerCoach/services/trainerCoachApi';
@@ -223,6 +266,32 @@ describe('TrainerSystemScreen', () => {
         { client_id: 'client-2', client_name: 'Jordan', user_id: 'client-user-2' },
       ],
     });
+    listTrainerClientMemory.mockResolvedValue([
+      {
+        id: 'memory-1',
+        trainer_id: 'trainer-1',
+        client_id: 'client-1',
+        memory_type: 'note',
+        memory_key: 'knee_injury',
+        visibility: 'ai_usable',
+        text: 'Client has a prior knee injury.',
+        tags: ['injury', 'knee'],
+        created_at: '2026-04-18T15:00:00.000Z',
+        updated_at: '2026-04-19T12:00:00.000Z',
+      },
+      {
+        id: 'memory-2',
+        trainer_id: 'trainer-1',
+        client_id: 'client-1',
+        memory_type: 'preference',
+        memory_key: 'diet_pref',
+        visibility: 'internal_only',
+        text: 'Vegetarian nutrition preference.',
+        tags: ['nutrition'],
+        created_at: '2026-04-17T15:00:00.000Z',
+        updated_at: '2026-04-17T15:00:00.000Z',
+      },
+    ]);
     getTrainerSettingsMe.mockResolvedValue({
       default_meeting_location: 'HQ Gym',
       auto_fill_meeting_location: true,
@@ -570,6 +639,156 @@ describe('TrainerSystemScreen', () => {
     });
 
     expect(JSON.stringify(tree.toJSON())).toContain('Client List');
+  });
+
+  it('renders an icon-only manage control in client list and opens client management', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-clients-manage').length,
+    ).toBeGreaterThan(0);
+    expect(
+      tree.root.findAll((node) => node.props?.name === 'user-plus').length,
+    ).toBeGreaterThan(0);
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-clients-manage').props.onPress();
+    });
+    await flushEffects();
+
+    expect(JSON.stringify(tree.toJSON())).toContain('Client Management');
+  });
+
+  it('removes the client detail refresh control', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-client-detail-refresh'),
+    ).toHaveLength(0);
+  });
+
+  it('creates client memory as ai_usable by default', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-input' })
+        .props.onChangeText('Client is vegetarian and needs high-protein options.');
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-composer-save').props.onPress();
+    });
+    await flushEffects();
+
+    expect(createTrainerClientMemory).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+      memoryType: 'note',
+      text: 'Client is vegetarian and needs high-protein options.',
+      visibility: 'ai_usable',
+      tags: [],
+    }));
+  });
+
+  it('supports switching memory visibility to internal_only for create and edit', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-input' })
+        .props.onChangeText('Internal-only check-in note');
+      tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-ai-toggle' })
+        .props.onValueChange(false);
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-composer-save').props.onPress();
+    });
+    await flushEffects();
+
+    expect(createTrainerClientMemory).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: 'client-1',
+      visibility: 'internal_only',
+    }));
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-edit-memory-1').props.onPress({
+        stopPropagation: jest.fn(),
+      });
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'trainer-system-client-memory-edit-ai-toggle' }).props.onValueChange(false);
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-edit-save').props.onPress();
+    });
+    await flushEffects();
+
+    expect(updateTrainerClientMemory).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+      memoryId: 'memory-1',
+      visibility: 'internal_only',
+    }));
+  });
+
+  it('archives a memory row from client detail memory hub', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-archive-memory-1').props.onPress({
+        stopPropagation: jest.fn(),
+      });
+    });
+    await flushEffects();
+
+    expect(archiveTrainerClientMemory).toHaveBeenCalledWith({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+      memoryId: 'memory-1',
+    });
   });
 
   it('hides inactive invite codes and removes a row after deactivate in client management', async () => {

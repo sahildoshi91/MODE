@@ -41,6 +41,9 @@ import {
   updateTrainerKnowledgeDocument,
 } from '../../trainerHome/services/trainerKnowledgeApi';
 import {
+  archiveTrainerClientMemory,
+  createTrainerClientMemory,
+  listTrainerClientMemory,
   createTrainerInviteCode,
   deactivateTrainerInviteCode,
   getTrainerClientAIContext,
@@ -48,6 +51,7 @@ import {
   listTrainerClients,
   listTrainerInviteCodes,
   removeTrainerClient,
+  updateTrainerClientMemory,
   updateTrainerClient,
 } from '../../trainerClients/services/trainerHomeApi';
 import {
@@ -144,6 +148,32 @@ function formatExceptionDate(value) {
     month: 'short',
     day: 'numeric',
   });
+}
+
+function parseTags(inputValue) {
+  return String(inputValue || '')
+    .split(',')
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+}
+
+function toTitleCase(input) {
+  return String(input || '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function buildMemoryMetaLine(record) {
+  const tags = Array.isArray(record?.tags) ? record.tags : [];
+  const parts = [];
+  if (tags.length > 0) {
+    parts.push(tags.join(', '));
+  }
+  const updatedLabel = formatSavedDate(record?.updated_at || record?.created_at);
+  if (updatedLabel !== 'Date unavailable') {
+    parts.push(`Updated ${updatedLabel}`);
+  }
+  return parts.join(' • ');
 }
 
 function normalizeListPayload(payload) {
@@ -1365,20 +1395,15 @@ function ClientsListScreen({
   const [query, setQuery] = useState('');
   const [payload, setPayload] = useState({ items: [], count: 0 });
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState(null);
 
-  const loadClients = useCallback(async ({ refresh = false } = {}) => {
+  const loadClients = useCallback(async () => {
     if (!accessToken) {
       setPayload({ items: [], count: 0 });
       setIsLoading(false);
       return;
     }
-    if (refresh) {
-      setIsRefreshing(true);
-    } else {
-      setIsLoading(true);
-    }
+    setIsLoading(true);
     setError(null);
     try {
       const response = await listTrainerClients({
@@ -1391,11 +1416,7 @@ function ClientsListScreen({
     } catch (nextError) {
       setError(nextError?.message || 'Unable to load clients.');
     } finally {
-      if (refresh) {
-        setIsRefreshing(false);
-      } else {
-        setIsLoading(false);
-      }
+      setIsLoading(false);
     }
   }, [accessToken, query]);
 
@@ -1410,13 +1431,19 @@ function ClientsListScreen({
       onBack={onBack}
       bottomInset={bottomInset}
       rightSlot={(
-        <ModeButton
-          title={isRefreshing ? 'Refreshing...' : 'Manage'}
-          variant="ghost"
-          size="sm"
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Open client management"
+          hitSlop={8}
           onPress={onOpenClientManagement}
           testID="trainer-system-clients-manage"
-        />
+          style={({ pressed }) => [
+            styles.headerIconButton,
+            pressed && styles.headerIconButtonPressed,
+          ]}
+        >
+          <Feather name="user-plus" size={16} color={theme.colors.text.primary} />
+        </Pressable>
       )}
     >
       <SystemSearchBar
@@ -1791,25 +1818,61 @@ function ClientDetailManagementScreen({
 }) {
   const [detail, setDetail] = useState(null);
   const [aiContext, setAiContext] = useState(null);
+  const [memoryRecords, setMemoryRecords] = useState([]);
   const [error, setError] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSavingMemory, setIsSavingMemory] = useState(false);
+  const [memoryMutationError, setMemoryMutationError] = useState(null);
+  const [memoryMutationSuccess, setMemoryMutationSuccess] = useState(null);
+  const [newMemoryText, setNewMemoryText] = useState('');
+  const [newMemoryAiReadable, setNewMemoryAiReadable] = useState(true);
+  const [isNewMemoryTagsVisible, setIsNewMemoryTagsVisible] = useState(false);
+  const [newMemoryTagsText, setNewMemoryTagsText] = useState('');
+  const [editingMemoryId, setEditingMemoryId] = useState(null);
+  const [editingText, setEditingText] = useState('');
+  const [editingAiReadable, setEditingAiReadable] = useState(true);
+  const [isEditingTagsVisible, setIsEditingTagsVisible] = useState(false);
+  const [editingTagsText, setEditingTagsText] = useState('');
+
+  const editingRecord = useMemo(
+    () => memoryRecords.find((record) => record?.id === editingMemoryId) || null,
+    [memoryRecords, editingMemoryId],
+  );
+
+  const resetMemoryComposer = useCallback(() => {
+    setNewMemoryText('');
+    setNewMemoryAiReadable(true);
+    setIsNewMemoryTagsVisible(false);
+    setNewMemoryTagsText('');
+  }, []);
+
+  const closeMemoryEditSheet = useCallback(() => {
+    setEditingMemoryId(null);
+    setEditingText('');
+    setEditingAiReadable(true);
+    setIsEditingTagsVisible(false);
+    setEditingTagsText('');
+  }, []);
 
   const loadClient = useCallback(async () => {
     if (!accessToken || !clientId) {
       setDetail(null);
       setAiContext(null);
+      setMemoryRecords([]);
       setIsLoading(false);
       return;
     }
     setIsLoading(true);
     setError(null);
     try {
-      const [detailPayload, aiContextPayload] = await Promise.all([
+      const [detailPayload, aiContextPayload, memoryPayload] = await Promise.all([
         getTrainerClientDetail({ accessToken, clientId }),
         getTrainerClientAIContext({ accessToken, clientId }),
+        listTrainerClientMemory({ accessToken, clientId }),
       ]);
       setDetail(detailPayload);
       setAiContext(aiContextPayload);
+      setMemoryRecords(Array.isArray(memoryPayload) ? memoryPayload : []);
     } catch (nextError) {
       setError(nextError?.message || 'Unable to load client detail.');
     } finally {
@@ -1821,6 +1884,108 @@ function ClientDetailManagementScreen({
     loadClient();
   }, [loadClient]);
 
+  const openMemoryEditor = (record) => {
+    setEditingMemoryId(record.id);
+    setEditingText(record.text || '');
+    setEditingAiReadable(record.visibility === 'ai_usable');
+    const tagValues = Array.isArray(record.tags) ? record.tags : [];
+    setEditingTagsText(tagValues.join(', '));
+    setIsEditingTagsVisible(tagValues.length > 0);
+    setMemoryMutationError(null);
+    setMemoryMutationSuccess(null);
+  };
+
+  const handleCreateMemory = async () => {
+    if (!accessToken || !clientId || isSavingMemory) {
+      return;
+    }
+    const trimmedText = newMemoryText.trim();
+    if (!trimmedText) {
+      setMemoryMutationError('Add memory text before saving.');
+      setMemoryMutationSuccess(null);
+      return;
+    }
+
+    setIsSavingMemory(true);
+    setMemoryMutationError(null);
+    setMemoryMutationSuccess(null);
+    try {
+      await createTrainerClientMemory({
+        accessToken,
+        clientId,
+        memoryType: 'note',
+        text: trimmedText,
+        visibility: newMemoryAiReadable ? 'ai_usable' : 'internal_only',
+        tags: parseTags(newMemoryTagsText),
+      });
+      await loadClient();
+      resetMemoryComposer();
+      setMemoryMutationSuccess('Memory saved.');
+    } catch (nextError) {
+      setMemoryMutationError(nextError?.message || 'Unable to save memory.');
+    } finally {
+      setIsSavingMemory(false);
+    }
+  };
+
+  const handleSaveMemoryEdit = async () => {
+    if (!accessToken || !clientId || !editingMemoryId || isSavingMemory) {
+      return;
+    }
+    const trimmedText = editingText.trim();
+    if (!trimmedText) {
+      setMemoryMutationError('Memory text cannot be empty.');
+      setMemoryMutationSuccess(null);
+      return;
+    }
+
+    setIsSavingMemory(true);
+    setMemoryMutationError(null);
+    setMemoryMutationSuccess(null);
+    try {
+      await updateTrainerClientMemory({
+        accessToken,
+        clientId,
+        memoryId: editingMemoryId,
+        text: trimmedText,
+        visibility: editingAiReadable ? 'ai_usable' : 'internal_only',
+        tags: parseTags(editingTagsText),
+      });
+      await loadClient();
+      closeMemoryEditSheet();
+      setMemoryMutationSuccess('Memory updated.');
+    } catch (nextError) {
+      setMemoryMutationError(nextError?.message || 'Unable to update memory.');
+    } finally {
+      setIsSavingMemory(false);
+    }
+  };
+
+  const handleArchiveMemory = async (memoryId) => {
+    if (!accessToken || !clientId || !memoryId || isSavingMemory) {
+      return;
+    }
+    setIsSavingMemory(true);
+    setMemoryMutationError(null);
+    setMemoryMutationSuccess(null);
+    try {
+      await archiveTrainerClientMemory({
+        accessToken,
+        clientId,
+        memoryId,
+      });
+      await loadClient();
+      if (editingMemoryId === memoryId) {
+        closeMemoryEditSheet();
+      }
+      setMemoryMutationSuccess('Memory archived.');
+    } catch (nextError) {
+      setMemoryMutationError(nextError?.message || 'Unable to archive memory.');
+    } finally {
+      setIsSavingMemory(false);
+    }
+  };
+
   const clientName = detail?.client?.client_name || 'Client';
 
   return (
@@ -1829,16 +1994,6 @@ function ClientDetailManagementScreen({
       subtitle="Client detail management"
       onBack={onBack}
       bottomInset={bottomInset}
-      rightSlot={(
-        <ModeButton
-          title={isLoading ? 'Loading...' : 'Refresh'}
-          variant="ghost"
-          size="sm"
-          onPress={loadClient}
-          disabled={isLoading}
-          testID="trainer-system-client-detail-refresh"
-        />
-      )}
     >
       {isLoading ? (
         <ModeCard variant="surface">
@@ -1900,6 +2055,160 @@ function ClientDetailManagementScreen({
               )}
           </SystemSectionCard>
 
+          <ModeCard variant="surface" style={styles.systemMemoryCard}>
+            <View style={styles.systemMemoryHeaderRow}>
+              <ModeText variant="label" tone="tertiary" style={styles.systemMemorySectionLabel}>Client Memory</ModeText>
+              <ModeText variant="caption" tone="secondary">{memoryRecords.length} saved</ModeText>
+            </View>
+            <ModeInput
+              testID="trainer-system-client-memory-composer-input"
+              value={newMemoryText}
+              onChangeText={setNewMemoryText}
+              placeholder="Add memory note..."
+            />
+            <View style={styles.systemMemoryToggleRow}>
+              <ModeText variant="bodySm">AI can read this</ModeText>
+              <Switch
+                testID="trainer-system-client-memory-composer-ai-toggle"
+                value={newMemoryAiReadable}
+                onValueChange={setNewMemoryAiReadable}
+                disabled={isSavingMemory}
+                thumbColor={theme.colors.text.primary}
+                trackColor={{
+                  false: theme.colors.surface.elevated,
+                  true: theme.colors.nav.activeBg,
+                }}
+              />
+            </View>
+            {isNewMemoryTagsVisible ? (
+              <ModeInput
+                testID="trainer-system-client-memory-composer-tags-input"
+                value={newMemoryTagsText}
+                onChangeText={setNewMemoryTagsText}
+                placeholder="Tags (comma separated)"
+              />
+            ) : (
+              <Pressable
+                testID="trainer-system-client-memory-composer-add-tags"
+                onPress={() => setIsNewMemoryTagsVisible(true)}
+                style={({ pressed }) => [
+                  styles.systemMemoryTagsAction,
+                  pressed && styles.systemMemoryTagsActionPressed,
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Add tags"
+              >
+                <ModeText variant="caption" tone="secondary" style={styles.systemMemoryTagsActionText}>Add tags</ModeText>
+              </Pressable>
+            )}
+            <ModeButton
+              testID="trainer-system-client-memory-composer-save"
+              title={isSavingMemory ? 'Saving...' : 'Save Memory'}
+              size="sm"
+              variant="primary"
+              disabled={isSavingMemory}
+              onPress={handleCreateMemory}
+              style={styles.systemMemorySaveButton}
+            />
+            {memoryMutationError ? (
+              <ModeText variant="caption" tone="error" style={styles.systemMemoryInlineFeedback}>{memoryMutationError}</ModeText>
+            ) : null}
+            {memoryMutationSuccess ? (
+              <ModeText variant="caption" tone="secondary" style={styles.systemMemoryInlineFeedback}>{memoryMutationSuccess}</ModeText>
+            ) : null}
+
+            <View style={styles.systemMemoryDenseList}>
+              {memoryRecords.length === 0 ? (
+                <ModeText variant="bodySm" tone="secondary">No memory captured yet.</ModeText>
+              ) : (
+                memoryRecords.map((record) => {
+                  const isAiUsable = record.visibility === 'ai_usable';
+                  const metaLine = buildMemoryMetaLine(record);
+                  return (
+                    <Pressable
+                      key={record.id}
+                      testID={`trainer-system-client-memory-row-${record.id}`}
+                      onPress={() => openMemoryEditor(record)}
+                      style={({ pressed }) => [
+                        styles.systemMemoryDenseRow,
+                        pressed && styles.systemMemoryDenseRowPressed,
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Open memory editor"
+                    >
+                      <View style={styles.systemMemoryDenseRowMain}>
+                        <ModeText
+                          variant="bodySm"
+                          numberOfLines={1}
+                          style={styles.systemMemoryDenseRowText}
+                        >
+                          {record.text || 'No text captured.'}
+                        </ModeText>
+                        <ModeText
+                          variant="caption"
+                          tone="secondary"
+                          numberOfLines={1}
+                          style={styles.systemMemoryDenseRowMeta}
+                        >
+                          {metaLine || 'No tags'}
+                        </ModeText>
+                      </View>
+                      <View style={styles.systemMemoryDenseRowRight}>
+                        <View style={[
+                          styles.systemMemoryStatusBadge,
+                          isAiUsable ? styles.systemMemoryStatusBadgeAi : styles.systemMemoryStatusBadgeInternal,
+                        ]}
+                        >
+                          <ModeText
+                            variant="caption"
+                            tone={isAiUsable ? 'accent' : 'secondary'}
+                            style={styles.systemMemoryStatusBadgeText}
+                          >
+                            {isAiUsable ? 'AI' : 'Internal'}
+                          </ModeText>
+                        </View>
+                        <View style={styles.systemMemoryIconActions}>
+                          <Pressable
+                            testID={`trainer-system-client-memory-edit-${record.id}`}
+                            onPress={(event) => {
+                              event?.stopPropagation?.();
+                              openMemoryEditor(record);
+                            }}
+                            style={({ pressed }) => [
+                              styles.systemMemoryIconButton,
+                              pressed && styles.systemMemoryIconButtonPressed,
+                            ]}
+                            accessibilityRole="button"
+                            accessibilityLabel="Edit memory"
+                            hitSlop={8}
+                          >
+                            <Feather name="edit-2" size={14} color={theme.colors.text.secondary} />
+                          </Pressable>
+                          <Pressable
+                            testID={`trainer-system-client-memory-archive-${record.id}`}
+                            onPress={(event) => {
+                              event?.stopPropagation?.();
+                              handleArchiveMemory(record.id);
+                            }}
+                            style={({ pressed }) => [
+                              styles.systemMemoryIconButton,
+                              pressed && styles.systemMemoryIconButtonPressed,
+                            ]}
+                            accessibilityRole="button"
+                            accessibilityLabel="Archive memory"
+                            hitSlop={8}
+                          >
+                            <Feather name="archive" size={14} color={theme.colors.text.secondary} />
+                          </Pressable>
+                        </View>
+                      </View>
+                    </Pressable>
+                  );
+                })
+              )}
+            </View>
+          </ModeCard>
+
           <SystemSectionCard>
             <SystemSectionHeader title="AI Context" />
             <DetailRow label="Memories" value={valueOrFallback(detail?.memory_counts?.total, '0')} />
@@ -1911,6 +2220,94 @@ function ClientDetailManagementScreen({
           </SystemSectionCard>
         </>
       ) : null}
+      <SystemActionSheet
+        visible={Boolean(editingRecord)}
+        onClose={closeMemoryEditSheet}
+        testID="trainer-system-client-memory-edit-sheet"
+      >
+        {editingRecord ? (
+          <View style={styles.sheetContent}>
+            <View style={styles.systemMemoryEditHeader}>
+              <View style={styles.systemMemoryEditHeaderCopy}>
+                <ModeText variant="label" tone="tertiary" style={styles.systemMemorySectionLabel}>Edit Memory</ModeText>
+                <ModeText variant="caption" tone="secondary">{toTitleCase(editingRecord.memory_type || 'note')}</ModeText>
+              </View>
+              <Pressable
+                testID="trainer-system-client-memory-edit-close"
+                style={({ pressed }) => [
+                  styles.systemMemoryIconButton,
+                  pressed && styles.systemMemoryIconButtonPressed,
+                ]}
+                onPress={closeMemoryEditSheet}
+                accessibilityRole="button"
+                accessibilityLabel="Close memory editor"
+                hitSlop={6}
+              >
+                <Feather name="x" size={16} color={theme.colors.text.secondary} />
+              </Pressable>
+            </View>
+            <ModeInput
+              testID="trainer-system-client-memory-edit-input"
+              value={editingText}
+              onChangeText={setEditingText}
+              placeholder="Update memory note..."
+            />
+            <View style={styles.systemMemoryToggleRow}>
+              <ModeText variant="bodySm">AI can read this</ModeText>
+              <Switch
+                testID="trainer-system-client-memory-edit-ai-toggle"
+                value={editingAiReadable}
+                onValueChange={setEditingAiReadable}
+                disabled={isSavingMemory}
+                thumbColor={theme.colors.text.primary}
+                trackColor={{
+                  false: theme.colors.surface.elevated,
+                  true: theme.colors.nav.activeBg,
+                }}
+              />
+            </View>
+            {isEditingTagsVisible ? (
+              <ModeInput
+                testID="trainer-system-client-memory-edit-tags-input"
+                value={editingTagsText}
+                onChangeText={setEditingTagsText}
+                placeholder="Tags (comma separated)"
+              />
+            ) : (
+              <Pressable
+                testID="trainer-system-client-memory-edit-add-tags"
+                onPress={() => setIsEditingTagsVisible(true)}
+                style={({ pressed }) => [
+                  styles.systemMemoryTagsAction,
+                  pressed && styles.systemMemoryTagsActionPressed,
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Add tags"
+              >
+                <ModeText variant="caption" tone="secondary" style={styles.systemMemoryTagsActionText}>Add tags</ModeText>
+              </Pressable>
+            )}
+            <View style={styles.buttonStack}>
+              <ModeButton
+                testID="trainer-system-client-memory-edit-cancel"
+                title="Cancel"
+                variant="ghost"
+                size="sm"
+                disabled={isSavingMemory}
+                onPress={closeMemoryEditSheet}
+              />
+              <ModeButton
+                testID="trainer-system-client-memory-edit-save"
+                title={isSavingMemory ? 'Saving...' : 'Save'}
+                variant="primary"
+                size="sm"
+                disabled={isSavingMemory}
+                onPress={handleSaveMemoryEdit}
+              />
+            </View>
+          </View>
+        ) : null}
+      </SystemActionSheet>
     </SectionShell>
   );
 }
@@ -2589,6 +2986,21 @@ const styles = StyleSheet.create({
     paddingTop: theme.spacing[3],
     gap: theme.spacing[2],
   },
+  headerIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: theme.colors.glass.base,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  headerIconButtonPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
+  },
   sectionLabel: {
     textTransform: 'uppercase',
     letterSpacing: 0.5,
@@ -2749,6 +3161,137 @@ const styles = StyleSheet.create({
     gap: theme.spacing[2],
   },
   managementCopy: {
+    flex: 1,
+    gap: 4,
+  },
+  systemMemoryCard: {
+    gap: theme.spacing[1],
+  },
+  systemMemoryHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[1],
+  },
+  systemMemorySectionLabel: {
+    marginBottom: 0,
+  },
+  systemMemoryToggleRow: {
+    minHeight: 48,
+    borderWidth: 1,
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
+    borderRadius: theme.radii.s,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[1],
+  },
+  systemMemoryTagsAction: {
+    minHeight: 36,
+    borderRadius: theme.radii.s,
+    borderWidth: 1,
+    borderColor: theme.colors.border.soft,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing[2],
+    backgroundColor: theme.colors.surface.base,
+  },
+  systemMemoryTagsActionPressed: {
+    opacity: theme.interaction.pressedOpacity,
+  },
+  systemMemoryTagsActionText: {
+    fontWeight: '600',
+  },
+  systemMemorySaveButton: {
+    marginTop: 2,
+  },
+  systemMemoryInlineFeedback: {
+    marginTop: 2,
+  },
+  systemMemoryDenseList: {
+    gap: theme.spacing[1],
+    marginTop: theme.spacing[1],
+  },
+  systemMemoryDenseRow: {
+    minHeight: 56,
+    borderWidth: 1,
+    borderColor: theme.colors.border.soft,
+    backgroundColor: theme.colors.surface.base,
+    borderRadius: theme.radii.s,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[1],
+  },
+  systemMemoryDenseRowPressed: {
+    opacity: theme.interaction.pressedOpacity,
+  },
+  systemMemoryDenseRowMain: {
+    flex: 1,
+    gap: 2,
+  },
+  systemMemoryDenseRowText: {
+    fontWeight: '600',
+  },
+  systemMemoryDenseRowMeta: {
+    lineHeight: theme.typography.body2.lineHeight,
+  },
+  systemMemoryDenseRowRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing[1],
+  },
+  systemMemoryStatusBadge: {
+    minWidth: 58,
+    minHeight: 24,
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  systemMemoryStatusBadgeAi: {
+    borderColor: theme.colors.nav.activeBorder,
+    backgroundColor: theme.colors.nav.activeBg,
+  },
+  systemMemoryStatusBadgeInternal: {
+    borderColor: theme.colors.border.default,
+    backgroundColor: theme.colors.surface.elevated,
+  },
+  systemMemoryStatusBadgeText: {
+    fontWeight: '700',
+  },
+  systemMemoryIconActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  systemMemoryIconButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: theme.colors.glass.base,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  systemMemoryIconButtonPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
+  },
+  systemMemoryEditHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[1],
+  },
+  systemMemoryEditHeaderCopy: {
     flex: 1,
     gap: 4,
   },
