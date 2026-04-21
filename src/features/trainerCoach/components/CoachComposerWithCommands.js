@@ -13,6 +13,8 @@ import { ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { resolveAssistantDisplayName } from '../../messaging';
 
+const COMPOSER_SURFACE_BORDER = 'rgba(255, 255, 255, 0.05)';
+
 const COMMANDS = [
   '/program',
   '/memory',
@@ -95,80 +97,93 @@ export default function CoachComposerWithCommands({
           ))}
         </View>
       ) : null}
-      <View style={styles.composer}>
-        <LinearGradient
-          pointerEvents="none"
-          colors={[
-            'rgba(249, 253, 255, 0.09)',
-            'rgba(186, 212, 255, 0.03)',
-            'rgba(5, 10, 19, 0.24)',
-          ]}
-          locations={[0, 0.48, 1]}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={StyleSheet.absoluteFill}
-        />
-        <View pointerEvents="none" style={styles.composerTopLight} />
-        <LinearGradient
-          pointerEvents="none"
-          colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0)', 'rgba(6, 12, 22, 0.24)']}
-          locations={[0, 0.56, 1]}
-          start={{ x: 0.5, y: 0 }}
-          end={{ x: 0.5, y: 1 }}
-          style={styles.composerLowerDepth}
-        />
-        <TextInput
-          value={value}
-          onChangeText={onChangeText}
-          placeholder={`Message ${resolvedAssistantDisplayName} or type / for commands`}
-          placeholderTextColor={theme.colors.text.tertiary}
-          style={styles.input}
-          multiline
-          editable={!disabled && !isSubmitting}
-          maxLength={1400}
-          textAlignVertical="top"
-        />
-        <Pressable
-          onPress={onSubmit}
-          disabled={!canSubmit}
-          style={({ pressed }) => [
-            styles.sendButton,
-            !canSubmit && styles.sendButtonDisabled,
-            pressed && canSubmit && styles.sendButtonPressed,
-          ]}
-        >
+      <View style={styles.composerShadowWrap}>
+        <View style={styles.composerSurface}>
           <LinearGradient
             pointerEvents="none"
-            colors={sendButtonGradientColors}
-            locations={[0, 0.52, 1]}
+            colors={[
+              'rgba(244, 250, 255, 0.05)',
+              'rgba(166, 198, 246, 0.035)',
+              'rgba(5, 10, 19, 0.24)',
+            ]}
+            locations={[0.12, 0.56, 1]}
             start={{ x: 0.5, y: 0 }}
             end={{ x: 0.5, y: 1 }}
             style={StyleSheet.absoluteFill}
           />
-          <View
+          <LinearGradient
             pointerEvents="none"
-            style={[
-              styles.sendButtonTopLight,
-              {
-                backgroundColor: sendButtonTopLight,
-              },
+            colors={[
+              'rgba(255, 255, 255, 0)',
+              'rgba(248, 252, 255, 0.12)',
+              'rgba(255, 255, 255, 0)',
             ]}
+            locations={[0, 0.52, 1]}
+            start={{ x: 0, y: 0.3 }}
+            end={{ x: 1, y: 0.9 }}
+            style={styles.composerAmbientLight}
           />
-          {isSubmitting ? (
-            <ActivityIndicator
-              size="small"
-              color={theme.colors.text.inverse}
-              style={styles.sendButtonIcon}
+          <LinearGradient
+            pointerEvents="none"
+            colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0)', 'rgba(6, 12, 22, 0.24)']}
+            locations={[0, 0.56, 1]}
+            start={{ x: 0.5, y: 0 }}
+            end={{ x: 0.5, y: 1 }}
+            style={styles.composerLowerDepth}
+          />
+          <TextInput
+            value={value}
+            onChangeText={onChangeText}
+            placeholder={`Message ${resolvedAssistantDisplayName} or type / for commands`}
+            placeholderTextColor={theme.colors.text.tertiary}
+            style={styles.input}
+            multiline
+            editable={!disabled && !isSubmitting}
+            maxLength={1400}
+            textAlignVertical="top"
+          />
+          <Pressable
+            onPress={onSubmit}
+            disabled={!canSubmit}
+            style={({ pressed }) => [
+              styles.sendButton,
+              !canSubmit && styles.sendButtonDisabled,
+              pressed && canSubmit && styles.sendButtonPressed,
+            ]}
+          >
+            <LinearGradient
+              pointerEvents="none"
+              colors={sendButtonGradientColors}
+              locations={[0, 0.52, 1]}
+              start={{ x: 0.5, y: 0 }}
+              end={{ x: 0.5, y: 1 }}
+              style={StyleSheet.absoluteFill}
             />
-          ) : (
-            <Feather
-              name="arrow-up"
-              size={16}
-              color={canSubmit ? theme.colors.text.inverse : theme.colors.text.disabled}
-              style={styles.sendButtonIcon}
+            <View
+              pointerEvents="none"
+              style={[
+                styles.sendButtonTopLight,
+                {
+                  backgroundColor: sendButtonTopLight,
+                },
+              ]}
             />
-          )}
-        </Pressable>
+            {isSubmitting ? (
+              <ActivityIndicator
+                size="small"
+                color={theme.colors.text.inverse}
+                style={styles.sendButtonIcon}
+              />
+            ) : (
+              <Feather
+                name="arrow-up"
+                size={16}
+                color={canSubmit ? theme.colors.text.inverse : theme.colors.text.disabled}
+                style={styles.sendButtonIcon}
+              />
+            )}
+          </Pressable>
+        </View>
       </View>
     </View>
   );
@@ -208,25 +223,29 @@ const styles = StyleSheet.create({
   commandChipDisabled: {
     opacity: theme.interaction.disabledOpacity,
   },
-  composer: {
+  composerShadowWrap: {
+    borderRadius: theme.radii.xl,
+    ...theme.shadows.soft,
+  },
+  composerSurface: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     gap: theme.spacing[1],
     borderRadius: theme.radii.xl,
     backgroundColor: theme.colors.surface.hero,
+    borderWidth: 1,
+    borderColor: COMPOSER_SURFACE_BORDER,
     paddingHorizontal: theme.spacing[2],
     paddingVertical: theme.spacing[1],
     overflow: 'hidden',
-    ...theme.shadows.soft,
   },
-  composerTopLight: {
+  composerAmbientLight: {
     position: 'absolute',
-    left: 12,
-    right: 12,
-    top: 3,
-    height: 1,
-    borderRadius: 1,
-    backgroundColor: 'rgba(249, 253, 255, 0.2)',
+    left: 10,
+    right: 10,
+    top: 7,
+    height: 44,
+    borderRadius: 20,
   },
   composerLowerDepth: {
     ...StyleSheet.absoluteFillObject,

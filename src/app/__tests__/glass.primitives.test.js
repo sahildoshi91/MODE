@@ -42,7 +42,7 @@ describe('Glass primitives', () => {
     act(() => tree.unmount());
   });
 
-  it('uses a thin optical edge catch light and avoids thick top bands', () => {
+  it('uses a diffused ambient highlight and avoids pinned top-edge lines', () => {
     let tree;
     act(() => {
       tree = renderer.create(
@@ -53,28 +53,53 @@ describe('Glass primitives', () => {
     });
 
     const layers = tree.root.findAll((node) => node.props);
-    const edgeCatchLights = layers.filter((node) => {
+    const legacyEdgeCatchLights = layers.filter((node) => {
       const colors = node.props?.colors;
       return Array.isArray(colors)
-        && colors.length === 2
-        && colors[1] === 'rgba(255,255,255,0)';
+        && colors.length === 2;
     });
-    expect(edgeCatchLights.length).toBeGreaterThan(0);
-    edgeCatchLights.forEach((node) => {
-      const style = flatten(node.props.style);
-      if (typeof style?.height === 'number') {
-        expect(style.height).toBeLessThanOrEqual(2);
-      }
+    const legacyPinnedWhiteGradients = legacyEdgeCatchLights.filter((node) => {
+      const colors = node.props?.colors || [];
+      return colors[0] === 'rgba(255,255,255,0.9)' && colors[1] === 'rgba(255,255,255,0)';
     });
+    expect(legacyPinnedWhiteGradients.length).toBe(0);
 
-    const thickTopBands = tree.root.findAll((node) => {
+    const topEdgeLineClips = tree.root.findAll((node) => {
       if (node.type !== View || !node.props?.style) {
         return false;
       }
       const style = flatten(node.props.style);
-      return style?.backgroundColor === theme.colors.glass.highlight && Number(style?.height || 0) >= 8;
+      return style?.top === 0
+        && style?.overflow === 'hidden'
+        && typeof style?.height === 'number'
+        && style.height <= 1;
     });
-    expect(thickTopBands.length).toBe(0);
+    expect(topEdgeLineClips.length).toBe(0);
+
+    const ambientHighlightBands = tree.root.findAll((node) => {
+      if (node.type !== View || !node.props?.style) {
+        return false;
+      }
+      const style = flatten(node.props.style);
+      return style?.left === 10 && style?.right === 10 && style?.top === 6 && style?.height === 56;
+    });
+    expect(ambientHighlightBands.length).toBeGreaterThan(0);
+
+    const diffusedAmbientGradients = layers.filter((node) => {
+      const colors = node.props?.colors;
+      return Array.isArray(colors)
+        && colors.length === 3
+        && colors[0] === 'rgba(255, 255, 255, 0)'
+        && colors[2] === 'rgba(255, 255, 255, 0)';
+    });
+    expect(diffusedAmbientGradients.length).toBeGreaterThan(0);
+
+    diffusedAmbientGradients.forEach((node) => {
+      const style = flatten(node.props.style);
+      if (typeof style?.height === 'number') {
+        expect(style.height).toBeGreaterThanOrEqual(40);
+      }
+    });
 
     act(() => tree.unmount());
   });
