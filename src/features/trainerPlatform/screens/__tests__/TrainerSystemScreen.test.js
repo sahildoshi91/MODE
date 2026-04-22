@@ -149,9 +149,14 @@ jest.mock('expo-constants', () => ({
   },
 }));
 
+jest.mock('expo-clipboard', () => ({
+  setStringAsync: jest.fn().mockResolvedValue(undefined),
+}));
+
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
-import { Alert, StyleSheet } from 'react-native';
+import { Alert, Keyboard, Platform, StyleSheet } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 
 import { fetchWithApiFallback } from '../../../../services/apiRequest';
 import {
@@ -208,8 +213,27 @@ function findBackButton(root) {
 }
 
 describe('TrainerSystemScreen', () => {
+  const openEventName = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+  const closeEventName = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+  let keyboardListeners = {};
+  let keyboardRemoveMocks = [];
+  let keyboardAddListenerSpy;
+  let mountedTrees = [];
+
   beforeEach(() => {
     jest.clearAllMocks();
+    keyboardListeners = {};
+    keyboardRemoveMocks = [];
+    keyboardAddListenerSpy = jest.spyOn(Keyboard, 'addListener').mockImplementation((eventName, callback) => {
+      keyboardListeners[eventName] = callback;
+      const remove = jest.fn(() => {
+        if (keyboardListeners[eventName] === callback) {
+          delete keyboardListeners[eventName];
+        }
+      });
+      keyboardRemoveMocks.push(remove);
+      return { remove };
+    });
 
     listTrainerInviteCodes.mockResolvedValue({ items: [], count: 0 });
     deactivateTrainerInviteCode.mockResolvedValue({
@@ -359,6 +383,16 @@ describe('TrainerSystemScreen', () => {
     });
   });
 
+  afterEach(async () => {
+    if (mountedTrees.length > 0) {
+      await act(async () => {
+        mountedTrees.forEach((tree) => tree.unmount());
+        mountedTrees = [];
+      });
+    }
+    keyboardAddListenerSpy?.mockRestore();
+  });
+
   async function renderScreen(overrides = {}) {
     let tree;
     await act(async () => {
@@ -383,6 +417,7 @@ describe('TrainerSystemScreen', () => {
       );
     });
     await flushEffects();
+    mountedTrees.push(tree);
     return tree;
   }
 
@@ -402,8 +437,11 @@ describe('TrainerSystemScreen', () => {
     const rendered = JSON.stringify(tree.toJSON());
 
     expect(rendered).toContain('System');
+    expect(rendered).toContain('Build');
     expect(rendered).toContain('Coach Workspace');
     expect(rendered).toContain('Knowledge Workspace');
+    expect(rendered).toContain('Client List');
+    expect(rendered).not.toContain('Add / Edit / Remove Clients');
     expect(rendered).toContain('Review Hub');
     expect(rendered).toContain('Coach Maya');
     expect(rendered).toContain('Atlas is calibrated and ready for trainer-controlled coaching.');
@@ -498,6 +536,41 @@ describe('TrainerSystemScreen', () => {
     expect(
       tree.root.findAll((node) => node.props?.testID === 'trainer-system-knowledge-toggle-memory-bank'),
     ).toHaveLength(0);
+  });
+
+  it('lifts the knowledge note sheet above the keyboard and resets on close', async () => {
+    const tree = await renderScreen();
+    const findSheetDock = () => tree.root.findByProps({ testID: 'trainer-system-notes-sheet-dock' });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-knowledge-workspace').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-notes-new').props.onPress();
+    });
+
+    expect(keyboardRemoveMocks.length).toBeGreaterThanOrEqual(2);
+    expect(StyleSheet.flatten(findSheetDock().props.style).marginBottom).toBe(0);
+
+    act(() => {
+      keyboardListeners[openEventName]?.({
+        endCoordinates: { height: 248 },
+      });
+    });
+
+    expect(StyleSheet.flatten(findSheetDock().props.style).marginBottom).toBe(248 + theme.spacing[1]);
+
+    act(() => {
+      keyboardListeners[closeEventName]?.();
+    });
+
+    expect(StyleSheet.flatten(findSheetDock().props.style).marginBottom).toBe(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
   });
 
   it('creates a new note with generated title when title is blank', async () => {
@@ -937,6 +1010,34 @@ describe('TrainerSystemScreen', () => {
     expect(flattened.paddingBottom).toBe(theme.spacing[4] + 40);
   });
 
+  it('copies invite code and shows inline copied feedback in client management', async () => {
+    listTrainerInviteCodes.mockResolvedValue({
+      count: 1,
+      items: [
+        { id: 'invite-copy', code: 'MODECOPY', is_active: true },
+      ],
+    });
+
+    const tree = await renderScreen();
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-clients-manage').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await findPressableByTestID(tree.root, 'trainer-system-invite-copy-invite-copy').props.onPress();
+    });
+    await flushEffects();
+
+    expect(Clipboard.setStringAsync).toHaveBeenCalledWith('MODECOPY');
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Copied');
+  });
+
   it('hides inactive invite codes and removes a row after deactivate in client management', async () => {
     listTrainerInviteCodes.mockResolvedValue({
       count: 2,
@@ -953,7 +1054,11 @@ describe('TrainerSystemScreen', () => {
 
     const tree = await renderScreen();
     await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-nav-client-management').props.onPress();
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-clients-manage').props.onPress();
     });
     await flushEffects();
 
@@ -970,6 +1075,7 @@ describe('TrainerSystemScreen', () => {
       accessToken: 'trainer-token',
       inviteId: 'invite-active',
     });
+    expect(Clipboard.setStringAsync).not.toHaveBeenCalled();
     rendered = JSON.stringify(tree.toJSON());
     expect(rendered).not.toContain('MODEACTIVE');
   });
@@ -985,7 +1091,11 @@ describe('TrainerSystemScreen', () => {
 
     const tree = await renderScreen();
     await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-nav-client-management').props.onPress();
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-clients-manage').props.onPress();
     });
     await flushEffects();
 
@@ -996,9 +1106,6 @@ describe('TrainerSystemScreen', () => {
 
     await act(async () => {
       findBackButton(tree.root).props.onPress();
-    });
-    await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
     });
     await flushEffects();
 

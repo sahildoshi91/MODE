@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import Constants from 'expo-constants';
+import * as Clipboard from 'expo-clipboard';
 
 import {
   HeaderBar,
@@ -116,6 +117,7 @@ const MEMORY_VISIBILITY = {
 
 const MEMORY_SWIPE_REVEAL_DISTANCE = 72;
 const MEMORY_SWIPE_OPEN_THRESHOLD = 32;
+const COPY_FEEDBACK_TIMEOUT_MS = 2200;
 
 const environment = __DEV__ ? 'Development' : 'Production';
 
@@ -591,6 +593,15 @@ function TrainerSystemHubScreen({
           onPress={() => onNavigate(SYSTEM_VIEW.KNOWLEDGE_WORKSPACE)}
           testID="trainer-system-nav-knowledge-workspace"
         />
+        <SystemNavRow
+          icon="users"
+          title="Client List"
+          subtitle="Open client summaries and detail management."
+          badge={counts.clients > 0 ? counts.clients : null}
+          badgeVariant="accent"
+          onPress={() => onNavigate(SYSTEM_VIEW.CLIENTS_LIST)}
+          testID="trainer-system-nav-clients-list"
+        />
       </SystemSectionCard>
 
       <SystemSectionCard>
@@ -608,26 +619,6 @@ function TrainerSystemHubScreen({
           subtitle="Assistant naming and communication identity."
           onPress={() => onNavigate(SYSTEM_VIEW.DEFAULTS_COMMUNICATION)}
           testID="trainer-system-nav-defaults-communication"
-        />
-      </SystemSectionCard>
-
-      <SystemSectionCard>
-        <SystemSectionHeader title="Clients" />
-        <SystemNavRow
-          icon="users"
-          title="Client List"
-          subtitle="Open client summaries and detail management."
-          badge={counts.clients > 0 ? counts.clients : null}
-          badgeVariant="accent"
-          onPress={() => onNavigate(SYSTEM_VIEW.CLIENTS_LIST)}
-          testID="trainer-system-nav-clients-list"
-        />
-        <SystemNavRow
-          icon="user-plus"
-          title="Add / Edit / Remove Clients"
-          subtitle="Manage assignments and invite codes without leaving System."
-          onPress={() => onNavigate(SYSTEM_VIEW.CLIENT_MANAGEMENT)}
-          testID="trainer-system-nav-client-management"
         />
       </SystemSectionCard>
 
@@ -1564,6 +1555,15 @@ function ClientManagementScreen({
     error: null,
     success: null,
   });
+  const [copiedInviteId, setCopiedInviteId] = useState(null);
+  const copiedInviteTimerRef = useRef(null);
+
+  const clearCopiedInviteTimer = useCallback(() => {
+    if (copiedInviteTimerRef.current) {
+      clearTimeout(copiedInviteTimerRef.current);
+      copiedInviteTimerRef.current = null;
+    }
+  }, []);
 
   const loadData = useCallback(async () => {
     if (!accessToken) {
@@ -1591,6 +1591,10 @@ function ClientManagementScreen({
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  useEffect(() => () => {
+    clearCopiedInviteTimer();
+  }, [clearCopiedInviteTimer]);
 
   const openClient = (client) => {
     setSelectedClient(client);
@@ -1716,6 +1720,25 @@ function ClientManagementScreen({
     }
   };
 
+  const handleCopyInviteCode = async (invite) => {
+    const inviteId = invite?.id;
+    const inviteCode = typeof invite?.code === 'string' ? invite.code.trim() : '';
+    if (!inviteId || !inviteCode) {
+      return;
+    }
+    try {
+      await Clipboard.setStringAsync(inviteCode);
+      clearCopiedInviteTimer();
+      setCopiedInviteId(inviteId);
+      copiedInviteTimerRef.current = setTimeout(() => {
+        setCopiedInviteId((current) => (current === inviteId ? null : current));
+        copiedInviteTimerRef.current = null;
+      }, COPY_FEEDBACK_TIMEOUT_MS);
+    } catch (_error) {
+      // Ignore copy failures until we add a dedicated error surface.
+    }
+  };
+
   const visibleInviteCodes = invitePayload.items.filter((invite) => invite?.is_active !== false);
 
   return (
@@ -1760,23 +1783,57 @@ function ClientManagementScreen({
             detail="Create one above to add clients into your trainer workspace."
           />
         ) : visibleInviteCodes.map((invite) => (
-          <View key={invite.id} style={styles.managementRow}>
+          <Pressable
+            key={invite.id}
+            testID={`trainer-system-invite-copy-${invite.id}`}
+            onPress={() => handleCopyInviteCode(invite)}
+            style={({ pressed }) => [
+              styles.managementRow,
+              pressed && styles.managementRowPressed,
+            ]}
+            accessibilityRole="button"
+            accessibilityLabel={`Copy invite code ${invite.code || ''}`.trim()}
+          >
             <View style={styles.managementCopy}>
               <ModeText variant="bodySm">{invite.code || 'Invite code'}</ModeText>
-              <ModeText variant="caption" tone="secondary">
-                {invite.is_active === false ? 'Inactive' : 'Active'}
-                {invite.expires_at ? ` · expires ${formatExceptionDate(String(invite.expires_at).slice(0, 10))}` : ''}
+              <ModeText
+                variant="caption"
+                tone={copiedInviteId === invite.id ? 'success' : 'secondary'}
+              >
+                {copiedInviteId === invite.id
+                  ? 'Copied'
+                  : (
+                    <>
+                      {invite.is_active === false ? 'Inactive' : 'Active'}
+                      {invite.expires_at ? ` · expires ${formatExceptionDate(String(invite.expires_at).slice(0, 10))}` : ''}
+                    </>
+                  )}
               </ModeText>
             </View>
-            <ModeButton
-              title={inviteStatus.isDeactivating === invite.id ? 'Deactivating...' : 'Deactivate'}
-              variant="ghost"
-              size="sm"
-              onPress={() => handleDeactivateInvite(invite.id)}
-              disabled={invite.is_active === false || inviteStatus.isDeactivating === invite.id}
+            <Pressable
               testID={`trainer-system-invite-deactivate-${invite.id}`}
-            />
-          </View>
+              onPress={(event) => {
+                event?.stopPropagation?.();
+                handleDeactivateInvite(invite.id);
+              }}
+              style={({ pressed }) => [
+                styles.managementIconButton,
+                pressed && styles.noteRowIconButtonPressed,
+                (invite.is_active === false || inviteStatus.isDeactivating === invite.id)
+                  && styles.managementIconButtonDisabled,
+              ]}
+              accessibilityRole="button"
+              accessibilityLabel={inviteStatus.isDeactivating === invite.id ? 'Deactivating invite code' : 'Deactivate invite code'}
+              hitSlop={8}
+              disabled={invite.is_active === false || inviteStatus.isDeactivating === invite.id}
+            >
+              {inviteStatus.isDeactivating === invite.id ? (
+                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
+              ) : (
+                <Feather name="trash-2" size={14} color={theme.colors.text.secondary} />
+              )}
+            </Pressable>
+          </Pressable>
         ))}
       </SystemSectionCard>
 
@@ -3494,9 +3551,26 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: theme.spacing[2],
   },
+  managementRowPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
+  },
   managementCopy: {
     flex: 1,
     gap: 4,
+  },
+  managementIconButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 1,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: theme.colors.glass.base,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  managementIconButtonDisabled: {
+    opacity: 0.55,
   },
   systemMemoryCard: {
     gap: theme.spacing[1],

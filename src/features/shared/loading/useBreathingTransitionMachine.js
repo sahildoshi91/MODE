@@ -5,23 +5,20 @@ export const BREATHING_PHASE = Object.freeze({
   PREPARING: 'preparing',
   ENTERING: 'entering',
   INHALE: 'inhale',
+  HOLD: 'hold',
   EXHALE: 'exhale',
   SETTLING: 'settling',
   EXITING: 'exiting',
 });
 
-const INHALE_PAUSE_MS = 140;
-const EXHALE_PAUSE_MS = 120;
-const DEFAULT_ENTER_MS = 220;
+const DEFAULT_ENTER_MS = 260;
 const DEFAULT_SETTLE_MS = 220;
-const DEFAULT_EXIT_MS = 180;
-const REDUCED_ENTER_MS = 170;
-const REDUCED_SETTLE_MS = 140;
-const REDUCED_EXIT_MS = 140;
-const QUICK_FINISH_MS = 160;
-const QUICK_FINISH_REDUCED_MS = 110;
-const INHALE_LATE_THRESHOLD = 0.58;
-const EXHALE_EARLY_THRESHOLD = 0.42;
+const DEFAULT_EXIT_MS = 200;
+const REDUCED_ENTER_MS = 220;
+const REDUCED_SETTLE_MS = 180;
+const REDUCED_EXIT_MS = 180;
+const MIN_FINISH_PHASE_MS = 120;
+const MAX_FINISH_PHASE_MS = 700;
 
 function buildIdleState() {
   return {
@@ -51,8 +48,9 @@ export function useBreathingTransitionMachine({
   active,
   showAfterMs = 140,
   minVisibleMs = 280,
-  inhaleMs = 4000,
-  exhaleMs = 4000,
+  inhaleMs = 3000,
+  holdMs = 300,
+  exhaleMs = 3000,
   reducedMotion = false,
   onExitComplete,
 } = {}) {
@@ -70,19 +68,18 @@ export function useBreathingTransitionMachine({
   const handlePhaseCompleteRef = useRef(() => {});
 
   const config = useMemo(() => {
-    const resolvedInhaleMs = coerceDuration(inhaleMs, 4000);
-    const resolvedExhaleMs = coerceDuration(exhaleMs, 4000);
-    const inhaleDuration = resolvedInhaleMs + (reducedMotion ? 0 : INHALE_PAUSE_MS);
-    const exhaleDuration = resolvedExhaleMs + (reducedMotion ? 0 : EXHALE_PAUSE_MS);
+    const inhaleDuration = coerceDuration(inhaleMs, 3000);
+    const holdDuration = coerceDuration(holdMs, 300);
+    const exhaleDuration = coerceDuration(exhaleMs, 3000);
     return {
       enterDuration: reducedMotion ? REDUCED_ENTER_MS : DEFAULT_ENTER_MS,
       inhaleDuration,
+      holdDuration,
       exhaleDuration,
       settleDuration: reducedMotion ? REDUCED_SETTLE_MS : DEFAULT_SETTLE_MS,
       exitDuration: reducedMotion ? REDUCED_EXIT_MS : DEFAULT_EXIT_MS,
-      quickFinishDuration: reducedMotion ? QUICK_FINISH_REDUCED_MS : QUICK_FINISH_MS,
     };
-  }, [exhaleMs, inhaleMs, reducedMotion]);
+  }, [exhaleMs, holdMs, inhaleMs, reducedMotion]);
 
   useEffect(() => {
     phaseRef.current = state.phase;
@@ -163,28 +160,37 @@ export function useBreathingTransitionMachine({
     enterPhase(BREATHING_PHASE.SETTLING, config.settleDuration, { exitRequested: true });
   }, [clearPhaseTimer, clearShowTimer, config.settleDuration, enterPhase, minVisibleMs]);
 
-  const accelerateCurrentPhase = useCallback(() => {
+  const finishCurrentPhaseNaturally = useCallback(() => {
     const phase = phaseRef.current;
     if (phase !== BREATHING_PHASE.ENTERING
       && phase !== BREATHING_PHASE.INHALE
+      && phase !== BREATHING_PHASE.HOLD
       && phase !== BREATHING_PHASE.EXHALE) {
       return;
     }
 
+    const durationMs = Math.max(1, phaseDurationRef.current);
+    const elapsedMs = Math.max(0, Date.now() - phaseStartedAtRef.current);
+    const remainingMs = Math.max(0, durationMs - elapsedMs);
+    const finishDuration = Math.min(
+      MAX_FINISH_PHASE_MS,
+      Math.max(MIN_FINISH_PHASE_MS, Math.round(remainingMs || MIN_FINISH_PHASE_MS)),
+    );
+
     clearPhaseTimer();
     phaseStartedAtRef.current = Date.now();
-    phaseDurationRef.current = config.quickFinishDuration;
+    phaseDurationRef.current = finishDuration;
 
     setState((previous) => ({
       ...previous,
-      durationMs: config.quickFinishDuration,
+      durationMs: finishDuration,
       exitRequested: true,
     }));
 
     phaseTimerRef.current = setTimeout(() => {
       handlePhaseCompleteRef.current(phase);
-    }, config.quickFinishDuration);
-  }, [clearPhaseTimer, config.quickFinishDuration]);
+    }, finishDuration);
+  }, [clearPhaseTimer]);
 
   const resetToIdle = useCallback(() => {
     clearPhaseTimer();
@@ -221,37 +227,15 @@ export function useBreathingTransitionMachine({
       return;
     }
 
-    if (phase === BREATHING_PHASE.ENTERING) {
+    if (phase === BREATHING_PHASE.ENTERING
+      || phase === BREATHING_PHASE.INHALE
+      || phase === BREATHING_PHASE.HOLD
+      || phase === BREATHING_PHASE.EXHALE) {
       stopModeRef.current = 'finish_current_then_settle';
-      accelerateCurrentPhase();
+      finishCurrentPhaseNaturally();
       return;
     }
-
-    const durationMs = Math.max(1, phaseDurationRef.current);
-    const elapsedMs = Math.max(0, Date.now() - phaseStartedAtRef.current);
-    const progress = elapsedMs / durationMs;
-
-    if (phase === BREATHING_PHASE.INHALE) {
-      if (progress >= INHALE_LATE_THRESHOLD) {
-        stopModeRef.current = 'finish_current_then_settle';
-        accelerateCurrentPhase();
-      } else {
-        stopModeRef.current = 'settle_now';
-        startSettling();
-      }
-      return;
-    }
-
-    if (phase === BREATHING_PHASE.EXHALE) {
-      if (progress <= EXHALE_EARLY_THRESHOLD) {
-        stopModeRef.current = 'finish_current_then_settle';
-        accelerateCurrentPhase();
-      } else {
-        stopModeRef.current = 'settle_now';
-        startSettling();
-      }
-    }
-  }, [accelerateCurrentPhase, resetToIdle, startSettling]);
+  }, [finishCurrentPhaseNaturally, resetToIdle]);
 
   const startPreparing = useCallback(() => {
     clearShowTimer();
@@ -307,6 +291,19 @@ export function useBreathingTransitionMachine({
         startSettling();
         return;
       }
+      if (config.holdDuration > 0 && cycleCountRef.current >= 1) {
+        enterPhase(BREATHING_PHASE.HOLD, config.holdDuration, { exitRequested: false });
+        return;
+      }
+      enterPhase(BREATHING_PHASE.EXHALE, config.exhaleDuration, { exitRequested: false });
+      return;
+    }
+
+    if (completedPhase === BREATHING_PHASE.HOLD) {
+      if (!activeRef.current || stopModeRef.current === 'finish_current_then_settle') {
+        startSettling();
+        return;
+      }
       enterPhase(BREATHING_PHASE.EXHALE, config.exhaleDuration, { exitRequested: false });
       return;
     }
@@ -343,6 +340,7 @@ export function useBreathingTransitionMachine({
   }, [
     config.exhaleDuration,
     config.exitDuration,
+    config.holdDuration,
     config.inhaleDuration,
     enterPhase,
     resetToIdle,
