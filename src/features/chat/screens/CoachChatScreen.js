@@ -396,6 +396,7 @@ export default function CoachChatScreen({
     ? KEYBOARD_OPEN_COMPOSER_OFFSET
     : dockAnchorInset;
   const chatListPaddingBottom = dockHeight + activeComposerOffset + LIST_BOTTOM_BREATHING_ROOM;
+  const previousChatListPaddingBottomRef = useRef(chatListPaddingBottom);
   const sessionIntro = useMemo(() => resolveSessionIntro(launchContext), [launchContext]);
   const activeLaunchClientId = useMemo(
     () => parseClientIdFromLaunchContext(launchContext),
@@ -453,12 +454,19 @@ export default function CoachChatScreen({
     requestAnimationFrame(() => {
       const metrics = scrollMetricsRef.current;
       const maxOffset = Math.max(metrics.contentHeight - metrics.layoutHeight, 0);
-      updateScrollMetrics({ offset: maxOffset });
-      if (listRef.current?.scrollToEnd) {
-        listRef.current.scrollToEnd({ animated });
-      } else if (listRef.current?.scrollToOffset) {
-        listRef.current.scrollToOffset({ offset: maxOffset, animated });
+      const listHandle = listRef.current;
+      if (listHandle?.scrollToEnd) {
+        listHandle.scrollToEnd({ animated });
+        if (listHandle?.scrollToOffset) {
+          listHandle.scrollToOffset({ offset: maxOffset, animated: false });
+        }
+        updateScrollMetrics({ offset: maxOffset });
+        return;
       }
+      if (listHandle?.scrollToOffset) {
+        listHandle.scrollToOffset({ offset: maxOffset, animated });
+      }
+      updateScrollMetrics({ offset: maxOffset });
     });
   }, [updateScrollMetrics]);
 
@@ -1044,6 +1052,18 @@ export default function CoachChatScreen({
   }, [scrollToLatest]);
 
   useEffect(() => {
+    const previousPadding = previousChatListPaddingBottomRef.current;
+    previousChatListPaddingBottomRef.current = chatListPaddingBottom;
+    if (chatListPaddingBottom <= previousPadding) {
+      return;
+    }
+    if (messages.length <= 0 || !scrollMetricsRef.current.nearBottom) {
+      return;
+    }
+    scrollToLatestWithRetries(false);
+  }, [chatListPaddingBottom, messages.length, scrollToLatestWithRetries]);
+
+  useEffect(() => {
     const openEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
     const closeEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
     const keyboardOpenSubscription = Keyboard.addListener(openEvent, (event) => {
@@ -1332,7 +1352,10 @@ export default function CoachChatScreen({
           >
             <View
               testID="coach-chat-dock-stack"
-              onLayout={(event) => setDockHeight(event.nativeEvent.layout.height)}
+              onLayout={(event) => {
+                const nextHeight = asNonNegativeNumber(event?.nativeEvent?.layout?.height, 0);
+                setDockHeight((current) => (current === nextHeight ? current : nextHeight));
+              }}
               style={styles.dockStack}
             >
               {hasRetryableFailure ? (

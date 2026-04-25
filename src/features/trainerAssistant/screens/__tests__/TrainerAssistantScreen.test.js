@@ -16,6 +16,157 @@ jest.mock('react-native-safe-area-context', () => {
   };
 });
 
+jest.mock('../../../trainerCoach/components/CoachPanelHost', () => {
+  const React = require('react');
+  const { Text, View } = require('react-native');
+
+  return function MockCoachPanelHost({
+    activePanel,
+    panelContext,
+  }) {
+    return (
+      <View testID="trainer-assistant-mock-panel-host">
+        <Text testID="trainer-assistant-mock-panel-active">{`panel:${activePanel || 'none'}`}</Text>
+        <Text testID="trainer-assistant-mock-panel-section">{`section:${panelContext?.initialSection || 'none'}`}</Text>
+        <Text testID="trainer-assistant-mock-panel-filter">{`filter:${panelContext?.filter || 'none'}`}</Text>
+      </View>
+    );
+  };
+});
+
+jest.mock('../../../trainerCoach/components/clientContextRail', () => {
+  const React = require('react');
+  const { Text, View } = require('react-native');
+
+  return {
+    ClientContextRail: ({ state, testIDPrefix = 'client-context-rail' }) => (
+      <View testID={`${testIDPrefix}-root`}>
+        <Text testID={`${testIDPrefix}-mode`}>{state?.railMode || 'collapsed'}</Text>
+        {state?.railMode !== 'collapsed' ? (
+          <View testID={`${testIDPrefix}-panel`} />
+        ) : null}
+      </View>
+    ),
+  };
+});
+
+jest.mock('../../../trainerCoach/hooks/useClientContextState', () => {
+  const React = require('react');
+
+  const CLIENT_CONTEXT_RAIL_MODE = {
+    COLLAPSED: 'collapsed',
+    EXPANDED: 'expanded',
+    FULL: 'full',
+  };
+
+  function useClientContextState({ initialSelectedClientId = null } = {}) {
+    const [state, setState] = React.useState({
+      isRailVisible: false,
+      railMode: CLIENT_CONTEXT_RAIL_MODE.COLLAPSED,
+      selectedClientId: initialSelectedClientId,
+      searchQuery: '',
+      quickNoteText: '',
+      allowAIUse: true,
+      todayClients: [],
+      recentClients: [],
+      allClients: [],
+      isSavingNote: false,
+      saveStatus: 'idle',
+      saveMessage: null,
+      fullSection: 'advanced_ai_context',
+      contextSummary: null,
+      isSavingSchedule: false,
+      scheduleSaveStatus: 'idle',
+      scheduleDaysDraft: [],
+      isSearching: false,
+    });
+
+    const actions = React.useMemo(() => ({
+      expandRail: ({ focusSearch = false } = {}) => {
+        setState((current) => ({
+          ...current,
+          isRailVisible: true,
+          railMode: CLIENT_CONTEXT_RAIL_MODE.EXPANDED,
+          searchQuery: focusSearch && !current.selectedClientId ? '' : current.searchQuery,
+        }));
+      },
+      collapseRail: () => {
+        setState((current) => ({
+          ...current,
+          isRailVisible: false,
+          railMode: CLIENT_CONTEXT_RAIL_MODE.COLLAPSED,
+        }));
+      },
+      dismissRail: () => {
+        setState((current) => ({
+          ...current,
+          isRailVisible: false,
+          railMode: CLIENT_CONTEXT_RAIL_MODE.COLLAPSED,
+        }));
+      },
+      openFullRail: (section = 'advanced_ai_context') => {
+        setState((current) => ({
+          ...current,
+          isRailVisible: true,
+          railMode: CLIENT_CONTEXT_RAIL_MODE.FULL,
+          fullSection: section,
+        }));
+      },
+      backToExpandedRail: () => {
+        setState((current) => ({
+          ...current,
+          isRailVisible: true,
+          railMode: CLIENT_CONTEXT_RAIL_MODE.EXPANDED,
+        }));
+      },
+      setSearchQuery: (value) => {
+        setState((current) => ({ ...current, searchQuery: value }));
+      },
+      setQuickNoteText: (value) => {
+        setState((current) => ({ ...current, quickNoteText: value }));
+      },
+      setAllowAIUse: (value) => {
+        setState((current) => ({ ...current, allowAIUse: Boolean(value) }));
+      },
+      setSelectedClient: async (clientId) => {
+        const normalized = String(clientId || '').trim() || null;
+        setState((current) => (
+          current.selectedClientId === normalized
+            ? current
+            : { ...current, selectedClientId: normalized }
+        ));
+      },
+      hydrateSelectedClientId: (clientId) => {
+        const normalized = String(clientId || '').trim() || null;
+        setState((current) => (
+          current.selectedClientId === normalized
+            ? current
+            : { ...current, selectedClientId: normalized }
+        ));
+      },
+      saveQuickNote: async () => true,
+      setScheduleDaysDraft: (days) => {
+        setState((current) => ({ ...current, scheduleDaysDraft: days }));
+      },
+      saveScheduleDays: async () => true,
+      refreshClients: async () => {},
+    }), []);
+
+    return {
+      state,
+      selectedClientSummary: state.selectedClientId
+        ? { id: state.selectedClientId, name: 'Selected Client' }
+        : null,
+      actions,
+    };
+  }
+
+  return {
+    useClientContextState,
+    CLIENT_CONTEXT_RAIL_MODE,
+  };
+});
+
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
@@ -203,6 +354,77 @@ describe('TrainerAssistantScreen', () => {
       }),
     );
     expect(() => tree.root.findByProps({ testID: 'trainer-assistant-preview-card' })).not.toThrow();
+  });
+
+  it('opens the floating client context rail from /client command chip', async () => {
+    const tree = await renderScreen();
+    const clientCommandChip = tree.root.findByProps({ testID: 'trainer-assistant-command-client' });
+
+    await act(async () => {
+      clientCommandChip.props.onPress();
+    });
+    await flushEffects();
+
+    expect(() => tree.root.findByProps({
+      testID: 'trainer-assistant-client-context-rail-panel',
+    })).not.toThrow();
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('panel:none');
+  });
+
+  it('opens knowledge note panel from /note command chip', async () => {
+    const tree = await renderScreen();
+    const noteCommandChip = tree.root.findByProps({ testID: 'trainer-assistant-command-note' });
+
+    await act(async () => {
+      noteCommandChip.props.onPress();
+    });
+    await flushEffects();
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('panel:note');
+  });
+
+  it('routes legacy /flag command to client-context settings rail, shows hint, and skips execute', async () => {
+    const tree = await renderScreen();
+    const promptInput = tree.root.findByProps({ testID: 'trainer-assistant-prompt-input' });
+    const generateButton = tree.root.findByProps({ testID: 'trainer-assistant-generate' });
+
+    await act(async () => {
+      promptInput.props.onChangeText('/flag');
+    });
+    await act(async () => {
+      await generateButton.props.onPress();
+    });
+    await flushEffects();
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(() => tree.root.findByProps({
+      testID: 'trainer-assistant-client-context-rail-panel',
+    })).not.toThrow();
+    expect(rendered).toContain('panel:none');
+    expect(rendered).toContain('Heads up: `/flag` is now part of `/client` settings.');
+    expect(executeTrainerAssistantActionStream).not.toHaveBeenCalled();
+    expect(executeTrainerAssistantAction).not.toHaveBeenCalled();
+  });
+
+  it('shows local validation for unknown slash command and skips execute', async () => {
+    const tree = await renderScreen();
+    const promptInput = tree.root.findByProps({ testID: 'trainer-assistant-prompt-input' });
+    const generateButton = tree.root.findByProps({ testID: 'trainer-assistant-generate' });
+
+    await act(async () => {
+      promptInput.props.onChangeText('/unknown');
+    });
+    await act(async () => {
+      await generateButton.props.onPress();
+    });
+    await flushEffects();
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Unknown command: /unknown. Use /client or /note.');
+    expect(executeTrainerAssistantActionStream).not.toHaveBeenCalled();
+    expect(executeTrainerAssistantAction).not.toHaveBeenCalled();
   });
 
   it('approves preview draft through approve endpoint', async () => {

@@ -76,3 +76,120 @@ class TrainerKnowledgeIngestResponse(BaseModel):
 
 class TrainerKnowledgeSaveResponse(TrainerKnowledgeIngestResponse):
     pass
+
+
+class TrainerKnowledgeEntry(BaseModel):
+    id: str
+    tenant_id: str
+    trainer_id: str
+    client_id: str | None = None
+    title: str
+    raw_content: str
+    structured_summary: str | None = None
+    knowledge_type: str = "other"
+    scope: str = "global"
+    tags: list[str] = Field(default_factory=list)
+    ai_enabled: bool = True
+    status: str = "active"
+    source: str = "manual_note"
+    confidence_score: float | None = None
+    version_count: int = 1
+    last_used_at: datetime | None = None
+    usage_count: int = 0
+    conflict_group_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    archived_at: datetime | None = None
+
+
+class TrainerKnowledgeEntryCreateRequest(BaseModel):
+    title: str | None = None
+    raw_content: str
+    structured_summary: str | None = None
+    knowledge_type: str | None = None
+    scope: str = "global"
+    tags: list[str] = Field(default_factory=list)
+    ai_enabled: bool = True
+    source: str = "manual_note"
+    confidence_score: float | None = None
+    client_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    change_reason: str | None = None
+
+
+class TrainerKnowledgeEntryUpdateRequest(BaseModel):
+    title: str | None = None
+    raw_content: str | None = None
+    structured_summary: str | None = None
+    knowledge_type: str | None = None
+    scope: str | None = None
+    tags: list[str] | None = None
+    ai_enabled: bool | None = None
+    status: str | None = None
+    confidence_score: float | None = None
+    client_id: str | None = None
+    metadata: dict[str, Any] | None = None
+    change_reason: str | None = None
+
+
+class TrainerKnowledgeClassificationRequest(BaseModel):
+    raw_content: str
+    title: str | None = None
+    client_id: str | None = None
+    preferred_scope: str | None = None
+    preferred_knowledge_type: str | None = None
+
+
+class TrainerKnowledgeClassificationSuggestion(BaseModel):
+    title: str
+    structured_summary: str | None = None
+    knowledge_type: str
+    scope: str
+    tags: list[str] = Field(default_factory=list)
+    ai_enabled: bool = True
+    confidence: float = 0.0
+    client_id: str | None = None
+    rationale: str | None = None
+
+
+class TrainerKnowledgeSafetyCheckResult(BaseModel):
+    ai_enabled_forced_off: bool = False
+    issues: list[str] = Field(default_factory=list)
+    message: str | None = None
+    severity: str | None = None
+
+
+class TrainerKnowledgeConflictCandidate(BaseModel):
+    knowledge_entry_id: str
+    title: str
+    structured_summary: str | None = None
+    knowledge_type: str
+    score: float
+    suggested_resolution: str = "review"
+
+
+class TrainerKnowledgeEntryMutationResponse(BaseModel):
+    entry: TrainerKnowledgeEntry
+    safety: TrainerKnowledgeSafetyCheckResult = Field(default_factory=TrainerKnowledgeSafetyCheckResult)
+    conflicts: list[TrainerKnowledgeConflictCandidate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class TrainerKnowledgeVersion(BaseModel):
+    id: str
+    tenant_id: str
+    trainer_id: str
+    knowledge_entry_id: str
+    version_number: int
+    content: str
+    structured_summary: str | None = None
+    edited_by: str | None = None
+    created_at: datetime | None = None
+    change_reason: str | None = None
+
+
+class TrainerKnowledgeRefineRequest(BaseModel):
+    action: str
+    content: str | None = None
+    change_reason: str | None = None

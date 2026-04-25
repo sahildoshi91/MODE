@@ -41,6 +41,53 @@ class FakeTrainerIntelligenceRepository:
             {"title": "Programming Notes", "raw_text": "Use movement substitutions for constrained schedules."},
         ]
 
+    def list_active_knowledge_entries(self, trainer_id, limit):
+        del trainer_id, limit
+        return [
+            {
+                "id": "entry-client-1",
+                "trainer_id": "trainer-1",
+                "client_id": "client-1",
+                "title": "Adjust intensity when sleep is poor",
+                "raw_content": "When sleep is poor, reduce volume and focus on movement quality.",
+                "structured_summary": "Reduce volume when sleep is poor.",
+                "knowledge_type": "coaching_rule",
+                "scope": "client_specific",
+                "tags": ["sleep", "recovery"],
+                "ai_enabled": True,
+                "status": "active",
+                "confidence_score": 0.9,
+                "usage_count": 3,
+                "last_used_at": "2026-04-12T10:00:00+00:00",
+                "updated_at": "2026-04-12T10:00:00+00:00",
+                "created_at": "2026-04-11T10:00:00+00:00",
+            },
+            {
+                "id": "entry-global-style",
+                "trainer_id": "trainer-1",
+                "client_id": None,
+                "title": "Communication style preference",
+                "raw_content": "Use concise, motivating language and avoid shaming language.",
+                "structured_summary": "Use concise and motivating tone.",
+                "knowledge_type": "communication_style",
+                "scope": "global",
+                "tags": ["tone", "communication"],
+                "ai_enabled": True,
+                "status": "active",
+                "confidence_score": 0.82,
+                "usage_count": 5,
+                "last_used_at": "2026-04-11T10:00:00+00:00",
+                "updated_at": "2026-04-11T10:00:00+00:00",
+                "created_at": "2026-04-10T10:00:00+00:00",
+            },
+        ]
+
+    def create_knowledge_usage_logs(self, rows):
+        return rows
+
+    def increment_knowledge_entry_usage(self, trainer_id, entry_id, timestamp_iso):
+        del trainer_id, entry_id, timestamp_iso
+
     def list_client_memory(self, trainer_id, client_id, limit):
         del trainer_id, client_id, limit
         return [
@@ -117,11 +164,15 @@ class TrainerIntelligenceServiceTests(unittest.TestCase):
 
         self.assertTrue(context.metadata["used"])
         self.assertIn("[LAYER_1_TRAINER_GLOBAL_KNOWLEDGE]", context.system_appendix)
+        self.assertIn("TRAINER KNOWLEDGE CONTEXT:", context.system_appendix)
+        self.assertIn("Reduce volume when sleep is poor.", context.system_appendix)
         self.assertIn("[LAYER_2_CLIENT_MEMORY_AI_USABLE_ONLY]", context.system_appendix)
         self.assertIn("Prefers early sessions before work.", context.system_appendix)
         self.assertNotIn("Internal-only note should not be injected.", context.system_appendix)
         self.assertIn("[LAYER_3_DYNAMIC_ANALYTICS]", context.system_appendix)
         self.assertIn("entrypoint: generated_workout", context.system_appendix)
+        self.assertIn("knowledge_retrieval", context.metadata)
+        self.assertGreaterEqual(context.metadata["knowledge_retrieval"]["selected_count"], 1)
 
     def test_memory_theme_matcher_returns_true_for_strong_token_overlap(self):
         service = TrainerIntelligenceService(

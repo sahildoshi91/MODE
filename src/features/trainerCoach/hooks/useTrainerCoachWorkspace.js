@@ -19,11 +19,14 @@ import {
   saveTrainerCoachWorkspaceCache,
 } from '../storage/trainerCoachStorage';
 
-const COMMANDS = ['/program', '/memory', '/flag', '/drafts', '/client', '/rules'];
+const PRIMARY_COMMANDS = ['/client', '/note'];
+const LEGACY_COMMAND_ALIASES = ['/memory', '/flag', '/drafts', '/program', '/rules'];
+const COMMANDS = [...PRIMARY_COMMANDS, ...LEGACY_COMMAND_ALIASES];
 
 const INITIAL_STATE = {
   summary: null,
   queue: [],
+  activeClientId: null,
   stream: [],
   panels: {
     active: null,
@@ -264,6 +267,7 @@ function workspaceReducer(state, action) {
         errorDetails: action.payload,
       };
     case 'WORKSPACE_LOADED': {
+      const incomingQueue = Array.isArray(action.payload?.queue) ? action.payload.queue : [];
       const incomingEvents = Array.isArray(action.payload?.events)
         ? [...action.payload.events].reverse().map(buildStreamEventFromSystemRecord)
         : [];
@@ -277,7 +281,8 @@ function workspaceReducer(state, action) {
       return {
         ...state,
         summary: action.payload?.summary || null,
-        queue: Array.isArray(action.payload?.queue) ? action.payload.queue : [],
+        queue: incomingQueue,
+        activeClientId: state.activeClientId || incomingQueue.find((item) => item?.client_id)?.client_id || null,
         stream: mergedStream,
         sync: {
           ...state.sync,
@@ -402,19 +407,28 @@ function workspaceReducer(state, action) {
         ...state,
         queue: state.queue.filter((item) => item.output_id !== action.payload),
       };
+    case 'SET_ACTIVE_CLIENT_ID':
+      return {
+        ...state,
+        activeClientId: action.payload || null,
+      };
     default:
       return state;
   }
 }
 
-function buildQueueItemFromAssistantResponse(responsePayload) {
+function buildQueueItemFromAssistantResponse(responsePayload, fallbackClientId = null) {
   const output = responsePayload?.output && typeof responsePayload.output === 'object'
     ? responsePayload.output
     : {};
+  const responseClientId = typeof responsePayload?.client_id === 'string' && responsePayload.client_id.trim()
+    ? responsePayload.client_id.trim()
+    : null;
+  const resolvedClientId = responseClientId || (typeof fallbackClientId === 'string' ? fallbackClientId.trim() : '') || null;
   return {
     output_id: responsePayload?.draft_id || `${Date.now()}`,
     trainer_id: 'trainer',
-    client_id: null,
+    client_id: resolvedClientId,
     client_name: null,
     source_type: 'trainer_assistant_draft',
     review_status: 'open',
@@ -700,6 +714,18 @@ export function useTrainerCoachWorkspace({
 
   const routeSlashCommand = useCallback((commandText) => {
     const command = String(commandText || '').trim().toLowerCase().split(/\s+/)[0];
+    const firstDraft = state.queue[0] || null;
+    const defaultClientId = state.activeClientId || firstDraft?.client_id || null;
+    const appendAliasHint = (text) => {
+      appendStream(buildStreamItem({
+        kind: 'internal_ai_private',
+        text,
+        visibility: 'trainer_private',
+        status: 'confirmed',
+        severity: 'info',
+      }));
+    };
+
     if (!COMMANDS.includes(command)) {
       appendStream(buildStreamItem({
         kind: 'system_confirmation',
@@ -708,94 +734,89 @@ export function useTrainerCoachWorkspace({
         status: 'failed',
         severity: 'warning',
       }));
-      return;
-    }
-
-    if (command === '/drafts') {
-      appendStream(buildStreamItem({
-        kind: 'system_confirmation',
-        text: 'Draft review now lives in the Clients tab under Command Center.',
-        visibility: 'system',
-        status: 'confirmed',
-        severity: 'info',
-      }));
-      return;
-    }
-
-    if (command === '/memory') {
-      const firstDraft = state.queue[0] || null;
-      openPanel('memory', {
-        clientId: firstDraft?.client_id || null,
-      });
-      appendStream(buildStreamItem({
-        kind: 'system_confirmation',
-        text: 'Memory panel opened.',
-        visibility: 'system',
-        status: 'confirmed',
-        severity: 'info',
-      }));
-      return;
+      return true;
     }
 
     if (command === '/client') {
-      const firstDraft = state.queue[0] || null;
       openPanel('client_context', {
-        clientId: firstDraft?.client_id || null,
+        clientId: defaultClientId,
+        initialSection: 'quick_note',
       });
       appendStream(buildStreamItem({
         kind: 'system_confirmation',
-        text: 'Client Context panel opened.',
+        text: 'Client workspace opened.',
         visibility: 'system',
         status: 'confirmed',
         severity: 'info',
       }));
-      return;
+      return true;
     }
 
-    if (command === '/program') {
-      openPanel('program', null);
+    if (command === '/note') {
+      openPanel('note', null);
       appendStream(buildStreamItem({
         kind: 'system_confirmation',
-        text: 'Program Review panel opened.',
+        text: 'Note workspace opened.',
         visibility: 'system',
         status: 'confirmed',
         severity: 'info',
       }));
-      return;
+      return true;
     }
 
-    if (command === '/rules') {
-      openPanel('rules', null);
-      appendStream(buildStreamItem({
-        kind: 'system_confirmation',
-        text: 'Rules panel opened.',
-        visibility: 'system',
-        status: 'confirmed',
-        severity: 'info',
-      }));
-      return;
+    if (command === '/memory') {
+      openPanel('client_context', {
+        clientId: defaultClientId,
+        initialSection: 'quick_note',
+      });
+      appendAliasHint('Heads up: `/memory` is now part of `/client` quick notes.');
+      return true;
     }
 
     if (command === '/flag') {
-      const firstDraft = state.queue[0] || null;
       openPanel('client_context', {
+        clientId: defaultClientId,
         filter: 'risk_flags',
-        clientId: firstDraft?.client_id || null,
+        initialSection: 'settings',
       });
-      appendStream(buildStreamItem({
-        kind: 'system_confirmation',
-        text: 'Risk-flag client context opened.',
-        visibility: 'system',
-        status: 'confirmed',
-        severity: 'info',
-      }));
+      appendAliasHint('Heads up: `/flag` is now part of `/client` settings.');
+      return true;
     }
-  }, [appendStream, openPanel, state.queue]);
+
+    if (command === '/drafts') {
+      openPanel('client_context', {
+        clientId: defaultClientId,
+        initialSection: 'settings',
+      });
+      appendAliasHint('Heads up: draft controls moved under `/client` settings.');
+      return true;
+    }
+
+    if (command === '/program' || command === '/rules') {
+      openPanel('note', null);
+      appendAliasHint(`Heads up: \`${command}\` now routes to \`/note\`.`);
+      return true;
+    }
+
+    appendStream(buildStreamItem({
+      kind: 'system_confirmation',
+      text: `Unknown command: ${command}`,
+      visibility: 'system',
+      status: 'failed',
+      severity: 'warning',
+    }));
+    return true;
+  }, [appendStream, openPanel, state.activeClientId, state.queue]);
 
   const sendIntentMessage = useCallback(async (text) => {
     const trimmed = String(text || '').trim();
     if (!trimmed || !accessToken) {
       return false;
+    }
+
+    if (trimmed.startsWith('/')) {
+      routeSlashCommand(trimmed);
+      return true;
     }
 
     appendStream(buildStreamItem({
@@ -805,11 +826,6 @@ export function useTrainerCoachWorkspace({
       status: 'confirmed',
       severity: 'info',
     }));
-
-    if (trimmed.startsWith('/')) {
-      routeSlashCommand(trimmed);
-      return true;
-    }
 
     const progressStreamId = buildIdempotencyKey('assistant-progress');
     upsertStream(buildStreamItem({
@@ -831,6 +847,7 @@ export function useTrainerCoachWorkspace({
       try {
         response = await executeTrainerAssistantActionStream({
           accessToken,
+          clientId: state.activeClientId,
           actionType: inferActionType(trimmed),
           message: trimmed,
           onEvent: (eventPayload) => {
@@ -859,6 +876,7 @@ export function useTrainerCoachWorkspace({
       } catch (_streamError) {
         response = await executeTrainerAssistantAction({
           accessToken,
+          clientId: state.activeClientId,
           actionType: inferActionType(trimmed),
           message: trimmed,
         });
@@ -877,7 +895,7 @@ export function useTrainerCoachWorkspace({
           }));
         }
       }
-      const queueItem = buildQueueItemFromAssistantResponse(response);
+      const queueItem = buildQueueItemFromAssistantResponse(response, state.activeClientId);
       dispatch({ type: 'UPSERT_QUEUE_ITEM', payload: queueItem });
       upsertStream(buildStreamItem({
         id: progressStreamId,
@@ -913,7 +931,15 @@ export function useTrainerCoachWorkspace({
       }));
       return false;
     }
-  }, [accessToken, appendStream, assistantDisplayName, refreshWorkspace, routeSlashCommand, upsertStream]);
+  }, [
+    accessToken,
+    appendStream,
+    assistantDisplayName,
+    refreshWorkspace,
+    routeSlashCommand,
+    state.activeClientId,
+    upsertStream,
+  ]);
 
   const retryPendingOps = useCallback(async () => {
     if (!accessToken || state.sync.replaying || state.sync.pendingOps.length === 0) {
@@ -1006,6 +1032,7 @@ export function useTrainerCoachWorkspace({
     const cachePayload = {
       summary: state.summary,
       queue: state.queue,
+      activeClientId: state.activeClientId,
       stream: state.stream,
       sync: {
         pendingOperationCount: state.sync.pendingOperationCount,
@@ -1018,6 +1045,7 @@ export function useTrainerCoachWorkspace({
   }, [
     trainerId,
     state.generatedAt,
+    state.activeClientId,
     state.queue,
     state.stream,
     state.summary,
@@ -1041,6 +1069,11 @@ export function useTrainerCoachWorkspace({
     dispatch({ type: 'SET_QUEUE_MINIMIZED', payload: value });
   }, []);
 
+  const setActiveClientId = useCallback((clientId) => {
+    const normalizedClientId = String(clientId || '').trim();
+    dispatch({ type: 'SET_ACTIVE_CLIENT_ID', payload: normalizedClientId || null });
+  }, []);
+
   const stateWithDerived = useMemo(() => ({
     ...state,
     queueCount: state.queue.length,
@@ -1060,6 +1093,7 @@ export function useTrainerCoachWorkspace({
       retryPendingOps,
       setSummaryCollapsed,
       setQueueMinimized,
+      setActiveClientId,
       appendStream,
       emitSystemEvent,
     },

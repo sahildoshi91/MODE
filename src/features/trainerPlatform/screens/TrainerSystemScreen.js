@@ -33,18 +33,17 @@ import {
 import { theme } from '../../../../lib/theme';
 import { getApiDebugInfo } from '../../../services/apiBaseUrl';
 import { fetchWithApiFallback } from '../../../services/apiRequest';
-import { TRAINER_AGENT_LAB_ENABLED } from '../../../config/featureFlags';
 import {
   ASSISTANT_DISPLAY_NAME_MAX_LENGTH,
   prepareAssistantDisplayNameForSave,
   resolveAssistantDisplayName,
 } from '../../messaging';
 import {
-  createTrainerKnowledgeDocument,
-  deleteTrainerKnowledgeDocument,
-  listTrainerKnowledgeDocuments,
-  saveTrainerKnowledgeDocumentWithFallback,
-  updateTrainerKnowledgeDocument,
+  archiveTrainerKnowledgeEntry,
+  createTrainerKnowledgeEntry,
+  listTrainerKnowledgeEntries,
+  refineTrainerKnowledgeEntry,
+  updateTrainerKnowledgeEntry,
 } from '../../trainerHome/services/trainerKnowledgeApi';
 import {
   archiveTrainerClientMemory,
@@ -734,16 +733,61 @@ function CoachWorkspaceScreen({
   );
 }
 
-function normalizeKnowledgeDocument(document) {
+const KNOWLEDGE_FILTER = {
+  ALL: 'all',
+  GLOBAL: 'global',
+  CLIENT: 'client_specific',
+  AI: 'ai_enabled',
+  ARCHIVED: 'archived',
+};
+
+const KNOWLEDGE_FILTER_SEGMENTS = [
+  { key: KNOWLEDGE_FILTER.ALL, label: 'All' },
+  { key: KNOWLEDGE_FILTER.GLOBAL, label: 'Global' },
+  { key: KNOWLEDGE_FILTER.CLIENT, label: 'Client-specific' },
+  { key: KNOWLEDGE_FILTER.AI, label: 'AI enabled' },
+  { key: KNOWLEDGE_FILTER.ARCHIVED, label: 'Archived' },
+];
+
+const KNOWLEDGE_SCOPE_SEGMENTS = [
+  { key: 'global', label: 'Global' },
+  { key: 'client_specific', label: 'Client-specific' },
+];
+
+const KNOWLEDGE_TYPE_OPTIONS = [
+  { key: 'coaching_rule', label: 'Coaching Rule' },
+  { key: 'programming_preference', label: 'Programming Preference' },
+  { key: 'nutrition_principle', label: 'Nutrition Principle' },
+  { key: 'client_pattern', label: 'Client Pattern' },
+  { key: 'communication_style', label: 'Communication Style' },
+  { key: 'business_policy', label: 'Business / Policy' },
+  { key: 'other', label: 'Other' },
+];
+
+function normalizeKnowledgeEntry(document) {
   return {
     id: document?.id || null,
+    trainer_id: document?.trainer_id || null,
+    client_id: document?.client_id || null,
     title: String(document?.title || ''),
-    raw_text: String(document?.raw_text || ''),
-    document_type: document?.document_type || 'text',
-    file_url: document?.file_url || null,
-    metadata: document?.metadata || {},
+    raw_content: String(document?.raw_content || ''),
+    structured_summary: String(document?.structured_summary || ''),
+    knowledge_type: String(document?.knowledge_type || 'other'),
+    scope: String(document?.scope || 'global'),
+    tags: Array.isArray(document?.tags) ? document.tags : [],
+    ai_enabled: document?.ai_enabled !== false,
+    status: String(document?.status || 'active'),
+    updated_at: document?.updated_at || document?.created_at || null,
     created_at: document?.created_at || null,
+    archived_at: document?.archived_at || null,
+    metadata: document?.metadata || {},
   };
+}
+
+function knowledgeTypeLabel(value) {
+  const normalized = String(value || 'other');
+  const option = KNOWLEDGE_TYPE_OPTIONS.find((item) => item.key === normalized);
+  return option?.label || 'Other';
 }
 
 function noteRowDisplayTitle(document) {
@@ -751,11 +795,13 @@ function noteRowDisplayTitle(document) {
   if (explicitTitle) {
     return explicitTitle;
   }
-  return generateKnowledgeNoteTitle(document?.raw_text || '');
+  return generateKnowledgeNoteTitle(document?.raw_content || '');
 }
 
 function buildKnowledgeNoteSubtitle(document) {
-  return `${document?.document_type || 'text'} · ${formatSavedDate(document?.created_at)}`;
+  const scopeLabel = document?.scope === 'client_specific' ? 'Client' : 'Global';
+  const aiLabel = document?.ai_enabled === false ? 'AI Off' : 'AI On';
+  return `${knowledgeTypeLabel(document?.knowledge_type)} · ${scopeLabel} · ${aiLabel} · ${formatSavedDate(document?.updated_at)}`;
 }
 
 function KnowledgeWorkspaceScreen({
@@ -764,44 +810,59 @@ function KnowledgeWorkspaceScreen({
   onBack,
   onKnowledgeMutated,
 }) {
-  const [documents, setDocuments] = useState([]);
+  const [entries, setEntries] = useState([]);
   const [query, setQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState(KNOWLEDGE_FILTER.ALL);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [loadError, setLoadError] = useState(null);
-  const [selectedDocument, setSelectedDocument] = useState(null);
+  const [selectedEntry, setSelectedEntry] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
   const [draftRawText, setDraftRawText] = useState('');
+  const [draftScope, setDraftScope] = useState('global');
+  const [draftKnowledgeType, setDraftKnowledgeType] = useState('coaching_rule');
+  const [draftTags, setDraftTags] = useState('');
+  const [draftAiEnabled, setDraftAiEnabled] = useState(true);
+  const [refinementAction, setRefinementAction] = useState(null);
+  const [refinementDraft, setRefinementDraft] = useState('');
   const [mutationState, setMutationState] = useState({
     isSaving: false,
-    deletingId: null,
+    archivingId: null,
     error: null,
-    errorDocumentId: null,
-    note: null,
+    errorEntryId: null,
     success: null,
+    conflictWarning: null,
+    aiDisabledWarning: null,
   });
 
   const closeSheet = useCallback(() => {
-    setSelectedDocument(null);
+    setSelectedEntry(null);
     setIsEditing(false);
     setIsCreating(false);
     setDraftTitle('');
     setDraftRawText('');
+    setDraftScope('global');
+    setDraftKnowledgeType('coaching_rule');
+    setDraftTags('');
+    setDraftAiEnabled(true);
+    setRefinementAction(null);
+    setRefinementDraft('');
     setMutationState((current) => ({
       ...current,
       isSaving: false,
       error: null,
-      errorDocumentId: null,
-      note: null,
+      errorEntryId: null,
       success: null,
+      conflictWarning: null,
+      aiDisabledWarning: null,
     }));
   }, []);
 
-  const loadDocuments = useCallback(async ({ refresh = false } = {}) => {
+  const loadEntries = useCallback(async ({ refresh = false } = {}) => {
     if (!accessToken) {
-      setDocuments([]);
+      setEntries([]);
       setIsLoading(false);
       return;
     }
@@ -812,13 +873,18 @@ function KnowledgeWorkspaceScreen({
     }
     setLoadError(null);
     try {
-      const payload = await listTrainerKnowledgeDocuments({ accessToken });
+      const payload = await listTrainerKnowledgeEntries({
+        accessToken,
+        includeArchived: true,
+        limit: 220,
+        offset: 0,
+      });
       const normalized = Array.isArray(payload)
-        ? payload.map((document) => normalizeKnowledgeDocument(document))
+        ? payload.map((item) => normalizeKnowledgeEntry(item))
         : [];
-      setDocuments(normalized);
+      setEntries(normalized);
     } catch (nextError) {
-      setLoadError(nextError?.message || 'Unable to load notes.');
+      setLoadError(nextError?.message || 'Unable to load knowledge entries.');
     } finally {
       if (refresh) {
         setIsRefreshing(false);
@@ -829,64 +895,95 @@ function KnowledgeWorkspaceScreen({
   }, [accessToken]);
 
   useEffect(() => {
-    loadDocuments();
-  }, [loadDocuments]);
+    loadEntries();
+  }, [loadEntries]);
 
-  const filteredDocuments = useMemo(() => {
+  const filteredEntries = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    const sorted = [...documents].sort((left, right) => (
-      String(right?.created_at || '').localeCompare(String(left?.created_at || ''))
+    const filtered = entries.filter((entry) => {
+      if (activeFilter === KNOWLEDGE_FILTER.GLOBAL && entry.scope !== 'global') {
+        return false;
+      }
+      if (activeFilter === KNOWLEDGE_FILTER.CLIENT && entry.scope !== 'client_specific') {
+        return false;
+      }
+      if (activeFilter === KNOWLEDGE_FILTER.AI && entry.ai_enabled !== true) {
+        return false;
+      }
+      if (activeFilter === KNOWLEDGE_FILTER.ARCHIVED && entry.status !== 'archived') {
+        return false;
+      }
+      if (activeFilter !== KNOWLEDGE_FILTER.ARCHIVED && entry.status === 'archived') {
+        return false;
+      }
+      if (!normalizedQuery) {
+        return true;
+      }
+      const tags = Array.isArray(entry.tags) ? entry.tags.join(' ') : '';
+      const clientName = String(entry?.metadata?.client_name || '');
+      const searchable = `${entry.title} ${entry.raw_content} ${tags} ${clientName}`.toLowerCase();
+      return searchable.includes(normalizedQuery);
+    });
+    return [...filtered].sort((left, right) => (
+      String(right.updated_at || '').localeCompare(String(left.updated_at || ''))
     ));
-    if (!normalizedQuery) {
-      return sorted;
-    }
-    return sorted.filter((document) => (
-      String(document?.title || '').toLowerCase().includes(normalizedQuery)
-      || String(document?.raw_text || '').toLowerCase().includes(normalizedQuery)
-    ));
-  }, [documents, query]);
+  }, [activeFilter, entries, query]);
 
-  const openDocument = useCallback((document, { editing = false } = {}) => {
-    const normalized = normalizeKnowledgeDocument(document);
-    setSelectedDocument(normalized);
-    setIsEditing(editing);
+  const openEntry = useCallback((entry, { editing = false } = {}) => {
+    const normalized = normalizeKnowledgeEntry(entry);
+    setSelectedEntry(normalized);
     setIsCreating(false);
-    setDraftTitle(String(normalized?.title || ''));
-    setDraftRawText(String(normalized?.raw_text || ''));
+    setIsEditing(editing);
+    setDraftTitle(String(normalized.title || ''));
+    setDraftRawText(String(normalized.raw_content || ''));
+    setDraftScope(normalized.scope || 'global');
+    setDraftKnowledgeType(normalized.knowledge_type || 'other');
+    setDraftTags(Array.isArray(normalized.tags) ? normalized.tags.join(', ') : '');
+    setDraftAiEnabled(normalized.ai_enabled !== false);
     setMutationState((current) => ({
       ...current,
       error: null,
-      errorDocumentId: null,
-      note: null,
+      errorEntryId: null,
       success: null,
+      conflictWarning: null,
+      aiDisabledWarning: null,
     }));
   }, []);
 
-  const handleOpenNewNote = useCallback(() => {
-    setSelectedDocument({
+  const handleOpenNewKnowledge = useCallback(() => {
+    setSelectedEntry({
       id: null,
       title: '',
-      raw_text: '',
-      document_type: 'text',
-      file_url: null,
-      metadata: { source: 'system_notes_workspace' },
+      raw_content: '',
+      knowledge_type: 'coaching_rule',
+      scope: 'global',
+      tags: [],
+      ai_enabled: true,
+      status: 'active',
+      updated_at: null,
       created_at: null,
+      metadata: { source: 'trainer_system_workspace' },
     });
     setIsCreating(true);
     setIsEditing(true);
     setDraftTitle('');
     setDraftRawText('');
+    setDraftScope('global');
+    setDraftKnowledgeType('coaching_rule');
+    setDraftTags('');
+    setDraftAiEnabled(true);
     setMutationState((current) => ({
       ...current,
       error: null,
-      errorDocumentId: null,
-      note: null,
+      errorEntryId: null,
       success: null,
+      conflictWarning: null,
+      aiDisabledWarning: null,
     }));
   }, []);
 
-  const handleSaveDocument = async () => {
-    if (!accessToken || mutationState.isSaving || !selectedDocument) {
+  const handleSaveEntry = useCallback(async () => {
+    if (!accessToken || mutationState.isSaving || !selectedEntry) {
       return;
     }
     const normalizedRawText = draftRawText.trim();
@@ -894,143 +991,172 @@ function KnowledgeWorkspaceScreen({
       setMutationState((current) => ({
         ...current,
         error: 'Add note content before saving.',
-        errorDocumentId: null,
       }));
       return;
     }
-    const normalizedTitle = draftTitle.trim();
-    const resolvedTitle = normalizedTitle || generateKnowledgeNoteTitle(normalizedRawText);
+    const resolvedTitle = draftTitle.trim() || generateKnowledgeNoteTitle(normalizedRawText);
+    const parsedTags = parseTags(draftTags);
     setMutationState((current) => ({
       ...current,
       isSaving: true,
       error: null,
-      errorDocumentId: null,
-      note: null,
+      errorEntryId: null,
       success: null,
+      conflictWarning: null,
+      aiDisabledWarning: null,
     }));
-
     try {
-      let payload;
-      if (isCreating || !selectedDocument?.id) {
-        const requestPayload = {
+      const payload = isCreating || !selectedEntry?.id
+        ? await createTrainerKnowledgeEntry({
           accessToken,
           title: resolvedTitle,
-          rawText: normalizedRawText,
-          documentType: selectedDocument?.document_type || 'text',
-          fileUrl: selectedDocument?.file_url || null,
-          metadata: selectedDocument?.metadata || { source: 'system_notes_workspace' },
-        };
-        payload = TRAINER_AGENT_LAB_ENABLED
-          ? await saveTrainerKnowledgeDocumentWithFallback(requestPayload)
-          : await createTrainerKnowledgeDocument(requestPayload);
-        const createdDocument = normalizeKnowledgeDocument(payload?.document || payload);
-        const extractionFallbackReason = payload?.extraction?.fallback_reason;
-        setDocuments((current) => {
-          const withoutDuplicate = current.filter((document) => document?.id !== createdDocument?.id);
-          return [createdDocument, ...withoutDuplicate];
-        });
-        setSelectedDocument(createdDocument);
-        setDraftTitle(String(createdDocument?.title || resolvedTitle));
-        setDraftRawText(String(createdDocument?.raw_text || normalizedRawText));
-        setIsCreating(false);
-        setIsEditing(false);
-        setMutationState({
-          isSaving: false,
-          deletingId: null,
-          error: null,
-          errorDocumentId: null,
-          note: isExtractionSoftNote(extractionFallbackReason)
-            ? 'Rule extraction is still processing. You can retry later.'
-            : null,
-          success: 'Note saved.',
-        });
-      } else {
-        payload = await updateTrainerKnowledgeDocument({
+          rawContent: normalizedRawText,
+          knowledgeType: draftKnowledgeType,
+          scope: draftScope,
+          tags: parsedTags,
+          aiEnabled: draftAiEnabled,
+          source: 'manual_note',
+          metadata: selectedEntry?.metadata || { source: 'trainer_system_workspace' },
+        })
+        : await updateTrainerKnowledgeEntry({
           accessToken,
-          documentId: selectedDocument.id,
+          entryId: selectedEntry.id,
           title: resolvedTitle,
-          rawText: normalizedRawText,
-          documentType: selectedDocument.document_type || 'text',
-          fileUrl: selectedDocument.file_url || null,
-          metadata: selectedDocument.metadata || {},
+          rawContent: normalizedRawText,
+          knowledgeType: draftKnowledgeType,
+          scope: draftScope,
+          tags: parsedTags,
+          aiEnabled: draftAiEnabled,
+          metadata: selectedEntry?.metadata || {},
+          changeReason: 'Trainer edited knowledge entry',
         });
-        const updatedDocument = normalizeKnowledgeDocument(payload?.document || {
-          ...selectedDocument,
-          title: resolvedTitle,
-          raw_text: normalizedRawText,
-        });
-        const extractionFallbackReason = payload?.extraction?.fallback_reason;
-        setSelectedDocument(updatedDocument);
-        setDraftTitle(String(updatedDocument?.title || resolvedTitle));
-        setDraftRawText(String(updatedDocument?.raw_text || normalizedRawText));
-        setDocuments((current) => current.map((document) => (
-          document?.id === updatedDocument?.id ? updatedDocument : document
-        )));
-        setIsEditing(false);
-        setMutationState({
-          isSaving: false,
-          deletingId: null,
-          error: null,
-          errorDocumentId: null,
-          note: isExtractionSoftNote(extractionFallbackReason)
-            ? 'Rule extraction is still processing. You can retry later.'
-            : null,
-          success: 'Note updated.',
-        });
-      }
+      const updated = normalizeKnowledgeEntry(payload?.entry || payload);
+      setEntries((current) => {
+        const withoutDuplicate = current.filter((entry) => entry?.id !== updated?.id);
+        return [updated, ...withoutDuplicate];
+      });
+      setSelectedEntry(updated);
+      setDraftTitle(String(updated?.title || resolvedTitle));
+      setDraftRawText(String(updated?.raw_content || normalizedRawText));
+      setIsEditing(false);
+      setIsCreating(false);
+      setMutationState((current) => ({
+        ...current,
+        isSaving: false,
+        success: isCreating ? 'Knowledge saved.' : 'Knowledge updated.',
+        conflictWarning: Array.isArray(payload?.conflicts) && payload.conflicts.length > 0
+          ? 'This may conflict with an existing coaching rule.'
+          : null,
+        aiDisabledWarning: payload?.safety?.ai_enabled_forced_off
+          ? 'This was saved, but AI usage is off until reviewed.'
+          : null,
+      }));
       onKnowledgeMutated?.();
     } catch (nextError) {
       setMutationState((current) => ({
         ...current,
         isSaving: false,
-        error: nextError?.message || 'Unable to save note.',
-        errorDocumentId: null,
-        note: null,
-        success: null,
+        error: nextError?.message || 'Unable to save knowledge.',
       }));
     }
-  };
+  }, [
+    accessToken,
+    draftAiEnabled,
+    draftKnowledgeType,
+    draftRawText,
+    draftScope,
+    draftTags,
+    draftTitle,
+    isCreating,
+    mutationState.isSaving,
+    onKnowledgeMutated,
+    selectedEntry,
+  ]);
 
-  const handleDeleteDocument = async (documentId) => {
-    if (!documentId || !accessToken || mutationState.deletingId || mutationState.isSaving) {
+  const handleArchiveEntry = useCallback(async (entryId) => {
+    if (!entryId || !accessToken || mutationState.archivingId || mutationState.isSaving) {
       return;
     }
     setMutationState((current) => ({
       ...current,
-      deletingId: documentId,
+      archivingId: entryId,
       error: null,
-      errorDocumentId: null,
-      note: null,
+      errorEntryId: null,
       success: null,
     }));
     try {
-      await deleteTrainerKnowledgeDocument({
+      const payload = await archiveTrainerKnowledgeEntry({
         accessToken,
-        documentId,
+        entryId,
       });
-      setDocuments((current) => current.filter((document) => document?.id !== documentId));
-      if (selectedDocument?.id === documentId) {
+      const archivedEntry = normalizeKnowledgeEntry(payload?.entry || payload);
+      setEntries((current) => current.map((entry) => (
+        entry?.id === entryId
+          ? { ...entry, status: 'archived', ai_enabled: false, archived_at: archivedEntry?.archived_at || new Date().toISOString() }
+          : entry
+      )));
+      setMutationState((current) => ({
+        ...current,
+        archivingId: null,
+        success: 'Knowledge archived.',
+      }));
+      if (selectedEntry?.id === entryId) {
         closeSheet();
-      } else {
-        setMutationState((current) => ({
-          ...current,
-          deletingId: null,
-          error: null,
-          errorDocumentId: null,
-          note: null,
-          success: 'Note deleted.',
-        }));
       }
       onKnowledgeMutated?.();
     } catch (nextError) {
       setMutationState((current) => ({
         ...current,
-        deletingId: null,
-        error: nextError?.message || 'Unable to delete note.',
-        errorDocumentId: documentId,
+        archivingId: null,
+        error: nextError?.message || 'Unable to archive entry.',
+        errorEntryId: entryId,
       }));
     }
-  };
+  }, [accessToken, closeSheet, mutationState.archivingId, mutationState.isSaving, onKnowledgeMutated, selectedEntry?.id]);
+
+  const applyRefinement = useCallback(async () => {
+    if (!accessToken || !selectedEntry?.id || !refinementAction || !refinementDraft.trim()) {
+      return;
+    }
+    setMutationState((current) => ({
+      ...current,
+      isSaving: true,
+      error: null,
+      success: null,
+    }));
+    try {
+      const payload = await refineTrainerKnowledgeEntry({
+        accessToken,
+        entryId: selectedEntry.id,
+        action: refinementAction,
+        content: refinementDraft.trim(),
+        changeReason: `Refinement action: ${refinementAction}`,
+      });
+      const updated = normalizeKnowledgeEntry(payload?.entry || payload);
+      setEntries((current) => {
+        const withoutCurrent = current.filter((entry) => entry.id !== updated.id);
+        return [updated, ...withoutCurrent];
+      });
+      setSelectedEntry(updated);
+      setDraftTitle(String(updated.title || ''));
+      setDraftRawText(String(updated.raw_content || ''));
+      setIsEditing(false);
+      setRefinementAction(null);
+      setRefinementDraft('');
+      setMutationState((current) => ({
+        ...current,
+        isSaving: false,
+        success: 'Refinement applied.',
+      }));
+      onKnowledgeMutated?.();
+    } catch (error) {
+      setMutationState((current) => ({
+        ...current,
+        isSaving: false,
+        error: error?.message || 'Unable to apply refinement.',
+      }));
+    }
+  }, [accessToken, onKnowledgeMutated, refinementAction, refinementDraft, selectedEntry]);
 
   return (
     <SectionShell
@@ -1041,16 +1167,16 @@ function KnowledgeWorkspaceScreen({
     >
       <View style={styles.knowledgeWorkspaceTopActions}>
         <ModeButton
-          title="New Note"
+          title="New Knowledge"
           size="sm"
-          onPress={handleOpenNewNote}
+          onPress={handleOpenNewKnowledge}
           testID="trainer-system-notes-new"
         />
         <ModeButton
           title={isRefreshing ? 'Refreshing...' : 'Refresh'}
           size="sm"
           variant="ghost"
-          onPress={() => loadDocuments({ refresh: true })}
+          onPress={() => loadEntries({ refresh: true })}
           disabled={isLoading || isRefreshing}
           testID="trainer-system-notes-refresh"
         />
@@ -1059,34 +1185,45 @@ function KnowledgeWorkspaceScreen({
       <SystemSearchBar
         value={query}
         onChangeText={setQuery}
-        placeholder="Search notes"
+        placeholder="Search title, content, tags, client"
         testID="trainer-system-notes-search"
       />
+      <View style={styles.chipRow}>
+        {KNOWLEDGE_FILTER_SEGMENTS.map((segment) => (
+          <ModeChip
+            key={segment.key}
+            label={segment.label}
+            selected={activeFilter === segment.key}
+            onPress={() => setActiveFilter(segment.key)}
+            testID={`trainer-system-knowledge-filter-${segment.key}`}
+          />
+        ))}
+      </View>
 
       <SystemSectionCard>
-        <SystemSectionHeader title="Saved Notes" />
+        <SystemSectionHeader title="Knowledge Library" />
         {isLoading ? (
           <View style={styles.loadingRow}>
             <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
-            <ModeText variant="bodySm" tone="secondary">Loading notes...</ModeText>
+            <ModeText variant="bodySm" tone="secondary">Loading knowledge...</ModeText>
           </View>
         ) : null}
         {!isLoading && loadError ? (
           <ModeText variant="bodySm" tone="error">{loadError}</ModeText>
         ) : null}
-        {!isLoading && !loadError && filteredDocuments.length === 0 ? (
+        {!isLoading && !loadError && filteredEntries.length === 0 ? (
           <EmptyListState
-            title="No notes yet"
-            detail="Create your first trainer note to shape assistant context."
+            title="Your coaching knowledge will live here."
+            detail="Add rules, preferences, and patterns your AI should remember."
           />
         ) : null}
-        {!isLoading && !loadError && filteredDocuments.length > 0 ? filteredDocuments.map((document, index) => {
-          const documentId = document?.id || `note-${index}`;
-          const isDeleting = mutationState.deletingId === documentId;
-          const hasDeleteError = mutationState.errorDocumentId === documentId && Boolean(mutationState.error);
+        {!isLoading && !loadError && filteredEntries.length > 0 ? filteredEntries.map((entry, index) => {
+          const entryId = entry?.id || `entry-${index}`;
+          const isArchiving = mutationState.archivingId === entryId;
+          const hasArchiveError = mutationState.errorEntryId === entryId && Boolean(mutationState.error);
           return (
             <View
-              key={document?.id || `${document?.title || 'note'}-${index}`}
+              key={entry?.id || `${entry?.title || 'entry'}-${index}`}
               style={styles.noteRowGroup}
             >
               <Pressable
@@ -1094,60 +1231,60 @@ function KnowledgeWorkspaceScreen({
                   styles.noteRow,
                   pressed && styles.noteRowPressed,
                 ]}
-                onPress={() => openDocument(document)}
-                testID={`trainer-system-note-row-${documentId}`}
+                onPress={() => openEntry(entry)}
+                testID={`trainer-system-note-row-${entryId}`}
                 accessibilityRole="button"
-                accessibilityLabel="Open note details"
+                accessibilityLabel="Open knowledge details"
               >
                 <View style={styles.noteRowCopy}>
                   <ModeText variant="bodySm" style={styles.noteRowTitle} numberOfLines={1}>
-                    {noteRowDisplayTitle(document)}
+                    {noteRowDisplayTitle(entry)}
                   </ModeText>
                   <ModeText variant="caption" tone="secondary" numberOfLines={1}>
-                    {buildKnowledgeNoteSubtitle(document)}
+                    {buildKnowledgeNoteSubtitle(entry)}
                   </ModeText>
                 </View>
                 <View style={styles.noteRowActions}>
                   <Pressable
-                    testID={`trainer-system-note-edit-${documentId}`}
+                    testID={`trainer-system-note-edit-${entryId}`}
                     onPress={(event) => {
                       event?.stopPropagation?.();
-                      openDocument(document, { editing: true });
+                      openEntry(entry, { editing: true });
                     }}
                     style={({ pressed }) => [
                       styles.noteRowIconButton,
                       pressed && styles.noteRowIconButtonPressed,
                     ]}
                     accessibilityRole="button"
-                    accessibilityLabel="Edit note"
+                    accessibilityLabel="Edit knowledge"
                     hitSlop={8}
                   >
                     <Feather name="edit-2" size={14} color={theme.colors.text.secondary} />
                   </Pressable>
                   <Pressable
-                    testID={`trainer-system-note-delete-${documentId}`}
+                    testID={`trainer-system-note-delete-${entryId}`}
                     onPress={(event) => {
                       event?.stopPropagation?.();
-                      handleDeleteDocument(document?.id);
+                      handleArchiveEntry(entry?.id);
                     }}
                     style={({ pressed }) => [
                       styles.noteRowIconButton,
                       pressed && styles.noteRowIconButtonPressed,
                     ]}
                     accessibilityRole="button"
-                    accessibilityLabel="Delete note"
+                    accessibilityLabel="Archive knowledge"
                     hitSlop={8}
-                    disabled={isDeleting}
+                    disabled={isArchiving || entry?.status === 'archived'}
                   >
-                    {isDeleting ? (
+                    {isArchiving ? (
                       <ActivityIndicator size="small" color={theme.colors.text.secondary} />
                     ) : (
-                      <Feather name="trash-2" size={14} color={theme.colors.text.secondary} />
+                      <Feather name="archive" size={14} color={theme.colors.text.secondary} />
                     )}
                   </Pressable>
                 </View>
               </Pressable>
-              {hasDeleteError ? (
+              {hasArchiveError ? (
                 <ModeText variant="caption" tone="error">{mutationState.error}</ModeText>
               ) : null}
             </View>
@@ -1156,23 +1293,23 @@ function KnowledgeWorkspaceScreen({
       </SystemSectionCard>
 
       <SystemActionSheet
-        visible={Boolean(selectedDocument)}
+        visible={Boolean(selectedEntry)}
         onClose={closeSheet}
         testID="trainer-system-notes-sheet"
       >
-        {selectedDocument ? (
+        {selectedEntry ? (
           <View style={styles.sheetContent}>
-            <ModeText variant="label" tone="tertiary">{isCreating ? 'New Note' : 'Note Detail'}</ModeText>
+            <ModeText variant="label" tone="tertiary">{isCreating ? 'New Knowledge' : 'Knowledge Detail'}</ModeText>
             {!isEditing ? (
               <>
                 <ModeText variant="bodySm" style={styles.sheetTitle}>
-                  {noteRowDisplayTitle(selectedDocument)}
+                  {noteRowDisplayTitle(selectedEntry)}
                 </ModeText>
                 <ModeText variant="caption" tone="tertiary">
-                  {buildKnowledgeNoteSubtitle(selectedDocument)}
+                  {buildKnowledgeNoteSubtitle(selectedEntry)}
                 </ModeText>
                 <ModeText variant="bodySm" tone="secondary">
-                  {selectedDocument.raw_text || 'No content available for this note.'}
+                  {selectedEntry.raw_content || 'No content available for this entry.'}
                 </ModeText>
               </>
             ) : (
@@ -1180,35 +1317,132 @@ function KnowledgeWorkspaceScreen({
                 <ModeInput
                   value={draftTitle}
                   onChangeText={setDraftTitle}
-                  placeholder="Short note title (optional)"
+                  placeholder="Optional title"
                   testID="trainer-system-note-sheet-title-input"
                 />
                 <ModeInput
                   value={draftRawText}
                   onChangeText={setDraftRawText}
-                  placeholder="Write a detailed note for your trainer AI..."
+                  placeholder="Add coaching knowledge..."
                   multiline
                   style={styles.multilineInput}
                   testID="trainer-system-note-sheet-raw-input"
                 />
+                <View style={styles.chipRow}>
+                  {KNOWLEDGE_SCOPE_SEGMENTS.map((scopeOption) => (
+                    <ModeChip
+                      key={scopeOption.key}
+                      label={scopeOption.label}
+                      selected={draftScope === scopeOption.key}
+                      onPress={() => setDraftScope(scopeOption.key)}
+                      testID={`trainer-system-knowledge-scope-${scopeOption.key}`}
+                    />
+                  ))}
+                </View>
+                <View style={styles.chipRow}>
+                  {KNOWLEDGE_TYPE_OPTIONS.map((typeOption) => (
+                    <ModeChip
+                      key={typeOption.key}
+                      label={typeOption.label}
+                      selected={draftKnowledgeType === typeOption.key}
+                      onPress={() => setDraftKnowledgeType(typeOption.key)}
+                      testID={`trainer-system-knowledge-type-${typeOption.key}`}
+                    />
+                  ))}
+                </View>
+                <ModeInput
+                  value={draftTags}
+                  onChangeText={setDraftTags}
+                  placeholder="Tags (comma-separated)"
+                  testID="trainer-system-knowledge-tags"
+                />
+                <ToggleRow
+                  label="Use this to inform AI coaching"
+                  value={draftAiEnabled}
+                  onValueChange={setDraftAiEnabled}
+                  testID="trainer-system-knowledge-ai-toggle"
+                />
               </>
             )}
-            {mutationState.error && !mutationState.errorDocumentId ? (
+            {mutationState.error && !mutationState.errorEntryId ? (
               <ModeText variant="caption" tone="error">{mutationState.error}</ModeText>
             ) : null}
-            {mutationState.note ? (
-              <ModeText variant="caption" tone="secondary">{mutationState.note}</ModeText>
+            {mutationState.conflictWarning ? (
+              <ModeText variant="caption" tone="secondary">{mutationState.conflictWarning}</ModeText>
+            ) : null}
+            {mutationState.aiDisabledWarning ? (
+              <ModeText variant="caption" tone="secondary">{mutationState.aiDisabledWarning}</ModeText>
             ) : null}
             {mutationState.success ? (
               <ModeText variant="caption" tone="success">{mutationState.success}</ModeText>
             ) : null}
+
+            {!isCreating && selectedEntry?.id ? (
+              <View style={styles.refinementActions}>
+                <ModeButton
+                  title="Add example"
+                  variant="ghost"
+                  size="sm"
+                  onPress={() => setRefinementAction('add_example')}
+                />
+                <ModeButton
+                  title="Add exception"
+                  variant="ghost"
+                  size="sm"
+                  onPress={() => setRefinementAction('add_exception')}
+                />
+                <ModeButton
+                  title="Clarify rule"
+                  variant="ghost"
+                  size="sm"
+                  onPress={() => setRefinementAction('clarify_rule')}
+                />
+              </View>
+            ) : null}
+
+            {refinementAction ? (
+              <View style={styles.refinementComposer}>
+                <ModeInput
+                  value={refinementDraft}
+                  onChangeText={setRefinementDraft}
+                  placeholder="Add refinement detail"
+                  multiline
+                  style={styles.multilineInputCompact}
+                  testID="trainer-system-knowledge-refine-input"
+                />
+                <View style={styles.buttonStack}>
+                  <ModeButton
+                    title={mutationState.isSaving ? 'Saving...' : 'Apply refinement'}
+                    onPress={applyRefinement}
+                    disabled={mutationState.isSaving || !refinementDraft.trim()}
+                    testID="trainer-system-knowledge-refine-apply"
+                  />
+                  <ModeButton
+                    title="Cancel refinement"
+                    variant="ghost"
+                    onPress={() => {
+                      setRefinementAction(null);
+                      setRefinementDraft('');
+                    }}
+                    disabled={mutationState.isSaving}
+                  />
+                </View>
+              </View>
+            ) : null}
+
             {!isEditing ? (
               <View style={styles.buttonStack}>
                 <ModeButton
-                  title="Edit note"
+                  title="Edit knowledge"
                   variant="secondary"
                   onPress={() => setIsEditing(true)}
                   testID="trainer-system-note-sheet-edit"
+                />
+                <ModeButton
+                  title="Archive"
+                  variant="ghost"
+                  onPress={() => handleArchiveEntry(selectedEntry.id)}
+                  testID="trainer-system-note-sheet-archive"
                 />
                 <ModeButton
                   title="Close"
@@ -1220,8 +1454,8 @@ function KnowledgeWorkspaceScreen({
             ) : (
               <View style={styles.buttonStack}>
                 <ModeButton
-                  title={mutationState.isSaving ? 'Saving...' : isCreating ? 'Create note' : 'Save note'}
-                  onPress={handleSaveDocument}
+                  title={mutationState.isSaving ? 'Saving...' : isCreating ? 'Save to knowledge' : 'Save changes'}
+                  onPress={handleSaveEntry}
                   disabled={mutationState.isSaving}
                   testID="trainer-system-note-sheet-save"
                 />
@@ -1234,13 +1468,16 @@ function KnowledgeWorkspaceScreen({
                       return;
                     }
                     setIsEditing(false);
-                    setDraftTitle(String(selectedDocument?.title || ''));
-                    setDraftRawText(String(selectedDocument?.raw_text || ''));
+                    setDraftTitle(String(selectedEntry?.title || ''));
+                    setDraftRawText(String(selectedEntry?.raw_content || ''));
+                    setDraftScope(String(selectedEntry?.scope || 'global'));
+                    setDraftKnowledgeType(String(selectedEntry?.knowledge_type || 'other'));
+                    setDraftTags(Array.isArray(selectedEntry?.tags) ? selectedEntry.tags.join(', ') : '');
+                    setDraftAiEnabled(selectedEntry?.ai_enabled !== false);
                     setMutationState((current) => ({
                       ...current,
                       error: null,
-                      errorDocumentId: null,
-                      note: null,
+                      errorEntryId: null,
                       success: null,
                     }));
                   }}
@@ -3187,14 +3424,16 @@ export default function TrainerSystemScreen({
     }
     try {
       const [knowledgeResponse, clientsResponse, draftResponse, outputResponse, qaResponse] = await Promise.all([
-        listTrainerKnowledgeDocuments({ accessToken }),
+        listTrainerKnowledgeEntries({ accessToken, includeArchived: false, limit: 220, offset: 0 }),
         listTrainerClients({ accessToken, limit: 1, offset: 0 }),
         getTrainerCoachQueue({ accessToken, limit: 50 }),
         getTrainerReviewOutputs({ accessToken, status: 'open', limit: 50, offset: 0 }),
         requestTrainerReviewQueue({ accessToken }),
       ]);
       const clientsCount = normalizeListPayload(clientsResponse).count;
-      const knowledgeCount = Array.isArray(knowledgeResponse) ? knowledgeResponse.length : 0;
+      const knowledgeCount = Array.isArray(knowledgeResponse)
+        ? knowledgeResponse.filter((entry) => entry?.status !== 'archived').length
+        : 0;
       const draftCount = normalizeListPayload(draftResponse).count;
       const outputCount = normalizeListPayload(outputResponse).count;
       const qaCount = Array.isArray(qaResponse) ? qaResponse.length : 0;
@@ -3501,6 +3740,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
   },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing[1],
+  },
   noteRowIconButton: {
     width: 34,
     height: 34,
@@ -3517,6 +3761,17 @@ const styles = StyleSheet.create({
   },
   multilineInput: {
     minHeight: 150,
+  },
+  multilineInputCompact: {
+    minHeight: 86,
+  },
+  refinementActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing[1],
+  },
+  refinementComposer: {
+    gap: theme.spacing[1],
   },
   sheetContent: {
     gap: theme.spacing[2],

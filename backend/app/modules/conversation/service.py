@@ -340,6 +340,7 @@ class ConversationService:
                     route=route,
                     client_context=client_context,
                     profile=profile,
+                    user_message=request.message,
                 )
                 orchestration_system_appendix = orchestration_context.system_appendix or ""
                 orchestration_user_appendix = orchestration_context.user_appendix or ""
@@ -1223,8 +1224,6 @@ class ConversationService:
         orchestration_metadata: dict[str, Any] | None,
         request: ChatRequest,
     ) -> None:
-        if not self.ai_feedback_logger_service:
-            return
         if not trainer_context.tenant_id or not trainer_context.trainer_id:
             return
 
@@ -1232,42 +1231,61 @@ class ConversationService:
         if not message_id:
             return
         generated_at = saved_assistant_message.get("created_at") or datetime.now(timezone.utc).isoformat()
-        try:
-            self.ai_feedback_logger_service.log_generated_output(
-                tenant_id=trainer_context.tenant_id,
-                trainer_id=trainer_context.trainer_id,
-                client_id=trainer_context.client_id,
-                source_type="chat",
-                source_ref_id=message_id,
-                conversation_id=conversation_id,
-                message_id=message_id,
-                output_text=assistant_message,
-                output_json={
-                    "route": {
-                        "task_type": route.task_type,
-                        "response_mode": route.response_mode,
-                        "flow": route.flow,
+        if self.ai_feedback_logger_service:
+            try:
+                self.ai_feedback_logger_service.log_generated_output(
+                    tenant_id=trainer_context.tenant_id,
+                    trainer_id=trainer_context.trainer_id,
+                    client_id=trainer_context.client_id,
+                    source_type="chat",
+                    source_ref_id=message_id,
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                    output_text=assistant_message,
+                    output_json={
+                        "route": {
+                            "task_type": route.task_type,
+                            "response_mode": route.response_mode,
+                            "flow": route.flow,
+                        },
+                        "request_message": request.message,
                     },
-                    "request_message": request.message,
-                },
-                generation_metadata={
-                    "producer": "conversation_service",
-                    "generation_strategy": execution_provider,
-                    "generated_at": generated_at,
-                    "provider": execution_provider,
-                    "model": execution_model,
-                    "fallback_reason": fallback_reason,
-                    "token_usage": {
-                        "prompt_tokens": completion.token_usage.prompt_tokens,
-                        "completion_tokens": completion.token_usage.completion_tokens,
-                        "total_tokens": completion.token_usage.total_tokens,
-                        "thoughts_tokens": completion.token_usage.thoughts_tokens,
+                    generation_metadata={
+                        "producer": "conversation_service",
+                        "generation_strategy": execution_provider,
+                        "generated_at": generated_at,
+                        "provider": execution_provider,
+                        "model": execution_model,
+                        "fallback_reason": fallback_reason,
+                        "token_usage": {
+                            "prompt_tokens": completion.token_usage.prompt_tokens,
+                            "completion_tokens": completion.token_usage.completion_tokens,
+                            "total_tokens": completion.token_usage.total_tokens,
+                            "thoughts_tokens": completion.token_usage.thoughts_tokens,
+                        },
+                        "orchestration": orchestration_metadata or {},
                     },
-                    "orchestration": orchestration_metadata or {},
-                },
-            )
-        except Exception:
-            logger.exception("Failed to write chat output to ai_generated_outputs message_id=%s", message_id)
+                )
+            except Exception:
+                logger.exception("Failed to write chat output to ai_generated_outputs message_id=%s", message_id)
+
+        if self.trainer_intelligence_service:
+            try:
+                knowledge_retrieval = (orchestration_metadata or {}).get("knowledge_retrieval")
+                self.trainer_intelligence_service.log_retrieval_usage(
+                    trainer_id=trainer_context.trainer_id,
+                    tenant_id=trainer_context.tenant_id,
+                    client_id=trainer_context.client_id,
+                    conversation_id=conversation_id,
+                    message_id=message_id,
+                    retrieval_metadata=knowledge_retrieval,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to record trainer knowledge retrieval usage conversation_id=%s message_id=%s",
+                    conversation_id,
+                    message_id,
+                )
 
     def _get_conversation_usage(self, conversation_id: str) -> ConversationUsage:
         try:

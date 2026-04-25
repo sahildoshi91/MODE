@@ -110,12 +110,12 @@ describe('CoachStreamItem', () => {
     let tree;
     await act(async () => {
       tree = renderer.create(
-        <CoachStreamItem item={{ kind: 'trainer_input', text: '/program' }} />,
+        <CoachStreamItem item={{ kind: 'trainer_input', text: '/client' }} />,
       );
     });
 
     const commandTextNode = tree.root.find(
-      (node) => node.type === Text && node?.props?.children === '/program',
+      (node) => node.type === Text && node?.props?.children === '/client',
     );
     expect(commandTextNode).toBeTruthy();
 

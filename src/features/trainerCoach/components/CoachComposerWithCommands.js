@@ -19,11 +19,8 @@ const COMPOSER_SURFACE_FOCUSED_BORDER = 'rgba(143, 178, 255, 0.4)';
 const COMPOSER_PLACEHOLDER = 'rgba(199, 214, 243, 0.74)';
 
 const COMMANDS = [
-  '/program',
-  '/memory',
-  '/flag',
   '/client',
-  '/rules',
+  '/note',
 ];
 
 export default function CoachComposerWithCommands({

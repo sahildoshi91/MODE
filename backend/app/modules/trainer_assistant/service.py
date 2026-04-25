@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
 from uuid import uuid4
@@ -80,6 +80,7 @@ class _ExecutionResult:
 class _PromptPackage:
     system_prompt: str
     user_prompt: str
+    orchestration_metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -442,6 +443,20 @@ class TrainerAssistantService:
         if not logged:
             raise RuntimeError("Could not persist trainer assistant draft")
 
+        if self.trainer_intelligence_service:
+            try:
+                knowledge_retrieval = (prompt.orchestration_metadata or {}).get("knowledge_retrieval")
+                self.trainer_intelligence_service.log_retrieval_usage(
+                    trainer_id=trainer_id,
+                    tenant_id=trainer_context.tenant_id,
+                    client_id=active_client_id,
+                    conversation_id=None,
+                    message_id=None,
+                    retrieval_metadata=knowledge_retrieval,
+                )
+            except Exception:
+                logger.exception("Trainer assistant knowledge usage logging failed draft_id=%s", logged.id)
+
         router_event = TrainerAssistantRouterEvent(
             trainer_id=trainer_id,
             client_id=active_client_id,
@@ -495,6 +510,7 @@ class TrainerAssistantService:
         user_message = (message or "").strip() or default_prompt
 
         orchestration_appendix = ""
+        orchestration_metadata: dict[str, Any] = {}
         if self.trainer_intelligence_service:
             try:
                 route_context = _RouteLikeContext(
@@ -510,8 +526,10 @@ class TrainerAssistantService:
                         "action_type": action_type.value,
                     },
                     profile=(detail.get("profile_snapshot") or {}),
+                    user_message=user_message,
                 )
                 orchestration_appendix = context.system_appendix
+                orchestration_metadata = context.metadata or {}
             except Exception:
                 logger.exception("Trainer assistant orchestration context assembly failed")
 
@@ -554,7 +572,11 @@ class TrainerAssistantService:
             "TRAINER_REQUEST:\n"
             f"{user_message}"
         )
-        return _PromptPackage(system_prompt=system_prompt, user_prompt=user_prompt)
+        return _PromptPackage(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            orchestration_metadata=orchestration_metadata,
+        )
 
     def _execute_prompt_with_routing(
         self,
@@ -677,6 +699,7 @@ class TrainerAssistantService:
                 f"Original assistant output JSON candidate:\n{completion.text}\n\n"
                 "Refine this output for better nuance and trainer voice, but keep the same schema."
             ),
+            orchestration_metadata=prompt.orchestration_metadata,
         )
 
         try:

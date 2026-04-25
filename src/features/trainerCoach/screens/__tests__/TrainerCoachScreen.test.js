@@ -442,6 +442,59 @@ describe('TrainerCoachScreen', () => {
     });
   });
 
+  it('keeps legacy-command redirect hints visible when emitted as internal_ai_private', async () => {
+    const snapshot = buildWorkspaceSnapshot({
+      state: {
+        ...buildWorkspaceSnapshot().state,
+        stream: [
+          {
+            id: 'trainer-input-memory',
+            kind: 'trainer_input',
+            text: '/memory',
+            severity: 'info',
+            status: 'confirmed',
+          },
+          {
+            id: 'legacy-hint',
+            kind: 'internal_ai_private',
+            text: 'Heads up: `/memory` is now part of `/client` quick notes.',
+            severity: 'info',
+            status: 'confirmed',
+          },
+          {
+            id: 'hidden-system-confirmation',
+            kind: 'system_confirmation',
+            text: 'Memory panel opened.',
+            severity: 'info',
+            status: 'confirmed',
+          },
+        ],
+      },
+    });
+    mockUseTrainerCoachWorkspace.mockReturnValue(snapshot);
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    const streamList = tree.root.findByType('MockCoachStreamList');
+    expect(streamList.props.streamItems.map((item) => item.id)).toEqual([
+      'trainer-input-memory',
+      'legacy-hint',
+    ]);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('shows jump-to-latest when viewport leaves the bottom and forces scroll on press', async () => {
     const snapshot = buildWorkspaceSnapshot({
       state: {

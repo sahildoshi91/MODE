@@ -23,9 +23,11 @@ import {
 } from '../../messaging';
 import { getTrainerSettingsMe } from '../../profile/services/profileApi';
 import { buildTrainerRouteDiagnosticsBundle } from '../../trainerPlatform/utils/trainerRouteDiagnostics';
+import { ClientContextRail } from '../components/clientContextRail';
 import CoachComposerWithCommands from '../components/CoachComposerWithCommands';
 import CoachPanelHost from '../components/CoachPanelHost';
 import CoachStreamList from '../components/CoachStreamList';
+import { CLIENT_CONTEXT_RAIL_MODE, useClientContextState } from '../hooks/useClientContextState';
 import { useTrainerCoachWorkspace } from '../hooks/useTrainerCoachWorkspace';
 
 const COPY_FEEDBACK_TIMEOUT_MS = 2200;
@@ -67,6 +69,7 @@ export default function TrainerCoachScreen({
   const copyFeedbackTimerRef = useRef(null);
   const visibleStreamLengthRef = useRef(0);
   const previousTrainerIdRef = useRef(trainerId);
+  const previousWorkspaceClientIdRef = useRef(null);
   const latestScrollMetricsRef = useRef({
     offset: 0,
     contentHeight: 0,
@@ -103,6 +106,19 @@ export default function TrainerCoachScreen({
     COMPOSER_DOCK_BACKDROP_MIN_HEIGHT,
     composerDockHeight + theme.spacing[1],
   );
+  const clientContext = useClientContextState({
+    accessToken,
+    trainerId,
+    initialSelectedClientId: state.activeClientId || state.panels.context?.clientId || null,
+    onSelectedClientChange: actions.setActiveClientId,
+  });
+  const isClientRailOpen = (
+    clientContext.state.railMode !== CLIENT_CONTEXT_RAIL_MODE.COLLAPSED
+    && clientContext.state.isRailVisible
+  );
+  const nonClientPanel = state.panels.active !== 'client_context'
+    ? state.panels.active
+    : null;
 
   const helperLabel = useMemo(() => {
     if (isSendingMessage) {
@@ -191,6 +207,43 @@ export default function TrainerCoachScreen({
     setPendingNewMessagesBelowFold(false);
     setAnchorToLatestSignal((value) => value + 1);
   }, [trainerId]);
+
+  useEffect(() => {
+    const normalizedWorkspaceClientId = String(state.activeClientId || '').trim() || null;
+    if (previousWorkspaceClientIdRef.current === normalizedWorkspaceClientId) {
+      return;
+    }
+    previousWorkspaceClientIdRef.current = normalizedWorkspaceClientId;
+    clientContext.actions.hydrateSelectedClientId(normalizedWorkspaceClientId);
+  }, [clientContext.actions, state.activeClientId]);
+
+  useEffect(() => {
+    if (state.panels.active !== 'client_context') {
+      return;
+    }
+    const panelContext = state.panels.context || {};
+    const initialClientId = panelContext?.clientId || state.activeClientId || null;
+    if (initialClientId) {
+      clientContext.actions.hydrateSelectedClientId(initialClientId);
+    }
+    if (panelContext?.initialSection === 'settings') {
+      const fullSection = panelContext?.filter === 'risk_flags'
+        ? 'advanced_ai_context'
+        : 'schedule_preferences';
+      clientContext.actions.openFullRail(fullSection);
+    } else {
+      clientContext.actions.expandRail({
+        focusSearch: !initialClientId,
+      });
+    }
+    actions.closePanel();
+  }, [
+    actions,
+    clientContext.actions,
+    state.activeClientId,
+    state.panels.active,
+    state.panels.context,
+  ]);
 
   useEffect(() => {
     const openEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
@@ -461,6 +514,16 @@ export default function TrainerCoachScreen({
                   </ModeText>
                 </Pressable>
               ) : null}
+              {isClientRailOpen ? (
+                <Pressable
+                  testID="trainer-coach-client-context-tap-outside"
+                  onPress={() => clientContext.actions.collapseRail()}
+                  style={[
+                    styles.clientContextTapOutside,
+                    { bottom: composerDockHeight + activeComposerOffset },
+                  ]}
+                />
+              ) : null}
 
               <View
                 pointerEvents="none"
@@ -494,6 +557,13 @@ export default function TrainerCoachScreen({
                   }}
                   style={styles.composerDockStack}
                 >
+                  <ClientContextRail
+                    testIDPrefix="trainer-coach-client-context-rail"
+                    state={clientContext.state}
+                    selectedClientSummary={clientContext.selectedClientSummary}
+                    actions={clientContext.actions}
+                    createdByTrainerId={trainerId}
+                  />
                   <CoachComposerWithCommands
                     value={composerValue}
                     onChangeText={setComposerValue}
@@ -520,7 +590,7 @@ export default function TrainerCoachScreen({
       {!staleRouteError ? (
         <CoachPanelHost
           accessToken={accessToken}
-          activePanel={state.panels.active}
+          activePanel={nonClientPanel}
           panelContext={state.panels.context}
           queue={state.queue}
           onOpenTrainerCoach={onOpenTrainerCoach}
@@ -634,6 +704,10 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     zIndex: 6,
+  },
+  clientContextTapOutside: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 5,
   },
   composerDockStack: {
     paddingTop: theme.spacing[1],

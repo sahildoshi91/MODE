@@ -132,7 +132,7 @@ describe('useTrainerCoachWorkspace', () => {
     });
   });
 
-  it('routes slash commands to structured panels', async () => {
+  it('routes primary and legacy slash commands to /client and /note surfaces', async () => {
     let latestSnapshot = null;
     const onSnapshot = (snapshot) => {
       latestSnapshot = snapshot;
@@ -150,34 +150,34 @@ describe('useTrainerCoachWorkspace', () => {
     await flushEffects();
 
     await act(async () => {
-      await latestSnapshot.actions.sendIntentMessage('/rules');
-    });
-    await flushEffects();
-    expect(latestSnapshot.state.panels.active).toBe('rules');
-
-    await act(async () => {
-      await latestSnapshot.actions.sendIntentMessage('/program');
-    });
-    await flushEffects();
-    expect(latestSnapshot.state.panels.active).toBe('program');
-
-    await act(async () => {
       await latestSnapshot.actions.sendIntentMessage('/client');
     });
     await flushEffects();
     expect(latestSnapshot.state.panels.active).toBe('client_context');
     expect(latestSnapshot.state.panels.context).toEqual(expect.objectContaining({
       clientId: 'client-1',
+      initialSection: 'quick_note',
     }));
+
+    await act(async () => {
+      await latestSnapshot.actions.sendIntentMessage('/note');
+    });
+    await flushEffects();
+    expect(latestSnapshot.state.panels.active).toBe('note');
 
     await act(async () => {
       await latestSnapshot.actions.sendIntentMessage('/memory');
     });
     await flushEffects();
-    expect(latestSnapshot.state.panels.active).toBe('memory');
+    expect(latestSnapshot.state.panels.active).toBe('client_context');
     expect(latestSnapshot.state.panels.context).toEqual(expect.objectContaining({
       clientId: 'client-1',
+      initialSection: 'quick_note',
     }));
+    let stream = latestSnapshot.state.stream;
+    let lastItem = stream[stream.length - 1];
+    expect(lastItem.kind).toBe('internal_ai_private');
+    expect(lastItem.text).toContain('/client');
 
     await act(async () => {
       await latestSnapshot.actions.sendIntentMessage('/flag');
@@ -187,7 +187,32 @@ describe('useTrainerCoachWorkspace', () => {
     expect(latestSnapshot.state.panels.context).toEqual(expect.objectContaining({
       clientId: 'client-1',
       filter: 'risk_flags',
+      initialSection: 'settings',
     }));
+    stream = latestSnapshot.state.stream;
+    lastItem = stream[stream.length - 1];
+    expect(lastItem.kind).toBe('internal_ai_private');
+    expect(lastItem.text).toContain('/client');
+
+    await act(async () => {
+      await latestSnapshot.actions.sendIntentMessage('/program');
+    });
+    await flushEffects();
+    expect(latestSnapshot.state.panels.active).toBe('note');
+    stream = latestSnapshot.state.stream;
+    lastItem = stream[stream.length - 1];
+    expect(lastItem.kind).toBe('internal_ai_private');
+    expect(lastItem.text).toContain('/note');
+
+    await act(async () => {
+      await latestSnapshot.actions.sendIntentMessage('/rules');
+    });
+    await flushEffects();
+    expect(latestSnapshot.state.panels.active).toBe('note');
+    stream = latestSnapshot.state.stream;
+    lastItem = stream[stream.length - 1];
+    expect(lastItem.kind).toBe('internal_ai_private');
+    expect(lastItem.text).toContain('/note');
   });
 
   it('marks unknown slash commands as failed system confirmations', async () => {
@@ -220,7 +245,7 @@ describe('useTrainerCoachWorkspace', () => {
     expect(lastItem.text).toContain('Unknown command');
   });
 
-  it('keeps /drafts available as a redirect message to Clients without opening queue panel', async () => {
+  it('keeps /drafts as a legacy alias that redirects to /client settings with a visible hint', async () => {
     let latestSnapshot = null;
     const onSnapshot = (snapshot) => {
       latestSnapshot = snapshot;
@@ -242,12 +267,82 @@ describe('useTrainerCoachWorkspace', () => {
     });
     await flushEffects();
 
-    expect(latestSnapshot.state.panels.active).not.toBe('draft_review');
+    expect(latestSnapshot.state.panels.active).toBe('client_context');
+    expect(latestSnapshot.state.panels.context).toEqual(expect.objectContaining({
+      clientId: 'client-1',
+      initialSection: 'settings',
+    }));
     const stream = latestSnapshot.state.stream;
     const lastItem = stream[stream.length - 1];
-    expect(lastItem.kind).toBe('system_confirmation');
+    expect(lastItem.kind).toBe('internal_ai_private');
     expect(lastItem.status).toBe('confirmed');
-    expect(lastItem.text).toContain('Clients tab');
+    expect(lastItem.text).toContain('/client');
+  });
+
+  it('handles rapid /client invocation without injecting slash chips into trainer_input stream items', async () => {
+    let latestSnapshot = null;
+    const onSnapshot = (snapshot) => {
+      latestSnapshot = snapshot;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          onSnapshot={onSnapshot}
+        />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await Promise.all([
+        latestSnapshot.actions.sendIntentMessage('/client'),
+        latestSnapshot.actions.sendIntentMessage('/client'),
+      ]);
+    });
+    await flushEffects();
+
+    const slashTrainerInputs = latestSnapshot.state.stream.filter(
+      (item) => item.kind === 'trainer_input' && item.text === '/client',
+    );
+    expect(slashTrainerInputs).toHaveLength(0);
+    expect(latestSnapshot.state.panels.active).toBe('client_context');
+  });
+
+  it('includes active client id metadata in assistant execute requests', async () => {
+    let latestSnapshot = null;
+    const onSnapshot = (snapshot) => {
+      latestSnapshot = snapshot;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          onSnapshot={onSnapshot}
+        />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await latestSnapshot.actions.sendIntentMessage('Draft a check-in follow-up.');
+    });
+    await flushEffects();
+
+    expect(executeTrainerAssistantActionStream).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+      message: 'Draft a check-in follow-up.',
+    }));
+    expect(executeTrainerAssistantAction).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+      message: 'Draft a check-in follow-up.',
+    }));
   });
 
   it('persists system confirmations through trainer-coach events API', async () => {

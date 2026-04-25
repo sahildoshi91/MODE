@@ -18,14 +18,19 @@ jest.mock('../../../../services/apiRequest', () => ({
 }));
 
 jest.mock('../../../trainerHome/services/trainerKnowledgeApi', () => ({
+  archiveTrainerKnowledgeEntry: jest.fn().mockResolvedValue({}),
   archiveTrainerRule: jest.fn().mockResolvedValue({}),
+  createTrainerKnowledgeEntry: jest.fn().mockResolvedValue({}),
   createTrainerKnowledgeDocument: jest.fn().mockResolvedValue({}),
   deleteTrainerKnowledgeDocument: jest.fn().mockResolvedValue({}),
+  listTrainerKnowledgeEntries: jest.fn(),
   listTrainerKnowledgeDocuments: jest.fn(),
+  refineTrainerKnowledgeEntry: jest.fn().mockResolvedValue({}),
   listTrainerRules: jest.fn().mockResolvedValue([]),
   saveTrainerKnowledgeDocumentWithFallback: jest.fn().mockResolvedValue({
     extraction: { rules_created: 0, fallback_reason: null },
   }),
+  updateTrainerKnowledgeEntry: jest.fn().mockResolvedValue({}),
   updateTrainerKnowledgeDocument: jest.fn().mockResolvedValue({}),
   updateTrainerRule: jest.fn().mockResolvedValue({}),
 }));
@@ -160,11 +165,11 @@ import * as Clipboard from 'expo-clipboard';
 
 import { fetchWithApiFallback } from '../../../../services/apiRequest';
 import {
-  createTrainerKnowledgeDocument,
-  deleteTrainerKnowledgeDocument,
-  listTrainerKnowledgeDocuments,
-  saveTrainerKnowledgeDocumentWithFallback,
-  updateTrainerKnowledgeDocument,
+  archiveTrainerKnowledgeEntry,
+  createTrainerKnowledgeEntry,
+  listTrainerKnowledgeEntries,
+  refineTrainerKnowledgeEntry,
+  updateTrainerKnowledgeEntry,
 } from '../../../trainerHome/services/trainerKnowledgeApi';
 import {
   archiveTrainerClientMemory,
@@ -241,50 +246,84 @@ describe('TrainerSystemScreen', () => {
       code: 'MODE1234',
       is_active: false,
     });
-    listTrainerKnowledgeDocuments.mockResolvedValue([
+    listTrainerKnowledgeEntries.mockResolvedValue([
       {
-        id: 'doc-1',
+        id: 'entry-1',
         title: '',
-        raw_text: 'Lower load on high stress weeks and prioritize movement quality.',
-        document_type: 'text',
+        raw_content: 'Lower load on high stress weeks and prioritize movement quality.',
+        knowledge_type: 'coaching_rule',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: ['stress'],
+        updated_at: '2026-04-20T15:00:00.000Z',
         created_at: '2026-04-20T15:00:00.000Z',
       },
       {
-        id: 'doc-2',
+        id: 'entry-2',
         title: 'Peak Week Strategy',
-        raw_text: 'Peak week check-in cadence and hydration guardrails.',
-        document_type: 'text',
+        raw_content: 'Peak week check-in cadence and hydration guardrails.',
+        knowledge_type: 'programming_preference',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: ['peak_week'],
+        updated_at: '2026-04-19T15:00:00.000Z',
         created_at: '2026-04-19T15:00:00.000Z',
       },
     ]);
-    saveTrainerKnowledgeDocumentWithFallback.mockResolvedValue({
-      document: {
-        id: 'doc-new',
+    createTrainerKnowledgeEntry.mockResolvedValue({
+      entry: {
+        id: 'entry-new',
         title: 'Auto Title',
-        raw_text: 'Default note text',
-        document_type: 'text',
+        raw_content: 'Default note text',
+        knowledge_type: 'coaching_rule',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: [],
+        updated_at: '2026-04-20T20:00:00.000Z',
         created_at: '2026-04-20T20:00:00.000Z',
       },
       extraction: { rules_created: 0, fallback_reason: null },
     });
-    createTrainerKnowledgeDocument.mockResolvedValue({
-      id: 'doc-new',
-      title: 'Auto Title',
-      raw_text: 'Default note text',
-      document_type: 'text',
-      created_at: '2026-04-20T20:00:00.000Z',
-    });
-    updateTrainerKnowledgeDocument.mockResolvedValue({
-      document: {
-        id: 'doc-1',
+    updateTrainerKnowledgeEntry.mockResolvedValue({
+      entry: {
+        id: 'entry-1',
         title: 'Edited Title',
-        raw_text: 'Edited note text',
-        document_type: 'text',
+        raw_content: 'Edited note text',
+        knowledge_type: 'coaching_rule',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: ['edited'],
+        updated_at: '2026-04-20T16:00:00.000Z',
         created_at: '2026-04-20T15:00:00.000Z',
       },
       extraction: { rules_created: 0, fallback_reason: null },
     });
-    deleteTrainerKnowledgeDocument.mockResolvedValue({});
+    archiveTrainerKnowledgeEntry.mockResolvedValue({
+      entry: {
+        id: 'entry-1',
+        status: 'archived',
+        ai_enabled: false,
+        archived_at: '2026-04-20T17:00:00.000Z',
+      },
+    });
+    refineTrainerKnowledgeEntry.mockResolvedValue({
+      entry: {
+        id: 'entry-1',
+        title: 'Edited Title',
+        raw_content: 'Edited note text\n\nadd_example: Track readiness before intensity.',
+        knowledge_type: 'coaching_rule',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: ['edited'],
+        updated_at: '2026-04-20T18:00:00.000Z',
+        created_at: '2026-04-20T15:00:00.000Z',
+      },
+    });
     listTrainerClients.mockResolvedValue({
       count: 3,
       items: [
@@ -446,7 +485,9 @@ describe('TrainerSystemScreen', () => {
     expect(rendered).toContain('Coach Maya');
     expect(rendered).toContain('Atlas is calibrated and ready for trainer-controlled coaching.');
 
-    expect(listTrainerKnowledgeDocuments).toHaveBeenCalledWith({ accessToken: 'trainer-token' });
+    expect(listTrainerKnowledgeEntries).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+    }));
     expect(listTrainerClients).toHaveBeenCalledWith({
       accessToken: 'trainer-token',
       limit: 1,
@@ -519,16 +560,15 @@ describe('TrainerSystemScreen', () => {
     const rendered = JSON.stringify(tree.toJSON());
     expect(rendered).toContain('Knowledge Workspace');
     expect(rendered).toContain('Trainer knowledge for AI memory and coaching context.');
-    expect(rendered).not.toContain('Notes Library');
-    expect(rendered).toContain('Saved Notes');
+    expect(rendered).toContain('Knowledge Library');
     expect(
-      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-row-doc-1').length,
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-row-entry-1').length,
     ).toBeGreaterThan(0);
     expect(
-      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-edit-doc-1').length,
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-edit-entry-1').length,
     ).toBeGreaterThan(0);
     expect(
-      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-delete-doc-1').length,
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-delete-entry-1').length,
     ).toBeGreaterThan(0);
     expect(
       tree.root.findAll((node) => node.props?.testID === 'trainer-system-notes-new').length,
@@ -577,12 +617,17 @@ describe('TrainerSystemScreen', () => {
     const tree = await renderScreen();
     const rawText = 'If stress is high, lower intensity before changing frequency.';
     const expectedTitle = generateKnowledgeNoteTitle(rawText);
-    saveTrainerKnowledgeDocumentWithFallback.mockImplementationOnce(async ({ title, rawText: nextRawText }) => ({
-      document: {
-        id: 'doc-created',
+    createTrainerKnowledgeEntry.mockImplementationOnce(async ({ title, rawContent: nextRawText }) => ({
+      entry: {
+        id: 'entry-created',
         title,
-        raw_text: nextRawText,
-        document_type: 'text',
+        raw_content: nextRawText,
+        knowledge_type: 'coaching_rule',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: [],
+        updated_at: '2026-04-20T21:00:00.000Z',
         created_at: '2026-04-20T21:00:00.000Z',
       },
       extraction: { rules_created: 0, fallback_reason: null },
@@ -604,22 +649,27 @@ describe('TrainerSystemScreen', () => {
     });
     await flushEffects();
 
-    expect(saveTrainerKnowledgeDocumentWithFallback).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(createTrainerKnowledgeEntry).toHaveBeenLastCalledWith(expect.objectContaining({
       accessToken: 'trainer-token',
       title: expectedTitle,
-      rawText,
+      rawContent: rawText,
     }));
     expect(JSON.stringify(tree.toJSON())).toContain(expectedTitle);
   });
 
   it('edits a note from inline edit icon and saves changes', async () => {
     const tree = await renderScreen();
-    updateTrainerKnowledgeDocument.mockResolvedValueOnce({
-      document: {
-        id: 'doc-1',
+    updateTrainerKnowledgeEntry.mockResolvedValueOnce({
+      entry: {
+        id: 'entry-1',
         title: 'High Stress Deload',
-        raw_text: 'Updated load management instructions.',
-        document_type: 'text',
+        raw_content: 'Updated load management instructions.',
+        knowledge_type: 'coaching_rule',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: ['stress'],
+        updated_at: '2026-04-20T16:00:00.000Z',
         created_at: '2026-04-20T15:00:00.000Z',
       },
       extraction: { rules_created: 0, fallback_reason: null },
@@ -631,7 +681,7 @@ describe('TrainerSystemScreen', () => {
     await flushEffects();
 
     await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-note-edit-doc-1').props.onPress({
+      findPressableByTestID(tree.root, 'trainer-system-note-edit-entry-1').props.onPress({
         stopPropagation: jest.fn(),
       });
     });
@@ -644,11 +694,11 @@ describe('TrainerSystemScreen', () => {
     });
     await flushEffects();
 
-    expect(updateTrainerKnowledgeDocument).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(updateTrainerKnowledgeEntry).toHaveBeenLastCalledWith(expect.objectContaining({
       accessToken: 'trainer-token',
-      documentId: 'doc-1',
+      entryId: 'entry-1',
       title: 'High Stress Deload',
-      rawText: 'Updated load management instructions.',
+      rawContent: 'Updated load management instructions.',
     }));
     expect(JSON.stringify(tree.toJSON())).toContain('High Stress Deload');
   });
@@ -662,18 +712,18 @@ describe('TrainerSystemScreen', () => {
     await flushEffects();
 
     await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-note-delete-doc-1').props.onPress({
+      findPressableByTestID(tree.root, 'trainer-system-note-delete-entry-1').props.onPress({
         stopPropagation: jest.fn(),
       });
     });
     await flushEffects();
 
-    expect(deleteTrainerKnowledgeDocument).toHaveBeenCalledWith({
+    expect(archiveTrainerKnowledgeEntry).toHaveBeenCalledWith({
       accessToken: 'trainer-token',
-      documentId: 'doc-1',
+      entryId: 'entry-1',
     });
     expect(
-      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-row-doc-1'),
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-row-entry-1'),
     ).toHaveLength(0);
   });
 

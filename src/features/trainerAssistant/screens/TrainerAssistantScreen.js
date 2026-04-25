@@ -22,6 +22,9 @@ import { theme } from '../../../../lib/theme';
 import { BREATHING_TRANSITIONS_ENABLED } from '../../../config/featureFlags';
 import { getAIProgressLabel } from '../../messaging';
 import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/loading';
+import { ClientContextRail } from '../../trainerCoach/components/clientContextRail';
+import CoachPanelHost from '../../trainerCoach/components/CoachPanelHost';
+import { CLIENT_CONTEXT_RAIL_MODE, useClientContextState } from '../../trainerCoach/hooks/useClientContextState';
 import { buildTrainerRouteDiagnosticsBundle } from '../../trainerPlatform/utils/trainerRouteDiagnostics';
 import {
   approveTrainerAssistantDraft,
@@ -38,7 +41,15 @@ const ACTION_CHIPS = [
   { actionType: 'analyze_client', label: 'Analyze Client' },
   { actionType: 'message_client', label: 'Message Client' },
 ];
+const COMMAND_CHIPS = [
+  { command: '/client', label: '/client' },
+  { command: '/note', label: '/note' },
+];
 const COPY_FEEDBACK_TIMEOUT_MS = 2200;
+
+const COMMAND_PANEL = {
+  NOTE: 'note',
+};
 
 function buildDefaultPrompt(actionType, clientName = 'this client') {
   if (actionType === 'build_program') {
@@ -68,6 +79,14 @@ function inferActionType(prompt) {
     return 'message_client';
   }
   return 'analyze_client';
+}
+
+function normalizeSlashCommand(prompt) {
+  return String(prompt || '').trim().toLowerCase().split(/\s+/)[0];
+}
+
+function commandToneToTextTone(value) {
+  return value === 'error' ? 'error' : 'secondary';
 }
 
 function splitLinesToList(value) {
@@ -192,6 +211,19 @@ export default function TrainerAssistantScreen({
   const [isMutatingDraft, setIsMutatingDraft] = useState(false);
   const [mutationError, setMutationError] = useState(null);
   const [mutationSuccess, setMutationSuccess] = useState(null);
+  const [panelState, setPanelState] = useState({
+    active: null,
+    context: null,
+  });
+  const [commandFeedback, setCommandFeedback] = useState(null);
+  const clientContext = useClientContextState({
+    accessToken,
+    trainerId: launchContext?.trainer_id || 'trainer-assistant',
+    initialSelectedClientId: selectedClientId || launchClientId,
+    onSelectedClientChange: (clientId) => {
+      setSelectedClientId(clientId);
+    },
+  });
 
   const clients = useMemo(() => (
     Array.isArray(bootstrapPayload?.clients)
@@ -219,6 +251,20 @@ export default function TrainerAssistantScreen({
     ? bootstrapPayload.context_bundle
     : {};
 
+  const panelQueue = useMemo(() => {
+    const normalizedClientId = String(selectedClientId || '').trim();
+    if (!normalizedClientId) {
+      return [];
+    }
+    return [
+      {
+        output_id: `assistant-panel-${normalizedClientId}`,
+        client_id: normalizedClientId,
+        client_name: selectedClientName,
+      },
+    ];
+  }, [selectedClientId, selectedClientName]);
+
   const showCopyFeedback = useCallback((message) => {
     if (copyFeedbackTimerRef.current) {
       clearTimeout(copyFeedbackTimerRef.current);
@@ -245,6 +291,104 @@ export default function TrainerAssistantScreen({
       showCopyFeedback('Unable to copy diagnostics');
     }
   }, [executionErrorDetails, showCopyFeedback]);
+
+  const openPanel = useCallback((active, context = null) => {
+    setPanelState({
+      active,
+      context,
+    });
+  }, []);
+
+  const closePanel = useCallback(() => {
+    setPanelState({
+      active: null,
+      context: null,
+    });
+  }, []);
+
+  const clearCommandFeedback = useCallback(() => {
+    setCommandFeedback(null);
+  }, []);
+
+  const routeSlashCommand = useCallback((prompt, { clientId = selectedClientId } = {}) => {
+    const command = normalizeSlashCommand(prompt);
+    if (!command.startsWith('/')) {
+      return false;
+    }
+    const normalizedClientId = typeof clientId === 'string' && clientId.trim().length > 0
+      ? clientId.trim()
+      : null;
+
+    if (command === '/client') {
+      clientContext.actions.expandRail({
+        focusSearch: !normalizedClientId,
+      });
+      if (normalizedClientId) {
+        clientContext.actions.hydrateSelectedClientId(normalizedClientId);
+      }
+      clearCommandFeedback();
+      return true;
+    }
+
+    if (command === '/note') {
+      openPanel(COMMAND_PANEL.NOTE, null);
+      clearCommandFeedback();
+      return true;
+    }
+
+    if (command === '/memory') {
+      clientContext.actions.expandRail({
+        focusSearch: !normalizedClientId,
+      });
+      if (normalizedClientId) {
+        clientContext.actions.hydrateSelectedClientId(normalizedClientId);
+      }
+      setCommandFeedback({
+        tone: 'secondary',
+        message: 'Heads up: `/memory` is now part of `/client` quick notes.',
+      });
+      return true;
+    }
+
+    if (command === '/flag') {
+      clientContext.actions.openFullRail('advanced_ai_context');
+      if (normalizedClientId) {
+        clientContext.actions.hydrateSelectedClientId(normalizedClientId);
+      }
+      setCommandFeedback({
+        tone: 'secondary',
+        message: 'Heads up: `/flag` is now part of `/client` settings.',
+      });
+      return true;
+    }
+
+    if (command === '/drafts') {
+      clientContext.actions.openFullRail('schedule_preferences');
+      if (normalizedClientId) {
+        clientContext.actions.hydrateSelectedClientId(normalizedClientId);
+      }
+      setCommandFeedback({
+        tone: 'secondary',
+        message: 'Heads up: draft controls moved under `/client` settings.',
+      });
+      return true;
+    }
+
+    if (command === '/program' || command === '/rules') {
+      openPanel(COMMAND_PANEL.NOTE, null);
+      setCommandFeedback({
+        tone: 'secondary',
+        message: `Heads up: \`${command}\` now routes to \`/note\`.`,
+      });
+      return true;
+    }
+
+    setCommandFeedback({
+      tone: 'error',
+      message: `Unknown command: ${command}. Use /client or /note.`,
+    });
+    return true;
+  }, [clearCommandFeedback, clientContext.actions, openPanel, selectedClientId]);
 
   const loadBootstrap = useCallback(async ({
     preferredClientId = null,
@@ -308,12 +452,24 @@ export default function TrainerAssistantScreen({
     setPromptInput(defaultPrompt);
   }, [promptInput, selectedActionType, selectedClientName]);
 
+  useEffect(() => {
+    clientContext.actions.hydrateSelectedClientId(selectedClientId);
+  }, [clientContext.actions, selectedClientId]);
+
   const runExecution = useCallback(async ({
     actionType = selectedActionType,
     prompt = promptInput,
     clientId = selectedClientId,
   } = {}) => {
+    const normalizedPrompt = String(prompt || '').trim();
     if (!accessToken || isExecuting) {
+      return;
+    }
+    if (normalizedPrompt.startsWith('/')) {
+      setExecutionError(null);
+      setExecutionErrorDetails(null);
+      setExecutionProgressStage(null);
+      routeSlashCommand(normalizedPrompt, { clientId });
       return;
     }
     if (!clientId) {
@@ -322,6 +478,7 @@ export default function TrainerAssistantScreen({
       return;
     }
 
+    clearCommandFeedback();
     setIsExecuting(true);
     setExecutionError(null);
     setExecutionErrorDetails(null);
@@ -336,7 +493,7 @@ export default function TrainerAssistantScreen({
           accessToken,
           clientId,
           actionType,
-          message: prompt,
+          message: normalizedPrompt,
           onEvent: (eventPayload) => {
             const eventType = String(eventPayload?.type || '').trim().toLowerCase();
             if (eventType === 'ack' || eventType === 'progress') {
@@ -353,7 +510,7 @@ export default function TrainerAssistantScreen({
           accessToken,
           clientId,
           actionType,
-          message: prompt,
+          message: normalizedPrompt,
         });
       }
       setDraftId(response?.draft_id || null);
@@ -362,6 +519,7 @@ export default function TrainerAssistantScreen({
       setDraftStatus('open');
       setSelectedActionType(response?.output?.action_type || actionType);
       setSelectedClientId(clientId);
+      clientContext.actions.setSelectedClient(clientId, { keepOpen: true });
       await loadBootstrap({ preferredClientId: clientId, keepCurrentPrompt: true });
       setExecutionProgressStage(null);
     } catch (error) {
@@ -372,7 +530,17 @@ export default function TrainerAssistantScreen({
     } finally {
       setIsExecuting(false);
     }
-  }, [accessToken, isExecuting, loadBootstrap, promptInput, selectedActionType, selectedClientId]);
+  }, [
+    accessToken,
+    clientContext.actions,
+    clearCommandFeedback,
+    isExecuting,
+    loadBootstrap,
+    promptInput,
+    routeSlashCommand,
+    selectedActionType,
+    selectedClientId,
+  ]);
 
   const handleCopyBootstrapError = useCallback(async () => {
     if (!bootstrapError) {
@@ -394,15 +562,27 @@ export default function TrainerAssistantScreen({
     setSelectedActionType(actionType);
     setPromptInput(buildDefaultPrompt(actionType, selectedClientName));
     setExecutionError(null);
+    clearCommandFeedback();
   };
 
   const handleSuggestedPromptPress = (prompt) => {
     const actionType = inferActionType(prompt);
     setSelectedActionType(actionType);
     setPromptInput(prompt);
+    clearCommandFeedback();
     runExecution({
       actionType,
       prompt,
+      clientId: selectedClientId,
+    });
+  };
+
+  const handleCommandChipPress = (command) => {
+    setPromptInput(command);
+    setExecutionError(null);
+    setExecutionErrorDetails(null);
+    setExecutionProgressStage(null);
+    routeSlashCommand(command, {
       clientId: selectedClientId,
     });
   };
@@ -412,6 +592,9 @@ export default function TrainerAssistantScreen({
     const actionType = insight?.action_type || selectedActionType;
     const prompt = insight?.suggested_prompt || buildDefaultPrompt(actionType, selectedClientName);
     setSelectedClientId(nextClientId);
+    if (nextClientId) {
+      clientContext.actions.setSelectedClient(nextClientId, { keepOpen: true });
+    }
     setSelectedActionType(actionType);
     setPromptInput(prompt);
     runExecution({
@@ -731,6 +914,7 @@ export default function TrainerAssistantScreen({
                 selected={selectedClientId === client.client_id}
                 onPress={() => {
                   setSelectedClientId(client.client_id);
+                  clientContext.actions.setSelectedClient(client.client_id, { keepOpen: true });
                   setPromptInput(buildDefaultPrompt(selectedActionType, client.client_name));
                 }}
               />
@@ -796,6 +980,31 @@ export default function TrainerAssistantScreen({
               ))}
             </View>
             <ModeText variant="caption" tone="secondary">
+              Commands:
+            </ModeText>
+            <View style={styles.chipRow}>
+              {COMMAND_CHIPS.map((chip) => (
+                <ModeChip
+                  key={chip.command}
+                  testID={`trainer-assistant-command-${chip.command.slice(1)}`}
+                  label={chip.label}
+                  selected={chip.command === '/client'
+                    ? clientContext.state.railMode !== CLIENT_CONTEXT_RAIL_MODE.COLLAPSED
+                    : panelState.active === COMMAND_PANEL.NOTE}
+                  onPress={() => handleCommandChipPress(chip.command)}
+                />
+              ))}
+            </View>
+            {commandFeedback ? (
+              <ModeText
+                testID="trainer-assistant-command-feedback"
+                variant="caption"
+                tone={commandToneToTextTone(commandFeedback.tone)}
+              >
+                {commandFeedback.message}
+              </ModeText>
+            ) : null}
+            <ModeText variant="caption" tone="secondary">
               Suggested prompts:
             </ModeText>
             <View style={styles.suggestedPromptList}>
@@ -811,6 +1020,13 @@ export default function TrainerAssistantScreen({
                 />
               ))}
             </View>
+            <ClientContextRail
+              testIDPrefix="trainer-assistant-client-context-rail"
+              state={clientContext.state}
+              selectedClientSummary={clientContext.selectedClientSummary}
+              actions={clientContext.actions}
+              createdByTrainerId={launchContext?.trainer_id || null}
+            />
             <ModeInput
               testID="trainer-assistant-prompt-input"
               value={promptInput}
@@ -905,7 +1121,7 @@ export default function TrainerAssistantScreen({
               <ModeText variant="h3">{draftOutput.headline || 'Draft Preview'}</ModeText>
               <ModeText variant="bodySm" tone="secondary">{draftOutput.summary}</ModeText>
               <ModeText variant="caption" tone="tertiary">
-                {`Status: ${draftStatus} · Route: ${routeSummary?.reason || 'n/a'}`}
+                {`Status: ${draftStatus} | Route: ${routeSummary?.reason || 'n/a'}`}
               </ModeText>
               {renderSections()}
               <ModeText variant="label">Preview & Edit</ModeText>
@@ -957,6 +1173,18 @@ export default function TrainerAssistantScreen({
           testID="trainer-assistant-breathing-loader"
         />
       ) : null}
+      <CoachPanelHost
+        accessToken={accessToken}
+        activePanel={panelState.active === COMMAND_PANEL.NOTE ? panelState.active : null}
+        panelContext={panelState.context}
+        queue={panelQueue}
+        onOpenTrainerCoach={() => {}}
+        onClose={closePanel}
+        onApproveDraft={() => false}
+        onEditDraft={() => false}
+        onRejectDraft={() => false}
+        onSystemEvent={() => {}}
+      />
     </SafeScreen>
   );
 }

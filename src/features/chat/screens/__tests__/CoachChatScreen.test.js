@@ -444,6 +444,44 @@ describe('CoachChatScreen', () => {
     });
   });
 
+  it('re-anchors latest when dock height grows while user is near bottom', () => {
+    const tree = renderScreen();
+    setListMetrics(tree, {
+      offset: 700,
+      contentHeight: 1200,
+      layoutHeight: 500,
+    });
+    setDockHeight(tree, 36);
+    global.requestAnimationFrame.mockClear();
+
+    setDockHeight(tree, 72);
+
+    expect(global.requestAnimationFrame).toHaveBeenCalled();
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('does not re-anchor latest when dock height grows while user is scrolled up', () => {
+    const tree = renderScreen();
+    setListMetrics(tree, {
+      offset: 120,
+      contentHeight: 1200,
+      layoutHeight: 500,
+    });
+    setDockHeight(tree, 36);
+    global.requestAnimationFrame.mockClear();
+
+    setDockHeight(tree, 72);
+
+    expect(global.requestAnimationFrame).not.toHaveBeenCalled();
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
   it('keeps latest visible on keyboard open when the user is already near bottom', () => {
     const tree = renderScreen();
     setListMetrics(tree, {

@@ -63,8 +63,13 @@ jest.mock('../../../draftReview/components/DraftReviewStructuredCard', () => {
 });
 
 jest.mock('../../../trainerHome/services/trainerKnowledgeApi', () => ({
+  archiveTrainerKnowledgeEntry: jest.fn(),
   archiveTrainerRule: jest.fn(),
+  classifyTrainerKnowledgeEntry: jest.fn(),
+  createTrainerKnowledgeEntry: jest.fn(),
+  listTrainerKnowledgeEntries: jest.fn(),
   listTrainerRules: jest.fn(),
+  updateTrainerKnowledgeEntry: jest.fn(),
   updateTrainerRule: jest.fn(),
 }));
 
@@ -96,6 +101,11 @@ import {
   listTrainerClientMemory,
   listTrainerClients,
 } from '../../../trainerClients/services/trainerHomeApi';
+import {
+  classifyTrainerKnowledgeEntry,
+  createTrainerKnowledgeEntry,
+  listTrainerKnowledgeEntries,
+} from '../../../trainerHome/services/trainerKnowledgeApi';
 
 function buildQueue() {
   return [
@@ -158,6 +168,32 @@ describe('CoachPanelHost', () => {
     });
 
     listTrainerProgramTemplates.mockResolvedValue({ items: [] });
+    listTrainerKnowledgeEntries.mockResolvedValue([]);
+    classifyTrainerKnowledgeEntry.mockResolvedValue({
+      title: 'Recovered title',
+      knowledge_type: 'coaching_rule',
+      scope: 'global',
+      tags: ['recovery'],
+      ai_enabled: true,
+      confidence: 0.81,
+    });
+    createTrainerKnowledgeEntry.mockResolvedValue({
+      entry: {
+        id: 'entry-1',
+        title: 'Recovered title',
+        raw_content: 'When sleep is poor, reduce intensity.',
+        scope: 'global',
+        knowledge_type: 'coaching_rule',
+        tags: ['sleep'],
+        ai_enabled: true,
+        status: 'active',
+        updated_at: '2026-04-21T16:00:00+00:00',
+      },
+      conflicts: [],
+      safety: {
+        ai_enabled_forced_off: false,
+      },
+    });
     listTrainerClientMemory.mockResolvedValue([]);
     listTrainerClients.mockResolvedValue({ items: buildQueue().map((item) => ({
       client_id: item.client_id,
@@ -191,88 +227,14 @@ describe('CoachPanelHost', () => {
     keyboardAddListenerSpy?.mockRestore();
   });
 
-  it('renders command-aware compact shell header and sticky footer action', async () => {
-    let tree;
-    await act(async () => {
-      tree = renderer.create(
-        <CoachPanelHost
-          accessToken="token"
-          activePanel="program"
-          panelContext={null}
-          queue={buildQueue()}
-          onClose={jest.fn()}
-          onOpenTrainerCoach={jest.fn()}
-          onApproveDraft={jest.fn()}
-          onEditDraft={jest.fn()}
-          onRejectDraft={jest.fn()}
-          onSystemEvent={jest.fn()}
-        />,
-      );
-    });
-
-    await flushEffects();
-
-    expect(hasText(tree, '/program')).toBe(true);
-    expect(hasText(tree, 'Program Templates')).toBe(true);
-    expect(hasText(tree, 'Close Panel')).toBe(true);
-
-    await act(async () => {
-      tree.unmount();
-    });
-  });
-
-  it('keeps advanced JSON editor collapsed by default in /program and expands on toggle', async () => {
-    let tree;
-    await act(async () => {
-      tree = renderer.create(
-        <CoachPanelHost
-          accessToken="token"
-          activePanel="program"
-          panelContext={null}
-          queue={buildQueue()}
-          onClose={jest.fn()}
-          onOpenTrainerCoach={jest.fn()}
-          onApproveDraft={jest.fn()}
-          onEditDraft={jest.fn()}
-          onRejectDraft={jest.fn()}
-          onSystemEvent={jest.fn()}
-        />,
-      );
-    });
-
-    await flushEffects();
-
-    let jsonInputs = tree.root.findAll(
-      (node) => node.type === TextInput && node.props?.placeholder === 'Template JSON',
-    );
-    expect(jsonInputs).toHaveLength(0);
-
-    const toggle = tree.root.find(
-      (node) => node.props?.testID === 'trainer-coach-program-create-advanced-toggle'
-        && typeof node.props?.onPress === 'function',
-    );
-    await act(async () => {
-      toggle.props.onPress();
-    });
-
-    jsonInputs = tree.root.findAll(
-      (node) => node.type === TextInput && node.props?.placeholder === 'Template JSON',
-    );
-    expect(jsonInputs.length).toBeGreaterThan(0);
-
-    await act(async () => {
-      tree.unmount();
-    });
-  });
-
-  it('uses name-based client picker and maps selection to client_id API calls', async () => {
+  it('does not render deprecated client-context and memory modal panels', async () => {
     let tree;
     await act(async () => {
       tree = renderer.create(
         <CoachPanelHost
           accessToken="token"
           activePanel="client_context"
-          panelContext={null}
+          panelContext={{ initialSection: 'quick_note' }}
           queue={buildQueue()}
           onClose={jest.fn()}
           onOpenTrainerCoach={jest.fn()}
@@ -283,41 +245,11 @@ describe('CoachPanelHost', () => {
         />,
       );
     });
-
     await flushEffects();
+    expect(() => tree.root.findByProps({ testID: 'trainer-coach-panel-sheet' })).toThrow();
 
-    expect(getTrainerClientDetail).toHaveBeenCalledWith(expect.objectContaining({
-      accessToken: 'token',
-      clientId: 'client-1',
-    }));
-
-    const toggle = tree.root.find(
-      (node) => node.props?.testID === 'trainer-coach-client-context-picker-toggle'
-        && typeof node.props?.onPress === 'function',
-    );
     await act(async () => {
-      toggle.props.onPress();
-    });
-
-    const option = tree.root.find(
-      (node) => node.props?.testID === 'trainer-coach-client-context-picker-option-client-2'
-        && typeof node.props?.onPress === 'function',
-    );
-    await act(async () => {
-      option.props.onPress();
-    });
-    await flushEffects();
-
-    expect(getTrainerClientDetail).toHaveBeenCalledWith(expect.objectContaining({
-      accessToken: 'token',
-      clientId: 'client-2',
-    }));
-  });
-
-  it('keeps /memory advanced controls collapsed by default and expandable', async () => {
-    let tree;
-    await act(async () => {
-      tree = renderer.create(
+      tree.update(
         <CoachPanelHost
           accessToken="token"
           activePanel="memory"
@@ -332,20 +264,41 @@ describe('CoachPanelHost', () => {
         />,
       );
     });
+    await flushEffects();
+    expect(() => tree.root.findByProps({ testID: 'trainer-coach-panel-sheet' })).toThrow();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('renders the redesigned /note capture sheet without deprecated advanced toggle or close panel footer', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachPanelHost
+          accessToken="token"
+          activePanel="note"
+          panelContext={null}
+          queue={buildQueue()}
+          onClose={jest.fn()}
+          onOpenTrainerCoach={jest.fn()}
+          onApproveDraft={jest.fn()}
+          onEditDraft={jest.fn()}
+          onRejectDraft={jest.fn()}
+          onSystemEvent={jest.fn()}
+        />,
+      );
+    });
 
     await flushEffects();
 
-    expect(hasText(tree, 'No memory records yet.')).toBe(false);
-
-    const toggle = tree.root.find(
-      (node) => node.props?.testID === 'trainer-coach-memory-advanced-toggle'
-        && typeof node.props?.onPress === 'function',
-    );
-    await act(async () => {
-      toggle.props.onPress();
-    });
-
-    expect(hasText(tree, 'No memory records yet.')).toBe(true);
+    expect(hasText(tree, 'Add to Coaching Knowledge')).toBe(true);
+    expect(hasText(tree, 'Save to Knowledge')).toBe(true);
+    expect(hasText(tree, 'Close Panel')).toBe(false);
+    expect(() => tree.root.findByProps({ testID: 'trainer-coach-note-dismiss' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-coach-note-swipe-dismiss' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-coach-note-advanced-toggle' })).toThrow();
 
     await act(async () => {
       tree.unmount();
