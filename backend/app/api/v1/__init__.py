@@ -1,11 +1,14 @@
 from fastapi import APIRouter
 
+from app.api.v1.account import router as account_router
 from app.api.v1.analytics import router as analytics_router
+from app.api.v1.auth_password import router as auth_password_router
 from app.api.v1.chat import router as chat_router
 from app.api.v1.checkin import router as checkin_router
 from app.api.v1.onboarding import router as onboarding_router
 from app.api.v1.plans import router as plans_router
 from app.api.v1.profiles import router as profiles_router
+from app.api.v1.storage_private import router as storage_private_router
 from app.api.v1.trainer_assignment import router as trainer_assignment_router
 from app.api.v1.trainer_clients import router as trainer_clients_router
 from app.api.v1.trainer_home import router as trainer_home_router
@@ -20,6 +23,9 @@ from app.api.v1.workouts import router as workouts_router
 
 
 api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(account_router, prefix="/account", tags=["account"])
+api_router.include_router(auth_password_router, prefix="/auth/password", tags=["auth-password"])
+api_router.include_router(storage_private_router, prefix="/storage", tags=["storage-private"])
 api_router.include_router(chat_router, prefix="/chat", tags=["chat"])
 api_router.include_router(checkin_router, prefix="/checkin", tags=["checkin"])
 api_router.include_router(profiles_router, prefix="/profiles", tags=["profiles"])

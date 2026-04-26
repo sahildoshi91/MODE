@@ -5,6 +5,7 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
+from app.api.v1.trainer_auth import require_client_or_trainer_actor
 from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.config import settings
 from app.core.dependencies import get_conversation_service, get_trainer_context
@@ -73,6 +74,7 @@ async def chat(
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: ConversationService = Depends(get_conversation_service),
 ):
+    require_client_or_trainer_actor(user, trainer_context)
     enforce_rate_limit(
         group="chat",
         user=user,
@@ -116,6 +118,7 @@ async def chat_history(
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: ConversationService = Depends(get_conversation_service),
 ):
+    require_client_or_trainer_actor(user, trainer_context)
     enforce_rate_limit(
         group="chat",
         user=user,
@@ -167,6 +170,7 @@ async def chat_request_events(
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: ConversationService = Depends(get_conversation_service),
 ):
+    require_client_or_trainer_actor(user, trainer_context)
     enforce_rate_limit(
         group="chat",
         user=user,
@@ -222,6 +226,7 @@ async def chat_stream(
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: ConversationService = Depends(get_conversation_service),
 ):
+    require_client_or_trainer_actor(user, trainer_context)
     enforce_rate_limit(
         group="chat",
         user=user,

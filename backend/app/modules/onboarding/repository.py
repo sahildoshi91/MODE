@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
@@ -425,33 +426,25 @@ class OnboardingRepository:
             }
         ).execute()
 
-    def get_invite_code(self, *, code: str) -> dict[str, Any] | None:
-        normalized = code.strip()
+    def hash_invite_code(self, code: str) -> str:
+        normalized = code.strip().lower()
         if not normalized:
+            return ""
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    def get_invite_code(self, *, code_hash: str) -> dict[str, Any] | None:
+        normalized_hash = code_hash.strip().lower()
+        if not normalized_hash:
             return None
         rows = (
             self.supabase_admin
             .table("trainer_invite_codes")
-            .select("id, code, trainer_id, tenant_id, is_active, expires_at")
-            .eq("code", normalized)
+            .select("id, trainer_id, tenant_id, is_active, expires_at, used_at, revoked_at")
+            .eq("code_hash", normalized_hash)
             .limit(1)
             .execute()
         ).data or []
-        if rows:
-            return rows[0]
-
-        fallback = normalized.upper()
-        if fallback == normalized:
-            return None
-        fallback_rows = (
-            self.supabase_admin
-            .table("trainer_invite_codes")
-            .select("id, code, trainer_id, tenant_id, is_active, expires_at")
-            .eq("code", fallback)
-            .limit(1)
-            .execute()
-        ).data or []
-        return fallback_rows[0] if fallback_rows else None
+        return rows[0] if rows else None
 
     def deactivate_invite_code(
         self,
@@ -459,6 +452,7 @@ class OnboardingRepository:
         invite_id: str,
         trainer_id: str,
         tenant_id: str,
+        used_by_user_id: str | None,
     ) -> dict[str, Any] | None:
         now = datetime.now(timezone.utc).isoformat()
         rows = (
@@ -466,12 +460,16 @@ class OnboardingRepository:
             .table("trainer_invite_codes")
             .update({
                 "is_active": False,
+                "used_at": now,
+                "used_by_user_id": used_by_user_id,
                 "updated_at": now,
             })
             .eq("id", invite_id)
             .eq("trainer_id", trainer_id)
             .eq("tenant_id", tenant_id)
             .eq("is_active", True)
+            .is_("used_at", "null")
+            .is_("revoked_at", "null")
             .execute()
         ).data or []
         return rows[0] if rows else None

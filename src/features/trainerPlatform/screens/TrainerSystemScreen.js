@@ -13,7 +13,6 @@ import {
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import Constants from 'expo-constants';
-import * as Clipboard from 'expo-clipboard';
 
 import {
   HeaderBar,
@@ -49,11 +48,8 @@ import {
   archiveTrainerClientMemory,
   createTrainerClientMemory,
   listTrainerClientMemory,
-  createTrainerInviteCode,
-  deactivateTrainerInviteCode,
   getTrainerClientDetail,
   listTrainerClients,
-  listTrainerInviteCodes,
   removeTrainerClient,
   updateTrainerClientMemory,
   updateTrainerClient,
@@ -116,7 +112,6 @@ const MEMORY_VISIBILITY = {
 
 const MEMORY_SWIPE_REVEAL_DISTANCE = 72;
 const MEMORY_SWIPE_OPEN_THRESHOLD = 32;
-const COPY_FEEDBACK_TIMEOUT_MS = 2200;
 
 const environment = __DEV__ ? 'Development' : 'Production';
 const SHOW_ACCOUNT_DIAGNOSTICS = (
@@ -248,15 +243,6 @@ function normalizeListPayload(payload) {
   };
 }
 
-function normalizeActiveInvitePayload(payload) {
-  const normalized = normalizeListPayload(payload);
-  const activeItems = normalized.items.filter((invite) => invite?.is_active !== false);
-  return {
-    items: activeItems,
-    count: activeItems.length,
-  };
-}
-
 function buildOnboardingState({
   trainerOnboardingCompleted = false,
   trainerOnboardingStatus = 'not_started',
@@ -365,15 +351,6 @@ function isExtractionSoftNote(reason) {
     || reason === 'ingest_request_failed'
     || reason === 'tenant_context_missing_for_extraction'
   );
-}
-
-function generateInviteCode() {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let suffix = '';
-  for (let index = 0; index < 6; index += 1) {
-    suffix += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
-  return `MODE${suffix}`;
 }
 
 async function parseApiError(response, fallbackMessage) {
@@ -1753,7 +1730,7 @@ function ClientsListScreen({
         {!isLoading && !error && payload.items.length === 0 ? (
           <EmptyListState
             title="No assigned clients"
-            detail="Create an invite code or check trainer assignments."
+            detail="Client invitations are admin-managed. Check trainer assignments or contact support to invite clients."
           />
         ) : null}
         {!isLoading && !error && payload.items.length > 0 ? payload.items.map((client) => (
@@ -1780,7 +1757,6 @@ function ClientManagementScreen({
 }) {
   const [query, setQuery] = useState('');
   const [clientsPayload, setClientsPayload] = useState({ items: [], count: 0 });
-  const [invitePayload, setInvitePayload] = useState({ items: [], count: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedClient, setSelectedClient] = useState(null);
@@ -1790,38 +1766,18 @@ function ClientManagementScreen({
     isRemoving: false,
     error: null,
   });
-  const [inviteStatus, setInviteStatus] = useState({
-    isCreating: false,
-    isDeactivating: null,
-    error: null,
-    success: null,
-  });
-  const [copiedInviteId, setCopiedInviteId] = useState(null);
-  const copiedInviteTimerRef = useRef(null);
-
-  const clearCopiedInviteTimer = useCallback(() => {
-    if (copiedInviteTimerRef.current) {
-      clearTimeout(copiedInviteTimerRef.current);
-      copiedInviteTimerRef.current = null;
-    }
-  }, []);
 
   const loadData = useCallback(async () => {
     if (!accessToken) {
       setClientsPayload({ items: [], count: 0 });
-      setInvitePayload({ items: [], count: 0 });
       setIsLoading(false);
       return;
     }
     setIsLoading(true);
     setError(null);
     try {
-      const [clientsResponse, inviteResponse] = await Promise.all([
-        listTrainerClients({ accessToken, query, limit: 100, offset: 0 }),
-        listTrainerInviteCodes({ accessToken }),
-      ]);
+      const clientsResponse = await listTrainerClients({ accessToken, query, limit: 100, offset: 0 });
       setClientsPayload(normalizeListPayload(clientsResponse));
-      setInvitePayload(normalizeActiveInvitePayload(inviteResponse));
     } catch (nextError) {
       setError(nextError?.message || 'Unable to load client management data.');
     } finally {
@@ -1832,10 +1788,6 @@ function ClientManagementScreen({
   useEffect(() => {
     loadData();
   }, [loadData]);
-
-  useEffect(() => () => {
-    clearCopiedInviteTimer();
-  }, [clearCopiedInviteTimer]);
 
   const openClient = (client) => {
     setSelectedClient(client);
@@ -1907,106 +1859,19 @@ function ClientManagementScreen({
     }
   };
 
-  const handleCreateInvite = async () => {
-    if (!accessToken || inviteStatus.isCreating) {
-      return;
-    }
-    setInviteStatus({ isCreating: true, isDeactivating: null, error: null, success: null });
-    try {
-      const payload = await createTrainerInviteCode({
-        accessToken,
-        code: generateInviteCode(),
-        metadata: { source: 'system_hub' },
-      });
-      setInvitePayload((current) => ({
-        items: payload?.is_active === false ? current.items : [payload, ...current.items],
-        count: payload?.is_active === false ? current.count : current.count + 1,
-      }));
-      setInviteStatus({
-        isCreating: false,
-        isDeactivating: null,
-        error: null,
-        success: `Invite code ${payload?.code || 'created'} is ready to share.`,
-      });
-      onClientsMutated?.();
-    } catch (error) {
-      setInviteStatus({
-        isCreating: false,
-        isDeactivating: null,
-        error: error?.message || 'Unable to create invite code.',
-        success: null,
-      });
-    }
-  };
-
-  const handleDeactivateInvite = async (inviteId) => {
-    if (!accessToken || !inviteId) {
-      return;
-    }
-    setInviteStatus({ isCreating: false, isDeactivating: inviteId, error: null, success: null });
-    try {
-      await deactivateTrainerInviteCode({ accessToken, inviteId });
-      setInvitePayload((current) => ({
-        count: Math.max(0, current.count - 1),
-        items: current.items.filter((invite) => invite.id !== inviteId),
-      }));
-      setInviteStatus({ isCreating: false, isDeactivating: null, error: null, success: 'Invite code deactivated.' });
-    } catch (error) {
-      setInviteStatus({
-        isCreating: false,
-        isDeactivating: null,
-        error: error?.message || 'Unable to deactivate invite code.',
-        success: null,
-      });
-    }
-  };
-
-  const handleCopyInviteCode = async (invite) => {
-    const inviteId = invite?.id;
-    const inviteCode = typeof invite?.code === 'string' ? invite.code.trim() : '';
-    if (!inviteId || !inviteCode) {
-      return;
-    }
-    try {
-      await Clipboard.setStringAsync(inviteCode);
-      clearCopiedInviteTimer();
-      setCopiedInviteId(inviteId);
-      copiedInviteTimerRef.current = setTimeout(() => {
-        setCopiedInviteId((current) => (current === inviteId ? null : current));
-        copiedInviteTimerRef.current = null;
-      }, COPY_FEEDBACK_TIMEOUT_MS);
-    } catch (_error) {
-      // Ignore copy failures until we add a dedicated error surface.
-    }
-  };
-
-  const visibleInviteCodes = invitePayload.items.filter((invite) => invite?.is_active !== false);
-
   return (
     <SectionShell
       title="Client Management"
-      subtitle="Rename, unassign, and create invite codes without leaving the System tab."
+      subtitle="Rename and unassign clients from your current roster."
       onBack={onBack}
       bottomInset={bottomInset}
     >
       <ModeCard variant="hero">
-        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Add Client</ModeText>
+        <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Client Invites</ModeText>
         <ModeText variant="bodySm" tone="secondary">
-          Generate invite codes for new clients. Active codes stay visible until they are used or deactivated.
+          Invite code management is handled by MODE platform admin services for security.
+          Contact support to issue, rotate, or revoke client invite codes.
         </ModeText>
-        <ModeButton
-          title={inviteStatus.isCreating ? 'Creating invite...' : 'Create invite code'}
-          variant="secondary"
-          onPress={handleCreateInvite}
-          disabled={inviteStatus.isCreating}
-          testID="trainer-system-client-management-create-invite"
-        />
-        {inviteStatus.error ? (
-          <ModeText variant="caption" tone="error">{inviteStatus.error}</ModeText>
-        ) : null}
-        {inviteStatus.success ? (
-          <ModeText variant="caption" tone="success">{inviteStatus.success}</ModeText>
-        ) : null}
       </ModeCard>
 
       <SystemSearchBar
@@ -2015,68 +1880,6 @@ function ClientManagementScreen({
         placeholder="Search clients"
         testID="trainer-system-client-management-search"
       />
-
-      <SystemSectionCard>
-        <SystemSectionHeader title="Invite Codes" />
-        {visibleInviteCodes.length === 0 ? (
-          <EmptyListState
-            title="No invite codes yet"
-            detail="Create one above to add clients into your trainer workspace."
-          />
-        ) : visibleInviteCodes.map((invite) => (
-          <Pressable
-            key={invite.id}
-            testID={`trainer-system-invite-copy-${invite.id}`}
-            onPress={() => handleCopyInviteCode(invite)}
-            style={({ pressed }) => [
-              styles.managementRow,
-              pressed && styles.managementRowPressed,
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel={`Copy invite code ${invite.code || ''}`.trim()}
-          >
-            <View style={styles.managementCopy}>
-              <ModeText variant="bodySm">{invite.code || 'Invite code'}</ModeText>
-              <ModeText
-                variant="caption"
-                tone={copiedInviteId === invite.id ? 'success' : 'secondary'}
-              >
-                {copiedInviteId === invite.id
-                  ? 'Copied'
-                  : (
-                    <>
-                      {invite.is_active === false ? 'Inactive' : 'Active'}
-                      {invite.expires_at ? ` · expires ${formatExceptionDate(String(invite.expires_at).slice(0, 10))}` : ''}
-                    </>
-                  )}
-              </ModeText>
-            </View>
-            <Pressable
-              testID={`trainer-system-invite-deactivate-${invite.id}`}
-              onPress={(event) => {
-                event?.stopPropagation?.();
-                handleDeactivateInvite(invite.id);
-              }}
-              style={({ pressed }) => [
-                styles.managementIconButton,
-                pressed && styles.noteRowIconButtonPressed,
-                (invite.is_active === false || inviteStatus.isDeactivating === invite.id)
-                  && styles.managementIconButtonDisabled,
-              ]}
-              accessibilityRole="button"
-              accessibilityLabel={inviteStatus.isDeactivating === invite.id ? 'Deactivating invite code' : 'Deactivate invite code'}
-              hitSlop={8}
-              disabled={invite.is_active === false || inviteStatus.isDeactivating === invite.id}
-            >
-              {inviteStatus.isDeactivating === invite.id ? (
-                <ActivityIndicator size="small" color={theme.colors.text.secondary} />
-              ) : (
-                <Feather name="trash-2" size={14} color={theme.colors.text.secondary} />
-              )}
-            </Pressable>
-          </Pressable>
-        ))}
-      </SystemSectionCard>
 
       <SystemSectionCard>
         <SystemSectionHeader title="Assigned Clients" />
@@ -2092,7 +1895,7 @@ function ClientManagementScreen({
         {!isLoading && !error && clientsPayload.items.length === 0 ? (
           <EmptyListState
             title="No assigned clients"
-            detail="Invite a client or adjust search filters."
+            detail="Client invitations are admin-managed. Adjust search filters or contact support to invite new clients."
           />
         ) : null}
         {!isLoading && !error && clientsPayload.items.length > 0 ? clientsPayload.items.map((client) => (

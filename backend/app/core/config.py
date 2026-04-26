@@ -13,6 +13,10 @@ def _split_csv(raw_value: str | None, *, fallback: list[str]) -> list[str]:
 
 
 class Settings(BaseSettings):
+    app_env: str = "development"
+    startup_guard_enabled: bool = True
+    account_deletion_enabled: bool = True
+    auth_password_proxy_enabled: bool = True
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
     anthropic_api_key: str | None = None
@@ -24,12 +28,20 @@ class Settings(BaseSettings):
     trainer_assistant_v1_enabled: bool = True
     trainer_assignment_global_fallback_enabled: bool = False
     rate_limit_enabled: bool = True
+    rate_limit_backend: str = "memory"
     rate_limit_window_seconds: int = 60
     rate_limit_default_per_window: int = 90
     rate_limit_chat_per_window: int = 30
     rate_limit_trainer_assistant_per_window: int = 20
     rate_limit_onboarding_per_window: int = 20
     rate_limit_mobile_events_per_window: int = 120
+    rate_limit_invite_redeem_per_window: int = 8
+    rate_limit_login_per_window: int = 10
+    rate_limit_signup_per_window: int = 8
+    rate_limit_password_reset_per_window: int = 6
+    rate_limit_memory_create_per_window: int = 20
+    rate_limit_file_upload_per_window: int = 20
+    rate_limit_expensive_ai_per_window: int = 8
     cors_allow_origins: str = (
         "http://localhost:19006,http://127.0.0.1:19006,"
         "http://localhost:8081,http://127.0.0.1:8081,"
@@ -44,6 +56,17 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("SUPABASE_ANON_KEY", "EXPO_PUBLIC_SUPABASE_ANON_KEY"),
     )
     supabase_service_role_key: str | None = None
+    storage_private_bucket: str = "private-user-files"
+    storage_signed_url_ttl_seconds: int = 300
+    storage_max_file_size_bytes: int = 10 * 1024 * 1024
+    storage_allowed_extensions: str = "pdf,png,jpg,jpeg,webp,txt,csv,json"
+    storage_allowed_mime_types: str = (
+        "application/pdf,image/png,image/jpeg,image/webp,text/plain,text/csv,application/json"
+    )
+    production_required_rls_tables: str = (
+        "clients,trainers,conversations,conversation_messages,coach_memory,trainer_invite_codes"
+    )
+    production_block_staging_supabase_hosts: str = "staging,localhost,127.0.0.1"
 
     model_config = SettingsConfigDict(
         env_file=(".env", "../.env", "backend/.env"),
@@ -61,6 +84,26 @@ class Settings(BaseSettings):
     @property
     def cors_allow_headers_list(self) -> list[str]:
         return _split_csv(self.cors_allow_headers, fallback=["*"])
+
+    @property
+    def is_production(self) -> bool:
+        return str(self.app_env).strip().lower() in {"prod", "production"}
+
+    @property
+    def storage_allowed_extensions_list(self) -> list[str]:
+        return [item.lstrip(".").lower() for item in _split_csv(self.storage_allowed_extensions, fallback=[])]
+
+    @property
+    def storage_allowed_mime_types_list(self) -> list[str]:
+        return [item.lower() for item in _split_csv(self.storage_allowed_mime_types, fallback=[])]
+
+    @property
+    def production_required_rls_tables_list(self) -> list[str]:
+        return [item for item in _split_csv(self.production_required_rls_tables, fallback=[])]
+
+    @property
+    def production_block_staging_supabase_hosts_list(self) -> list[str]:
+        return [item.lower() for item in _split_csv(self.production_block_staging_supabase_hosts, fallback=[])]
 
 
 settings = Settings()

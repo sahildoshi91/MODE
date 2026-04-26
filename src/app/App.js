@@ -27,12 +27,18 @@ import {
   ingestMobileEvents,
   setOnboardingRole,
 } from '../features/onboarding/services/onboardingApi';
+import { deleteMyAccount } from '../features/profile/services/profileApi';
 import ProfileScreen from '../features/profile/screens/ProfileScreen';
 import ProgressScreen from '../features/progress/screens/ProgressScreen';
 import TrainerClientsScreen from '../features/trainerClients/screens/TrainerClientsScreen';
 import TrainerHomeScreen from '../features/trainerHome/screens/TrainerHomeScreen';
 import TrainerRouteHost from '../features/trainerPlatform/routes/TrainerRouteHost';
 import { getTrainerAssignmentStatus } from '../features/trainerAssignment/services/trainerAssignmentApi';
+import {
+  requestPasswordResetProxy,
+  signInWithPasswordProxy,
+  signUpWithPasswordProxy,
+} from '../features/auth/services/passwordAuthApi';
 import {
   AUTH_PASSWORD_ENABLED,
   AUTH_SOCIAL_ENABLED,
@@ -460,6 +466,43 @@ function AppShell() {
     setAssignmentStatusError(null);
   };
 
+  const handleDeleteAccount = async ({ confirmation }) => {
+    if (!session?.access_token) {
+      throw new Error('No active session to delete.');
+    }
+
+    await deleteMyAccount({
+      accessToken: session.access_token,
+      confirmation,
+    });
+
+    try {
+      await supabase.auth.signOut();
+    } catch (_error) {
+      // Session may already be invalidated by backend deletion; continue local cleanup.
+    }
+
+    assignmentStatusAutoRetryUsedRef.current = false;
+    analyticsQueueRef.current = [];
+    setSession(null);
+    setBootstrap(null);
+    setBootstrapError(null);
+    setAuthStage('welcome');
+    setAuthEmail('');
+    setAuthPassword('');
+    setAuthUiError(null);
+    setAuthUiInfo('Your account has been permanently deleted.');
+    setIsAuthUiSubmitting(false);
+    setIsSignInMode(true);
+    setActiveTab('home');
+    setProgressRoute('progress');
+    setInsightsOrigin('progress');
+    setChatLaunchContext(null);
+    setCoachOverlayContext(null);
+    setAssignmentStatus(null);
+    setAssignmentStatusError(null);
+  };
+
   const handleOpenChat = (launchContext = null) => {
     if (
       launchContext?.entrypoint === 'generated_workout'
@@ -718,27 +761,34 @@ function AppShell() {
 
     try {
       if (isSignInMode) {
-        const { error } = await supabase.auth.signInWithPassword({
+        const payload = await signInWithPasswordProxy({
           email: normalizedEmail,
           password: authPassword,
+        });
+        if (!payload?.access_token || !payload?.refresh_token) {
+          throw new Error('Invalid credentials.');
+        }
+        const { error } = await supabase.auth.setSession({
+          access_token: payload.access_token,
+          refresh_token: payload.refresh_token,
         });
         if (error) {
           throw error;
         }
         setAuthUiInfo('Signed in successfully.');
       } else {
-        const redirectTo = resolveOAuthRedirectUrl();
-        const { data, error } = await supabase.auth.signUp({
+        const payload = await signUpWithPasswordProxy({
           email: normalizedEmail,
           password: authPassword,
-          options: {
-            emailRedirectTo: redirectTo,
-          },
         });
-        if (error) {
-          throw error;
-        }
-        if (data?.session?.access_token) {
+        if (payload?.access_token && payload?.refresh_token) {
+          const { error } = await supabase.auth.setSession({
+            access_token: payload.access_token,
+            refresh_token: payload.refresh_token,
+          });
+          if (error) {
+            throw error;
+          }
           setAuthUiInfo('Account created and signed in.');
         } else {
           setAuthUiInfo('Account created. Check your email if verification is required.');
@@ -770,12 +820,10 @@ function AppShell() {
 
     try {
       const redirectTo = resolveOAuthRedirectUrl();
-      const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+      await requestPasswordResetProxy({
+        email: normalizedEmail,
         redirectTo,
       });
-      if (error) {
-        throw error;
-      }
       setAuthUiInfo('Password reset link sent. Check your email to continue.');
     } catch (error) {
       setAuthUiError(error?.message || 'Unable to send password reset instructions.');
@@ -1126,6 +1174,7 @@ function AppShell() {
                 assignmentStatus={assignmentStatus}
                 accessToken={session.access_token}
                 onSignOut={handleSignOut}
+                onDeleteAccount={handleDeleteAccount}
                 bottomInset={contentBottomInset}
               />
             ) : null}

@@ -144,6 +144,7 @@ class ChatApiTests(unittest.TestCase):
             trainer_user_id="trainer-user-123",
             trainer_display_name="Coach Alex",
             client_id="client-123",
+            client_user_id="user-123",
             persona_id="persona-123",
             persona_name="Strength Coach",
         )

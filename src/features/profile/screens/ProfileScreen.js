@@ -80,6 +80,7 @@ export default function ProfileScreen({
   assignmentStatus,
   accessToken,
   onSignOut,
+  onDeleteAccount,
   bottomInset = 0,
 }) {
   const debugInfo = useMemo(() => getApiDebugInfo(), []);
@@ -106,6 +107,9 @@ export default function ProfileScreen({
   const [trainerSchedule, setTrainerSchedule] = useState(null);
   const [trainerScheduleError, setTrainerScheduleError] = useState(null);
   const [isLoadingTrainerSchedule, setIsLoadingTrainerSchedule] = useState(false);
+  const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [deleteAccountError, setDeleteAccountError] = useState(null);
   const resolvedAssistantPreviewName = useMemo(
     () => resolveAssistantDisplayName(trainerSettingsDraft.assistantDisplayName),
     [trainerSettingsDraft.assistantDisplayName],
@@ -222,6 +226,28 @@ export default function ProfileScreen({
       setTrainerSettingsError(error?.message || 'Unable to save trainer settings.');
     } finally {
       setIsSavingTrainerSettings(false);
+    }
+  };
+
+  const handleDeleteAccountPress = async () => {
+    if (!onDeleteAccount || isDeletingAccount) {
+      return;
+    }
+
+    const normalized = String(deleteConfirmationText || '').trim().toUpperCase();
+    if (normalized !== 'DELETE') {
+      setDeleteAccountError('Type DELETE to confirm permanent account deletion.');
+      return;
+    }
+
+    setIsDeletingAccount(true);
+    setDeleteAccountError(null);
+    try {
+      await onDeleteAccount({ confirmation: 'DELETE' });
+    } catch (error) {
+      setDeleteAccountError(error?.message || 'Unable to delete account right now.');
+    } finally {
+      setIsDeletingAccount(false);
     }
   };
 
@@ -419,6 +445,29 @@ export default function ProfileScreen({
             </View>
           </ModeCard>
         ) : null}
+
+        <ModeCard variant="surface">
+          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Account Deletion</ModeText>
+          <ModeText variant="bodySm" tone="secondary">
+            Permanently deletes your account, sessions, chat history, files, and linked training data.
+          </ModeText>
+          <ModeInput
+            value={deleteConfirmationText}
+            onChangeText={setDeleteConfirmationText}
+            placeholder="Type DELETE to confirm"
+            autoCapitalize="characters"
+            style={styles.settingsInput}
+          />
+          {deleteAccountError ? (
+            <ModeText variant="caption" tone="error">{deleteAccountError}</ModeText>
+          ) : null}
+          <ModeButton
+            title={isDeletingAccount ? 'Deleting Account...' : 'Delete Account Permanently'}
+            variant="destructive"
+            disabled={isDeletingAccount}
+            onPress={handleDeleteAccountPress}
+          />
+        </ModeCard>
 
         <ModeButton
           title="Sign out"

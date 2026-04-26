@@ -158,9 +158,11 @@ def _derive_plan_preview(
 @router.get("/today", response_model=DailyCheckinStatusResponse)
 async def get_today_checkin(
     request_date: date | None = None,
+    user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: DailyCheckinService = Depends(get_daily_checkin_service),
 ):
+    _validate_client_write_access(user, trainer_context)
     client_id = _resolve_client_id(trainer_context)
     today = request_date or datetime.now(timezone.utc).date()
     return service.get_status(client_id, today)
@@ -169,9 +171,11 @@ async def get_today_checkin(
 @router.get("/previous", response_model=PreviousCheckinResponse)
 async def get_previous_checkin(
     before_date: date | None = None,
+    user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: DailyCheckinService = Depends(get_daily_checkin_service),
 ):
+    _validate_client_write_access(user, trainer_context)
     client_id = _resolve_client_id(trainer_context)
     target_date = before_date or datetime.now(timezone.utc).date()
     summary = service.get_previous_checkin_summary(client_id, target_date)
@@ -181,9 +185,11 @@ async def get_previous_checkin(
 @router.get("/progress", response_model=CheckinProgressResponse)
 async def get_checkin_progress(
     as_of_date: date | None = None,
+    user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: DailyCheckinService = Depends(get_daily_checkin_service),
 ):
+    _validate_client_write_access(user, trainer_context)
     client_id = _resolve_client_id(trainer_context)
     target_date = as_of_date or datetime.now(timezone.utc).date()
     return service.get_progress_analytics(client_id, target_date)
@@ -199,7 +205,7 @@ async def submit_daily_checkin(
 ):
     _validate_client_write_access(user, trainer_context)
     enforce_rate_limit(
-        group="chat",
+        group="expensive_ai",
         user=user,
         request=http_request,
         context={

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
+import re
 from typing import Any
 
 from app.core.auth import AuthenticatedUser
@@ -23,6 +25,7 @@ PROFILE_FIELD_MAP = {
 }
 ONBOARDING_STATUS_VALUES = {"not_started", "in_progress", "completed"}
 ROLE_VALUES = {"client", "trainer"}
+INVITE_CODE_PATTERN = re.compile(r"^[A-Z0-9_-]{6,64}$")
 
 
 @dataclass
@@ -297,11 +300,25 @@ class OnboardingService:
         normalized_code = invite_code.strip().upper()
         if not normalized_code:
             raise OnboardingServiceError("Invite code is required", status_code=422)
+        if not INVITE_CODE_PATTERN.match(normalized_code):
+            raise OnboardingServiceError("Invite code is invalid", status_code=404)
 
-        code_row = self.repository.get_invite_code(code=normalized_code)
+        invite_hash = ""
+        hash_resolver = getattr(self.repository, "hash_invite_code", None)
+        if callable(hash_resolver):
+            invite_hash = str(hash_resolver(normalized_code) or "").strip().lower()
+        if not invite_hash:
+            invite_hash = self._hash_invite_code(normalized_code)
+
+        try:
+            code_row = self.repository.get_invite_code(code_hash=invite_hash)
+        except TypeError:
+            code_row = self.repository.get_invite_code(code=normalized_code)
         if not code_row:
             raise OnboardingServiceError("Invite code is invalid", status_code=404)
         if not code_row.get("is_active"):
+            raise OnboardingServiceError("Invite code is inactive", status_code=409)
+        if code_row.get("revoked_at") or code_row.get("used_at"):
             raise OnboardingServiceError("Invite code is inactive", status_code=409)
 
         expires_at = code_row.get("expires_at")
@@ -385,22 +402,36 @@ class OnboardingService:
             current_step=(existing_state or {}).get("current_step") or self.CLIENT_FIRST_STEP,
             payload={
                 **existing_payload,
-                "trainer_invite_code": normalized_code,
+                "trainer_invite_attached": True,
                 "assigned_trainer_id": trainer["id"],
                 "assigned_trainer_display_name": trainer.get("display_name"),
             },
             completed_at=(existing_state or {}).get("completed_at"),
         )
 
-        consumed = self.repository.deactivate_invite_code(
-            invite_id=str(code_row.get("id") or ""),
-            trainer_id=str(code_row.get("trainer_id") or ""),
-            tenant_id=str(code_row.get("tenant_id") or ""),
-        )
+        try:
+            consumed = self.repository.deactivate_invite_code(
+                invite_id=str(code_row.get("id") or ""),
+                trainer_id=str(code_row.get("trainer_id") or ""),
+                tenant_id=str(code_row.get("tenant_id") or ""),
+                used_by_user_id=user.id,
+            )
+        except TypeError:
+            consumed = self.repository.deactivate_invite_code(
+                invite_id=str(code_row.get("id") or ""),
+                trainer_id=str(code_row.get("trainer_id") or ""),
+                tenant_id=str(code_row.get("tenant_id") or ""),
+            )
         if not consumed:
             raise OnboardingServiceError("Invite code is inactive", status_code=409)
 
         return self.get_bootstrap(user)
+
+    def _hash_invite_code(self, code: str) -> str:
+        normalized = code.strip().lower()
+        if not normalized:
+            return ""
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
     def _normalize_onboarding_status(self, state: dict[str, Any] | None) -> str:
         status = str((state or {}).get("status") or "not_started").strip().lower()

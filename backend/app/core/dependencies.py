@@ -6,6 +6,8 @@ from app.core.tenancy import TrainerContext, resolve_trainer_context
 from app.db.client import get_supabase_admin_client, get_supabase_user_client
 from app.modules.ai_feedback.repository import AIFeedbackRepository
 from app.modules.ai_feedback.service import AIFeedbackService
+from app.modules.account_deletion.repository import AccountDeletionRepository
+from app.modules.account_deletion.service import AccountDeletionService
 from app.modules.conversation.repository import ConversationRepository
 from app.modules.conversation.service import ConversationService
 from app.modules.daily_checkins.repository import DailyCheckinRepository
@@ -50,6 +52,16 @@ def get_request_scoped_supabase_client(
     if not user.access_token:
         raise ValueError("Authenticated user is missing access token")
     return get_supabase_user_client(user.access_token)
+
+
+def get_account_deletion_repository() -> AccountDeletionRepository:
+    return AccountDeletionRepository(get_supabase_admin_client())
+
+
+def get_account_deletion_service(
+    repository: AccountDeletionRepository = Depends(get_account_deletion_repository),
+) -> AccountDeletionService:
+    return AccountDeletionService(repository)
 
 
 def get_workout_repository(

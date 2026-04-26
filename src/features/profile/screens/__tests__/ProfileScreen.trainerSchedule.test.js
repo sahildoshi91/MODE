@@ -137,4 +137,50 @@ describe('ProfileScreen trainer schedule', () => {
       tree.unmount();
     });
   });
+
+  it('requires DELETE confirmation before account deletion and calls onDeleteAccount', async () => {
+    const onDeleteAccount = jest.fn().mockResolvedValue(undefined);
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <ProfileScreen
+          session={{ user: { email: 'client@example.com' } }}
+          assignmentStatus={{
+            viewer_role: 'client',
+            assigned_trainer_display_name: 'Coach Alex',
+          }}
+          accessToken="client-token"
+          onSignOut={() => {}}
+          onDeleteAccount={onDeleteAccount}
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    const deleteButton = tree.root.find(
+      (node) => node?.props?.title === 'Delete Account Permanently' && typeof node?.props?.onPress === 'function',
+    );
+
+    await act(async () => {
+      await deleteButton.props.onPress();
+    });
+
+    let rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Type DELETE to confirm');
+    expect(onDeleteAccount).not.toHaveBeenCalled();
+
+    const confirmationInput = tree.root.find(
+      (node) => node?.props?.placeholder === 'Type DELETE to confirm' && typeof node?.props?.onChangeText === 'function',
+    );
+    act(() => {
+      confirmationInput.props.onChangeText('DELETE');
+    });
+
+    await act(async () => {
+      await deleteButton.props.onPress();
+    });
+
+    expect(onDeleteAccount).toHaveBeenCalledWith({ confirmation: 'DELETE' });
+  });
 });

@@ -165,102 +165,11 @@ async def assign_trainer(
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
 ):
-    enforce_rate_limit(
-        group="onboarding",
-        user=user,
-        request=http_request,
-        context={"tenant_id": trainer_context.tenant_id},
+    del request, http_request, user, trainer_context
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Direct trainer selection is disabled. Attach with a trainer invite code instead.",
     )
-    if not trainer_context.tenant_id and not settings.trainer_assignment_global_fallback_enabled:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Direct trainer selection is disabled. Attach with a trainer invite code instead.",
-        )
-    if trainer_context.trainer_id and not trainer_context.client_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Trainer accounts cannot self-assign to a trainer",
-        )
-    if trainer_context.trainer_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User is already assigned to an active trainer context",
-        )
-
-    admin_client = get_supabase_client()
-    trainers = _list_active_trainers(tenant_id=trainer_context.tenant_id)
-    selected_trainer = next((trainer for trainer in trainers if trainer["id"] == request.trainer_id), None)
-    if not selected_trainer:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Selected trainer was not found in the available trainer scope",
-        )
-
-    existing_clients = (
-        admin_client
-        .table("clients")
-        .select("id, tenant_id, assigned_trainer_id")
-        .eq("user_id", user.id)
-        .execute()
-    ).data or []
-
-    assigned_to_other_trainer = [
-        client for client in existing_clients
-        if client.get("assigned_trainer_id") and client.get("assigned_trainer_id") != request.trainer_id
-    ]
-    if assigned_to_other_trainer:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User is already assigned to an active trainer context",
-        )
-    already_assigned = next(
-        (
-            client for client in existing_clients
-            if client.get("assigned_trainer_id") == request.trainer_id
-        ),
-        None,
-    )
-    if already_assigned:
-        updated_context = resolve_trainer_context(admin_client, user.id)
-        return _build_status_response(updated_context, user)
-
-    tenant_mismatch_assigned = [
-        client for client in existing_clients
-        if client.get("assigned_trainer_id")
-        and client.get("tenant_id") != selected_trainer.get("tenant_id")
-    ]
-    if tenant_mismatch_assigned:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User is already linked to a different tenant and cannot self-assign to this trainer",
-        )
-
-    admin_client.rpc(
-        "assign_client_to_trainer",
-        {
-            "client_user_id": user.id,
-            "trainer_record_id": request.trainer_id,
-        },
-    ).execute()
-
-    try:
-        updated_context = resolve_trainer_context(admin_client, user.id)
-    except Exception:
-        fallback_client = next(
-            (
-                client for client in existing_clients
-                if client.get("tenant_id") == selected_trainer.get("tenant_id")
-            ),
-            None,
-        )
-        updated_context = TrainerContext(
-            tenant_id=selected_trainer.get("tenant_id"),
-            trainer_id=selected_trainer["id"],
-            trainer_user_id=None,
-            trainer_display_name=selected_trainer["display_name"],
-            client_id=fallback_client.get("id") if fallback_client else None,
-        )
-    return _build_status_response(updated_context, user)
 
 
 @router.post("/assign-by-invite", response_model=TrainerAssignmentStatus)
@@ -272,7 +181,7 @@ async def assign_trainer_by_invite(
     onboarding_service: OnboardingService = Depends(get_onboarding_service),
 ):
     enforce_rate_limit(
-        group="onboarding",
+        group="invite_redeem",
         user=user,
         request=http_request,
         context={"tenant_id": trainer_context.tenant_id},

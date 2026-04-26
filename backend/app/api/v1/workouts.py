@@ -15,7 +15,7 @@ async def generate_workout(
     user: AuthenticatedUser = CurrentUser,
     service: WorkoutService = Depends(get_workout_service),
 ):
-    enforce_rate_limit(group="chat", user=user, request=http_request)
+    enforce_rate_limit(group="expensive_ai", user=user, request=http_request)
     try:
         return service.generate_workout(user.id, request)
     except ValueError as e:

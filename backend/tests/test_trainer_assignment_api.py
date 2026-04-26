@@ -235,7 +235,7 @@ class TrainerAssignmentApiTests(unittest.TestCase):
         self.assertEqual(response.json()["trainer_onboarding_status"], "completed")
         self.assertEqual(response.json()["trainer_onboarding_completed_steps"], 8)
 
-    def test_assign_trainer_uses_rpc_for_unassigned_user(self):
+    def test_assign_trainer_is_disabled_even_for_scoped_unassigned_client(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
             tenant_id="tenant-1",
             trainer_id=None,
@@ -259,16 +259,14 @@ class TrainerAssignmentApiTests(unittest.TestCase):
                 headers={"Authorization": "Bearer ignored-by-override"},
             )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()["needs_assignment"])
-        self.assertEqual(response.json()["assigned_trainer_id"], "trainer-1")
-        self.assertEqual(response.json()["viewer_role"], "client")
+        self.assertEqual(response.status_code, 403)
         self.assertEqual(
-            fake_admin_client.rpc_calls,
-            [("assign_client_to_trainer", {"client_user_id": "user-123", "trainer_record_id": "trainer-1"})],
+            response.json()["detail"],
+            "Direct trainer selection is disabled. Attach with a trainer invite code instead.",
         )
+        self.assertEqual(fake_admin_client.rpc_calls, [])
 
-    def test_assign_trainer_rejects_selection_outside_tenant_scope_before_cross_tenant_link_check(self):
+    def test_assign_trainer_does_not_allow_tenant_selection_bypass(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
             tenant_id="tenant-legacy",
             trainer_id=None,
@@ -292,13 +290,13 @@ class TrainerAssignmentApiTests(unittest.TestCase):
                 headers={"Authorization": "Bearer ignored-by-override"},
             )
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 403)
         self.assertEqual(
             response.json()["detail"],
-            "Selected trainer was not found in the available trainer scope",
+            "Direct trainer selection is disabled. Attach with a trainer invite code instead.",
         )
 
-    def test_assign_trainer_rejects_selection_outside_scoped_trainer_list(self):
+    def test_assign_trainer_does_not_allow_scoped_list_selection(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
             tenant_id="tenant-1",
             trainer_id=None,
@@ -322,10 +320,10 @@ class TrainerAssignmentApiTests(unittest.TestCase):
                 headers={"Authorization": "Bearer ignored-by-override"},
             )
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 403)
         self.assertEqual(
             response.json()["detail"],
-            "Selected trainer was not found in the available trainer scope",
+            "Direct trainer selection is disabled. Attach with a trainer invite code instead.",
         )
 
     def test_assign_by_invite_returns_generic_failure_message(self):

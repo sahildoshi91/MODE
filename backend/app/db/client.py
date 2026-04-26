@@ -32,5 +32,16 @@ def get_supabase_user_client(access_token: str) -> Client:
     )
 
 
+def get_supabase_public_client() -> Client:
+    return create_client(
+        _require_setting(settings.supabase_url, "SUPABASE_URL"),
+        _require_setting(settings.supabase_anon_key, "SUPABASE_ANON_KEY"),
+        options=SyncClientOptions(
+            auto_refresh_token=False,
+            persist_session=False,
+        ),
+    )
+
+
 def get_supabase_client() -> Client:
     return get_supabase_admin_client()

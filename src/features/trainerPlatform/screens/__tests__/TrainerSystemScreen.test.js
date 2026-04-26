@@ -45,16 +45,6 @@ jest.mock('../../../trainerClients/services/trainerHomeApi', () => ({
     text: 'New memory',
     tags: [],
   }),
-  createTrainerInviteCode: jest.fn().mockResolvedValue({
-    id: 'invite-1',
-    code: 'MODE1234',
-    is_active: true,
-  }),
-  deactivateTrainerInviteCode: jest.fn().mockResolvedValue({
-    id: 'invite-1',
-    code: 'MODE1234',
-    is_active: false,
-  }),
   getTrainerClientAIContext: jest.fn().mockResolvedValue({
     context_preview_text: 'Taylor responds well to concise coaching prompts.',
   }),
@@ -115,7 +105,6 @@ jest.mock('../../../trainerClients/services/trainerHomeApi', () => ({
     },
   ]),
   listTrainerClients: jest.fn(),
-  listTrainerInviteCodes: jest.fn().mockResolvedValue({ items: [], count: 0 }),
   removeTrainerClient: jest.fn().mockResolvedValue({ client_id: 'client-1' }),
   updateTrainerClientMemory: jest.fn().mockResolvedValue({
     id: 'memory-1',
@@ -154,14 +143,9 @@ jest.mock('expo-constants', () => ({
   },
 }));
 
-jest.mock('expo-clipboard', () => ({
-  setStringAsync: jest.fn().mockResolvedValue(undefined),
-}));
-
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 import { Alert, Keyboard, Platform, StyleSheet } from 'react-native';
-import * as Clipboard from 'expo-clipboard';
 
 import { fetchWithApiFallback } from '../../../../services/apiRequest';
 import {
@@ -174,10 +158,8 @@ import {
 import {
   archiveTrainerClientMemory,
   createTrainerClientMemory,
-  deactivateTrainerInviteCode,
   listTrainerClientMemory,
   listTrainerClients,
-  listTrainerInviteCodes,
   updateTrainerClientMemory,
 } from '../../../trainerClients/services/trainerHomeApi';
 import { getTrainerSettingsMe, listTrainerPersonas } from '../../../profile/services/profileApi';
@@ -240,12 +222,6 @@ describe('TrainerSystemScreen', () => {
       return { remove };
     });
 
-    listTrainerInviteCodes.mockResolvedValue({ items: [], count: 0 });
-    deactivateTrainerInviteCode.mockResolvedValue({
-      id: 'invite-1',
-      code: 'MODE1234',
-      is_active: false,
-    });
     listTrainerKnowledgeEntries.mockResolvedValue([
       {
         id: 'entry-1',
@@ -1060,14 +1036,7 @@ describe('TrainerSystemScreen', () => {
     expect(flattened.paddingBottom).toBe(theme.spacing[4] + 40);
   });
 
-  it('copies invite code and shows inline copied feedback in client management', async () => {
-    listTrainerInviteCodes.mockResolvedValue({
-      count: 1,
-      items: [
-        { id: 'invite-copy', code: 'MODECOPY', is_active: true },
-      ],
-    });
-
+  it('shows admin-managed invite notice in client management', async () => {
     const tree = await renderScreen();
     await act(async () => {
       findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
@@ -1078,56 +1047,10 @@ describe('TrainerSystemScreen', () => {
     });
     await flushEffects();
 
-    await act(async () => {
-      await findPressableByTestID(tree.root, 'trainer-system-invite-copy-invite-copy').props.onPress();
-    });
-    await flushEffects();
-
-    expect(Clipboard.setStringAsync).toHaveBeenCalledWith('MODECOPY');
     const rendered = JSON.stringify(tree.toJSON());
-    expect(rendered).toContain('Copied');
-  });
-
-  it('hides inactive invite codes and removes a row after deactivate in client management', async () => {
-    listTrainerInviteCodes.mockResolvedValue({
-      count: 2,
-      items: [
-        { id: 'invite-active', code: 'MODEACTIVE', is_active: true },
-        { id: 'invite-1', code: 'MODEOLD', is_active: false },
-      ],
-    });
-    deactivateTrainerInviteCode.mockResolvedValue({
-      id: 'invite-active',
-      code: 'MODEACTIVE',
-      is_active: false,
-    });
-
-    const tree = await renderScreen();
-    await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
-    });
-    await flushEffects();
-    await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-clients-manage').props.onPress();
-    });
-    await flushEffects();
-
-    let rendered = JSON.stringify(tree.toJSON());
-    expect(rendered).toContain('MODEACTIVE');
-    expect(rendered).not.toContain('MODEOLD');
-
-    await act(async () => {
-      findPressableByTestID(tree.root, 'trainer-system-invite-deactivate-invite-active').props.onPress();
-    });
-    await flushEffects();
-
-    expect(deactivateTrainerInviteCode).toHaveBeenCalledWith({
-      accessToken: 'trainer-token',
-      inviteId: 'invite-active',
-    });
-    expect(Clipboard.setStringAsync).not.toHaveBeenCalled();
-    rendered = JSON.stringify(tree.toJSON());
-    expect(rendered).not.toContain('MODEACTIVE');
+    expect(rendered).toContain('Client Invites');
+    expect(rendered).toContain('Invite code management is handled by MODE platform admin services for security.');
+    expect(rendered).not.toContain('Create invite code');
   });
 
   it('shows Pending user only in Client Management assigned clients list', async () => {

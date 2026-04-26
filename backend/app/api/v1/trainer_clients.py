@@ -1,10 +1,11 @@
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.v1.trainer_auth import require_trainer_actor
 from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.dependencies import get_trainer_client_service, get_trainer_context
+from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
 from app.modules.trainer_clients.schemas import (
     TrainerAIContextResponse,
@@ -29,6 +30,9 @@ from app.modules.trainer_clients.service import TrainerClientService
 
 
 router = APIRouter()
+INVITE_CODES_SERVICE_ONLY_DETAIL = (
+    "Invite code management is service-controlled. Contact platform support to issue or revoke codes."
+)
 
 def _handle_service_value_error(exc: ValueError) -> None:
     detail = str(exc)
@@ -73,14 +77,8 @@ async def list_trainer_client_invite_codes(
     service: TrainerClientService = Depends(get_trainer_client_service),
 ):
     require_trainer_actor(user, trainer_context)
-    try:
-        return service.list_invite_codes(
-            trainer_context,
-            limit=limit,
-            offset=offset,
-        )
-    except ValueError as exc:
-        _handle_service_value_error(exc)
+    del limit, offset, service
+    raise HTTPException(status_code=403, detail=INVITE_CODES_SERVICE_ONLY_DETAIL)
 
 
 @router.post("/invite-codes", response_model=TrainerClientInviteCodeRecord)
@@ -91,10 +89,8 @@ async def create_trainer_client_invite_code(
     service: TrainerClientService = Depends(get_trainer_client_service),
 ):
     require_trainer_actor(user, trainer_context)
-    try:
-        return service.create_invite_code(trainer_context, request)
-    except ValueError as exc:
-        _handle_service_value_error(exc)
+    del request, service
+    raise HTTPException(status_code=403, detail=INVITE_CODES_SERVICE_ONLY_DETAIL)
 
 
 @router.delete("/invite-codes/{invite_id}", response_model=TrainerClientInviteCodeRecord)
@@ -105,10 +101,8 @@ async def deactivate_trainer_client_invite_code(
     service: TrainerClientService = Depends(get_trainer_client_service),
 ):
     require_trainer_actor(user, trainer_context)
-    try:
-        return service.deactivate_invite_code(trainer_context, invite_id)
-    except ValueError as exc:
-        _handle_service_value_error(exc)
+    del invite_id, service
+    raise HTTPException(status_code=403, detail=INVITE_CODES_SERVICE_ONLY_DETAIL)
 
 
 @router.patch("/{client_id}", response_model=TrainerClientIdentity)
@@ -183,11 +177,22 @@ async def list_trainer_client_memory(
 async def create_trainer_client_memory(
     client_id: str,
     request: TrainerMemoryCreateRequest,
+    http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: TrainerClientService = Depends(get_trainer_client_service),
 ):
     require_trainer_actor(user, trainer_context)
+    enforce_rate_limit(
+        group="memory_create",
+        user=user,
+        request=http_request,
+        context={
+            "tenant_id": trainer_context.tenant_id,
+            "trainer_id": trainer_context.trainer_id,
+            "client_id": client_id,
+        },
+    )
     try:
         return service.create_memory(trainer_context, client_id, request)
     except ValueError as exc:

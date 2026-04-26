@@ -526,26 +526,23 @@ class TrainerClientsApiTests(unittest.TestCase):
             "/api/v1/trainer-clients/invite-codes",
             headers={"Authorization": "Bearer ignored-by-override"},
         )
-        self.assertEqual(invite_list_response.status_code, 200)
-        self.assertEqual(invite_list_response.json()["count"], 1)
-        self.assertEqual(invite_list_response.json()["items"][0]["code"], "MODE1234")
+        self.assertEqual(invite_list_response.status_code, 403)
+        self.assertIn("service-controlled", invite_list_response.json()["detail"])
 
         invite_create_response = self.client.post(
             "/api/v1/trainer-clients/invite-codes",
             json={"code": "newcode42", "metadata": {"source": "hub"}},
             headers={"Authorization": "Bearer ignored-by-override"},
         )
-        self.assertEqual(invite_create_response.status_code, 200)
-        self.assertEqual(invite_create_response.json()["code"], "NEWCODE42")
-        self.assertTrue(invite_create_response.json()["is_active"])
+        self.assertEqual(invite_create_response.status_code, 403)
+        self.assertIn("service-controlled", invite_create_response.json()["detail"])
 
         invite_delete_response = self.client.delete(
             "/api/v1/trainer-clients/invite-codes/invite-1",
             headers={"Authorization": "Bearer ignored-by-override"},
         )
-        self.assertEqual(invite_delete_response.status_code, 200)
-        self.assertEqual(invite_delete_response.json()["id"], "invite-1")
-        self.assertFalse(invite_delete_response.json()["is_active"])
+        self.assertEqual(invite_delete_response.status_code, 403)
+        self.assertIn("service-controlled", invite_delete_response.json()["detail"])
 
     def test_trainer_endpoints_reject_non_trainer_actor(self):
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
@@ -569,13 +566,13 @@ class TrainerClientsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "Memory not found")
 
-    def test_invite_code_not_found_maps_to_404(self):
+    def test_invite_code_routes_are_service_only_for_trainers(self):
         response = self.client.delete(
             "/api/v1/trainer-clients/invite-codes/missing-id",
             headers={"Authorization": "Bearer ignored-by-override"},
         )
-        self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.json()["detail"], "Invite code not found")
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("service-controlled", response.json()["detail"])
 
     def test_meeting_location_requires_existing_scheduled_session(self):
         response = self.client.patch(
