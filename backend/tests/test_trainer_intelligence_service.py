@@ -20,6 +20,10 @@ class FakeRoute:
 
 
 class FakeTrainerIntelligenceRepository:
+    def __init__(self):
+        self.usage_logs = []
+        self.increment_events = []
+
     def get_default_persona(self, trainer_id):
         del trainer_id
         return {
@@ -57,6 +61,8 @@ class FakeTrainerIntelligenceRepository:
                 "ai_enabled": True,
                 "status": "active",
                 "confidence_score": 0.9,
+                "embedding_status": "embedded",
+                "last_embedded_at": "2026-04-12T10:00:00+00:00",
                 "usage_count": 3,
                 "last_used_at": "2026-04-12T10:00:00+00:00",
                 "updated_at": "2026-04-12T10:00:00+00:00",
@@ -75,7 +81,69 @@ class FakeTrainerIntelligenceRepository:
                 "ai_enabled": True,
                 "status": "active",
                 "confidence_score": 0.82,
+                "embedding_status": "embedded",
+                "last_embedded_at": "2026-04-11T10:00:00+00:00",
                 "usage_count": 5,
+                "last_used_at": "2026-04-11T10:00:00+00:00",
+                "updated_at": "2026-04-11T10:00:00+00:00",
+                "created_at": "2026-04-10T10:00:00+00:00",
+            },
+            {
+                "id": "entry-archived",
+                "trainer_id": "trainer-1",
+                "client_id": "client-1",
+                "title": "Archived rule",
+                "raw_content": "Archived content should never surface.",
+                "structured_summary": "Archived content should never surface.",
+                "knowledge_type": "coaching_rule",
+                "scope": "client_specific",
+                "tags": ["archived"],
+                "ai_enabled": True,
+                "status": "archived",
+                "confidence_score": 0.6,
+                "embedding_status": "embedded",
+                "last_embedded_at": "2026-04-10T10:00:00+00:00",
+                "usage_count": 2,
+                "last_used_at": "2026-04-10T10:00:00+00:00",
+                "updated_at": "2026-04-10T10:00:00+00:00",
+                "created_at": "2026-04-09T10:00:00+00:00",
+            },
+            {
+                "id": "entry-ai-disabled",
+                "trainer_id": "trainer-1",
+                "client_id": None,
+                "title": "AI disabled rule",
+                "raw_content": "AI disabled content should never surface.",
+                "structured_summary": "AI disabled content should never surface.",
+                "knowledge_type": "coaching_rule",
+                "scope": "global",
+                "tags": ["ai_disabled"],
+                "ai_enabled": False,
+                "status": "active",
+                "confidence_score": 0.6,
+                "embedding_status": "failed",
+                "last_embedded_at": None,
+                "usage_count": 0,
+                "last_used_at": None,
+                "updated_at": "2026-04-10T10:00:00+00:00",
+                "created_at": "2026-04-09T10:00:00+00:00",
+            },
+            {
+                "id": "entry-other-client",
+                "trainer_id": "trainer-1",
+                "client_id": "client-2",
+                "title": "Other client note",
+                "raw_content": "Other client context should not leak.",
+                "structured_summary": "Other client context should not leak.",
+                "knowledge_type": "coaching_rule",
+                "scope": "client_specific",
+                "tags": ["other_client"],
+                "ai_enabled": True,
+                "status": "active",
+                "confidence_score": 0.62,
+                "embedding_status": "embedded",
+                "last_embedded_at": "2026-04-11T10:00:00+00:00",
+                "usage_count": 1,
                 "last_used_at": "2026-04-11T10:00:00+00:00",
                 "updated_at": "2026-04-11T10:00:00+00:00",
                 "created_at": "2026-04-10T10:00:00+00:00",
@@ -83,10 +151,17 @@ class FakeTrainerIntelligenceRepository:
         ]
 
     def create_knowledge_usage_logs(self, rows):
+        self.usage_logs.extend(rows)
         return rows
 
     def increment_knowledge_entry_usage(self, trainer_id, entry_id, timestamp_iso):
-        del trainer_id, entry_id, timestamp_iso
+        self.increment_events.append(
+            {
+                "trainer_id": trainer_id,
+                "entry_id": entry_id,
+                "timestamp_iso": timestamp_iso,
+            }
+        )
 
     def list_client_memory(self, trainer_id, client_id, limit):
         del trainer_id, client_id, limit
@@ -166,6 +241,9 @@ class TrainerIntelligenceServiceTests(unittest.TestCase):
         self.assertIn("[LAYER_1_TRAINER_GLOBAL_KNOWLEDGE]", context.system_appendix)
         self.assertIn("TRAINER KNOWLEDGE CONTEXT:", context.system_appendix)
         self.assertIn("Reduce volume when sleep is poor.", context.system_appendix)
+        self.assertNotIn("Archived content should never surface.", context.system_appendix)
+        self.assertNotIn("AI disabled content should never surface.", context.system_appendix)
+        self.assertNotIn("Other client context should not leak.", context.system_appendix)
         self.assertIn("[LAYER_2_CLIENT_MEMORY_AI_USABLE_ONLY]", context.system_appendix)
         self.assertIn("Prefers early sessions before work.", context.system_appendix)
         self.assertNotIn("Internal-only note should not be injected.", context.system_appendix)
@@ -173,6 +251,8 @@ class TrainerIntelligenceServiceTests(unittest.TestCase):
         self.assertIn("entrypoint: generated_workout", context.system_appendix)
         self.assertIn("knowledge_retrieval", context.metadata)
         self.assertGreaterEqual(context.metadata["knowledge_retrieval"]["selected_count"], 1)
+        selected = context.metadata["knowledge_retrieval"]["selected_entries"]
+        self.assertEqual(selected[0]["knowledge_entry_id"], "entry-client-1")
 
     def test_memory_theme_matcher_returns_true_for_strong_token_overlap(self):
         service = TrainerIntelligenceService(
@@ -268,6 +348,34 @@ class TrainerIntelligenceServiceTests(unittest.TestCase):
 
         self.assertFalse(result["covered"])
         self.assertEqual(result["reason"], "no_ai_usable_memory")
+
+    def test_log_retrieval_usage_marks_only_selected_entries_as_used(self):
+        repository = FakeTrainerIntelligenceRepository()
+        service = TrainerIntelligenceService(repository)
+
+        service.log_retrieval_usage(
+            trainer_id="trainer-1",
+            tenant_id="tenant-1",
+            client_id="client-1",
+            conversation_id="conversation-1",
+            message_id="message-1",
+            retrieval_metadata={
+                "candidate_entries": [
+                    {"knowledge_entry_id": "entry-client-1", "score": 0.91},
+                    {"knowledge_entry_id": "entry-global-style", "score": 0.73},
+                    {"knowledge_entry_id": "entry-other-client", "score": 0.38},
+                ],
+                "selected_entries": [
+                    {"knowledge_entry_id": "entry-client-1", "score": 0.91},
+                    {"knowledge_entry_id": "entry-global-style", "score": 0.73},
+                ],
+            },
+        )
+
+        self.assertEqual(len(repository.usage_logs), 3)
+        used_ids = {row["knowledge_entry_id"] for row in repository.usage_logs if row["used_in_response"] is True}
+        self.assertEqual(used_ids, {"entry-client-1", "entry-global-style"})
+        self.assertEqual(len(repository.increment_events), 2)
 
 
 if __name__ == "__main__":

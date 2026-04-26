@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Keyboard,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -13,6 +14,8 @@ import { BlurView } from 'expo-blur';
 import {
   ModeButton,
   ModeCard,
+  ModeChip,
+  ModeInput,
   ModeText,
   SafeScreen,
 } from '../../../../lib/components';
@@ -22,6 +25,7 @@ import {
   resolveAssistantDisplayName,
 } from '../../messaging';
 import { getTrainerSettingsMe } from '../../profile/services/profileApi';
+import { createTrainerKnowledgeEntry } from '../../trainerHome/services/trainerKnowledgeApi';
 import { buildTrainerRouteDiagnosticsBundle } from '../../trainerPlatform/utils/trainerRouteDiagnostics';
 import { ClientContextRail } from '../components/clientContextRail';
 import CoachComposerWithCommands from '../components/CoachComposerWithCommands';
@@ -36,6 +40,8 @@ const LIST_BOTTOM_BREATHING_ROOM = theme.spacing[2];
 const JUMP_TO_LATEST_BOTTOM_OFFSET = theme.spacing[1] + 2;
 const COMPOSER_DOCK_BACKDROP_MIN_HEIGHT = 92;
 const VISIBLE_CONVERSATION_KINDS = new Set(['trainer_input', 'internal_ai_private']);
+const CHAT_CAPTURE_SOURCE = 'message_capture';
+const CHAT_CAPTURE_TOAST_TIMEOUT_MS = 2200;
 
 function asNonNegativeNumber(value, fallback = 0) {
   const parsed = Number(value);
@@ -48,6 +54,17 @@ function asNonNegativeNumber(value, fallback = 0) {
 function shouldDisplayStreamItem(item) {
   const kind = typeof item?.kind === 'string' ? item.kind : '';
   return VISIBLE_CONVERSATION_KINDS.has(kind);
+}
+
+function normalizeCaptureScope(value) {
+  const normalized = String(value || 'global').trim().toLowerCase();
+  if (normalized === 'client_specific') {
+    return 'client';
+  }
+  if (normalized === 'client') {
+    return 'client';
+  }
+  return 'global';
 }
 
 export default function TrainerCoachScreen({
@@ -65,8 +82,21 @@ export default function TrainerCoachScreen({
   const [streamForceScrollSignal, setStreamForceScrollSignal] = useState(0);
   const [anchorToLatestSignal, setAnchorToLatestSignal] = useState(1);
   const [copyFeedback, setCopyFeedback] = useState(null);
+  const [surfaceToast, setSurfaceToast] = useState(null);
   const [assistantDisplayName, setAssistantDisplayName] = useState(DEFAULT_ASSISTANT_DISPLAY_NAME);
+  const [messageActionTarget, setMessageActionTarget] = useState(null);
+  const [captureSheetVisible, setCaptureSheetVisible] = useState(false);
+  const [captureDraft, setCaptureDraft] = useState({
+    text: '',
+    scope: 'global',
+    type: 'note',
+    aiUsable: true,
+    clientId: null,
+    sourceMessageId: null,
+  });
+  const [isSavingCapture, setIsSavingCapture] = useState(false);
   const copyFeedbackTimerRef = useRef(null);
+  const surfaceToastTimerRef = useRef(null);
   const visibleStreamLengthRef = useRef(0);
   const previousTrainerIdRef = useRef(trainerId);
   const previousWorkspaceClientIdRef = useRef(null);
@@ -94,6 +124,21 @@ export default function TrainerCoachScreen({
     () => (Array.isArray(state.stream) ? state.stream.filter(shouldDisplayStreamItem) : []),
     [state.stream],
   );
+  const captureClientOptions = useMemo(() => {
+    const byId = new Map();
+    (Array.isArray(state.queue) ? state.queue : []).forEach((item) => {
+      const clientId = String(item?.client_id || '').trim();
+      if (!clientId || byId.has(clientId)) {
+        return;
+      }
+      const clientName = String(item?.client_name || '').trim() || `Client ${clientId.slice(0, 6)}`;
+      byId.set(clientId, {
+        client_id: clientId,
+        client_name: clientName,
+      });
+    });
+    return [...byId.values()];
+  }, [state.queue]);
   const showJumpToLatest = visibleStream.length > 0 && (!isNearBottom || pendingNewMessagesBelowFold);
   const dockAnchorInset = Math.max(bottomInset, 0);
   const activeComposerOffset = isKeyboardVisible
@@ -155,6 +200,7 @@ export default function TrainerCoachScreen({
     }
     return 'Ready';
   }, [isSendingMessage, state.hasPendingSync, state.loading, state.sync.replaying]);
+  const activeToast = surfaceToast || state.ui?.toast || null;
 
   useEffect(() => {
     let isActive = true;
@@ -192,6 +238,25 @@ export default function TrainerCoachScreen({
       setCopyFeedback(null);
       copyFeedbackTimerRef.current = null;
     }, COPY_FEEDBACK_TIMEOUT_MS);
+  }, []);
+
+  const showSurfaceToast = useCallback((message, tone = 'success') => {
+    const normalized = String(message || '').trim();
+    if (!normalized) {
+      return;
+    }
+    if (surfaceToastTimerRef.current) {
+      clearTimeout(surfaceToastTimerRef.current);
+    }
+    setSurfaceToast({
+      id: `${Date.now()}`,
+      message: normalized,
+      tone,
+    });
+    surfaceToastTimerRef.current = setTimeout(() => {
+      setSurfaceToast(null);
+      surfaceToastTimerRef.current = null;
+    }, CHAT_CAPTURE_TOAST_TIMEOUT_MS);
   }, []);
 
   useEffect(() => {
@@ -273,6 +338,10 @@ export default function TrainerCoachScreen({
       clearTimeout(copyFeedbackTimerRef.current);
       copyFeedbackTimerRef.current = null;
     }
+    if (surfaceToastTimerRef.current) {
+      clearTimeout(surfaceToastTimerRef.current);
+      surfaceToastTimerRef.current = null;
+    }
   }, []);
 
   const handleSubmitComposer = async () => {
@@ -310,6 +379,129 @@ export default function TrainerCoachScreen({
       setIsSendingMessage(false);
     }
   }, [actions, isSendingMessage, state.loading]);
+
+  const closeMessageActionMenu = useCallback(() => {
+    setMessageActionTarget(null);
+  }, []);
+
+  const closeCaptureSheet = useCallback(() => {
+    if (isSavingCapture) {
+      return;
+    }
+    setCaptureSheetVisible(false);
+    setCaptureDraft({
+      text: '',
+      scope: 'global',
+      type: 'note',
+      aiUsable: true,
+      clientId: null,
+      sourceMessageId: null,
+    });
+  }, [isSavingCapture]);
+
+  const handleOpenCaptureSheetFromAction = useCallback((actionType) => {
+    const sourceItem = messageActionTarget;
+    if (!sourceItem?.id || typeof sourceItem?.text !== 'string') {
+      closeMessageActionMenu();
+      return;
+    }
+    const scopedClientId = String(state.activeClientId || '').trim() || null;
+    let nextScope = 'global';
+    let nextType = 'note';
+    if (actionType === 'client') {
+      nextScope = 'client';
+    } else if (actionType === 'rule') {
+      nextType = 'rule';
+    }
+    setCaptureDraft({
+      text: sourceItem.text,
+      scope: nextScope,
+      type: nextType,
+      aiUsable: true,
+      clientId: nextScope === 'client' ? scopedClientId : null,
+      sourceMessageId: sourceItem.id,
+    });
+    setCaptureSheetVisible(true);
+    closeMessageActionMenu();
+  }, [closeMessageActionMenu, messageActionTarget, state.activeClientId]);
+
+  const handleMessageLongPress = useCallback((item) => {
+    if (!item?.id || typeof item?.text !== 'string') {
+      return;
+    }
+    setMessageActionTarget(item);
+  }, []);
+
+  const handleCopyMessageAction = useCallback(async () => {
+    if (!messageActionTarget?.text) {
+      closeMessageActionMenu();
+      return;
+    }
+    try {
+      await Clipboard.setStringAsync(String(messageActionTarget.text));
+      showSurfaceToast('Copied message', 'success');
+    } catch (_error) {
+      showSurfaceToast('Unable to copy message', 'error');
+    } finally {
+      closeMessageActionMenu();
+    }
+  }, [closeMessageActionMenu, messageActionTarget, showSurfaceToast]);
+
+  const handleArchiveMessageAction = useCallback(() => {
+    closeMessageActionMenu();
+    showSurfaceToast('Archive is not available for chat messages yet.', 'warning');
+  }, [closeMessageActionMenu, showSurfaceToast]);
+
+  const handleSaveMessageCapture = useCallback(async () => {
+    const trimmedText = String(captureDraft.text || '').trim();
+    if (!trimmedText) {
+      showSurfaceToast('Add note text before saving.', 'warning');
+      return;
+    }
+    const normalizedScope = normalizeCaptureScope(captureDraft.scope);
+    const normalizedClientId = String(captureDraft.clientId || '').trim() || null;
+    if (normalizedScope === 'client' && !normalizedClientId) {
+      showSurfaceToast('Select a client to save this note.', 'warning');
+      return;
+    }
+    if (!accessToken) {
+      showSurfaceToast('Sign in before saving knowledge.', 'error');
+      return;
+    }
+
+    setIsSavingCapture(true);
+    try {
+      await createTrainerKnowledgeEntry({
+        accessToken,
+        body: trimmedText,
+        type: captureDraft.type || 'note',
+        scope: normalizedScope,
+        aiUsable: captureDraft.aiUsable !== false,
+        source: CHAT_CAPTURE_SOURCE,
+        sourceMessageId: captureDraft.sourceMessageId || null,
+        clientId: normalizedScope === 'client' ? normalizedClientId : null,
+      });
+      showSurfaceToast('Saved to Coaching Knowledge', 'success');
+      closeCaptureSheet();
+      actions.emitSystemEvent?.({
+        eventType: 'knowledge_entry_created',
+        message: 'Knowledge entry saved from message capture',
+        severity: 'success',
+        visibility: 'system',
+        clientId: normalizedScope === 'client' ? normalizedClientId : null,
+        payload: {
+          source: CHAT_CAPTURE_SOURCE,
+          source_message_id: captureDraft.sourceMessageId || null,
+          scope: normalizedScope,
+          type: captureDraft.type || 'note',
+        },
+      });
+    } catch (error) {
+      showSurfaceToast(error?.message || 'Unable to save coaching knowledge.', 'error');
+    } finally {
+      setIsSavingCapture(false);
+    }
+  }, [accessToken, actions, captureDraft, closeCaptureSheet, showSurfaceToast]);
 
   const handleCopyRouteDetails = useCallback(async () => {
     const diagnosticsSource = staleRouteError || workspaceNetworkError;
@@ -464,6 +656,7 @@ export default function TrainerCoachScreen({
               <CoachStreamList
                 streamItems={visibleStream}
                 assistantDisplayName={assistantDisplayName}
+                onMessageLongPress={handleMessageLongPress}
                 forceScrollSignal={streamForceScrollSignal}
                 anchorToLatestSignal={anchorToLatestSignal}
                 threadKey={trainerId || 'trainer-coach-default-thread'}
@@ -603,6 +796,139 @@ export default function TrainerCoachScreen({
           }}
         />
       ) : null}
+
+      {activeToast ? (
+        <View style={[
+          styles.captureToast,
+          activeToast?.tone === 'error'
+            ? styles.captureToastError
+            : (activeToast?.tone === 'warning' ? styles.captureToastWarning : styles.captureToastSuccess),
+        ]}
+        >
+          <ModeText variant="caption" tone="primary">{activeToast.message}</ModeText>
+        </View>
+      ) : null}
+
+      <Modal
+        visible={Boolean(messageActionTarget)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeMessageActionMenu}
+      >
+        <View style={styles.captureActionBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeMessageActionMenu} />
+          <View style={styles.captureActionSheet}>
+            <ModeText variant="label" style={styles.captureActionTitle}>Message Actions</ModeText>
+            <ModeButton
+              title="Save as Knowledge"
+              variant="ghost"
+              onPress={() => handleOpenCaptureSheetFromAction('knowledge')}
+              style={styles.captureActionButton}
+            />
+            <ModeButton
+              title="Save as Client Note"
+              variant="ghost"
+              onPress={() => handleOpenCaptureSheetFromAction('client')}
+              style={styles.captureActionButton}
+            />
+            <ModeButton
+              title="Save as Rule"
+              variant="ghost"
+              onPress={() => handleOpenCaptureSheetFromAction('rule')}
+              style={styles.captureActionButton}
+            />
+            <ModeButton
+              title="Copy"
+              variant="ghost"
+              onPress={handleCopyMessageAction}
+              style={styles.captureActionButton}
+            />
+            <ModeButton
+              title="Archive"
+              variant="ghost"
+              onPress={handleArchiveMessageAction}
+              style={styles.captureActionButton}
+            />
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={captureSheetVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={closeCaptureSheet}
+      >
+        <View style={styles.captureActionBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={closeCaptureSheet} />
+          <View style={styles.captureComposerSheet}>
+            <View style={styles.captureComposerHeader}>
+              <ModeText variant="h4">Save Knowledge</ModeText>
+              <ModeButton
+                title={isSavingCapture ? 'Saving...' : 'Save Knowledge'}
+                onPress={handleSaveMessageCapture}
+                disabled={isSavingCapture}
+              />
+            </View>
+            <ModeInput
+              value={captureDraft.text}
+              onChangeText={(value) => setCaptureDraft((current) => ({ ...current, text: value }))}
+              multiline
+              placeholder="Edit before saving"
+              style={styles.captureComposerInput}
+              testID="trainer-coach-message-capture-input"
+            />
+            <View style={styles.captureComposerRow}>
+              <ModeChip
+                label="Global"
+                selected={normalizeCaptureScope(captureDraft.scope) === 'global'}
+                onPress={() => setCaptureDraft((current) => ({
+                  ...current,
+                  scope: 'global',
+                  clientId: null,
+                }))}
+              />
+              <ModeChip
+                label="Client"
+                selected={normalizeCaptureScope(captureDraft.scope) === 'client'}
+                onPress={() => setCaptureDraft((current) => ({
+                  ...current,
+                  scope: 'client',
+                  clientId: current.clientId || (state.activeClientId || null),
+                }))}
+              />
+              <ModeChip
+                label={captureDraft.aiUsable ? 'AI On' : 'AI Off'}
+                selected={captureDraft.aiUsable}
+                onPress={() => setCaptureDraft((current) => ({ ...current, aiUsable: !current.aiUsable }))}
+              />
+            </View>
+            {normalizeCaptureScope(captureDraft.scope) === 'client' ? (
+              <View style={styles.captureComposerClientRow}>
+                {(captureClientOptions.length > 0 ? captureClientOptions : [{
+                  client_id: state.activeClientId,
+                  client_name: 'Selected client',
+                }]).filter((item) => item?.client_id).map((option) => (
+                  <ModeChip
+                    key={option.client_id}
+                    label={option.client_name}
+                    selected={captureDraft.clientId === option.client_id}
+                    onPress={() => setCaptureDraft((current) => ({ ...current, clientId: option.client_id }))}
+                  />
+                ))}
+              </View>
+            ) : null}
+            <View style={styles.captureComposerFooter}>
+              <ModeButton
+                title="Cancel"
+                variant="ghost"
+                onPress={closeCaptureSheet}
+                disabled={isSavingCapture}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeScreen>
   );
 }
@@ -712,6 +1038,83 @@ const styles = StyleSheet.create({
   composerDockStack: {
     paddingTop: theme.spacing[1],
     gap: theme.spacing[1],
+  },
+  captureToast: {
+    position: 'absolute',
+    left: theme.spacing[3],
+    right: theme.spacing[3],
+    bottom: theme.spacing[3] + 56,
+    borderRadius: theme.radii.md,
+    borderWidth: 1,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    zIndex: 20,
+  },
+  captureToastSuccess: {
+    borderColor: 'rgba(121, 171, 247, 0.42)',
+    backgroundColor: 'rgba(24, 43, 76, 0.95)',
+  },
+  captureToastWarning: {
+    borderColor: 'rgba(206, 172, 113, 0.36)',
+    backgroundColor: 'rgba(55, 40, 21, 0.95)',
+  },
+  captureToastError: {
+    borderColor: 'rgba(212, 119, 119, 0.36)',
+    backgroundColor: 'rgba(62, 28, 28, 0.95)',
+  },
+  captureActionBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(4, 9, 17, 0.62)',
+    justifyContent: 'flex-end',
+    paddingHorizontal: theme.spacing[2],
+    paddingBottom: theme.spacing[3],
+  },
+  captureActionSheet: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(114, 148, 209, 0.3)',
+    backgroundColor: 'rgba(10, 18, 34, 0.97)',
+    padding: theme.spacing[2],
+    gap: theme.spacing[1],
+  },
+  captureActionTitle: {
+    marginBottom: theme.spacing[1],
+  },
+  captureActionButton: {
+    justifyContent: 'flex-start',
+  },
+  captureComposerSheet: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(114, 148, 209, 0.3)',
+    backgroundColor: 'rgba(9, 17, 33, 0.98)',
+    padding: theme.spacing[2],
+    gap: theme.spacing[1],
+  },
+  captureComposerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[1],
+  },
+  captureComposerInput: {
+    minHeight: 120,
+  },
+  captureComposerRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+  },
+  captureComposerClientRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+  },
+  captureComposerFooter: {
+    alignItems: 'flex-end',
+    marginTop: 2,
   },
   helperRow: {
     minHeight: 0,

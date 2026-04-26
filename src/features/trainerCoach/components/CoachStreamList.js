@@ -34,6 +34,7 @@ function asNonNegativeNumber(value, fallback = 0) {
 export default function CoachStreamList({
   streamItems,
   assistantDisplayName,
+  onMessageLongPress,
   onScrollDepthChange,
   onScrollMetricsChange,
   onNearBottomChange,
@@ -163,10 +164,11 @@ export default function CoachStreamList({
           item={item}
           assistantDisplayName={resolvedAssistantDisplayName}
           showRoleLabel={currentSpeakerKey !== previousSpeakerKey}
+          onLongPressMessage={onMessageLongPress}
         />
       );
     },
-    [items, resolvedAssistantDisplayName],
+    [items, onMessageLongPress, resolvedAssistantDisplayName],
   );
 
   const updateScrollMetrics = useCallback((partial = {}) => {

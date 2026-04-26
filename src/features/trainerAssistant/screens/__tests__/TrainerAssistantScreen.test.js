@@ -7,6 +7,10 @@ jest.mock('../../services/trainerAssistantApi', () => ({
   rejectTrainerAssistantDraft: jest.fn(),
 }));
 
+jest.mock('../../../trainerHome/services/trainerKnowledgeApi', () => ({
+  createTrainerKnowledgeEntry: jest.fn(),
+}));
+
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react');
   return {
@@ -179,6 +183,7 @@ import {
   executeTrainerAssistantActionStream,
   getTrainerAssistantBootstrap,
 } from '../../services/trainerAssistantApi';
+import { createTrainerKnowledgeEntry } from '../../../trainerHome/services/trainerKnowledgeApi';
 
 jest.mock('expo-clipboard', () => ({
   setStringAsync: jest.fn(),
@@ -288,6 +293,9 @@ describe('TrainerAssistantScreen', () => {
     getTrainerAssistantBootstrap.mockResolvedValue(buildBootstrapPayload());
     executeTrainerAssistantActionStream.mockRejectedValue(new Error('stream unavailable'));
     executeTrainerAssistantAction.mockResolvedValue(buildExecutePayload('adjust_plan'));
+    createTrainerKnowledgeEntry.mockResolvedValue({
+      entry: { id: 'entry-1', scope: 'global', type: 'note', source: 'slash_command' },
+    });
     approveTrainerAssistantDraft.mockResolvedValue({
       draft_id: 'draft-1',
       review_status: 'approved',
@@ -422,9 +430,82 @@ describe('TrainerAssistantScreen', () => {
     await flushEffects();
 
     const rendered = JSON.stringify(tree.toJSON());
-    expect(rendered).toContain('Unknown command: /unknown. Use /client or /note.');
+    expect(rendered).toContain('Unknown command: /unknown.');
     expect(executeTrainerAssistantActionStream).not.toHaveBeenCalled();
     expect(executeTrainerAssistantAction).not.toHaveBeenCalled();
+  });
+
+  it('saves /note payloads to coaching knowledge and skips assistant execute', async () => {
+    const tree = await renderScreen();
+    const promptInput = tree.root.findByProps({ testID: 'trainer-assistant-prompt-input' });
+    const generateButton = tree.root.findByProps({ testID: 'trainer-assistant-generate' });
+
+    await act(async () => {
+      promptInput.props.onChangeText('/note Prioritize protein adherence before adding calories.');
+    });
+    await act(async () => {
+      await generateButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(createTrainerKnowledgeEntry).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      body: 'Prioritize protein adherence before adding calories.',
+      type: 'note',
+      scope: 'global',
+      source: 'slash_command',
+    }));
+    expect(executeTrainerAssistantActionStream).not.toHaveBeenCalled();
+    expect(executeTrainerAssistantAction).not.toHaveBeenCalled();
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Saved to Coaching Knowledge');
+  });
+
+  it('prompts for client selection when /clientnote is used with no active client', async () => {
+    getTrainerAssistantBootstrap.mockResolvedValueOnce(buildBootstrapPayload({
+      active_client_id: null,
+      requires_client_selection: true,
+      clients: [],
+      context_bundle: {},
+    }));
+    const tree = await renderScreen();
+    const promptInput = tree.root.findByProps({ testID: 'trainer-assistant-prompt-input' });
+    const generateButton = tree.root.findByProps({ testID: 'trainer-assistant-generate' });
+
+    await act(async () => {
+      promptInput.props.onChangeText('/clientnote Keep this client on low-impact work after poor sleep.');
+    });
+    await act(async () => {
+      await generateButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(createTrainerKnowledgeEntry).not.toHaveBeenCalled();
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('panel:note');
+    expect(rendered).toContain('Select a client to save this note.');
+  });
+
+  it('treats escaped capture commands as literal prompt text for assistant execute', async () => {
+    const tree = await renderScreen();
+    const promptInput = tree.root.findByProps({ testID: 'trainer-assistant-prompt-input' });
+    const generateButton = tree.root.findByProps({ testID: 'trainer-assistant-generate' });
+
+    await act(async () => {
+      promptInput.props.onChangeText('\\/note keep this as literal prompt');
+    });
+    await act(async () => {
+      await generateButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(createTrainerKnowledgeEntry).not.toHaveBeenCalled();
+    expect(executeTrainerAssistantAction).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+      message: '/note keep this as literal prompt',
+    }));
   });
 
   it('approves preview draft through approve endpoint', async () => {

@@ -84,15 +84,21 @@ class TrainerKnowledgeEntry(BaseModel):
     trainer_id: str
     client_id: str | None = None
     title: str
+    body: str | None = None
     raw_content: str
     structured_summary: str | None = None
-    knowledge_type: str = "other"
+    type: str = "note"
+    knowledge_type: str = "note"
     scope: str = "global"
     tags: list[str] = Field(default_factory=list)
+    ai_usable: bool = True
     ai_enabled: bool = True
     status: str = "active"
-    source: str = "manual_note"
+    source: str = "manual"
+    source_message_id: str | None = None
     confidence_score: float | None = None
+    embedding_status: str = "pending"
+    last_embedded_at: datetime | None = None
     version_count: int = 1
     last_used_at: datetime | None = None
     usage_count: int = 0
@@ -105,13 +111,17 @@ class TrainerKnowledgeEntry(BaseModel):
 
 class TrainerKnowledgeEntryCreateRequest(BaseModel):
     title: str | None = None
-    raw_content: str
+    body: str | None = None
+    raw_content: str | None = None
     structured_summary: str | None = None
+    type: str | None = None
     knowledge_type: str | None = None
     scope: str = "global"
     tags: list[str] = Field(default_factory=list)
+    ai_usable: bool | None = None
     ai_enabled: bool = True
-    source: str = "manual_note"
+    source: str = "manual"
+    source_message_id: str | None = None
     confidence_score: float | None = None
     client_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -120,21 +130,26 @@ class TrainerKnowledgeEntryCreateRequest(BaseModel):
 
 class TrainerKnowledgeEntryUpdateRequest(BaseModel):
     title: str | None = None
+    body: str | None = None
     raw_content: str | None = None
     structured_summary: str | None = None
+    type: str | None = None
     knowledge_type: str | None = None
     scope: str | None = None
     tags: list[str] | None = None
+    ai_usable: bool | None = None
     ai_enabled: bool | None = None
     status: str | None = None
     confidence_score: float | None = None
     client_id: str | None = None
+    source_message_id: str | None = None
     metadata: dict[str, Any] | None = None
     change_reason: str | None = None
 
 
 class TrainerKnowledgeClassificationRequest(BaseModel):
-    raw_content: str
+    body: str | None = None
+    raw_content: str | None = None
     title: str | None = None
     client_id: str | None = None
     preferred_scope: str | None = None
@@ -144,9 +159,11 @@ class TrainerKnowledgeClassificationRequest(BaseModel):
 class TrainerKnowledgeClassificationSuggestion(BaseModel):
     title: str
     structured_summary: str | None = None
+    type: str | None = None
     knowledge_type: str
     scope: str
     tags: list[str] = Field(default_factory=list)
+    ai_usable: bool = True
     ai_enabled: bool = True
     confidence: float = 0.0
     client_id: str | None = None

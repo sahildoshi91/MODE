@@ -62,13 +62,15 @@ class FakeTrainerKnowledgeService:
                 "title": "Adjust intensity when sleep is poor",
                 "raw_content": "When sleep is poor, lower volume and focus on movement quality.",
                 "structured_summary": "Lower volume when sleep is poor.",
-                "knowledge_type": "coaching_rule",
+                "knowledge_type": "rule",
                 "scope": "global",
                 "tags": ["sleep", "recovery"],
                 "ai_enabled": True,
                 "status": "active",
-                "source": "manual_note",
+                "source": "manual",
                 "confidence_score": 0.84,
+                "embedding_status": "embedded",
+                "last_embedded_at": "2026-04-11T10:00:00+00:00",
                 "version_count": 1,
                 "last_used_at": None,
                 "usage_count": 0,
@@ -95,6 +97,13 @@ class FakeTrainerKnowledgeService:
                 }
             ]
         }
+
+    @staticmethod
+    def _normalize_scope(scope_value):
+        normalized = str(scope_value or "global").strip().lower().replace("-", "_")
+        if normalized in {"client", "clientspecific", "client_specific"}:
+            return "client"
+        return "global"
 
     def list_documents(self, trainer_id: str):
         del trainer_id
@@ -258,9 +267,11 @@ class FakeTrainerKnowledgeService:
         return {
             "title": request.title or "Suggested title",
             "structured_summary": "Suggested summary",
-            "knowledge_type": request.preferred_knowledge_type or "coaching_rule",
+            "knowledge_type": request.preferred_knowledge_type or "rule",
+            "type": request.preferred_knowledge_type or "rule",
             "scope": request.preferred_scope or "global",
             "tags": ["sleep", "recovery"],
+            "ai_usable": True,
             "ai_enabled": True,
             "confidence": 0.91,
             "client_id": request.client_id,
@@ -268,21 +279,28 @@ class FakeTrainerKnowledgeService:
         }
 
     def create_entry(self, trainer_context, request):
+        normalized_scope = self._normalize_scope(request.scope)
         entry = {
             "id": f"entry-{len(self.entries) + 1}",
             "tenant_id": trainer_context.tenant_id,
             "trainer_id": trainer_context.trainer_id,
             "client_id": request.client_id,
             "title": request.title or "Created entry",
-            "raw_content": request.raw_content,
+            "body": request.body or request.raw_content,
+            "raw_content": request.body or request.raw_content,
             "structured_summary": request.structured_summary,
-            "knowledge_type": request.knowledge_type or "other",
-            "scope": request.scope,
+            "type": request.type or request.knowledge_type or "note",
+            "knowledge_type": request.type or request.knowledge_type or "note",
+            "scope": normalized_scope,
             "tags": request.tags,
-            "ai_enabled": request.ai_enabled,
+            "ai_usable": request.ai_usable if request.ai_usable is not None else request.ai_enabled,
+            "ai_enabled": request.ai_usable if request.ai_usable is not None else request.ai_enabled,
             "status": "active",
             "source": request.source,
+            "source_message_id": request.source_message_id,
             "confidence_score": request.confidence_score,
+            "embedding_status": "pending",
+            "last_embedded_at": None,
             "version_count": 1,
             "last_used_at": None,
             "usage_count": 0,
@@ -321,16 +339,32 @@ class FakeTrainerKnowledgeService:
                 continue
             if request.title is not None:
                 entry["title"] = request.title
+            if request.body is not None:
+                entry["body"] = request.body
+                entry["raw_content"] = request.body
             if request.raw_content is not None:
                 entry["raw_content"] = request.raw_content
+                entry["body"] = request.raw_content
+            if request.type is not None:
+                entry["type"] = request.type
+                entry["knowledge_type"] = request.type
             if request.knowledge_type is not None:
                 entry["knowledge_type"] = request.knowledge_type
             if request.scope is not None:
-                entry["scope"] = request.scope
+                entry["scope"] = self._normalize_scope(request.scope)
             if request.tags is not None:
                 entry["tags"] = request.tags
+            if request.ai_usable is not None:
+                entry["ai_usable"] = request.ai_usable
+                entry["ai_enabled"] = request.ai_usable
             if request.ai_enabled is not None:
                 entry["ai_enabled"] = request.ai_enabled
+                entry["ai_usable"] = request.ai_enabled
+            if request.ai_enabled is True and request.raw_content is not None:
+                entry["embedding_status"] = "pending"
+                entry["last_embedded_at"] = None
+            if request.source_message_id is not None:
+                entry["source_message_id"] = request.source_message_id
             if request.status is not None:
                 entry["status"] = request.status
             entry["version_count"] = int(entry.get("version_count") or 1) + 1
@@ -498,18 +532,18 @@ class TrainerKnowledgeApiTests(unittest.TestCase):
             headers={"Authorization": "Bearer ignored-by-override"},
         )
         self.assertEqual(classify_response.status_code, 200)
-        self.assertEqual(classify_response.json()["knowledge_type"], "coaching_rule")
+        self.assertEqual(classify_response.json()["knowledge_type"], "rule")
 
         create_response = self.client.post(
             "/api/v1/trainer-knowledge/entries",
             json={
                 "title": "Sleep adjustment",
                 "raw_content": "When sleep is poor, reduce intensity.",
-                "knowledge_type": "coaching_rule",
+                "type": "rule",
                 "scope": "global",
                 "tags": ["sleep"],
-                "ai_enabled": True,
-                "source": "manual_note",
+                "ai_usable": True,
+                "source": "manual",
             },
             headers={"Authorization": "Bearer ignored-by-override"},
         )
@@ -524,7 +558,7 @@ class TrainerKnowledgeApiTests(unittest.TestCase):
             json={
                 "title": "Updated title",
                 "raw_content": "Updated content",
-                "knowledge_type": "coaching_rule",
+                "type": "rule",
                 "scope": "global",
                 "tags": ["sleep", "quality"],
             },
@@ -557,6 +591,24 @@ class TrainerKnowledgeApiTests(unittest.TestCase):
         )
         self.assertEqual(archive_response.status_code, 200)
         self.assertEqual(archive_response.json()["entry"]["status"], "archived")
+
+    def test_entry_create_accepts_client_scope_alias(self):
+        create_response = self.client.post(
+            "/api/v1/trainer-knowledge/entries",
+            json={
+                "title": "Client-specific sleep adjustment",
+                "raw_content": "For this client, reduce intensity when sleep is poor.",
+                "type": "rule",
+                "scope": "client",
+                "client_id": "client-42",
+                "tags": ["sleep"],
+                "ai_usable": True,
+                "source": "manual",
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(create_response.status_code, 200)
+        self.assertEqual(create_response.json()["entry"]["scope"], "client")
 
     def test_patch_document_updates_and_returns_extraction(self):
         response = self.client.patch(

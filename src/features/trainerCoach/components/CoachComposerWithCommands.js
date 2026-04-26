@@ -21,6 +21,9 @@ const COMPOSER_PLACEHOLDER = 'rgba(199, 214, 243, 0.74)';
 const COMMANDS = [
   '/client',
   '/note',
+  '/clientnote',
+  '/rule',
+  '/faq',
 ];
 
 export default function CoachComposerWithCommands({

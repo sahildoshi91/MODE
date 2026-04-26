@@ -21,6 +21,10 @@ jest.mock('../../storage/trainerCoachStorage', () => ({
   saveTrainerCoachWorkspaceCache: jest.fn(),
 }));
 
+jest.mock('../../../trainerHome/services/trainerKnowledgeApi', () => ({
+  createTrainerKnowledgeEntry: jest.fn(),
+}));
+
 import {
   createTrainerCoachEvent,
   getTrainerCoachWorkspace,
@@ -35,6 +39,7 @@ import {
   saveTrainerCoachPendingOps,
   saveTrainerCoachWorkspaceCache,
 } from '../../storage/trainerCoachStorage';
+import { createTrainerKnowledgeEntry } from '../../../trainerHome/services/trainerKnowledgeApi';
 import { useTrainerCoachWorkspace } from '../useTrainerCoachWorkspace';
 
 function buildWorkspacePayload() {
@@ -115,6 +120,14 @@ describe('useTrainerCoachWorkspace', () => {
         action_type: 'adjust_plan',
         headline: 'Draft Ready',
         summary: 'Draft generated.',
+      },
+    });
+    createTrainerKnowledgeEntry.mockResolvedValue({
+      entry: {
+        id: 'entry-1',
+        scope: 'global',
+        type: 'note',
+        source: 'slash_command',
       },
     });
     createTrainerCoachEvent.mockResolvedValue({
@@ -213,6 +226,117 @@ describe('useTrainerCoachWorkspace', () => {
     lastItem = stream[stream.length - 1];
     expect(lastItem.kind).toBe('internal_ai_private');
     expect(lastItem.text).toContain('/note');
+  });
+
+  it('intercepts /note capture commands and saves knowledge without running assistant execute', async () => {
+    let latestSnapshot = null;
+    const onSnapshot = (snapshot) => {
+      latestSnapshot = snapshot;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          onSnapshot={onSnapshot}
+        />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await latestSnapshot.actions.sendIntentMessage('/note Keep protein high before increasing calories.');
+    });
+    await flushEffects();
+
+    expect(createTrainerKnowledgeEntry).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      body: 'Keep protein high before increasing calories.',
+      type: 'note',
+      scope: 'global',
+      source: 'slash_command',
+      clientId: null,
+    }));
+    expect(executeTrainerAssistantActionStream).not.toHaveBeenCalled();
+    expect(executeTrainerAssistantAction).not.toHaveBeenCalled();
+    expect(latestSnapshot.state.ui.toast).toEqual(expect.objectContaining({
+      message: 'Saved to Coaching Knowledge',
+      tone: 'success',
+    }));
+  });
+
+  it('opens client-note composer when /clientnote has no selected client', async () => {
+    getTrainerCoachWorkspace.mockResolvedValueOnce({
+      ...buildWorkspacePayload(),
+      queue: [],
+    });
+
+    let latestSnapshot = null;
+    const onSnapshot = (snapshot) => {
+      latestSnapshot = snapshot;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          onSnapshot={onSnapshot}
+        />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await latestSnapshot.actions.sendIntentMessage('/clientnote Track readiness and sleep consistency.');
+    });
+    await flushEffects();
+
+    expect(createTrainerKnowledgeEntry).not.toHaveBeenCalled();
+    expect(latestSnapshot.state.panels.active).toBe('note');
+    expect(latestSnapshot.state.panels.context).toEqual(expect.objectContaining({
+      initialDraft: expect.objectContaining({
+        body: 'Track readiness and sleep consistency.',
+        scope: 'client',
+        type: 'note',
+        source: 'slash_command',
+      }),
+    }));
+    expect(latestSnapshot.state.ui.toast).toEqual(expect.objectContaining({
+      message: 'Select a client to save this note.',
+      tone: 'warning',
+    }));
+  });
+
+  it('treats escaped capture commands as literal trainer text for assistant execution', async () => {
+    let latestSnapshot = null;
+    const onSnapshot = (snapshot) => {
+      latestSnapshot = snapshot;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          onSnapshot={onSnapshot}
+        />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await latestSnapshot.actions.sendIntentMessage('\\/note Keep this as normal chat text.');
+    });
+    await flushEffects();
+
+    expect(createTrainerKnowledgeEntry).not.toHaveBeenCalled();
+    expect(executeTrainerAssistantActionStream).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      message: '/note Keep this as normal chat text.',
+      clientId: 'client-1',
+    }));
   });
 
   it('marks unknown slash commands as failed system confirmations', async () => {

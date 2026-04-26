@@ -12,6 +12,8 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from app.core.tenancy import TrainerContext
 from app.modules.trainer_knowledge.schemas import (
     TrainerKnowledgeDocumentUpdateRequest,
+    TrainerKnowledgeEntryCreateRequest,
+    TrainerKnowledgeEntryUpdateRequest,
     TrainerKnowledgeIngestRequest,
 )
 from app.modules.trainer_knowledge.service import TrainerKnowledgeService
@@ -23,10 +25,12 @@ class FakeTrainerKnowledgeRepository:
         self.fail_create_rule_version = fail_create_rule_version
         self.created_rules = []
         self.created_rule_versions = []
+        self.created_entry_versions = []
         self.updated_documents = []
         self.updated_rules = []
         self.deleted_documents = []
         self.deleted_rule_documents = []
+        self.updated_entries = []
         self.documents = {
             "doc-1": {
                 "id": "doc-1",
@@ -58,6 +62,34 @@ class FakeTrainerKnowledgeRepository:
                     "updated_at": "2026-04-13T10:00:00+00:00",
                 }
             ]
+        }
+        self.entries = {
+            "entry-1": {
+                "id": "entry-1",
+                "tenant_id": "tenant-1",
+                "trainer_id": "trainer-1",
+                "client_id": "client-1",
+                "title": "Existing client note",
+                "raw_content": "Reduce intensity when sleep is poor.",
+                "structured_summary": "Reduce intensity when sleep is poor.",
+                "knowledge_type": "coaching_rule",
+                "scope": "client_specific",
+                "tags": ["sleep"],
+                "ai_enabled": True,
+                "status": "active",
+                "source": "manual_note",
+                "confidence_score": 0.81,
+                "embedding_status": "embedded",
+                "last_embedded_at": "2026-04-24T10:00:00+00:00",
+                "version_count": 1,
+                "last_used_at": None,
+                "usage_count": 0,
+                "conflict_group_id": None,
+                "metadata": {},
+                "created_at": "2026-04-24T09:00:00+00:00",
+                "updated_at": "2026-04-24T10:00:00+00:00",
+                "archived_at": None,
+            }
         }
 
     def create(self, payload):
@@ -162,6 +194,113 @@ class FakeTrainerKnowledgeRepository:
         created = {"id": f"rule-version-{len(self.created_rule_versions) + 1}", **payload}
         self.created_rule_versions.append(created)
         return created
+
+    def list_entries_by_trainer(
+        self,
+        trainer_id,
+        *,
+        include_archived=False,
+        scope=None,
+        ai_enabled=None,
+        limit=120,
+        offset=0,
+    ):
+        del limit, offset
+        rows = [row for row in self.entries.values() if row.get("trainer_id") == trainer_id]
+        if not include_archived:
+            rows = [row for row in rows if row.get("status") != "archived"]
+        if scope:
+            normalized_scope = str(scope).strip().lower().replace("-", "_")
+            if normalized_scope in {"client", "client_specific", "clientspecific"}:
+                rows = [
+                    row for row in rows
+                    if str(row.get("scope") or "").strip().lower().replace("-", "_") in {
+                        "client",
+                        "client_specific",
+                        "clientspecific",
+                    }
+                ]
+            elif normalized_scope == "global":
+                rows = [row for row in rows if str(row.get("scope") or "").strip().lower() == "global"]
+        if isinstance(ai_enabled, bool):
+            rows = [row for row in rows if bool(row.get("ai_enabled")) == ai_enabled]
+        return [dict(row) for row in rows]
+
+    def list_conflict_candidates(self, trainer_id, *, limit=120):
+        del limit
+        return [
+            {
+                "id": row["id"],
+                "client_id": row.get("client_id"),
+                "title": row.get("title"),
+                "raw_content": row.get("raw_content"),
+                "structured_summary": row.get("structured_summary"),
+                "knowledge_type": row.get("knowledge_type"),
+                "scope": row.get("scope"),
+                "tags": row.get("tags") or [],
+                "updated_at": row.get("updated_at"),
+            }
+            for row in self.entries.values()
+            if row.get("trainer_id") == trainer_id and row.get("status") == "active"
+        ]
+
+    def create_entry(self, payload):
+        entry_id = f"entry-{len(self.entries) + 1}"
+        created = {
+            "id": entry_id,
+            "tenant_id": payload["tenant_id"],
+            "trainer_id": payload["trainer_id"],
+            "client_id": payload.get("client_id"),
+            "title": payload["title"],
+            "raw_content": payload["raw_content"],
+            "structured_summary": payload.get("structured_summary"),
+            "knowledge_type": payload.get("knowledge_type", "other"),
+            "scope": payload.get("scope", "global"),
+            "tags": payload.get("tags") or [],
+            "ai_enabled": bool(payload.get("ai_enabled", True)),
+            "status": payload.get("status", "active"),
+            "source": payload.get("source", "manual_note"),
+            "confidence_score": payload.get("confidence_score"),
+            "embedding_status": payload.get("embedding_status", "pending"),
+            "last_embedded_at": payload.get("last_embedded_at"),
+            "version_count": int(payload.get("version_count") or 1),
+            "last_used_at": payload.get("last_used_at"),
+            "usage_count": int(payload.get("usage_count") or 0),
+            "conflict_group_id": payload.get("conflict_group_id"),
+            "metadata": payload.get("metadata") or {},
+            "created_at": payload.get("created_at"),
+            "updated_at": payload.get("updated_at"),
+            "archived_at": payload.get("archived_at"),
+        }
+        self.entries[entry_id] = created
+        return dict(created)
+
+    def get_entry(self, trainer_id, entry_id):
+        row = self.entries.get(entry_id)
+        if not row or row.get("trainer_id") != trainer_id:
+            return None
+        return dict(row)
+
+    def update_entry(self, trainer_id, entry_id, payload):
+        row = self.entries.get(entry_id)
+        if not row or row.get("trainer_id") != trainer_id:
+            return {}
+        updated = {
+            **row,
+            **payload,
+        }
+        self.entries[entry_id] = updated
+        self.updated_entries.append({"entry_id": entry_id, "payload": payload})
+        return dict(updated)
+
+    def create_entry_version(self, payload):
+        created = {"id": f"entry-version-{len(self.created_entry_versions) + 1}", **payload}
+        self.created_entry_versions.append(created)
+        return created
+
+    def list_entry_versions(self, trainer_id, knowledge_entry_id, *, limit=50):
+        del trainer_id, knowledge_entry_id, limit
+        return [*self.created_entry_versions]
 
 
 class RaisingExtractor:
@@ -344,6 +483,63 @@ class TrainerKnowledgeServiceTests(unittest.TestCase):
         self.assertIn("doc-1", repository.deleted_rule_documents)
         self.assertIsNone(repository.get_document("trainer-1", "doc-1"))
         self.assertEqual(repository.list_rules_by_document("trainer-1", "doc-1"), [])
+
+    def test_create_entry_accepts_client_scope_alias_and_sets_embedding_pending(self):
+        repository = FakeTrainerKnowledgeRepository()
+        service = TrainerKnowledgeService(repository=repository, extractor=ReturningExtractor())
+
+        response = service.create_entry(
+            self.trainer_context,
+            TrainerKnowledgeEntryCreateRequest(
+                title="Client sleep rule",
+                raw_content="For this client, reduce intensity when sleep is poor.",
+                scope="client",
+                client_id="client-123",
+                ai_enabled=True,
+                knowledge_type="coaching_rule",
+                tags=["sleep"],
+            ),
+        )
+
+        self.assertEqual(response.entry.scope, "client")
+        self.assertEqual(response.entry.client_id, "client-123")
+        self.assertEqual(response.entry.embedding_status, "pending")
+        self.assertIsNone(response.entry.last_embedded_at)
+
+    def test_update_entry_with_ai_enabled_content_change_marks_embedding_pending(self):
+        repository = FakeTrainerKnowledgeRepository()
+        service = TrainerKnowledgeService(repository=repository, extractor=ReturningExtractor())
+
+        response = service.update_entry(
+            self.trainer_context,
+            "entry-1",
+            TrainerKnowledgeEntryUpdateRequest(
+                raw_content="Reduce intensity and trim accessory volume when sleep is poor.",
+                ai_enabled=True,
+            ),
+        )
+
+        self.assertEqual(response.entry.embedding_status, "pending")
+        self.assertIsNone(response.entry.last_embedded_at)
+        self.assertGreaterEqual(response.entry.version_count, 2)
+        self.assertTrue(any(
+            update["payload"].get("embedding_status") == "pending"
+            for update in repository.updated_entries
+        ))
+
+    def test_list_entries_scope_alias_client_maps_to_client(self):
+        repository = FakeTrainerKnowledgeRepository()
+        service = TrainerKnowledgeService(repository=repository, extractor=ReturningExtractor())
+
+        rows = service.list_entries(
+            self.trainer_context,
+            scope="client",
+            client_id="client-1",
+            include_archived=False,
+        )
+
+        self.assertGreaterEqual(len(rows), 1)
+        self.assertTrue(all(row.scope == "client" for row in rows))
 
 
 if __name__ == "__main__":

@@ -25,6 +25,8 @@ import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/load
 import { ClientContextRail } from '../../trainerCoach/components/clientContextRail';
 import CoachPanelHost from '../../trainerCoach/components/CoachPanelHost';
 import { CLIENT_CONTEXT_RAIL_MODE, useClientContextState } from '../../trainerCoach/hooks/useClientContextState';
+import { parseKnowledgeCaptureCommand } from '../../trainerCoach/utils/knowledgeCaptureCommands';
+import { createTrainerKnowledgeEntry } from '../../trainerHome/services/trainerKnowledgeApi';
 import { buildTrainerRouteDiagnosticsBundle } from '../../trainerPlatform/utils/trainerRouteDiagnostics';
 import {
   approveTrainerAssistantDraft,
@@ -44,6 +46,9 @@ const ACTION_CHIPS = [
 const COMMAND_CHIPS = [
   { command: '/client', label: '/client' },
   { command: '/note', label: '/note' },
+  { command: '/clientnote', label: '/clientnote' },
+  { command: '/rule', label: '/rule' },
+  { command: '/faq', label: '/faq' },
 ];
 const COPY_FEEDBACK_TIMEOUT_MS = 2200;
 
@@ -336,6 +341,54 @@ export default function TrainerAssistantScreen({
       return true;
     }
 
+    if (command === '/clientnote') {
+      openPanel(COMMAND_PANEL.NOTE, {
+        initialDraft: {
+          scope: 'client',
+          type: 'note',
+          source: 'slash_command',
+          ...(normalizedClientId ? { client_id: normalizedClientId } : {}),
+        },
+      });
+      setCommandFeedback({
+        tone: 'secondary',
+        message: normalizedClientId
+          ? 'Client note composer opened.'
+          : 'Select a client to save this note.',
+      });
+      return true;
+    }
+
+    if (command === '/rule') {
+      openPanel(COMMAND_PANEL.NOTE, {
+        initialDraft: {
+          scope: 'global',
+          type: 'rule',
+          source: 'slash_command',
+        },
+      });
+      setCommandFeedback({
+        tone: 'secondary',
+        message: 'Rule composer opened.',
+      });
+      return true;
+    }
+
+    if (command === '/faq') {
+      openPanel(COMMAND_PANEL.NOTE, {
+        initialDraft: {
+          scope: 'global',
+          type: 'faq',
+          source: 'slash_command',
+        },
+      });
+      setCommandFeedback({
+        tone: 'secondary',
+        message: 'FAQ composer opened.',
+      });
+      return true;
+    }
+
     if (command === '/memory') {
       clientContext.actions.expandRail({
         focusSearch: !normalizedClientId,
@@ -385,7 +438,7 @@ export default function TrainerAssistantScreen({
 
     setCommandFeedback({
       tone: 'error',
-      message: `Unknown command: ${command}. Use /client or /note.`,
+      message: `Unknown command: ${command}.`,
     });
     return true;
   }, [clearCommandFeedback, clientContext.actions, openPanel, selectedClientId]);
@@ -465,11 +518,79 @@ export default function TrainerAssistantScreen({
     if (!accessToken || isExecuting) {
       return;
     }
-    if (normalizedPrompt.startsWith('/')) {
+
+    const parsedCapture = parseKnowledgeCaptureCommand(normalizedPrompt);
+    if (parsedCapture.kind === 'capture') {
+      const payloadText = String(parsedCapture.payload || '').trim();
+      const commandScope = parsedCapture.scope;
+      const commandType = parsedCapture.type;
+      if (!payloadText) {
+        openPanel(COMMAND_PANEL.NOTE, {
+          initialDraft: {
+            scope: commandScope,
+            type: commandType,
+            source: 'slash_command',
+            ...(commandScope === 'client' && clientId ? { client_id: clientId } : {}),
+          },
+        });
+        setCommandFeedback({
+          tone: 'secondary',
+          message: `Add text after ${parsedCapture.command} to save immediately.`,
+        });
+        return;
+      }
+      if (commandScope === 'client' && !clientId) {
+        openPanel(COMMAND_PANEL.NOTE, {
+          initialDraft: {
+            body: payloadText,
+            scope: 'client',
+            type: commandType,
+            source: 'slash_command',
+          },
+        });
+        setCommandFeedback({
+          tone: 'secondary',
+          message: 'Select a client to save this note.',
+        });
+        return;
+      }
+      try {
+        await createTrainerKnowledgeEntry({
+          accessToken,
+          body: payloadText,
+          type: commandType,
+          scope: commandScope,
+          aiUsable: true,
+          source: 'slash_command',
+          clientId: commandScope === 'client' ? clientId : null,
+        });
+        setCommandFeedback({
+          tone: 'secondary',
+          message: 'Saved to Coaching Knowledge',
+        });
+        setPromptInput('');
+      } catch (error) {
+        setCommandFeedback({
+          tone: 'error',
+          message: error?.message || 'Unable to save coaching knowledge.',
+        });
+      }
       setExecutionError(null);
       setExecutionErrorDetails(null);
       setExecutionProgressStage(null);
-      routeSlashCommand(normalizedPrompt, { clientId });
+      return;
+    }
+
+    const isEscapedCapture = parsedCapture.kind === 'escaped_capture';
+    const resolvedPrompt = isEscapedCapture
+      ? String(parsedCapture.text || '').trim()
+      : normalizedPrompt;
+
+    if (!isEscapedCapture && resolvedPrompt.startsWith('/')) {
+      setExecutionError(null);
+      setExecutionErrorDetails(null);
+      setExecutionProgressStage(null);
+      routeSlashCommand(resolvedPrompt, { clientId });
       return;
     }
     if (!clientId) {
@@ -493,7 +614,7 @@ export default function TrainerAssistantScreen({
           accessToken,
           clientId,
           actionType,
-          message: normalizedPrompt,
+          message: resolvedPrompt,
           onEvent: (eventPayload) => {
             const eventType = String(eventPayload?.type || '').trim().toLowerCase();
             if (eventType === 'ack' || eventType === 'progress') {
@@ -510,7 +631,7 @@ export default function TrainerAssistantScreen({
           accessToken,
           clientId,
           actionType,
-          message: normalizedPrompt,
+          message: resolvedPrompt,
         });
       }
       setDraftId(response?.draft_id || null);
@@ -534,6 +655,7 @@ export default function TrainerAssistantScreen({
     accessToken,
     clientContext.actions,
     clearCommandFeedback,
+    openPanel,
     isExecuting,
     loadBootstrap,
     promptInput,

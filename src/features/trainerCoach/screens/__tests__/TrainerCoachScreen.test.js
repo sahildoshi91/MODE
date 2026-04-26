@@ -5,6 +5,7 @@ import { Keyboard, KeyboardAvoidingView, Platform, StyleSheet } from 'react-nati
 const mockUseTrainerCoachWorkspace = jest.fn();
 const mockSetStringAsync = jest.fn();
 const mockGetTrainerSettingsMe = jest.fn();
+const mockCreateTrainerKnowledgeEntry = jest.fn();
 
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react');
@@ -25,6 +26,10 @@ jest.mock('expo-clipboard', () => ({
 
 jest.mock('../../../profile/services/profileApi', () => ({
   getTrainerSettingsMe: (...args) => mockGetTrainerSettingsMe(...args),
+}));
+
+jest.mock('../../../trainerHome/services/trainerKnowledgeApi', () => ({
+  createTrainerKnowledgeEntry: (...args) => mockCreateTrainerKnowledgeEntry(...args),
 }));
 
 jest.mock('../../components/CoachComposerWithCommands', () => {
@@ -145,6 +150,15 @@ describe('TrainerCoachScreen', () => {
     mockGetTrainerSettingsMe.mockResolvedValue({
       trainer_id: 'trainer-1',
       assistant_display_name: null,
+    });
+    mockCreateTrainerKnowledgeEntry.mockResolvedValue({
+      entry: {
+        id: 'entry-1',
+        scope: 'global',
+        type: 'note',
+        source: 'message_capture',
+        source_message_id: 'message-1',
+      },
     });
   });
 
@@ -1038,6 +1052,65 @@ describe('TrainerCoachScreen', () => {
 
     streamList = tree.root.findByType('MockCoachStreamList');
     expect(streamList.props.forceScrollSignal).toBe(postSendSignal);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('saves long-press message capture with source_message_id metadata', async () => {
+    const snapshot = buildWorkspaceSnapshot({
+      state: {
+        ...buildWorkspaceSnapshot().state,
+        stream: [
+          {
+            id: 'message-1',
+            kind: 'trainer_input',
+            text: 'Prioritize protein before increasing calories.',
+            status: 'confirmed',
+          },
+        ],
+      },
+    });
+    mockUseTrainerCoachWorkspace.mockReturnValue(snapshot);
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-capture"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    const streamList = tree.root.findByType('MockCoachStreamList');
+    act(() => {
+      streamList.props.onMessageLongPress?.({
+        id: 'message-1',
+        text: 'Prioritize protein before increasing calories.',
+        kind: 'trainer_input',
+      });
+    });
+
+    const saveAsKnowledgeButton = tree.root.findAll((node) => node.props?.title === 'Save as Knowledge')[0];
+    await act(async () => {
+      saveAsKnowledgeButton.props.onPress();
+    });
+
+    const saveKnowledgeButton = tree.root.findAll((node) => node.props?.title === 'Save Knowledge')[0];
+    await act(async () => {
+      await saveKnowledgeButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(mockCreateTrainerKnowledgeEntry).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      body: 'Prioritize protein before increasing calories.',
+      source: 'message_capture',
+      sourceMessageId: 'message-1',
+    }));
 
     await act(async () => {
       tree.unmount();

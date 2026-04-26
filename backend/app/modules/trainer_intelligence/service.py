@@ -74,13 +74,10 @@ RETRIEVAL_WEIGHTS = {
     "usage_quality_score": 0.05,
 }
 KNOWLEDGE_TYPE_DISPLAY = {
-    "coaching_rule": "Coaching Rule",
-    "programming_preference": "Programming Preference",
-    "nutrition_principle": "Nutrition Principle",
-    "client_pattern": "Client Pattern",
-    "communication_style": "Communication Style",
-    "business_policy": "Business / Policy",
-    "other": "Other",
+    "rule": "Rule",
+    "preference": "Preference",
+    "faq": "FAQ",
+    "note": "Note",
 }
 
 
@@ -365,16 +362,24 @@ class TrainerIntelligenceService:
 
         scored: list[dict[str, Any]] = []
         for row in knowledge_entries:
-            scope = str(row.get("scope") or "global").strip().lower()
+            status = str(row.get("status") or "active").strip().lower()
+            if status != "active":
+                continue
+            if bool(row.get("ai_enabled", True)) is not True:
+                continue
+            scope = str(row.get("scope") or "global").strip().lower().replace("-", "_")
+            if scope in {"client_specific", "clientspecific"}:
+                scope = "client"
             row_client_id = str(row.get("client_id") or "").strip() or None
-            if scope == "client_specific" and row_client_id != client_id:
+            if scope == "client" and row_client_id != client_id:
                 continue
 
             entry_tokens = self._entry_tokens(row)
             semantic_similarity = self._semantic_similarity(query_tokens, entry_tokens)
-            client_specific_boost = 1.0 if scope == "client_specific" and row_client_id == client_id else 0.0
+            client_specific_boost = 1.0 if scope == "client" and row_client_id == client_id else 0.0
+            normalized_type = self._normalize_knowledge_type(str(row.get("knowledge_type") or row.get("type") or "note"))
             knowledge_type_match = self._knowledge_type_match_score(
-                knowledge_type=str(row.get("knowledge_type") or "other"),
+                knowledge_type=normalized_type,
                 query_tokens=query_tokens,
                 route=route,
             )
@@ -394,6 +399,10 @@ class TrainerIntelligenceService:
                 {
                     **row,
                     "knowledge_entry_id": row.get("id"),
+                    "knowledge_type": normalized_type,
+                    "type": normalized_type,
+                    "scope": scope,
+                    "rule_priority": 1.0 if normalized_type == "rule" else 0.0,
                     "score": round(score, 6),
                     "semantic_similarity": round(semantic_similarity, 6),
                     "client_specific_boost": round(client_specific_boost, 6),
@@ -405,6 +414,7 @@ class TrainerIntelligenceService:
 
         scored.sort(
             key=lambda item: (
+                float(item.get("rule_priority") or 0.0),
                 float(item.get("score") or 0.0),
                 float(item.get("client_specific_boost") or 0.0),
                 float(item.get("knowledge_type_match") or 0.0),
@@ -461,8 +471,10 @@ class TrainerIntelligenceService:
         if selected_knowledge_entries:
             lines.append("TRAINER KNOWLEDGE CONTEXT:")
             for entry in selected_knowledge_entries[: self.KNOWLEDGE_CONTEXT_MAX]:
-                knowledge_type = str(entry.get("knowledge_type") or "other").strip().lower()
-                label = KNOWLEDGE_TYPE_DISPLAY.get(knowledge_type, "Other")
+                knowledge_type = self._normalize_knowledge_type(
+                    str(entry.get("knowledge_type") or entry.get("type") or "note")
+                )
+                label = KNOWLEDGE_TYPE_DISPLAY.get(knowledge_type, "Note")
                 summary = str(entry.get("structured_summary") or "").strip()
                 if not summary:
                     summary = str(entry.get("raw_content") or "").strip()[:240]
@@ -649,6 +661,7 @@ class TrainerIntelligenceService:
         return sorted(counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
 
     def _entry_tokens(self, row: dict[str, Any]) -> set[str]:
+        normalized_type = self._normalize_knowledge_type(str(row.get("knowledge_type") or row.get("type") or "note"))
         tags = row.get("tags")
         tag_text = " ".join(str(tag or "") for tag in tags) if isinstance(tags, list) else ""
         source = " ".join(
@@ -656,11 +669,23 @@ class TrainerIntelligenceService:
                 str(row.get("title") or ""),
                 str(row.get("structured_summary") or ""),
                 str(row.get("raw_content") or ""),
-                str(row.get("knowledge_type") or ""),
+                normalized_type,
                 tag_text,
             ]
         )
         return self._normalize_memory_theme_tokens(source)
+
+    def _normalize_knowledge_type(self, value: str) -> str:
+        normalized = str(value or "note").strip().lower().replace("-", "_").replace(" ", "_")
+        if normalized in {"coaching_rule", "rules"}:
+            return "rule"
+        if normalized in {"programming_preference", "nutrition_principle", "communication_style", "business_policy"}:
+            return "preference"
+        if normalized == "client_pattern" or normalized == "other":
+            return "note"
+        if normalized not in {"note", "rule", "faq", "preference"}:
+            return "note"
+        return normalized
 
     def _semantic_similarity(self, query_tokens: set[str], entry_tokens: set[str]) -> float:
         if not entry_tokens:
@@ -674,18 +699,16 @@ class TrainerIntelligenceService:
         return min(1.0, overlap / denominator)
 
     def _knowledge_type_match_score(self, *, knowledge_type: str, query_tokens: set[str], route: Any) -> float:
-        normalized_type = str(knowledge_type or "other").strip().lower()
+        normalized_type = self._normalize_knowledge_type(knowledge_type)
         task_type = str(getattr(route, "task_type", "") or "").strip().lower()
         if normalized_type in task_type:
             return 1.0
 
         keyword_map: dict[str, set[str]] = {
-            "coaching_rule": {"coach", "coaching", "guidance", "rule", "framework"},
-            "programming_preference": {"program", "programming", "sets", "reps", "volume", "intensity", "exercise"},
-            "nutrition_principle": {"nutrition", "protein", "meal", "calorie", "macro", "diet"},
-            "client_pattern": {"pattern", "adherence", "consistency", "habit", "behavior"},
-            "communication_style": {"tone", "message", "communication", "wording", "language"},
-            "business_policy": {"policy", "billing", "refund", "session", "business"},
+            "rule": {"coach", "coaching", "guidance", "rule", "framework", "policy"},
+            "preference": {"program", "programming", "sets", "reps", "volume", "intensity", "exercise", "nutrition"},
+            "faq": {"faq", "answer", "question", "response", "template"},
+            "note": {"note", "context", "pattern", "habit", "behavior"},
         }
         mapped_keywords = keyword_map.get(normalized_type, set())
         if not mapped_keywords:

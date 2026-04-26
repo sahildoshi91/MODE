@@ -196,7 +196,7 @@ describe('trainerKnowledgeApi', () => {
     });
 
     expect(fetchWithApiFallback).toHaveBeenCalledWith(
-      '/api/v1/trainer-knowledge/entries?include_archived=true&scope=client_specific&ai_enabled=true&client_id=client-1&query=sleep&limit=20&offset=10',
+      '/api/v1/trainer-knowledge/entries?include_archived=true&scope=client&ai_usable=true&ai_enabled=true&client_id=client-1&query=sleep&limit=20&offset=10',
       expect.objectContaining({
         method: 'GET',
         headers: expect.objectContaining({
@@ -312,6 +312,37 @@ describe('trainerKnowledgeApi', () => {
     );
     expect(result?.entry?.id).toBe('doc-legacy-1');
     expect(result?.entry?.scope).toBe('global');
-    expect(result?.entry?.knowledge_type).toBe('coaching_rule');
+    expect(result?.entry?.knowledge_type).toBe('rule');
+  });
+
+  it('normalizes client scope alias to canonical client for entry create and update payloads', async () => {
+    fetchWithApiFallback
+      .mockResolvedValueOnce({
+        response: createJsonResponse({ entry: { id: 'entry-5' } }),
+        baseUrl: 'http://127.0.0.1:8000',
+      })
+      .mockResolvedValueOnce({
+        response: createJsonResponse({ entry: { id: 'entry-5' } }),
+        baseUrl: 'http://127.0.0.1:8000',
+      });
+
+    await createTrainerKnowledgeEntry({
+      accessToken: 'trainer-token',
+      title: 'Client note',
+      rawContent: 'Client-specific content',
+      scope: 'client',
+      clientId: 'client-1',
+    });
+
+    await updateTrainerKnowledgeEntry({
+      accessToken: 'trainer-token',
+      entryId: 'entry-5',
+      scope: 'client',
+    });
+
+    const createCallBody = JSON.parse(fetchWithApiFallback.mock.calls[0][1].body);
+    const updateCallBody = JSON.parse(fetchWithApiFallback.mock.calls[1][1].body);
+    expect(createCallBody.scope).toBe('client');
+    expect(updateCallBody.scope).toBe('client');
   });
 });

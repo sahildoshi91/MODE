@@ -114,6 +114,7 @@ async def archive_rule(
 async def list_entries(
     include_archived: bool = Query(default=False),
     scope: str | None = Query(default=None),
+    ai_usable: bool | None = Query(default=None),
     ai_enabled: bool | None = Query(default=None),
     client_id: str | None = Query(default=None),
     query: str | None = Query(default=None),
@@ -124,11 +125,12 @@ async def list_entries(
     service: TrainerKnowledgeService = Depends(get_trainer_knowledge_service),
 ):
     require_trainer_actor(user, trainer_context)
+    resolved_ai_usable = ai_usable if isinstance(ai_usable, bool) else ai_enabled
     return service.list_entries(
         trainer_context,
         include_archived=include_archived,
         scope=scope,
-        ai_enabled=ai_enabled,
+        ai_enabled=resolved_ai_usable,
         client_id=client_id,
         query=query,
         limit=limit,

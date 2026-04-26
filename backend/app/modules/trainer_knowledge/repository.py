@@ -156,7 +156,11 @@ class TrainerKnowledgeRepository:
         if not include_archived:
             query = query.eq("status", "active")
         if isinstance(scope, str) and scope:
-            query = query.eq("scope", scope)
+            normalized_scope = scope.strip().lower().replace("-", "_").replace(" ", "_")
+            if normalized_scope in {"client", "client_specific", "clientspecific"}:
+                query = query.in_("scope", ["client", "client_specific"])
+            elif normalized_scope == "global":
+                query = query.eq("scope", "global")
         if isinstance(ai_enabled, bool):
             query = query.eq("ai_enabled", ai_enabled)
         response = (
@@ -174,7 +178,8 @@ class TrainerKnowledgeRepository:
             .table("trainer_knowledge_entries")
             .select(
                 "id, trainer_id, client_id, title, raw_content, structured_summary, knowledge_type, scope, "
-                "tags, ai_enabled, status, confidence_score, usage_count, last_used_at, updated_at, created_at"
+                "tags, ai_enabled, status, confidence_score, embedding_status, last_embedded_at, "
+                "usage_count, last_used_at, updated_at, created_at, source, source_message_id"
             )
             .eq("trainer_id", trainer_id)
             .eq("status", "active")

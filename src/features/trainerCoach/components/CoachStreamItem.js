@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
@@ -74,6 +74,7 @@ function CoachStreamItem({
   item,
   assistantDisplayName,
   showRoleLabel = true,
+  onLongPressMessage = null,
 }) {
   const kind = item?.kind || 'system_confirmation';
   const style = styleByKind(kind);
@@ -94,6 +95,37 @@ function CoachStreamItem({
     && Array.isArray(structuredModel.blocks)
     && structuredModel.blocks.length > 0,
   );
+  const supportsLongPress = (
+    typeof onLongPressMessage === 'function'
+    && (
+      kind === 'trainer_input'
+      || kind === 'internal_ai_private'
+      || kind === 'client_message_draft'
+    )
+    && safeText.trim().length > 0
+  );
+
+  const bubble = isTrainerCommand ? (
+    <View style={styles.commandBubble}>
+      <ModeText variant="caption" tone="secondary" style={styles.commandText}>
+        {safeText}
+      </ModeText>
+    </View>
+  ) : (
+    <View style={[styles.bubble, style.container]}>
+      {hasStructuredBlocks ? (
+        <AIResponseRenderer
+          model={structuredModel}
+          testIDPrefix="coach-stream-ai-response"
+        />
+      ) : (
+        <ModeText variant="bodySm" tone={style.textTone} style={style.textStyle}>
+          {safeText}
+        </ModeText>
+      )}
+    </View>
+  );
+
   return (
     <View style={styles.row}>
       {showRoleLabel ? (
@@ -101,25 +133,16 @@ function CoachStreamItem({
           {resolveKindLabel(kind, assistantDisplayName)}
         </ModeText>
       ) : null}
-      {isTrainerCommand ? (
-        <View style={styles.commandBubble}>
-          <ModeText variant="caption" tone="secondary" style={styles.commandText}>
-            {safeText}
-          </ModeText>
-        </View>
+      {supportsLongPress ? (
+        <Pressable
+          onLongPress={() => onLongPressMessage?.(item)}
+          delayLongPress={260}
+          style={({ pressed }) => [styles.longPressWrap, pressed && styles.longPressPressed]}
+        >
+          {bubble}
+        </Pressable>
       ) : (
-        <View style={[styles.bubble, style.container]}>
-          {hasStructuredBlocks ? (
-            <AIResponseRenderer
-              model={structuredModel}
-              testIDPrefix="coach-stream-ai-response"
-            />
-          ) : (
-            <ModeText variant="bodySm" tone={style.textTone} style={style.textStyle}>
-              {safeText}
-            </ModeText>
-          )}
-        </View>
+        bubble
       )}
     </View>
   );
@@ -152,6 +175,12 @@ export default MemoizedCoachStreamItem;
 const styles = StyleSheet.create({
   row: {
     gap: 2,
+  },
+  longPressWrap: {
+    borderRadius: theme.radii.lg,
+  },
+  longPressPressed: {
+    opacity: 0.9,
   },
   label: {
     fontWeight: '600',

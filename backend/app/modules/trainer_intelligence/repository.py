@@ -101,7 +101,8 @@ class TrainerIntelligenceRepository:
             .table("trainer_knowledge_entries")
             .select(
                 "id, trainer_id, client_id, title, raw_content, structured_summary, knowledge_type, scope, tags, "
-                "ai_enabled, status, confidence_score, usage_count, last_used_at, updated_at, created_at"
+                "ai_enabled, status, confidence_score, embedding_status, last_embedded_at, "
+                "usage_count, last_used_at, updated_at, created_at, source, source_message_id"
             )
             .eq("trainer_id", trainer_id)
             .eq("status", "active")

@@ -55,17 +55,33 @@ TAG_STOPWORDS = {
     "with",
 }
 KNOWLEDGE_TYPE_VALUES = {
-    "coaching_rule",
-    "programming_preference",
-    "nutrition_principle",
-    "client_pattern",
-    "communication_style",
-    "business_policy",
-    "other",
+    "note",
+    "rule",
+    "faq",
+    "preference",
 }
-KNOWLEDGE_SCOPE_VALUES = {"global", "client_specific"}
+KNOWLEDGE_TYPE_ALIASES = {
+    "coaching_rule": "rule",
+    "programming_preference": "preference",
+    "nutrition_principle": "preference",
+    "client_pattern": "note",
+    "communication_style": "preference",
+    "business_policy": "preference",
+    "other": "note",
+}
+KNOWLEDGE_SCOPE_VALUES = {"global", "client"}
+KNOWLEDGE_SCOPE_ALIASES = {
+    "client_specific": "client",
+    "clientspecific": "client",
+}
 KNOWLEDGE_STATUS_VALUES = {"active", "archived"}
-KNOWLEDGE_SOURCE_VALUES = {"manual_note", "chat_capture", "ai_suggestion", "imported_doc"}
+KNOWLEDGE_SOURCE_VALUES = {"manual", "slash_command", "message_capture"}
+KNOWLEDGE_SOURCE_ALIASES = {
+    "manual_note": "manual",
+    "chat_capture": "message_capture",
+    "ai_suggestion": "manual",
+    "imported_doc": "manual",
+}
 SAFETY_HIGH_RISK_PATTERNS = (
     "ignore pain",
     "push through pain",
@@ -112,10 +128,15 @@ class TrainerKnowledgeService:
         trainer_id = trainer_context.trainer_id
         if not trainer_id:
             return []
+        normalized_scope = None
+        if isinstance(scope, str) and scope.strip():
+            scope_text = scope.strip().lower()
+            if scope_text not in {"all", "*"}:
+                normalized_scope = self._normalize_scope(scope_text)
         rows = self.repository.list_entries_by_trainer(
             trainer_id,
             include_archived=include_archived,
-            scope=self._normalize_scope(scope) if scope else None,
+            scope=normalized_scope,
             ai_enabled=ai_enabled,
             limit=limit,
             offset=offset,
@@ -124,19 +145,20 @@ class TrainerKnowledgeService:
         client_filter = str(client_id or "").strip() or None
         entries: list[TrainerKnowledgeEntry] = []
         for row in rows:
+            normalized_row = self._normalize_entry_row(row)
             if client_filter:
-                row_scope = self._normalize_scope(row.get("scope"))
-                row_client_id = str(row.get("client_id") or "").strip() or None
-                if row_scope == "client_specific" and row_client_id != client_filter:
+                row_scope = self._normalize_scope(normalized_row.get("scope"))
+                row_client_id = str(normalized_row.get("client_id") or "").strip() or None
+                if row_scope == "client" and row_client_id != client_filter:
                     continue
-            if normalized_query and not self._matches_entry_query(row, normalized_query):
+            if normalized_query and not self._matches_entry_query(normalized_row, normalized_query):
                 continue
             try:
-                entries.append(TrainerKnowledgeEntry(**row))
+                entries.append(TrainerKnowledgeEntry(**normalized_row))
             except Exception:
                 logger.exception(
                     "Failed to parse trainer knowledge entry id=%s trainer_id=%s",
-                    row.get("id"),
+                    normalized_row.get("id"),
                     trainer_id,
                 )
         return entries
@@ -148,7 +170,7 @@ class TrainerKnowledgeService:
     ) -> TrainerKnowledgeClassificationSuggestion:
         if not trainer_context.trainer_id:
             raise ValueError("No trainer context found")
-        raw_content = str(request.raw_content or "").strip()
+        raw_content = str(request.body or request.raw_content or "").strip()
         if not raw_content:
             raise ValueError("Raw content is required")
         return self._suggest_structure(
@@ -169,7 +191,7 @@ class TrainerKnowledgeService:
         if not trainer_id or not tenant_id:
             raise ValueError("No trainer context found")
 
-        raw_content = str(request.raw_content or "").strip()
+        raw_content = str(request.body or request.raw_content or "").strip()
         if not raw_content:
             raise ValueError("Raw content is required")
 
@@ -178,24 +200,32 @@ class TrainerKnowledgeService:
             title=request.title,
             client_id=request.client_id,
             preferred_scope=request.scope,
-            preferred_knowledge_type=request.knowledge_type,
+            preferred_knowledge_type=request.type or request.knowledge_type,
         )
         resolved_scope = self._normalize_scope(request.scope or suggestion.scope)
         resolved_client_id = str(request.client_id or suggestion.client_id or "").strip() or None
-        if resolved_scope == "client_specific" and not resolved_client_id:
+        if resolved_scope == "client" and not resolved_client_id:
             raise ValueError("Client-specific scope requires client_id")
         if resolved_scope == "global":
             resolved_client_id = None
 
         resolved_title = str(request.title or "").strip() or suggestion.title or self._build_default_title(raw_content)
         resolved_summary = self._coerce_optional_text(request.structured_summary) or suggestion.structured_summary
-        resolved_type = self._normalize_knowledge_type(request.knowledge_type or suggestion.knowledge_type)
+        resolved_type = self._normalize_knowledge_type(
+            request.type or request.knowledge_type or suggestion.type or suggestion.knowledge_type
+        )
         resolved_tags = self._normalize_tags(request.tags or suggestion.tags)
-        resolved_source = self._normalize_source(request.source or "manual_note")
+        resolved_source = self._normalize_source(request.source or "manual")
         resolved_confidence = self._normalize_confidence(
             request.confidence_score if request.confidence_score is not None else suggestion.confidence
         )
-        resolved_ai_enabled = bool(request.ai_enabled)
+        if request.ai_usable is not None:
+            resolved_ai_enabled = bool(request.ai_usable)
+        elif request.ai_enabled is not None:
+            resolved_ai_enabled = bool(request.ai_enabled)
+        else:
+            resolved_ai_enabled = bool(suggestion.ai_usable if suggestion.ai_usable is not None else suggestion.ai_enabled)
+        resolved_source_message_id = str(request.source_message_id or "").strip() or None
         safety = self._review_safety(raw_content)
         warnings: list[str] = []
         if safety.ai_enabled_forced_off:
@@ -218,7 +248,10 @@ class TrainerKnowledgeService:
                 "ai_enabled": resolved_ai_enabled,
                 "status": "active",
                 "source": resolved_source,
+                "source_message_id": resolved_source_message_id,
                 "confidence_score": resolved_confidence,
+                "embedding_status": "pending",
+                "last_embedded_at": None,
                 "version_count": 1,
                 "metadata": request.metadata or {},
                 "created_at": now_iso,
@@ -228,7 +261,7 @@ class TrainerKnowledgeService:
         )
         if not created_row:
             raise ValueError("Entry create failed")
-        entry = TrainerKnowledgeEntry(**created_row)
+        entry = TrainerKnowledgeEntry(**self._normalize_entry_row(created_row))
         self._create_entry_version(
             entry=entry,
             version_number=1,
@@ -261,7 +294,7 @@ class TrainerKnowledgeService:
         if not existing:
             raise ValueError("Entry not found")
 
-        current = TrainerKnowledgeEntry(**existing)
+        current = TrainerKnowledgeEntry(**self._normalize_entry_row(existing))
         updates: dict[str, Any] = {}
 
         if request.title is not None:
@@ -269,8 +302,9 @@ class TrainerKnowledgeService:
             if not title:
                 raise ValueError("Title cannot be empty")
             updates["title"] = title
-        if request.raw_content is not None:
-            raw_content = str(request.raw_content).strip()
+        next_raw_input = request.body if request.body is not None else request.raw_content
+        if next_raw_input is not None:
+            raw_content = str(next_raw_input).strip()
             if not raw_content:
                 raise ValueError("Raw content cannot be empty")
             updates["raw_content"] = raw_content
@@ -278,11 +312,15 @@ class TrainerKnowledgeService:
             updates["structured_summary"] = self._coerce_optional_text(request.structured_summary)
         if request.knowledge_type is not None:
             updates["knowledge_type"] = self._normalize_knowledge_type(request.knowledge_type)
+        if request.type is not None:
+            updates["knowledge_type"] = self._normalize_knowledge_type(request.type)
         if request.scope is not None:
             updates["scope"] = self._normalize_scope(request.scope)
         if request.tags is not None:
             updates["tags"] = self._normalize_tags(request.tags)
-        if request.ai_enabled is not None:
+        if request.ai_usable is not None:
+            updates["ai_enabled"] = bool(request.ai_usable)
+        elif request.ai_enabled is not None:
             updates["ai_enabled"] = bool(request.ai_enabled)
         if request.status is not None:
             updates["status"] = self._normalize_status(request.status)
@@ -290,12 +328,14 @@ class TrainerKnowledgeService:
             updates["confidence_score"] = self._normalize_confidence(request.confidence_score)
         if request.client_id is not None:
             updates["client_id"] = str(request.client_id).strip() or None
+        if request.source_message_id is not None:
+            updates["source_message_id"] = str(request.source_message_id).strip() or None
         if request.metadata is not None:
             updates["metadata"] = request.metadata
 
         resolved_scope = updates.get("scope", current.scope)
         resolved_client_id = updates.get("client_id", current.client_id)
-        if resolved_scope == "client_specific" and not resolved_client_id:
+        if resolved_scope == "client" and not resolved_client_id:
             raise ValueError("Client-specific scope requires client_id")
         if resolved_scope == "global":
             updates["client_id"] = None
@@ -309,6 +349,20 @@ class TrainerKnowledgeService:
             updates["ai_enabled"] = False
             if safety.message:
                 warnings.append(safety.message)
+
+        raw_content_changed = (
+            "raw_content" in updates
+            and str(updates.get("raw_content") or "").strip() != str(current.raw_content or "").strip()
+        )
+        next_ai_enabled = bool(updates.get("ai_enabled", current.ai_enabled))
+        ai_enabled_toggled_on = (
+            "ai_enabled" in updates
+            and current.ai_enabled is False
+            and next_ai_enabled is True
+        )
+        if next_ai_enabled and (raw_content_changed or ai_enabled_toggled_on):
+            updates["embedding_status"] = "pending"
+            updates["last_embedded_at"] = None
 
         if not updates:
             return TrainerKnowledgeEntryMutationResponse(
@@ -331,7 +385,7 @@ class TrainerKnowledgeService:
         updated_row = self.repository.update_entry(trainer_id, entry_id, updates)
         if not updated_row:
             raise ValueError("Entry update failed")
-        entry = TrainerKnowledgeEntry(**updated_row)
+        entry = TrainerKnowledgeEntry(**self._normalize_entry_row(updated_row))
         self._create_entry_version(
             entry=entry,
             version_number=next_version,
@@ -380,7 +434,7 @@ class TrainerKnowledgeService:
         existing = self.repository.get_entry(trainer_context.trainer_id or "", entry_id)
         if not existing:
             raise ValueError("Entry not found")
-        current = TrainerKnowledgeEntry(**existing)
+        current = TrainerKnowledgeEntry(**self._normalize_entry_row(existing))
         additional = str(request.content or "").strip()
         if not additional:
             raise ValueError("Refinement content is required")
@@ -649,6 +703,27 @@ class TrainerKnowledgeService:
             }
         )
 
+    def _normalize_entry_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(row or {})
+        raw_content = str(normalized.get("raw_content") or normalized.get("body") or "").strip()
+        normalized_type = self._normalize_knowledge_type(normalized.get("knowledge_type") or normalized.get("type"))
+        normalized_scope = self._normalize_scope(normalized.get("scope"))
+        normalized_source = self._normalize_source(normalized.get("source"))
+        ai_enabled_value = normalized.get("ai_enabled")
+        if ai_enabled_value is None:
+            ai_enabled_value = normalized.get("ai_usable")
+        normalized_ai_enabled = bool(True if ai_enabled_value is None else ai_enabled_value)
+        normalized["raw_content"] = raw_content
+        normalized["body"] = raw_content
+        normalized["knowledge_type"] = normalized_type
+        normalized["type"] = normalized_type
+        normalized["scope"] = normalized_scope
+        normalized["source"] = normalized_source
+        normalized["ai_enabled"] = normalized_ai_enabled
+        normalized["ai_usable"] = normalized_ai_enabled
+        normalized["source_message_id"] = normalized.get("source_message_id")
+        return normalized
+
     def _matches_entry_query(self, row: dict[str, Any], normalized_query: str) -> bool:
         if not normalized_query:
             return True
@@ -672,7 +747,14 @@ class TrainerKnowledgeService:
         return text or None
 
     def _normalize_scope(self, value: Any) -> str:
-        normalized = str(value or "global").strip().lower().replace("-", "_")
+        normalized = (
+            str(value or "global")
+            .strip()
+            .lower()
+            .replace("-", "_")
+            .replace(" ", "_")
+        )
+        normalized = KNOWLEDGE_SCOPE_ALIASES.get(normalized, normalized)
         if normalized not in KNOWLEDGE_SCOPE_VALUES:
             return "global"
         return normalized
@@ -684,27 +766,29 @@ class TrainerKnowledgeService:
         return normalized
 
     def _normalize_source(self, value: Any) -> str:
-        normalized = str(value or "manual_note").strip().lower()
+        normalized = str(value or "manual").strip().lower().replace("-", "_").replace(" ", "_")
+        normalized = KNOWLEDGE_SOURCE_ALIASES.get(normalized, normalized)
         if normalized not in KNOWLEDGE_SOURCE_VALUES:
-            return "manual_note"
+            return "manual"
         return normalized
 
     def _normalize_knowledge_type(self, value: Any) -> str:
-        normalized = str(value or "other").strip().lower().replace("/", "_").replace(" ", "_")
+        normalized = str(value or "note").strip().lower().replace("/", "_").replace(" ", "_")
         if normalized in {"coaching", "coaching_rules", "rule"}:
-            normalized = "coaching_rule"
+            normalized = "rule"
         if normalized in {"programming", "programming_rule", "programming_preferences"}:
-            normalized = "programming_preference"
+            normalized = "preference"
         if normalized in {"nutrition", "nutrition_rules"}:
-            normalized = "nutrition_principle"
+            normalized = "preference"
         if normalized in {"client", "pattern"}:
-            normalized = "client_pattern"
+            normalized = "note"
         if normalized in {"communication", "style"}:
-            normalized = "communication_style"
+            normalized = "preference"
         if normalized in {"business", "policy"}:
-            normalized = "business_policy"
+            normalized = "preference"
+        normalized = KNOWLEDGE_TYPE_ALIASES.get(normalized, normalized)
         if normalized not in KNOWLEDGE_TYPE_VALUES:
-            normalized = "other"
+            normalized = "note"
         return normalized
 
     def _normalize_confidence(self, value: Any) -> float | None:
@@ -748,27 +832,27 @@ class TrainerKnowledgeService:
     def _infer_knowledge_type(self, raw_content: str, tags: list[str]) -> str:
         text = f"{raw_content} {' '.join(tags)}".lower()
         if any(keyword in text for keyword in ("macro", "protein", "calorie", "nutrition", "meal")):
-            return "nutrition_principle"
+            return "preference"
         if any(keyword in text for keyword in ("tone", "language", "message", "phrasing", "communicat")):
-            return "communication_style"
+            return "preference"
         if any(keyword in text for keyword in ("policy", "refund", "billing", "business", "session")):
-            return "business_policy"
+            return "preference"
         if any(keyword in text for keyword in ("client tends", "pattern", "usually struggles", "often misses")):
-            return "client_pattern"
+            return "note"
         if any(keyword in text for keyword in ("program", "sets", "reps", "intensity", "volume", "exercise")):
-            return "programming_preference"
+            return "preference"
         if any(keyword in text for keyword in ("always", "never", "should", "avoid", "rule", "when")):
-            return "coaching_rule"
-        return "other"
+            return "rule"
+        return "note"
 
     def _infer_scope(self, raw_content: str, client_id: str | None) -> str:
         text = raw_content.lower()
         if client_id:
             if any(keyword in text for keyword in ("this client", "for client", "specific client")):
-                return "client_specific"
+                return "client"
             if any(keyword in text for keyword in ("all clients", "every client", "global")):
                 return "global"
-            return "client_specific"
+            return "client"
         return "global"
 
     def _extract_tags(self, raw_content: str) -> list[str]:
@@ -805,9 +889,9 @@ class TrainerKnowledgeService:
         confidence = 0.58
         if resolved_tags:
             confidence += 0.1
-        if resolved_type != "other":
+        if resolved_type != "note":
             confidence += 0.14
-        if resolved_scope == "client_specific" and client_id:
+        if resolved_scope == "client" and client_id:
             confidence += 0.08
         safety = self._review_safety(raw_content)
         if safety.ai_enabled_forced_off:
@@ -817,12 +901,14 @@ class TrainerKnowledgeService:
         return TrainerKnowledgeClassificationSuggestion(
             title=resolved_title,
             structured_summary=structured_summary,
+            type=resolved_type,
             knowledge_type=resolved_type,
             scope=resolved_scope,
             tags=resolved_tags,
+            ai_usable=not safety.ai_enabled_forced_off,
             ai_enabled=not safety.ai_enabled_forced_off,
             confidence=max(0.0, min(1.0, confidence)),
-            client_id=client_id if resolved_scope == "client_specific" else None,
+            client_id=client_id if resolved_scope == "client" else None,
             rationale="Heuristic classification based on content keywords, scope signals, and safety checks.",
         )
 
@@ -875,8 +961,8 @@ class TrainerKnowledgeService:
                 continue
             candidate_scope = self._normalize_scope(candidate.get("scope"))
             candidate_client_id = str(candidate.get("client_id") or "").strip() or None
-            if target_entry.scope == "client_specific":
-                if candidate_scope == "client_specific" and candidate_client_id != target_entry.client_id:
+            if target_entry.scope == "client":
+                if candidate_scope == "client" and candidate_client_id != target_entry.client_id:
                     continue
             candidate_tokens = self._tokenize(
                 f"{candidate.get('title') or ''} {candidate.get('raw_content') or ''} {' '.join(candidate.get('tags') or [])}"

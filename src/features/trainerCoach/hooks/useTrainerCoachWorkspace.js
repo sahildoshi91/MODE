@@ -5,6 +5,7 @@ import {
   executeTrainerAssistantAction,
   executeTrainerAssistantActionStream,
 } from '../../trainerAssistant/services/trainerAssistantApi';
+import { createTrainerKnowledgeEntry } from '../../trainerHome/services/trainerKnowledgeApi';
 import {
   approveTrainerCoachQueueItem,
   createTrainerCoachEvent,
@@ -12,6 +13,7 @@ import {
   getTrainerCoachWorkspace,
   rejectTrainerCoachQueueItem,
 } from '../services/trainerCoachApi';
+import { parseKnowledgeCaptureCommand } from '../utils/knowledgeCaptureCommands';
 import {
   loadTrainerCoachPendingOps,
   loadTrainerCoachWorkspaceCache,
@@ -19,9 +21,10 @@ import {
   saveTrainerCoachWorkspaceCache,
 } from '../storage/trainerCoachStorage';
 
-const PRIMARY_COMMANDS = ['/client', '/note'];
+const PRIMARY_COMMANDS = ['/client', '/note', '/clientnote', '/rule', '/faq'];
 const LEGACY_COMMAND_ALIASES = ['/memory', '/flag', '/drafts', '/program', '/rules'];
 const COMMANDS = [...PRIMARY_COMMANDS, ...LEGACY_COMMAND_ALIASES];
+const ENABLE_TOAST_AUTODISMISS = process.env.NODE_ENV !== 'test';
 
 const INITIAL_STATE = {
   summary: null,
@@ -41,6 +44,7 @@ const INITIAL_STATE = {
   ui: {
     summaryCollapsed: false,
     queueMinimized: false,
+    toast: null,
   },
   loading: true,
   error: null,
@@ -348,6 +352,14 @@ function workspaceReducer(state, action) {
           queueMinimized: Boolean(action.payload),
         },
       };
+    case 'SET_TOAST':
+      return {
+        ...state,
+        ui: {
+          ...state.ui,
+          toast: action.payload || null,
+        },
+      };
     case 'SET_PENDING_OPS':
       return {
         ...state,
@@ -495,6 +507,22 @@ export function useTrainerCoachWorkspace({
 
   const upsertStream = useCallback((payload) => {
     dispatch({ type: 'UPSERT_STREAM', payload });
+  }, []);
+
+  const showToast = useCallback((message, tone = 'success') => {
+    const normalizedMessage = String(message || '').trim();
+    if (!normalizedMessage) {
+      dispatch({ type: 'SET_TOAST', payload: null });
+      return;
+    }
+    dispatch({
+      type: 'SET_TOAST',
+      payload: {
+        id: buildIdempotencyKey('toast'),
+        message: normalizedMessage,
+        tone,
+      },
+    });
   }, []);
 
   const applyMutationResponse = useCallback((payload) => {
@@ -764,6 +792,60 @@ export function useTrainerCoachWorkspace({
       return true;
     }
 
+    if (command === '/clientnote') {
+      openPanel('note', {
+        initialDraft: {
+          scope: 'client',
+          type: 'note',
+          source: 'slash_command',
+        },
+      });
+      appendStream(buildStreamItem({
+        kind: 'system_confirmation',
+        text: 'Client note composer opened.',
+        visibility: 'system',
+        status: 'confirmed',
+        severity: 'info',
+      }));
+      return true;
+    }
+
+    if (command === '/rule') {
+      openPanel('note', {
+        initialDraft: {
+          scope: 'global',
+          type: 'rule',
+          source: 'slash_command',
+        },
+      });
+      appendStream(buildStreamItem({
+        kind: 'system_confirmation',
+        text: 'Rule composer opened.',
+        visibility: 'system',
+        status: 'confirmed',
+        severity: 'info',
+      }));
+      return true;
+    }
+
+    if (command === '/faq') {
+      openPanel('note', {
+        initialDraft: {
+          scope: 'global',
+          type: 'faq',
+          source: 'slash_command',
+        },
+      });
+      appendStream(buildStreamItem({
+        kind: 'system_confirmation',
+        text: 'FAQ composer opened.',
+        visibility: 'system',
+        status: 'confirmed',
+        severity: 'info',
+      }));
+      return true;
+    }
+
     if (command === '/memory') {
       openPanel('client_context', {
         clientId: defaultClientId,
@@ -810,18 +892,103 @@ export function useTrainerCoachWorkspace({
 
   const sendIntentMessage = useCallback(async (text) => {
     const trimmed = String(text || '').trim();
-    if (!trimmed || !accessToken) {
+    if (!trimmed) {
       return false;
     }
 
-    if (trimmed.startsWith('/')) {
-      routeSlashCommand(trimmed);
+    const parsedCapture = parseKnowledgeCaptureCommand(trimmed);
+    const firstDraft = state.queue[0] || null;
+    const defaultClientId = state.activeClientId || firstDraft?.client_id || null;
+
+    if (parsedCapture.kind === 'capture') {
+      const payloadText = String(parsedCapture.payload || '').trim();
+      const command = parsedCapture.command;
+      const commandType = parsedCapture.type;
+      const commandScope = parsedCapture.scope;
+      if (!payloadText) {
+        openPanel('note', {
+          initialDraft: {
+            scope: commandScope,
+            type: commandType,
+            source: 'slash_command',
+            ...(commandScope === 'client' && defaultClientId ? { client_id: defaultClientId } : {}),
+          },
+        });
+        showToast(`Add text after ${command} to save immediately.`, 'warning');
+        return true;
+      }
+      if (!accessToken) {
+        showToast('Sign in before saving coaching knowledge.', 'error');
+        return false;
+      }
+      if (commandScope === 'client' && !defaultClientId) {
+        openPanel('note', {
+          initialDraft: {
+            body: payloadText,
+            scope: 'client',
+            type: commandType,
+            source: 'slash_command',
+          },
+        });
+        showToast('Select a client to save this note.', 'warning');
+        return true;
+      }
+      try {
+        await createTrainerKnowledgeEntry({
+          accessToken,
+          body: payloadText,
+          type: commandType,
+          scope: commandScope,
+          aiUsable: true,
+          source: 'slash_command',
+          clientId: commandScope === 'client' ? defaultClientId : null,
+        });
+        showToast('Saved to Coaching Knowledge', 'success');
+        appendStream(buildStreamItem({
+          kind: 'system_confirmation',
+          text: 'Saved to Coaching Knowledge',
+          visibility: 'system',
+          status: 'confirmed',
+          severity: 'success',
+          payload: {
+            source: 'slash_command',
+            type: commandType,
+            scope: commandScope,
+            client_id: commandScope === 'client' ? defaultClientId : null,
+          },
+        }));
+        return true;
+      } catch (error) {
+        const message = error?.message || 'Unable to save coaching knowledge.';
+        showToast(message, 'error');
+        appendStream(buildStreamItem({
+          kind: 'system_confirmation',
+          text: message,
+          visibility: 'system',
+          status: 'failed',
+          severity: 'warning',
+        }));
+        return false;
+      }
+    }
+
+    const isEscapedCapture = parsedCapture.kind === 'escaped_capture';
+    const resolvedText = isEscapedCapture
+      ? String(parsedCapture.text || '').trim()
+      : trimmed;
+
+    if (!isEscapedCapture && resolvedText.startsWith('/')) {
+      routeSlashCommand(resolvedText);
       return true;
+    }
+
+    if (!accessToken) {
+      return false;
     }
 
     appendStream(buildStreamItem({
       kind: 'trainer_input',
-      text: trimmed,
+      text: resolvedText,
       visibility: 'trainer_private',
       status: 'confirmed',
       severity: 'info',
@@ -848,8 +1015,8 @@ export function useTrainerCoachWorkspace({
         response = await executeTrainerAssistantActionStream({
           accessToken,
           clientId: state.activeClientId,
-          actionType: inferActionType(trimmed),
-          message: trimmed,
+          actionType: inferActionType(resolvedText),
+          message: resolvedText,
           onEvent: (eventPayload) => {
             const eventType = String(eventPayload?.type || '').toLowerCase();
             if (eventType === 'ack' || eventType === 'progress') {
@@ -877,8 +1044,8 @@ export function useTrainerCoachWorkspace({
         response = await executeTrainerAssistantAction({
           accessToken,
           clientId: state.activeClientId,
-          actionType: inferActionType(trimmed),
-          message: trimmed,
+          actionType: inferActionType(resolvedText),
+          message: resolvedText,
         });
         if (streamErrorDetail) {
           upsertStream(buildStreamItem({
@@ -935,9 +1102,12 @@ export function useTrainerCoachWorkspace({
     accessToken,
     appendStream,
     assistantDisplayName,
+    openPanel,
     refreshWorkspace,
     routeSlashCommand,
+    showToast,
     state.activeClientId,
+    state.queue,
     upsertStream,
   ]);
 
@@ -1024,6 +1194,17 @@ export function useTrainerCoachWorkspace({
     didAutoReplayRef.current = true;
     retryPendingOps();
   }, [accessToken, retryPendingOps, state.sync.pendingOps.length]);
+
+  useEffect(() => {
+    const toastId = state.ui?.toast?.id;
+    if (!toastId || !ENABLE_TOAST_AUTODISMISS) {
+      return undefined;
+    }
+    const timeoutId = setTimeout(() => {
+      dispatch({ type: 'SET_TOAST', payload: null });
+    }, 2200);
+    return () => clearTimeout(timeoutId);
+  }, [state.ui?.toast?.id]);
 
   useEffect(() => {
     if (!trainerId) {
