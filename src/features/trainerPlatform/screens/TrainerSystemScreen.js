@@ -119,6 +119,10 @@ const MEMORY_SWIPE_OPEN_THRESHOLD = 32;
 const COPY_FEEDBACK_TIMEOUT_MS = 2200;
 
 const environment = __DEV__ ? 'Development' : 'Production';
+const SHOW_ACCOUNT_DIAGNOSTICS = (
+  (typeof __DEV__ === 'boolean' && __DEV__)
+  || String(process.env.EXPO_PUBLIC_SHOW_ACCOUNT_DIAGNOSTICS || '').trim().toLowerCase() === 'true'
+);
 
 function valueOrFallback(value, fallback = 'Not available') {
   if (typeof value === 'string' && value.trim().length > 0) {
@@ -3340,10 +3344,19 @@ function SystemAccountScreen({
       </ModeCard>
 
       <SystemSectionCard>
-        <SystemSectionHeader title="Diagnostics" />
-        <DetailRow label="Environment" value={environment} />
-        <DetailRow label="Version" value={appVersion} />
-        <DetailRow label="API Base" value={valueOrFallback(debugInfo.resolvedApiBaseUrl)} />
+        {SHOW_ACCOUNT_DIAGNOSTICS ? (
+          <>
+            <SystemSectionHeader title="Diagnostics" />
+            <DetailRow label="Environment" value={environment} />
+            <DetailRow label="Version" value={appVersion} />
+            <DetailRow label="API Base" value={valueOrFallback(debugInfo.resolvedApiBaseUrl)} />
+          </>
+        ) : (
+          <>
+            <SystemSectionHeader title="App Info" />
+            <DetailRow label="Version" value={appVersion} />
+          </>
+        )}
       </SystemSectionCard>
 
       <ModeButton

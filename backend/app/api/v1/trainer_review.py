@@ -87,7 +87,7 @@ async def get_review_output_detail(
     try:
         return service.get_output_detail(trainer_id, output_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=404, detail="Not found") from exc
 
 
 @router.post("/outputs/{output_id}/edit", response_model=AIOutputMutationResponse)
@@ -104,8 +104,8 @@ async def edit_review_output(
     except ValueError as exc:
         message = str(exc)
         if "not found" in message.lower():
-            raise HTTPException(status_code=404, detail=message) from exc
-        raise HTTPException(status_code=400, detail=message) from exc
+            raise HTTPException(status_code=404, detail="Not found") from exc
+        raise HTTPException(status_code=400, detail="Invalid review output edit request") from exc
 
 
 @router.post("/outputs/{output_id}/approve", response_model=AIOutputMutationResponse)
@@ -122,8 +122,8 @@ async def approve_review_output(
     except ValueError as exc:
         message = str(exc)
         if "not found" in message.lower():
-            raise HTTPException(status_code=404, detail=message) from exc
-        raise HTTPException(status_code=400, detail=message) from exc
+            raise HTTPException(status_code=404, detail="Not found") from exc
+        raise HTTPException(status_code=400, detail="Invalid review output approve request") from exc
 
 
 @router.post("/outputs/{output_id}/reject", response_model=AIOutputMutationResponse)
@@ -140,5 +140,5 @@ async def reject_review_output(
     except ValueError as exc:
         message = str(exc)
         if "not found" in message.lower():
-            raise HTTPException(status_code=404, detail=message) from exc
-        raise HTTPException(status_code=400, detail=message) from exc
+            raise HTTPException(status_code=404, detail="Not found") from exc
+        raise HTTPException(status_code=400, detail="Invalid review output reject request") from exc

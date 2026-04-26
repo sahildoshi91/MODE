@@ -250,8 +250,7 @@ class TrainerAssistantApiTests(unittest.TestCase):
         self.assertEqual(response.json()["detail"], CONTROLLED_TRAINER_ASSISTANT_ERROR_DETAIL)
         self.assertEqual(response.json()["status"], 502)
         self.assertEqual(response.json()["request_path"], "/api/v1/trainer-assistant/execute")
-        self.assertIsNone(response.json()["code"])
-        self.assertIsNone(response.json()["hint"])
+        self.assertTrue(response.json()["error_id"])
 
     def test_execute_maps_source_type_constraint_failures_with_migration_hint(self):
         class _ConstraintFailureService(FakeTrainerAssistantService):
@@ -287,9 +286,7 @@ class TrainerAssistantApiTests(unittest.TestCase):
         self.assertEqual(payload["detail"], CONTROLLED_TRAINER_ASSISTANT_ERROR_DETAIL)
         self.assertEqual(payload["status"], 502)
         self.assertEqual(payload["request_path"], "/api/v1/trainer-assistant/execute")
-        self.assertEqual(payload["code"], "23514")
-        self.assertIn("20260418c_allow_trainer_assistant_draft_source_type.sql", payload["hint"])
-        self.assertIn("ai_generated_outputs_source_type_check", payload["details"])
+        self.assertTrue(payload["error_id"])
 
 
 if __name__ == "__main__":

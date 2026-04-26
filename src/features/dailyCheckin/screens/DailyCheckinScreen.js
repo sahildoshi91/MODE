@@ -332,16 +332,20 @@ function buildFallbackResult({ date, inputs, timeToComplete }) {
 }
 
 function logSubmitFailure({ date, inputs, error }) {
+  if (!__DEV__) {
+    return;
+  }
   const score = calculateTotalScore(inputs);
   const mode = assignMode(score);
+  const detailPayload = error?.detail && typeof error.detail === 'object' ? error.detail : null;
 
   console.error('Daily check-in submit failed', {
     date,
     score,
     mode,
     status: error?.status ?? null,
-    detail: error?.detail ?? error?.message ?? null,
-    message: error?.message ?? 'Unknown error',
+    stage: error?.stage ?? detailPayload?.stage ?? null,
+    requestId: error?.request_id ?? detailPayload?.request_id ?? null,
   });
 }
 

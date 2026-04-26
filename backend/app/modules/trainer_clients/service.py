@@ -595,9 +595,11 @@ class TrainerClientService:
         return trainer_id, tenant_id
 
     def _require_client_assignment(self, trainer_context: TrainerContext, client_id: str) -> dict[str, Any]:
-        trainer_id, _tenant_id = self._require_trainer_context(trainer_context)
+        trainer_id, tenant_id = self._require_trainer_context(trainer_context)
         client_row = self.repository.get_client_for_trainer(trainer_id, client_id)
         if not client_row:
+            raise ValueError("Client not found for trainer")
+        if not self._client_belongs_to_tenant(client_row, tenant_id):
             raise ValueError("Client not found for trainer")
         return client_row
 
@@ -617,7 +619,7 @@ class TrainerClientService:
 
     def _client_belongs_to_tenant(self, client_row: dict[str, Any], tenant_id: str) -> bool:
         row_tenant_id = str(client_row.get("tenant_id") or "").strip()
-        return not row_tenant_id or row_tenant_id == tenant_id
+        return row_tenant_id == tenant_id
 
     def _get_or_create_profile(self, client_id: str) -> dict[str, Any]:
         profile = self.repository.get_profile(client_id)

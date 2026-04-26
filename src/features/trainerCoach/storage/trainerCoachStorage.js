@@ -1,5 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+const ALLOW_PLAINTEXT_COACH_CACHE = (
+  (typeof __DEV__ === 'boolean' && __DEV__)
+  || String(process.env.EXPO_PUBLIC_ALLOW_PLAINTEXT_COACH_CACHE || '').trim().toLowerCase() === 'true'
+);
+
 function workspaceKey(trainerId) {
   return `trainer_coach_workspace:${trainerId}`;
 }
@@ -19,7 +24,14 @@ function parseJson(rawValue, fallbackValue) {
   }
 }
 
+function shouldPersistCoachCache() {
+  return ALLOW_PLAINTEXT_COACH_CACHE;
+}
+
 export async function loadTrainerCoachWorkspaceCache(trainerId) {
+  if (!shouldPersistCoachCache()) {
+    return null;
+  }
   if (!trainerId) {
     return null;
   }
@@ -28,6 +40,9 @@ export async function loadTrainerCoachWorkspaceCache(trainerId) {
 }
 
 export async function saveTrainerCoachWorkspaceCache(trainerId, payload) {
+  if (!shouldPersistCoachCache()) {
+    return;
+  }
   if (!trainerId) {
     return;
   }
@@ -35,6 +50,9 @@ export async function saveTrainerCoachWorkspaceCache(trainerId, payload) {
 }
 
 export async function loadTrainerCoachPendingOps(trainerId) {
+  if (!shouldPersistCoachCache()) {
+    return [];
+  }
   if (!trainerId) {
     return [];
   }
@@ -44,6 +62,9 @@ export async function loadTrainerCoachPendingOps(trainerId) {
 }
 
 export async function saveTrainerCoachPendingOps(trainerId, pendingOps) {
+  if (!shouldPersistCoachCache()) {
+    return;
+  }
   if (!trainerId) {
     return;
   }
@@ -52,4 +73,3 @@ export async function saveTrainerCoachPendingOps(trainerId, pendingOps) {
     JSON.stringify(Array.isArray(pendingOps) ? pendingOps : []),
   );
 }
-

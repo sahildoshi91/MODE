@@ -294,7 +294,7 @@ class OnboardingService:
         user: AuthenticatedUser,
         invite_code: str,
     ) -> OnboardingBootstrapResponse:
-        normalized_code = invite_code.strip()
+        normalized_code = invite_code.strip().upper()
         if not normalized_code:
             raise OnboardingServiceError("Invite code is required", status_code=422)
 
@@ -398,7 +398,7 @@ class OnboardingService:
             tenant_id=str(code_row.get("tenant_id") or ""),
         )
         if not consumed:
-            raise OnboardingServiceError("Unable to consume invite code", status_code=500)
+            raise OnboardingServiceError("Invite code is inactive", status_code=409)
 
         return self.get_bootstrap(user)
 

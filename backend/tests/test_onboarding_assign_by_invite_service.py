@@ -175,6 +175,21 @@ class OnboardingAssignByInviteServiceTests(unittest.TestCase):
         self.assertEqual(str(raised.exception), "Invite code is inactive")
         self.assertEqual(raised.exception.status_code, 409)
 
+    def test_assign_by_invite_rejects_when_atomic_consume_fails(self):
+        class NonAtomicDeactivationRepository(FakeOnboardingRepository):
+            def deactivate_invite_code(self, *, invite_id, trainer_id, tenant_id):
+                del invite_id, trainer_id, tenant_id
+                return None
+
+        service = OnboardingService(NonAtomicDeactivationRepository())
+        service.get_bootstrap = self.service.get_bootstrap
+
+        with self.assertRaises(OnboardingServiceError) as raised:
+            service.assign_by_invite(user=self.user, invite_code="MODE1234")
+
+        self.assertEqual(str(raised.exception), "Invite code is inactive")
+        self.assertEqual(raised.exception.status_code, 409)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -122,28 +122,32 @@ class TrainerClientRepository:
         *,
         code: str,
     ) -> dict[str, Any] | None:
-        normalized = code.strip().lower()
+        normalized = code.strip()
+        if not normalized:
+            return None
         rows = (
             self.supabase
             .table("trainer_invite_codes")
             .select("id, code, trainer_id, tenant_id, is_active, expires_at, metadata, created_at, updated_at")
-            .eq("code", code.strip())
+            .eq("code", normalized)
             .limit(1)
             .execute()
         ).data or []
         if rows:
             return rows[0]
 
+        fallback = normalized.upper()
+        if fallback == normalized:
+            return None
         fallback_rows = (
             self.supabase
             .table("trainer_invite_codes")
             .select("id, code, trainer_id, tenant_id, is_active, expires_at, metadata, created_at, updated_at")
+            .eq("code", fallback)
+            .limit(1)
             .execute()
         ).data or []
-        for row in fallback_rows:
-            if str(row.get("code") or "").strip().lower() == normalized:
-                return row
-        return None
+        return fallback_rows[0] if fallback_rows else None
 
     def create_invite_code(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         response = self.supabase.table("trainer_invite_codes").insert(payload).execute()

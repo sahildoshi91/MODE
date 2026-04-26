@@ -12,7 +12,9 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from fastapi.testclient import TestClient
 
 from app.core.auth import AuthenticatedUser, require_user
+from app.core.config import settings
 from app.core.dependencies import get_mobile_analytics_service, get_onboarding_service
+from app.core.rate_limit import _rate_limiter
 from app.main import app
 from app.modules.onboarding.service import OnboardingServiceError
 
@@ -102,6 +104,13 @@ class OnboardingApiTests(unittest.TestCase):
     def setUp(self):
         self.fake_onboarding = FakeOnboardingService()
         self.fake_analytics = FakeMobileAnalyticsService()
+        self._original_rate_limit_enabled = settings.rate_limit_enabled
+        self._original_rate_limit_window_seconds = settings.rate_limit_window_seconds
+        self._original_rate_limit_onboarding_per_window = settings.rate_limit_onboarding_per_window
+        settings.rate_limit_enabled = True
+        settings.rate_limit_window_seconds = 60
+        settings.rate_limit_onboarding_per_window = 20
+        _rate_limiter._windows.clear()
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
             id="user-123",
             email="user@example.com",
@@ -112,6 +121,10 @@ class OnboardingApiTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self):
+        settings.rate_limit_enabled = self._original_rate_limit_enabled
+        settings.rate_limit_window_seconds = self._original_rate_limit_window_seconds
+        settings.rate_limit_onboarding_per_window = self._original_rate_limit_onboarding_per_window
+        _rate_limiter._windows.clear()
         app.dependency_overrides.clear()
 
     def test_bootstrap_returns_initial_payload(self):
@@ -141,6 +154,26 @@ class OnboardingApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["detail"], "trainer disabled")
+
+    def test_role_selection_enforces_rate_limit(self):
+        settings.rate_limit_onboarding_per_window = 1
+
+        first = self.client.post(
+            "/api/v1/onboarding/role",
+            json={"role": "client"},
+            headers={"Authorization": "Bearer token"},
+        )
+        second = self.client.post(
+            "/api/v1/onboarding/role",
+            json={"role": "client"},
+            headers={"Authorization": "Bearer token"},
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.json()["detail"]["detail"], "Rate limit exceeded")
+        self.assertEqual(second.json()["detail"]["group"], "onboarding")
+        self.assertGreaterEqual(second.json()["detail"]["retry_after_seconds"], 1)
 
     def test_state_patch_updates_resume_payload(self):
         response = self.client.patch(

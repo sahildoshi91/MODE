@@ -65,6 +65,38 @@ function resolveOAuthRedirectUrl() {
   return process.env.EXPO_PUBLIC_SUPABASE_REDIRECT_URL || 'mode://auth/callback';
 }
 
+function parseUrl(url) {
+  if (!url || typeof url !== 'string') {
+    return null;
+  }
+  try {
+    return new URL(url);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function normalizePathname(pathname) {
+  if (!pathname || pathname === '/') {
+    return '/';
+  }
+  const normalized = pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+  return normalized || '/';
+}
+
+function isExpectedAuthCallbackUrl(url) {
+  const parsedIncoming = parseUrl(url);
+  const parsedExpected = parseUrl(resolveOAuthRedirectUrl());
+  if (!parsedIncoming || !parsedExpected) {
+    return false;
+  }
+  return (
+    parsedIncoming.protocol === parsedExpected.protocol &&
+    parsedIncoming.host === parsedExpected.host &&
+    normalizePathname(parsedIncoming.pathname) === normalizePathname(parsedExpected.pathname)
+  );
+}
+
 function ShellLoadingState({
   title,
   subtitle,
@@ -267,13 +299,11 @@ function AppShell() {
 
   useEffect(() => {
     const handleUrlAuthCallback = async (url) => {
-      if (!url || typeof url !== 'string') {
+      if (!isExpectedAuthCallbackUrl(url)) {
         return;
       }
-      let parsed;
-      try {
-        parsed = new URL(url);
-      } catch (_error) {
+      const parsed = parseUrl(url);
+      if (!parsed) {
         return;
       }
       const code = parsed.searchParams.get('code');

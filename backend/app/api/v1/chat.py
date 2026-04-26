@@ -2,12 +2,13 @@ import json
 import logging
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.config import settings
 from app.core.dependencies import get_conversation_service, get_trainer_context
+from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
 from app.modules.conversation.schemas import (
     ChatHistoryResponse,
@@ -35,6 +36,15 @@ def _public_chat_response(response: ChatResponse) -> ChatResponse:
     return response.model_copy(update={"route_debug": None})
 
 
+def _raise_chat_value_error(exc: ValueError) -> None:
+    normalized = str(exc).strip().lower()
+    if normalized == "conversation not found":
+        raise HTTPException(status_code=404, detail="Not found") from exc
+    if normalized == "user is not assigned to an active trainer context":
+        raise HTTPException(status_code=400, detail="Invalid chat context") from exc
+    raise HTTPException(status_code=400, detail="Invalid chat request") from exc
+
+
 def _raise_controlled_chat_error(
     *,
     endpoint: str,
@@ -58,16 +68,34 @@ def _raise_controlled_chat_error(
 @router.post("", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
+    http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: ConversationService = Depends(get_conversation_service),
 ):
+    enforce_rate_limit(
+        group="chat",
+        user=user,
+        request=http_request,
+        context={
+            "tenant_id": trainer_context.tenant_id,
+            "trainer_id": trainer_context.trainer_id,
+            "client_id": trainer_context.client_id,
+        },
+    )
     try:
         return _public_chat_response(service.handle_chat(user.id, trainer_context, request))
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        _raise_chat_value_error(exc)
     except ConversationProcessingError as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        logger.warning(
+            "Conversation processing error endpoint=/api/v1/chat user_id=%s trainer_id=%s client_id=%s",
+            user.id,
+            trainer_context.trainer_id,
+            trainer_context.client_id,
+            exc_info=exc,
+        )
+        raise HTTPException(status_code=502, detail=CONTROLLED_CHAT_ERROR_DETAIL)
     except Exception as exc:
         _raise_controlled_chat_error(
             endpoint="/api/v1/chat",
@@ -80,6 +108,7 @@ async def chat(
 
 @router.get("/history", response_model=ChatHistoryResponse)
 async def chat_history(
+    http_request: Request,
     conversation_id: str | None = Query(default=None),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=80, ge=1, le=200),
@@ -87,6 +116,16 @@ async def chat_history(
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: ConversationService = Depends(get_conversation_service),
 ):
+    enforce_rate_limit(
+        group="chat",
+        user=user,
+        request=http_request,
+        context={
+            "tenant_id": trainer_context.tenant_id,
+            "trainer_id": trainer_context.trainer_id,
+            "client_id": trainer_context.client_id,
+        },
+    )
     try:
         return service.get_history(
             user_id=user.id,
@@ -96,12 +135,16 @@ async def chat_history(
             cursor=cursor,
         )
     except ValueError as exc:
-        detail = str(exc)
-        if detail.strip().lower() == "conversation not found":
-            raise HTTPException(status_code=404, detail=detail)
-        raise HTTPException(status_code=400, detail=detail)
+        _raise_chat_value_error(exc)
     except ConversationProcessingError as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        logger.warning(
+            "Conversation processing error endpoint=/api/v1/chat/history user_id=%s trainer_id=%s client_id=%s",
+            user.id,
+            trainer_context.trainer_id,
+            trainer_context.client_id,
+            exc_info=exc,
+        )
+        raise HTTPException(status_code=502, detail=CONTROLLED_CHAT_ERROR_DETAIL)
     except Exception as exc:
         logger.exception(
             "Unexpected chat history failure user_id=%s trainer_id=%s client_id=%s conversation_id=%s",
@@ -117,13 +160,23 @@ async def chat_history(
 @router.get("/requests/{request_id}/events", response_model=ChatRequestEventsResponse)
 async def chat_request_events(
     request_id: str,
+    http_request: Request,
     since_seq: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=500),
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: ConversationService = Depends(get_conversation_service),
 ):
-    del user
+    enforce_rate_limit(
+        group="chat",
+        user=user,
+        request=http_request,
+        context={
+            "tenant_id": trainer_context.tenant_id,
+            "trainer_id": trainer_context.trainer_id,
+            "client_id": trainer_context.client_id,
+        },
+    )
     if not trainer_context.trainer_id:
         raise HTTPException(status_code=404, detail="Not found")
     try:
@@ -164,17 +217,35 @@ async def chat_request_events(
 @router.post("/stream")
 async def chat_stream(
     request: ChatRequest,
+    http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: ConversationService = Depends(get_conversation_service),
 ):
+    enforce_rate_limit(
+        group="chat",
+        user=user,
+        request=http_request,
+        context={
+            "tenant_id": trainer_context.tenant_id,
+            "trainer_id": trainer_context.trainer_id,
+            "client_id": trainer_context.client_id,
+        },
+    )
     request_id = str(request.request_id) if request.request_id else str(uuid4())
     try:
         conversation_id, chunks, route_debug, result_state = service.stream_chat(user.id, trainer_context, request)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        _raise_chat_value_error(exc)
     except ConversationProcessingError as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        logger.warning(
+            "Conversation processing error endpoint=/api/v1/chat/stream user_id=%s trainer_id=%s client_id=%s",
+            user.id,
+            trainer_context.trainer_id,
+            trainer_context.client_id,
+            exc_info=exc,
+        )
+        raise HTTPException(status_code=502, detail=CONTROLLED_CHAT_ERROR_DETAIL)
     except Exception as exc:
         _raise_controlled_chat_error(
             endpoint="/api/v1/chat/stream",

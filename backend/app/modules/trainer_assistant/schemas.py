@@ -138,7 +138,7 @@ class TrainerAssistantBootstrapResponse(BaseModel):
 class TrainerAssistantExecuteRequest(BaseModel):
     client_id: str | None = None
     action_type: TrainerAssistantActionType
-    message: str | None = None
+    message: str | None = Field(default=None, max_length=4000)
     routing_input: TrainerAssistantRoutingInput | None = None
 
 
@@ -180,14 +180,14 @@ class TrainerAssistantDraftMutationResponse(BaseModel):
 class TrainerAssistantBackgroundJobRequest(BaseModel):
     client_id: str | None = None
     action_type: TrainerAssistantActionType
-    message: str | None = None
+    message: str | None = Field(default=None, max_length=2000)
     essential: bool = True
     routing_input: TrainerAssistantRoutingInput | None = None
 
 
 class TrainerAssistantBackgroundRunRequest(BaseModel):
     run_date: date | None = None
-    jobs: list[TrainerAssistantBackgroundJobRequest] = Field(default_factory=list)
+    jobs: list[TrainerAssistantBackgroundJobRequest] = Field(default_factory=list, max_length=5)
 
 
 class TrainerAssistantBackgroundResult(BaseModel):

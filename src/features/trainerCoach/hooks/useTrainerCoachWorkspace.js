@@ -1211,10 +1211,9 @@ export function useTrainerCoachWorkspace({
       return;
     }
     const cachePayload = {
-      summary: state.summary,
-      queue: state.queue,
+      // Persist only low-sensitivity UI/sync metadata in plaintext storage.
+      // Queue/summary/stream payloads can contain private client details and should stay in-memory.
       activeClientId: state.activeClientId,
-      stream: state.stream,
       sync: {
         pendingOperationCount: state.sync.pendingOperationCount,
         failedOperationCount: state.sync.failedOperationCount,
@@ -1227,9 +1226,6 @@ export function useTrainerCoachWorkspace({
     trainerId,
     state.generatedAt,
     state.activeClientId,
-    state.queue,
-    state.stream,
-    state.summary,
     state.sync.failedOperationCount,
     state.sync.pendingOperationCount,
     state.ui,

@@ -426,28 +426,32 @@ class OnboardingRepository:
         ).execute()
 
     def get_invite_code(self, *, code: str) -> dict[str, Any] | None:
-        normalized = code.strip().lower()
+        normalized = code.strip()
+        if not normalized:
+            return None
         rows = (
             self.supabase_admin
             .table("trainer_invite_codes")
             .select("id, code, trainer_id, tenant_id, is_active, expires_at")
-            .eq("code", code.strip())
+            .eq("code", normalized)
             .limit(1)
             .execute()
         ).data or []
-        if not rows:
-            # fallback for case-insensitive index only
-            all_rows = (
-                self.supabase_admin
-                .table("trainer_invite_codes")
-                .select("id, code, trainer_id, tenant_id, is_active, expires_at")
-                .execute()
-            ).data or []
-            for row in all_rows:
-                if str(row.get("code", "")).strip().lower() == normalized:
-                    return row
+        if rows:
+            return rows[0]
+
+        fallback = normalized.upper()
+        if fallback == normalized:
             return None
-        return rows[0]
+        fallback_rows = (
+            self.supabase_admin
+            .table("trainer_invite_codes")
+            .select("id, code, trainer_id, tenant_id, is_active, expires_at")
+            .eq("code", fallback)
+            .limit(1)
+            .execute()
+        ).data or []
+        return fallback_rows[0] if fallback_rows else None
 
     def deactivate_invite_code(
         self,
@@ -467,6 +471,7 @@ class OnboardingRepository:
             .eq("id", invite_id)
             .eq("trainer_id", trainer_id)
             .eq("tenant_id", tenant_id)
+            .eq("is_active", True)
             .execute()
         ).data or []
         return rows[0] if rows else None

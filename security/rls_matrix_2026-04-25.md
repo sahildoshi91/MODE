@@ -1,0 +1,47 @@
+| Table | RLS enabled? | SELECT policy safe? | INSERT policy safe? | UPDATE policy safe? | DELETE policy safe? | Tenant scoped? | Notes/Fixes |
+|---|---|---|---|---|---|---|---|
+| ai_feedback_events | Yes (forced) | Yes | Yes | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| ai_generated_outputs | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| client_trainer_assignments | Yes (forced) | Yes | N/A | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| clients | Yes (forced) | Yes | N/A | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| coach_memory | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| conversation_ai_request_events | Yes (forced) | Yes | Yes | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| conversation_ai_requests | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| conversation_messages | Yes (forced) | Yes | Yes | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| conversation_usage_events | Yes (forced) | Yes | Yes | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| conversations | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| daily_checkins | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| generated_checkin_plans | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| mobile_analytics_events | Yes (forced) | Yes | Yes | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| onboarding_answers | Yes (forced) | Yes | Yes | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| onboarding_states | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| profiles | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| tenants | Yes (forced) | Yes | N/A | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_assistant_router_events | Yes (forced) | Yes | Yes | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_client_schedule_exceptions | Yes (forced) | Yes | Yes | Yes | Yes | Yes | Tenant/user scoped policy names; keep regression tests. |
+| trainer_client_schedule_preferences | Yes (forced) | Yes | Yes | Yes | Yes | Yes | Tenant/user scoped policy names; keep regression tests. |
+| trainer_daily_schedule | Yes (forced) | Yes | N/A | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_faq_examples | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_invite_codes | Yes (forced) | No | No | No | No | No | RLS on but no policies; service-role-only path. Add explicit trainer-scoped policies or document/lock grants. |
+| trainer_knowledge_documents | Yes (forced) | Yes | Yes | Yes | Yes | Yes | Tenant/user scoped policy names; keep regression tests. |
+| trainer_knowledge_entries | Yes (forced) | Yes | Yes | Yes | Yes | Yes | Tenant/user scoped policy names; keep regression tests. |
+| trainer_knowledge_usage_logs | Yes (forced) | Yes | Yes | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_knowledge_versions | Yes (forced) | Yes | Yes | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_mutation_operations | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_onboarding_events | Yes (forced) | Yes | Yes | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_onboarding_profiles | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_personas | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_profile_core | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_program_templates | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_response_approvals | Yes (forced) | Yes | Yes | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_rule_versions | Yes (forced) | Yes | Yes | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_rules | Yes (forced) | Yes | Yes | Yes | Yes | Yes | Tenant/user scoped policy names; keep regression tests. |
+| trainer_system_events | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainer_talking_points | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| trainers | Yes (forced) | Yes | N/A | N/A | N/A | Yes | No user DELETE policy (service/retention path required). |
+| unanswered_question_queue | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| user_accounts | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| user_fitness_profiles | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| user_roles | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| workout_plans | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |
+| workouts | Yes (forced) | Yes | Yes | Yes | N/A | Yes | No user DELETE policy (service/retention path required). |

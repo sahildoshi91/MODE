@@ -44,4 +44,4 @@ async def get_my_trainer_schedule(
     try:
         return service.get_client_visible_schedule(trainer_context)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail="Invalid trainer schedule request") from exc

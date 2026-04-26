@@ -13,7 +13,9 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from fastapi.testclient import TestClient
 
 from app.core.auth import AuthenticatedUser, require_user
+from app.core.config import settings
 from app.core.dependencies import get_conversation_service, get_trainer_context
+from app.core.rate_limit import _rate_limiter
 from app.core.tenancy import TrainerContext
 from app.main import app
 from app.modules.conversation.schemas import ChatResponse, ConversationState, ConversationUsage, RouteDebug, TokenUsage
@@ -124,6 +126,13 @@ class UnexpectedExplodingConversationService(FakeConversationService):
 
 class ChatApiTests(unittest.TestCase):
     def setUp(self):
+        self._original_rate_limit_enabled = settings.rate_limit_enabled
+        self._original_rate_limit_window_seconds = settings.rate_limit_window_seconds
+        self._original_rate_limit_chat_per_window = settings.rate_limit_chat_per_window
+        settings.rate_limit_enabled = True
+        settings.rate_limit_window_seconds = 60
+        settings.rate_limit_chat_per_window = 30
+        _rate_limiter._windows.clear()
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
             id="user-123",
             email="user@example.com",
@@ -141,6 +150,10 @@ class ChatApiTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self):
+        settings.rate_limit_enabled = self._original_rate_limit_enabled
+        settings.rate_limit_window_seconds = self._original_rate_limit_window_seconds
+        settings.rate_limit_chat_per_window = self._original_rate_limit_chat_per_window
+        _rate_limiter._windows.clear()
         app.dependency_overrides.clear()
 
     def test_chat_hides_route_debug_by_default(self):
@@ -205,6 +218,27 @@ class ChatApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["detail"], "Chat response could not be completed")
+
+    def test_chat_enforces_rate_limit(self):
+        settings.rate_limit_chat_per_window = 1
+        app.dependency_overrides[get_conversation_service] = lambda: FakeConversationService()
+
+        first = self.client.post(
+            "/api/v1/chat",
+            json={"message": "Hello"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        second = self.client.post(
+            "/api/v1/chat",
+            json={"message": "Hello again"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        self.assertEqual(second.json()["detail"]["detail"], "Rate limit exceeded")
+        self.assertEqual(second.json()["detail"]["group"], "chat")
+        self.assertGreaterEqual(second.json()["detail"]["retry_after_seconds"], 1)
 
     def test_stream_maps_unexpected_failure_to_controlled_502(self):
         app.dependency_overrides[get_conversation_service] = lambda: UnexpectedExplodingConversationService()

@@ -94,8 +94,8 @@ class TrainerAssignmentInviteApiTests(unittest.TestCase):
                 headers={"Authorization": "Bearer ignored"},
             )
 
-        self.assertEqual(response.status_code, 404)
-        self.assertEqual(response.json()["detail"], "Invite code is invalid")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "Unable to attach trainer with invite code")
 
 
 if __name__ == "__main__":

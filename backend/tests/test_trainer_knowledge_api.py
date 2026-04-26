@@ -460,6 +460,20 @@ class TrainerKnowledgeApiTests(unittest.TestCase):
             "Always prioritize movement quality before volume.",
         )
 
+    def test_create_document_rejects_non_https_file_url(self):
+        response = self.client.post(
+            "/api/v1/trainer-knowledge",
+            json={
+                "title": "Programming Rules",
+                "raw_text": "Always prioritize movement quality before volume.",
+                "file_url": "javascript:alert(1)",
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("file_url", response.text)
+
     def test_list_documents_returns_created_at(self):
         response = self.client.get(
             "/api/v1/trainer-knowledge",
@@ -625,6 +639,18 @@ class TrainerKnowledgeApiTests(unittest.TestCase):
         self.assertEqual(payload["document"]["title"], "Updated Methodology")
         self.assertEqual(payload["extraction"]["rules_created"], 1)
         self.assertEqual(self.fake_service.last_update["document_id"], "doc-1")
+
+    def test_patch_document_rejects_non_https_file_url(self):
+        response = self.client.patch(
+            "/api/v1/trainer-knowledge/doc-1",
+            json={
+                "file_url": "ftp://example.com/file.pdf",
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("file_url", response.text)
 
     def test_delete_document_removes_saved_knowledge(self):
         response = self.client.delete(

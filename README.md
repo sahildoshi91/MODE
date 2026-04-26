@@ -211,6 +211,8 @@ EXPO_PUBLIC_API_BASE_URL=http://192.168.1.10:8000
 EXPO_PUBLIC_SUPABASE_REDIRECT_URL=mode://auth/callback
 EXPO_PUBLIC_AUTH_SOCIAL_ENABLED=false
 EXPO_PUBLIC_AUTH_PASSWORD_ENABLED=false
+EXPO_PUBLIC_SHOW_ACCOUNT_DIAGNOSTICS=false
+EXPO_PUBLIC_ALLOW_PLAINTEXT_COACH_CACHE=false
 ```
 
 When testing in Expo Go on a physical device, `localhost` points to the phone, not your computer. If auto-detection does not work in your setup, set `EXPO_PUBLIC_API_BASE_URL` to your computer's LAN IP so the phone can reach the FastAPI server.
@@ -219,6 +221,9 @@ For email callback support, add `mode://auth/callback` to Supabase allowed Redir
 
 Set `EXPO_PUBLIC_AUTH_PASSWORD_ENABLED=true` to enable temporary QA password auth in the mobile login screen (password + OTP fallback).
 TODO before production release: set `EXPO_PUBLIC_AUTH_PASSWORD_ENABLED=false`.
+
+`EXPO_PUBLIC_SHOW_ACCOUNT_DIAGNOSTICS` keeps API-base diagnostics hidden in production by default.
+`EXPO_PUBLIC_ALLOW_PLAINTEXT_COACH_CACHE` keeps trainer-coach cache persistence disabled in production by default.
 
 ### `backend/.env`
 ```env
@@ -229,16 +234,16 @@ SUPABASE_SERVICE_ROLE_KEY=...
 
 ## Test Accounts
 
-Seeded local test users currently use:
+Use local-only placeholder accounts for QA. Do not commit real usernames, passwords, or production credentials.
 
 ```text
-Client login (QA): test.user@mode.local / password123
+Client login (QA): <local-placeholder-email> / <local-placeholder-password>
 ```
 
-Example client:
+Example client email format:
 
 ```text
-test_client_1@mode.local
+<local-client>@mode.local
 ```
 
 Password sign-up may still require email verification depending on your Supabase Auth settings.
@@ -279,6 +284,22 @@ Email auth smoke:
 3. Open `action_link` on the test device.
 4. Confirm app session is established and user leaves signed-out auth screens.
 5. Confirm onboarding bootstrap loads (role selection/onboarding or home flow appears).
+
+## Security Secret Scanning
+
+Run the repository secret scanner before commits and before release tags:
+
+```bash
+bash scripts/security_scan_secrets.sh
+```
+
+By default, local `.env` files are skipped. To include them in local-only scans:
+
+```bash
+MODE_SECURITY_SCAN_INCLUDE_ENV=1 bash scripts/security_scan_secrets.sh
+```
+
+CI runs the same scan script in `.github/workflows/security-secrets-scan.yml`.
 
 ## Before Publishing To GitHub
 

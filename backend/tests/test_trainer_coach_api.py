@@ -13,7 +13,9 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from fastapi.testclient import TestClient
 
 from app.core.auth import AuthenticatedUser, require_user
+from app.core.config import settings
 from app.core.dependencies import get_trainer_coach_service, get_trainer_context
+from app.core.rate_limit import _rate_limiter
 from app.core.tenancy import TrainerContext
 from app.main import app
 from app.modules.ai_feedback.schemas import AIGeneratedOutput
@@ -164,6 +166,13 @@ class FakeTrainerCoachService:
 
 class TrainerCoachApiTests(unittest.TestCase):
     def setUp(self):
+        self._original_rate_limit_enabled = settings.rate_limit_enabled
+        self._original_rate_limit_window_seconds = settings.rate_limit_window_seconds
+        self._original_rate_limit_trainer_assistant_per_window = settings.rate_limit_trainer_assistant_per_window
+        settings.rate_limit_enabled = True
+        settings.rate_limit_window_seconds = 60
+        settings.rate_limit_trainer_assistant_per_window = 20
+        _rate_limiter._windows.clear()
         self.fake_service = FakeTrainerCoachService()
         self.trainer_context = TrainerContext(
             tenant_id="tenant-1",
@@ -182,6 +191,10 @@ class TrainerCoachApiTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self):
+        settings.rate_limit_enabled = self._original_rate_limit_enabled
+        settings.rate_limit_window_seconds = self._original_rate_limit_window_seconds
+        settings.rate_limit_trainer_assistant_per_window = self._original_rate_limit_trainer_assistant_per_window
+        _rate_limiter._windows.clear()
         app.dependency_overrides.clear()
 
     def test_workspace_and_queue_routes_return_expected_shape(self):
@@ -253,6 +266,25 @@ class TrainerCoachApiTests(unittest.TestCase):
             headers={"Authorization": "Bearer ignored-by-override"},
         )
         self.assertEqual(response.status_code, 403, response.text)
+
+    def test_trainer_coach_endpoints_enforce_rate_limit(self):
+        settings.rate_limit_trainer_assistant_per_window = 1
+
+        first = self.client.get(
+            "/api/v1/trainer-coach/workspace",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        second = self.client.get(
+            "/api/v1/trainer-coach/workspace",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(first.status_code, 200, first.text)
+        self.assertEqual(second.status_code, 429, second.text)
+        payload = second.json().get("detail", {})
+        self.assertEqual(payload.get("detail"), "Rate limit exceeded")
+        self.assertEqual(payload.get("group"), "trainer_assistant")
+        self.assertGreaterEqual(int(payload.get("retry_after_seconds", 0)), 1)
 
 
 if __name__ == "__main__":

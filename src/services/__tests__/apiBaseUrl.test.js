@@ -3,9 +3,11 @@ function loadApiBaseUrlModule({
   isDevice = false,
   platformOs = 'ios',
   hostUri = null,
+  nodeEnv = 'test',
 } = {}) {
   jest.resetModules();
   process.env.EXPO_PUBLIC_API_BASE_URL = apiBaseUrl;
+  process.env.NODE_ENV = nodeEnv;
 
   jest.doMock('expo-constants', () => ({
     __esModule: true,
@@ -26,6 +28,7 @@ function loadApiBaseUrlModule({
 
 describe('apiBaseUrl', () => {
   const originalApiBaseUrl = process.env.EXPO_PUBLIC_API_BASE_URL;
+  const originalNodeEnv = process.env.NODE_ENV;
 
   afterEach(() => {
     jest.resetModules();
@@ -34,6 +37,11 @@ describe('apiBaseUrl', () => {
       process.env.EXPO_PUBLIC_API_BASE_URL = originalApiBaseUrl;
     } else {
       delete process.env.EXPO_PUBLIC_API_BASE_URL;
+    }
+    if (typeof originalNodeEnv === 'string') {
+      process.env.NODE_ENV = originalNodeEnv;
+    } else {
+      delete process.env.NODE_ENV;
     }
   });
 
@@ -91,5 +99,18 @@ describe('apiBaseUrl', () => {
     expect(candidates).toEqual(['http://192.168.1.50:8000']);
     expect(candidates).not.toContain('http://localhost:8000');
     expect(candidates).not.toContain('http://127.0.0.1:8000');
+  });
+
+  it('requires https API base URL in production builds', () => {
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => loadApiBaseUrlModule({
+      apiBaseUrl: 'http://192.168.1.50:8000',
+      isDevice: true,
+      platformOs: 'ios',
+      hostUri: null,
+      nodeEnv: 'production',
+    })).toThrow(
+      'EXPO_PUBLIC_API_BASE_URL must be configured to an https URL for production builds.',
+    );
   });
 });

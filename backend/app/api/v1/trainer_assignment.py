@@ -1,16 +1,20 @@
+import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from app.core.auth import AuthenticatedUser, CurrentUser
+from app.core.config import settings
 from app.core.dependencies import get_onboarding_service, get_trainer_context
+from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext, resolve_trainer_context
 from app.db.client import get_supabase_client
 from app.modules.onboarding.service import OnboardingService, OnboardingServiceError
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class TrainerOption(BaseModel):
@@ -82,10 +86,12 @@ def _resolve_viewer_display_name(
 
 
 def _list_active_trainers(*, tenant_id: str | None) -> list[dict]:
+    if not tenant_id and not settings.trainer_assignment_global_fallback_enabled:
+        return []
     query = (
         get_supabase_client()
         .table("trainers")
-        .select("id, tenant_id, display_name, is_active")
+        .select("id, tenant_id, user_id, display_name, is_active")
         .eq("is_active", True)
     )
     if tenant_id:
@@ -155,9 +161,21 @@ async def get_assignment_status(
 @router.post("/assign", response_model=TrainerAssignmentStatus)
 async def assign_trainer(
     request: TrainerAssignmentRequest,
+    http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
 ):
+    enforce_rate_limit(
+        group="onboarding",
+        user=user,
+        request=http_request,
+        context={"tenant_id": trainer_context.tenant_id},
+    )
+    if not trainer_context.tenant_id and not settings.trainer_assignment_global_fallback_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Direct trainer selection is disabled. Attach with a trainer invite code instead.",
+        )
     if trainer_context.trainer_id and not trainer_context.client_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -248,10 +266,17 @@ async def assign_trainer(
 @router.post("/assign-by-invite", response_model=TrainerAssignmentStatus)
 async def assign_trainer_by_invite(
     request: TrainerInviteCodeAssignmentRequest,
+    http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     onboarding_service: OnboardingService = Depends(get_onboarding_service),
 ):
+    enforce_rate_limit(
+        group="onboarding",
+        user=user,
+        request=http_request,
+        context={"tenant_id": trainer_context.tenant_id},
+    )
     if trainer_context.trainer_id and not trainer_context.client_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -260,7 +285,16 @@ async def assign_trainer_by_invite(
     try:
         onboarding_service.assign_by_invite(user=user, invite_code=request.invite_code)
     except OnboardingServiceError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        logger.info(
+            "Invite assignment rejected user_id=%s status_code=%s reason=%s",
+            user.id,
+            exc.status_code,
+            exc.message,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to attach trainer with invite code",
+        ) from exc
 
     updated_context = resolve_trainer_context(get_supabase_client(), user.id)
     return _build_status_response(updated_context, user)

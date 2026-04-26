@@ -48,14 +48,14 @@ class TrainerStubProfileRequest(BaseModel):
 
 
 class OnboardingEventPayload(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=80)
     event_timestamp: datetime | None = None
-    session_id: str | None = None
+    session_id: str | None = Field(default=None, max_length=128)
     properties: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnalyticsEventsRequest(BaseModel):
-    events: list[OnboardingEventPayload] = Field(default_factory=list)
+    events: list[OnboardingEventPayload] = Field(default_factory=list, max_length=100)
 
 
 class AnalyticsEventsResponse(BaseModel):

@@ -1,7 +1,20 @@
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def _normalize_and_validate_optional_file_url(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    parsed = urlparse(normalized)
+    if parsed.scheme.lower() != "https" or not parsed.netloc:
+        raise ValueError("file_url must be an https URL")
+    return normalized
 
 
 class TrainerKnowledgeDocument(BaseModel):
@@ -23,6 +36,11 @@ class TrainerKnowledgeDocumentCreate(BaseModel):
     raw_text: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("file_url")
+    @classmethod
+    def _validate_file_url(cls, value: str | None) -> str | None:
+        return _normalize_and_validate_optional_file_url(value)
+
 
 class TrainerKnowledgeIngestRequest(TrainerKnowledgeDocumentCreate):
     pass
@@ -34,6 +52,11 @@ class TrainerKnowledgeDocumentUpdateRequest(BaseModel):
     document_type: str | None = None
     raw_text: str | None = None
     metadata: dict[str, Any] | None = None
+
+    @field_validator("file_url")
+    @classmethod
+    def _validate_file_url(cls, value: str | None) -> str | None:
+        return _normalize_and_validate_optional_file_url(value)
 
 
 class TrainerRule(BaseModel):

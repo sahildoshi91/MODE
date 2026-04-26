@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     trainer_intelligence_orchestration_enabled: bool = False
     trainer_ai_review_auto_apply_enabled: bool = True
     trainer_assistant_v1_enabled: bool = True
+    trainer_assignment_global_fallback_enabled: bool = False
+    rate_limit_enabled: bool = True
+    rate_limit_window_seconds: int = 60
+    rate_limit_default_per_window: int = 90
+    rate_limit_chat_per_window: int = 30
+    rate_limit_trainer_assistant_per_window: int = 20
+    rate_limit_onboarding_per_window: int = 20
+    rate_limit_mobile_events_per_window: int = 120
     cors_allow_origins: str = (
         "http://localhost:19006,http://127.0.0.1:19006,"
         "http://localhost:8081,http://127.0.0.1:8081,"

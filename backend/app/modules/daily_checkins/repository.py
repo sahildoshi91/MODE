@@ -228,15 +228,21 @@ class DailyCheckinRepository:
         )
         return response.data[0] if response.data else None
 
-    def get_generated_plan_by_id(self, generated_plan_id: str) -> dict[str, Any] | None:
-        response = (
+    def get_generated_plan_by_id(
+        self,
+        generated_plan_id: str,
+        *,
+        client_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        query = (
             self.supabase
             .table("generated_checkin_plans")
             .select("*")
             .eq("id", generated_plan_id)
-            .limit(1)
-            .execute()
         )
+        if client_id:
+            query = query.eq("client_id", client_id)
+        response = query.limit(1).execute()
         return response.data[0] if response.data else None
 
     def get_latest_workout_session(self, user_id: str) -> dict[str, Any] | None:

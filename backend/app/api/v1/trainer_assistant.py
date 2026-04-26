@@ -3,13 +3,14 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.api.v1.trainer_auth import require_trainer_actor
 from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.config import settings
 from app.core.dependencies import get_trainer_assistant_service, get_trainer_context
+from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
 from app.modules.trainer_assistant.schemas import (
     TrainerAssistantBackgroundRunRequest,
@@ -44,7 +45,18 @@ def _map_value_error(exc: ValueError) -> None:
         "client not found for trainer",
     }:
         raise HTTPException(status_code=404, detail=detail) from exc
-    raise HTTPException(status_code=400, detail=detail) from exc
+    raise HTTPException(status_code=400, detail="Invalid trainer assistant request") from exc
+
+
+def _safe_stream_value_error_detail(exc: ValueError) -> str:
+    detail = str(exc)
+    normalized = detail.strip().lower()
+    if normalized in {
+        "draft not found",
+        "client not found for trainer",
+    }:
+        return detail
+    return "Invalid trainer assistant request"
 
 
 def _raise_controlled_trainer_assistant_error(
@@ -55,6 +67,7 @@ def _raise_controlled_trainer_assistant_error(
     trainer_context: TrainerContext,
     request_context: dict[str, object] | None = None,
 ) -> JSONResponse:
+    error_id = uuid4().hex[:12]
     diagnostics = _extract_error_diagnostics(exc)
     if _is_source_type_constraint_mismatch(diagnostics):
         diagnostics["code"] = diagnostics["code"] or "23514"
@@ -67,8 +80,9 @@ def _raise_controlled_trainer_assistant_error(
         )
 
     logger.exception(
-        "Unexpected trainer assistant failure endpoint=%s user_id=%s trainer_id=%s client_id=%s request_context=%s "
+        "Unexpected trainer assistant failure error_id=%s endpoint=%s user_id=%s trainer_id=%s client_id=%s request_context=%s "
         "code=%s hint=%s details=%s",
+        error_id,
         endpoint,
         user.id,
         trainer_context.trainer_id,
@@ -85,9 +99,7 @@ def _raise_controlled_trainer_assistant_error(
             "detail": CONTROLLED_TRAINER_ASSISTANT_ERROR_DETAIL,
             "status": 502,
             "request_path": endpoint,
-            "code": diagnostics["code"],
-            "hint": diagnostics["hint"],
-            "details": diagnostics["details"],
+            "error_id": error_id,
         },
     )
 
@@ -152,8 +164,28 @@ def _is_source_type_constraint_mismatch(diagnostics: dict[str, str | None]) -> b
     return not code or code == "23514"
 
 
+def _enforce_trainer_assistant_limit(
+    *,
+    user: AuthenticatedUser,
+    request: Request,
+    trainer_context: TrainerContext,
+    client_id: str | None = None,
+) -> None:
+    enforce_rate_limit(
+        group="trainer_assistant",
+        user=user,
+        request=request,
+        context={
+            "tenant_id": trainer_context.tenant_id,
+            "trainer_id": trainer_context.trainer_id,
+            "client_id": client_id or trainer_context.client_id,
+        },
+    )
+
+
 @router.get("/bootstrap", response_model=TrainerAssistantBootstrapResponse)
 async def bootstrap_trainer_assistant(
+    http_request: Request,
     client_id: str | None = Query(default=None),
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
@@ -161,6 +193,12 @@ async def bootstrap_trainer_assistant(
 ):
     _ensure_enabled()
     require_trainer_actor(user, trainer_context)
+    _enforce_trainer_assistant_limit(
+        user=user,
+        request=http_request,
+        trainer_context=trainer_context,
+        client_id=client_id,
+    )
     try:
         return service.bootstrap(
             trainer_context,
@@ -182,12 +220,19 @@ async def bootstrap_trainer_assistant(
 @router.post("/execute", response_model=TrainerAssistantExecuteResponse)
 async def execute_trainer_assistant(
     request: TrainerAssistantExecuteRequest,
+    http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: TrainerAssistantService = Depends(get_trainer_assistant_service),
 ):
     _ensure_enabled()
     require_trainer_actor(user, trainer_context)
+    _enforce_trainer_assistant_limit(
+        user=user,
+        request=http_request,
+        trainer_context=trainer_context,
+        client_id=request.client_id,
+    )
     try:
         return service.execute(trainer_context, request)
     except ValueError as exc:
@@ -208,12 +253,19 @@ async def execute_trainer_assistant(
 @router.post("/execute/stream")
 async def execute_trainer_assistant_stream(
     request: TrainerAssistantExecuteRequest,
+    http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: TrainerAssistantService = Depends(get_trainer_assistant_service),
 ):
     _ensure_enabled()
     require_trainer_actor(user, trainer_context)
+    _enforce_trainer_assistant_limit(
+        user=user,
+        request=http_request,
+        trainer_context=trainer_context,
+        client_id=request.client_id,
+    )
     request_id = str(uuid4())
 
     def emit_event(seq: int, payload: dict[str, object]) -> str:
@@ -251,10 +303,11 @@ async def execute_trainer_assistant_stream(
                 },
             )
         except ValueError as exc:
+            safe_detail = _safe_stream_value_error_detail(exc)
             seq += 1
-            yield emit_event(seq, {"type": "failed", "detail": str(exc)})
+            yield emit_event(seq, {"type": "failed", "detail": safe_detail})
             seq += 1
-            yield emit_event(seq, {"type": "error", "detail": str(exc)})
+            yield emit_event(seq, {"type": "error", "detail": safe_detail})
         except Exception as exc:
             logger.exception(
                 "Unexpected trainer assistant stream failure user_id=%s trainer_id=%s client_id=%s action_type=%s",
@@ -276,12 +329,18 @@ async def execute_trainer_assistant_stream(
 async def edit_trainer_assistant_draft(
     draft_id: str,
     request: TrainerAssistantDraftEditRequest,
+    http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: TrainerAssistantService = Depends(get_trainer_assistant_service),
 ):
     _ensure_enabled()
     require_trainer_actor(user, trainer_context)
+    _enforce_trainer_assistant_limit(
+        user=user,
+        request=http_request,
+        trainer_context=trainer_context,
+    )
     try:
         return service.edit_draft(trainer_context, draft_id, request)
     except ValueError as exc:
@@ -300,12 +359,18 @@ async def edit_trainer_assistant_draft(
 async def approve_trainer_assistant_draft(
     draft_id: str,
     request: TrainerAssistantDraftApproveRequest,
+    http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: TrainerAssistantService = Depends(get_trainer_assistant_service),
 ):
     _ensure_enabled()
     require_trainer_actor(user, trainer_context)
+    _enforce_trainer_assistant_limit(
+        user=user,
+        request=http_request,
+        trainer_context=trainer_context,
+    )
     try:
         return service.approve_draft(trainer_context, draft_id, request)
     except ValueError as exc:
@@ -324,12 +389,18 @@ async def approve_trainer_assistant_draft(
 async def reject_trainer_assistant_draft(
     draft_id: str,
     request: TrainerAssistantDraftRejectRequest,
+    http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: TrainerAssistantService = Depends(get_trainer_assistant_service),
 ):
     _ensure_enabled()
     require_trainer_actor(user, trainer_context)
+    _enforce_trainer_assistant_limit(
+        user=user,
+        request=http_request,
+        trainer_context=trainer_context,
+    )
     try:
         return service.reject_draft(trainer_context, draft_id, request)
     except ValueError as exc:
@@ -347,12 +418,18 @@ async def reject_trainer_assistant_draft(
 @router.post("/background/run", response_model=TrainerAssistantBackgroundRunResponse)
 async def run_trainer_assistant_background(
     request: TrainerAssistantBackgroundRunRequest,
+    http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: TrainerAssistantService = Depends(get_trainer_assistant_service),
 ):
     _ensure_enabled()
     require_trainer_actor(user, trainer_context)
+    _enforce_trainer_assistant_limit(
+        user=user,
+        request=http_request,
+        trainer_context=trainer_context,
+    )
     try:
         return service.run_background(trainer_context, request)
     except ValueError as exc:

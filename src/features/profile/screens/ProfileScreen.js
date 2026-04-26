@@ -87,6 +87,7 @@ export default function ProfileScreen({
   const trainerName = valueOrFallback(assignmentStatus?.assigned_trainer_display_name, 'No trainer assigned');
   const appVersion = valueOrFallback(Constants.expoConfig?.version, 'dev');
   const environment = __DEV__ ? 'Development' : 'Production';
+  const showDiagnostics = __DEV__;
   const isTrainerViewer = assignmentStatus?.viewer_role === 'trainer';
 
   const [tonePreference, setTonePreference] = useState(true);
@@ -399,23 +400,25 @@ export default function ProfileScreen({
           </ModeCard>
         )}
 
-        <ModeCard variant="surface">
-          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Diagnostics</ModeText>
-          <View style={styles.row}>
-            <ModeText variant="bodySm" tone="secondary">Environment</ModeText>
-            <ModeText variant="bodySm">{environment}</ModeText>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.row}>
-            <ModeText variant="bodySm" tone="secondary">Version</ModeText>
-            <ModeText variant="bodySm">{appVersion}</ModeText>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.row}>
-            <ModeText variant="bodySm" tone="secondary">API Base</ModeText>
-            <ModeText variant="bodySm" style={styles.apiText}>{valueOrFallback(debugInfo.resolvedApiBaseUrl)}</ModeText>
-          </View>
-        </ModeCard>
+        {showDiagnostics ? (
+          <ModeCard variant="surface">
+            <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Diagnostics</ModeText>
+            <View style={styles.row}>
+              <ModeText variant="bodySm" tone="secondary">Environment</ModeText>
+              <ModeText variant="bodySm">{environment}</ModeText>
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.row}>
+              <ModeText variant="bodySm" tone="secondary">Version</ModeText>
+              <ModeText variant="bodySm">{appVersion}</ModeText>
+            </View>
+            <View style={styles.divider} />
+            <View style={styles.row}>
+              <ModeText variant="bodySm" tone="secondary">API Base</ModeText>
+              <ModeText variant="bodySm" style={styles.apiText}>{valueOrFallback(debugInfo.resolvedApiBaseUrl)}</ModeText>
+            </View>
+          </ModeCard>
+        ) : null}
 
         <ModeButton
           title="Sign out"

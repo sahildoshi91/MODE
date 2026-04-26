@@ -23,6 +23,7 @@ from app.modules.daily_checkins.schemas import (
     DailyCheckinStatusResponse,
     Environment,
     GenerateCheckinPlanRequest,
+    LogGeneratedWorkoutRequest,
     PlanType,
     YesterdayCheckinSummary,
 )
@@ -151,9 +152,10 @@ class FakeDailyCheckinService:
             "structured": {"title": "Builder"},
         }
 
-    def log_generated_workout(self, user_id: str, request):
+    def log_generated_workout(self, user_id: str, request, *, client_id: str | None = None):
         self.last_log = {
             "user_id": user_id,
+            "client_id": client_id,
             "request": request.model_dump(),
         }
         return {
@@ -330,6 +332,46 @@ class DailyCheckinServiceTests(unittest.TestCase):
 
         self.assertEqual(result.mode, "BUILD")
         self.assertEqual(result.training.type, "Moderate cardio or controlled strength")
+
+    def test_log_generated_workout_scopes_lookup_to_client(self):
+        class FakeRepository:
+            def __init__(self):
+                self.last_lookup = None
+
+            def get_generated_plan_by_id(self, generated_plan_id, *, client_id=None):
+                self.last_lookup = {
+                    "generated_plan_id": generated_plan_id,
+                    "client_id": client_id,
+                }
+                return {
+                    "id": generated_plan_id,
+                    "structured_content": {"title": "Builder"},
+                }
+
+            def insert_workout_plan(self, payload):
+                return {"id": "plan-1", **payload}
+
+            def insert_workout_session(self, payload):
+                return {"id": "workout-1", **payload}
+
+        repository = FakeRepository()
+        service = DailyCheckinService(repository=repository, profile_service=None)
+        request = LogGeneratedWorkoutRequest(
+            generated_plan_id="generated-plan-1",
+            title="Builder",
+            elapsed_seconds=930,
+            completed=True,
+            feel_rating=4,
+        )
+
+        result = service.log_generated_workout("user-123", request, client_id="client-123")
+
+        self.assertEqual(repository.last_lookup, {
+            "generated_plan_id": "generated-plan-1",
+            "client_id": "client-123",
+        })
+        self.assertEqual(result.workout_id, "workout-1")
+        self.assertTrue(result.completed)
 
     def test_submit_checkin_retries_with_legacy_mode_when_constraint_rejects_new_mode(self):
         class ConstraintFallbackRepository:
@@ -1343,6 +1385,14 @@ class DailyCheckinApiTests(unittest.TestCase):
             email="user@example.com",
             access_token="token-123",
         )
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id="client-default",
+            client_user_id="user-123",
+        )
         self.fake_service = FakeDailyCheckinService()
         app.dependency_overrides[get_daily_checkin_service] = lambda: self.fake_service
         self.client = TestClient(app)
@@ -1518,9 +1568,14 @@ class DailyCheckinApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 500)
-        self.assertIn("Daily check-in submit failed unexpectedly for client_id=client-fail date=2026-03-27", captured.output[0])
-        self.assertIn("database unavailable", response.json()["detail"])
-        self.assertIn("RuntimeError", response.json()["detail"])
+        self.assertIn(
+            "Daily check-in submit failed unexpectedly request_id=",
+            captured.output[0],
+        )
+        payload = response.json()["detail"]
+        self.assertEqual(payload["detail"], "Unexpected check-in save failure")
+        self.assertEqual(payload["stage"], "submit_checkin_unexpected")
+        self.assertTrue(payload["request_id"])
 
     def test_submit_rejects_client_user_mismatch(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
@@ -1637,6 +1692,33 @@ class DailyCheckinApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(self.fake_service.last_generate["request"]["refresh_requested"])
 
+    def test_generate_plan_rejects_client_user_mismatch(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id="client-generate",
+            client_user_id="different-user",
+        )
+
+        response = self.client.post(
+            "/api/v1/checkin/generate-plan",
+            json={
+                "checkin_id": "checkin-1",
+                "plan_type": "training",
+                "environment": "home_gym",
+                "time_available": 30,
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["detail"],
+            "Authenticated user does not own the resolved client record for this check-in",
+        )
+
     def test_generate_plan_returns_structured_diagnostics_on_repository_failure(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
             tenant_id="tenant-1",
@@ -1662,8 +1744,7 @@ class DailyCheckinApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 500)
         payload = response.json()["detail"]
         self.assertEqual(payload["stage"], "persist_generated_plan")
-        self.assertEqual(payload["code"], "PGRST205")
-        self.assertIn("generated_checkin_plans", payload["detail"])
+        self.assertEqual(payload["detail"], "Generated plan persistence failed")
         self.assertTrue(payload["request_id"])
 
     def test_previous_checkin_is_loaded_from_dedicated_endpoint(self):
@@ -1703,7 +1784,33 @@ class DailyCheckinApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["workout_id"], "workout-1")
         self.assertEqual(self.fake_service.last_log["user_id"], "user-123")
+        self.assertEqual(self.fake_service.last_log["client_id"], "client-default")
         self.assertEqual(self.fake_service.last_log["request"]["feel_rating"], 4)
+
+    def test_log_generated_workout_rejects_non_owner_context(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id="client-default",
+            client_user_id="different-user",
+        )
+
+        response = self.client.post(
+            "/api/v1/checkin/log-workout",
+            json={
+                "generated_plan_id": "generated-plan-1",
+                "title": "Builder",
+                "elapsed_seconds": 930,
+                "completed": True,
+                "feel_rating": 4,
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.json()["detail"], "Authenticated user does not own the resolved client record for this check-in")
 
 
 if __name__ == "__main__":

@@ -368,14 +368,22 @@ class DailyCheckinService:
         self,
         user_id: str,
         request,
+        *,
+        client_id: str | None = None,
     ) -> LogGeneratedWorkoutResponse:
-        generated_plan = self.repository.get_generated_plan_by_id(request.generated_plan_id)
+        generated_plan = self.repository.get_generated_plan_by_id(
+            request.generated_plan_id,
+            client_id=client_id,
+        )
         if not generated_plan:
             raise ValueError("Generated plan not found")
+        structured_content = generated_plan.get("structured_content")
+        if not isinstance(structured_content, dict):
+            raise ValueError("Generated plan is missing structured content")
         workout_plan = self.repository.insert_workout_plan(
             {
                 "user_id": user_id,
-                "plan_data": generated_plan["structured_content"],
+                "plan_data": structured_content,
             }
         )
         created = self.repository.insert_workout_session(

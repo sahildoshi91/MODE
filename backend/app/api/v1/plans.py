@@ -17,7 +17,7 @@ async def get_active_plan(
     try:
         return service.build_plan_summary(trainer_context.trainer_id, trainer_context.client_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail="Invalid plan request") from exc
 
 
 @router.post("/generate", response_model=PlanSummary)
@@ -28,4 +28,4 @@ async def generate_plan(
     try:
         return service.build_plan_summary(trainer_context.trainer_id, trainer_context.client_id)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail="Invalid plan request") from exc
