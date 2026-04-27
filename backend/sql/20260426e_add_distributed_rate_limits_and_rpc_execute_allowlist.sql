@@ -139,7 +139,8 @@ DECLARE
     'bootstrap_trainer_tenant',
     'assign_client_to_trainer',
     'security_enforce_rate_limit',
-    'security_assert_rls_enabled'
+    'security_assert_rls_enabled',
+    'security_list_public_tables'
   ];
 BEGIN
   FOR fn_signature, fn_name IN

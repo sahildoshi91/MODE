@@ -301,6 +301,39 @@ MODE_SECURITY_SCAN_INCLUDE_ENV=1 bash scripts/security_scan_secrets.sh
 
 CI runs the same scan script in `.github/workflows/security-secrets-scan.yml`.
 
+## Release Security Gates
+
+Release hardening gates and required environment variables are documented in:
+
+- `docs/security/release-hardening-gates.md`
+- `docs/security/ios-hardening-checklist.md`
+
+Core gate commands:
+
+```bash
+cd backend
+./venv/bin/python scripts/check_personal_data_inventory.py
+MODE_SECURITY_DATABASE_URL='postgres://...' ./venv/bin/python scripts/staging_db_security_check.py
+APP_ENV=production RATE_LIMIT_BACKEND=postgres ./venv/bin/python scripts/security_release_preflight.py --env production
+MODE_SECURITY_TARGET_ENV=production ./scripts/security_regression_suite.sh
+```
+
+Root-level audits:
+
+```bash
+python scripts/storage_access_audit.py
+python scripts/ios_hardening_lint.py --require-prebuild
+python scripts/ios_artifact_scan.py --require-ipa
+```
+
+Local/dev behavior:
+- `security_release_preflight.py --env development` is allowed for local checks.
+- iOS artifact scan can be skipped when no IPA is available.
+
+Production behavior:
+- preflight, staging DB posture check, and iOS checks are release blockers.
+- storage orphan cleanup job (`backend/scripts/storage_orphan_cleanup.py`) must be scheduled and healthy.
+
 ## Before Publishing To GitHub
 
 1. Confirm `.env` and `backend/.env` are still ignored.

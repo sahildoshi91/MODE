@@ -18,6 +18,9 @@ def test_security_release_preflight_contains_required_guards() -> None:
     assert "rate_limit_backend must be postgres in production" in source
     assert "Plaintext AsyncStorage session persistence" in source
     assert "SUPABASE_SERVICE_ROLE_KEY is required server-side in production" in source
+    assert "APP_ENV is required and must be set to production" in source
+    assert "account_deletion_contract_enforced must be true in production" in source
+    assert "personal_data_inventory_path must be configured in production" in source
 
 
 def test_security_release_preflight_development_mode_runs() -> None:

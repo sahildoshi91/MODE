@@ -10,7 +10,18 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "associatedDomains": [
+        "applinks:mode.app",
+        "applinks:mode.app"
+      ],
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSExceptionDomains": {}
+        }
+      },
+      "bundleIdentifier": "com.anonymous.mode"
     },
     "android": {
       "adaptiveIcon": {

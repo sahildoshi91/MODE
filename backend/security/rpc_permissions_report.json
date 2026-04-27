@@ -10,7 +10,7 @@
     "trainer_coach_approve_output"
   ],
   "dangerous_grant_findings": [],
-  "functions_discovered_count": 13,
+  "functions_discovered_count": 14,
   "ok": true,
   "rows": [
     {
@@ -103,6 +103,13 @@
       ]
     },
     {
+      "category": "privileged_service_only",
+      "function_name": "security_list_public_tables",
+      "grants_to": [
+        "service_role"
+      ]
+    },
+    {
       "category": "safe_allowlist",
       "function_name": "trainer_coach_approve_output",
       "grants_to": [
@@ -115,7 +122,8 @@
     "assign_client_to_trainer",
     "bootstrap_trainer_tenant",
     "security_assert_rls_enabled",
-    "security_enforce_rate_limit"
+    "security_enforce_rate_limit",
+    "security_list_public_tables"
   ],
   "source_migration": "sql/20260426e_add_distributed_rate_limits_and_rpc_execute_allowlist.sql"
 }

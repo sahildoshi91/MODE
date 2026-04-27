@@ -47,3 +47,24 @@ def test_account_deletion_audit_table_is_service_scoped() -> None:
     assert "REVOKE ALL ON public.account_deletion_audits FROM anon" in source
     assert "REVOKE ALL ON public.account_deletion_audits FROM authenticated" in source
     assert "GRANT SELECT, INSERT ON public.account_deletion_audits TO service_role" in source
+
+
+def test_storage_upload_lifecycle_tables_and_security_catalog_rpc_are_service_scoped() -> None:
+    source = _read_sql("20260426h_add_storage_upload_lifecycle_and_security_catalog_rpc.sql")
+    assert "CREATE TABLE IF NOT EXISTS public.storage_upload_grants" in source
+    assert "CREATE TABLE IF NOT EXISTS public.storage_object_ownership" in source
+    assert "REVOKE ALL ON public.storage_upload_grants FROM anon" in source
+    assert "REVOKE ALL ON public.storage_object_ownership FROM authenticated" in source
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON public.storage_upload_grants TO service_role" in source
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON public.storage_object_ownership TO service_role" in source
+    assert "CREATE OR REPLACE FUNCTION public.security_list_public_tables()" in source
+    assert "GRANT EXECUTE ON FUNCTION public.security_list_public_tables() TO service_role" in source
+
+
+def test_storage_cleanup_heartbeat_table_is_service_scoped() -> None:
+    source = _read_sql("20260426i_add_storage_cleanup_job_heartbeats.sql")
+    assert "CREATE TABLE IF NOT EXISTS public.storage_cleanup_job_heartbeats" in source
+    assert "run_source IN ('scheduled', 'manual', 'release_gate')" in source
+    assert "REVOKE ALL ON public.storage_cleanup_job_heartbeats FROM anon" in source
+    assert "ALTER TABLE public.storage_cleanup_job_heartbeats ENABLE ROW LEVEL SECURITY" in source
+    assert "GRANT SELECT, INSERT ON public.storage_cleanup_job_heartbeats TO service_role" in source

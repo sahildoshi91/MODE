@@ -201,6 +201,139 @@ class AccountDeletionRepository:
             deleted_total += len(deleted)
         return deleted_total
 
+    def list_storage_ownership_paths_for_subjects(
+        self,
+        *,
+        user_id: str,
+        trainer_ids: list[str],
+        client_ids: list[str],
+    ) -> list[str]:
+        if not self.table_is_accessible(table="storage_object_ownership"):
+            return []
+
+        paths: set[str] = set()
+
+        def _fetch_by_values(column: str, values: list[str]) -> None:
+            normalized = [str(value).strip() for value in values if str(value).strip()]
+            if not normalized:
+                return
+            rows = (
+                self.supabase_admin
+                .table("storage_object_ownership")
+                .select("object_path")
+                .eq("is_active", True)
+                .in_(column, normalized)
+                .execute()
+            ).data or []
+            for row in rows:
+                path = str(row.get("object_path") or "").strip().strip("/")
+                if path:
+                    paths.add(path)
+
+        _fetch_by_values("owner_user_id", [user_id])
+        _fetch_by_values("owner_trainer_id", trainer_ids)
+        _fetch_by_values("owner_client_id", client_ids)
+        return sorted(paths)
+
+    def mark_storage_ownership_paths_deleted(
+        self,
+        *,
+        paths: list[str],
+        reason: str = "account_deletion",
+    ) -> int:
+        if not paths:
+            return 0
+        if not self.table_is_accessible(table="storage_object_ownership"):
+            return 0
+
+        normalized_paths = sorted({str(path).strip().strip("/") for path in paths if str(path).strip()})
+        if not normalized_paths:
+            return 0
+
+        updated_total = 0
+        now = datetime.now(timezone.utc).isoformat()
+        chunk_size = 100
+        for index in range(0, len(normalized_paths), chunk_size):
+            chunk = normalized_paths[index:index + chunk_size]
+            updated = (
+                self.supabase_admin
+                .table("storage_object_ownership")
+                .update(
+                    {
+                        "is_active": False,
+                        "deleted_at": now,
+                        "deletion_reason": reason,
+                    }
+                )
+                .in_("object_path", chunk)
+                .eq("is_active", True)
+                .execute()
+            ).data or []
+            updated_total += len(updated)
+        return updated_total
+
+    def delete_upload_grants_for_subjects(
+        self,
+        *,
+        user_id: str,
+        trainer_ids: list[str],
+        client_ids: list[str],
+    ) -> int:
+        if not self.table_is_accessible(table="storage_upload_grants"):
+            return 0
+
+        candidate_ids: set[str] = set()
+
+        def _fetch_ids(column: str, values: list[str]) -> None:
+            normalized = [str(value).strip() for value in values if str(value).strip()]
+            if not normalized:
+                return
+            rows = (
+                self.supabase_admin
+                .table("storage_upload_grants")
+                .select("id")
+                .in_(column, normalized)
+                .execute()
+            ).data or []
+            for row in rows:
+                row_id = str(row.get("id") or "").strip()
+                if row_id:
+                    candidate_ids.add(row_id)
+
+        _fetch_ids("owner_user_id", [user_id])
+        _fetch_ids("owner_trainer_id", trainer_ids)
+        _fetch_ids("owner_client_id", client_ids)
+
+        if not candidate_ids:
+            return 0
+
+        normalized_ids = sorted(candidate_ids)
+        deleted_total = 0
+        chunk_size = 100
+        for index in range(0, len(normalized_ids), chunk_size):
+            chunk = normalized_ids[index:index + chunk_size]
+            deleted = (
+                self.supabase_admin
+                .table("storage_upload_grants")
+                .delete()
+                .in_("id", chunk)
+                .execute()
+            ).data or []
+            deleted_total += len(deleted)
+        return deleted_total
+
+    def list_public_tables(self) -> list[str]:
+        response = self.supabase_admin.rpc("security_list_public_tables", {}).execute()
+        rows = response.data or []
+        table_names: list[str] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("table_name") or "").strip()
+            if name:
+                table_names.append(name)
+        return sorted(set(table_names))
+
     def table_is_accessible(self, *, table: str) -> bool:
         try:
             (

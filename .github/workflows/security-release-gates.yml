@@ -1,0 +1,126 @@
+name: Security Release Gates
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      ios_ipa_path:
+        description: "Path to IPA artifact to scan"
+        required: false
+        type: string
+      ios_info_plist_path:
+        description: "Optional path to prebuild Info.plist"
+        required: false
+        type: string
+
+jobs:
+  security-static-gates:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: test-openai-key
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_ANON_KEY: test-anon-key
+      SUPABASE_SERVICE_ROLE_KEY: test-service-role-key
+      EXPO_PUBLIC_SUPABASE_URL: https://example.supabase.co
+      EXPO_PUBLIC_API_BASE_URL: https://api.mode.app
+      EXPO_PUBLIC_SUPABASE_REDIRECT_URL: mode://auth/callback
+      APP_ENV: production
+      RATE_LIMIT_BACKEND: postgres
+      STORAGE_UPLOAD_WINDOW_SECONDS: 90
+      MODE_SECURITY_TARGET_ENV: production
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt pytest
+
+      - name: Run static and unit security regression gates
+        run: |
+          cd backend
+          PYTHON_BIN=python PYTEST_BIN=pytest ./scripts/security_regression_suite.sh
+
+  staging-db-security-gate:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      MODE_SECURITY_DATABASE_URL: ${{ secrets.MODE_SECURITY_DATABASE_URL }}
+      MODE_RUN_STAGING_SUPABASE_TESTS: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt pytest
+
+      - name: Assert required staging security env vars are configured
+        run: |
+          set -euo pipefail
+          for key in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY MODE_SECURITY_DATABASE_URL; do
+            if [ -z "${!key:-}" ]; then
+              echo "Missing required secret: ${key}"
+              exit 1
+            fi
+          done
+
+      - name: Run live DB security posture checks
+        run: |
+          cd backend
+          python scripts/staging_db_security_check.py
+
+      - name: Run staging cross-tenant integration checks
+        run: |
+          cd backend
+          pytest -q tests/test_staging_db_security_integration.py -rs
+
+  ios-security-gate:
+    if: github.event_name == 'workflow_dispatch' && inputs.ios_ipa_path != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      EXPO_PUBLIC_SUPABASE_REDIRECT_URL: mode://auth/callback
+      MODE_IOS_IPA_PATH: ${{ inputs.ios_ipa_path }}
+      MODE_IOS_INFO_PLIST_PATH: ${{ inputs.ios_info_plist_path }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run iOS hardening lint
+        run: |
+          python scripts/ios_hardening_lint.py --require-prebuild
+
+      - name: Run iOS IPA artifact scan
+        run: |
+          python scripts/ios_artifact_scan.py --require-ipa

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import secrets
 from pathlib import PurePosixPath
@@ -17,9 +18,12 @@ from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
 from app.modules.trainer_clients.repository import TrainerClientRepository
 from app.db.client import get_supabase_admin_client
+from app.modules.storage_lifecycle.repository import StorageLifecycleRepository
+from app.modules.storage_lifecycle.service import StorageLifecycleError, StorageLifecycleService
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9/_\-.]+$")
 _RANDOM_BASENAME_RE = re.compile(r"[A-Za-z0-9_-]{24,}")
@@ -80,6 +84,19 @@ class PrivateDownloadUrlResponse(BaseModel):
     expires_in: int
 
 
+class PrivateUploadCompleteRequest(BaseModel):
+    upload_token: str = Field(min_length=1, max_length=256)
+    object_path: str = Field(min_length=3, max_length=512)
+    bucket: str | None = Field(default=None, min_length=3, max_length=120)
+
+
+class PrivateUploadCompleteResponse(BaseModel):
+    bucket: str
+    object_path: str
+    status: Literal["verified"]
+    verified: bool = True
+
+
 def _normalized_extension(filename: str) -> str:
     value = str(filename or "").strip().lower()
     suffix = PurePosixPath(value).suffix
@@ -121,13 +138,17 @@ def _build_object_path(
     user: AuthenticatedUser,
     extension: str,
     requested_client_id: str | None,
-) -> str:
+) -> tuple[str, str | None, str | None]:
     if scope == "client_self":
         client_id = require_client_actor(user, trainer_context)
         prefix = f"client/{client_id}"
+        owner_trainer_id = trainer_context.trainer_id or None
+        owner_client_id = client_id
     elif scope == "trainer_workspace":
         trainer_id = require_trainer_actor(user, trainer_context)
         prefix = f"trainer/{trainer_id}/workspace"
+        owner_trainer_id = trainer_id
+        owner_client_id = None
     elif scope == "trainer_client":
         trainer_id = require_trainer_actor(user, trainer_context)
         client_id = str(requested_client_id or "").strip()
@@ -137,11 +158,13 @@ def _build_object_path(
         if not assigned_client:
             raise HTTPException(status_code=403, detail="Client is not assigned to this trainer")
         prefix = f"trainer/{trainer_id}/clients/{client_id}"
+        owner_trainer_id = trainer_id
+        owner_client_id = client_id
     else:
         raise HTTPException(status_code=422, detail="Invalid storage scope")
 
     random_basename = f"{uuid4().hex}_{secrets.token_urlsafe(18)}"
-    return f"{prefix}/{random_basename}.{extension}"
+    return f"{prefix}/{random_basename}.{extension}", owner_trainer_id, owner_client_id
 
 
 def _normalize_object_path(path_value: str) -> str:
@@ -187,9 +210,49 @@ def _authorize_download_path(
                 raise HTTPException(status_code=403, detail="Forbidden file path")
             assigned_client = trainer_client_repository.get_client_for_trainer(trainer_id, target_client_id)
             if not assigned_client:
+                logger.warning(
+                    "legacy_storage_access_denied reason=trainer_client_not_assigned user_id=%s trainer_id=%s target_client_id=%s path=%s",
+                    user.id,
+                    trainer_context.trainer_id,
+                    target_client_id,
+                    normalized,
+                )
                 raise HTTPException(status_code=403, detail="Forbidden file path")
             return
 
+    logger.warning(
+        "legacy_storage_access_denied reason=path_not_authorized user_id=%s trainer_id=%s client_id=%s path=%s",
+        user.id,
+        trainer_context.trainer_id,
+        trainer_context.client_id,
+        normalized,
+    )
+    raise HTTPException(status_code=403, detail="Forbidden file path")
+
+
+def _ownership_from_authorized_path(
+    *,
+    object_path: str,
+    trainer_context: TrainerContext,
+    user: AuthenticatedUser,
+) -> tuple[str | None, str | None]:
+    normalized = _normalize_object_path(object_path)
+    if normalized.startswith("client/"):
+        client_id = require_client_actor(user, trainer_context)
+        if not normalized.startswith(f"client/{client_id}/"):
+            raise HTTPException(status_code=403, detail="Forbidden file path")
+        return trainer_context.trainer_id or None, client_id
+
+    trainer_id = require_trainer_actor(user, trainer_context)
+    if normalized.startswith(f"trainer/{trainer_id}/workspace/"):
+        return trainer_id, None
+    client_prefix = f"trainer/{trainer_id}/clients/"
+    if normalized.startswith(client_prefix):
+        remainder = normalized[len(client_prefix):]
+        target_client_id = remainder.split("/", 1)[0]
+        if not target_client_id:
+            raise HTTPException(status_code=403, detail="Forbidden file path")
+        return trainer_id, target_client_id
     raise HTTPException(status_code=403, detail="Forbidden file path")
 
 
@@ -218,7 +281,7 @@ async def issue_private_upload_url(
         mime_type=request.mime_type,
         size_bytes=request.size_bytes,
     )
-    object_path = _build_object_path(
+    object_path, owner_trainer_id, owner_client_id = _build_object_path(
         scope=request.scope,
         trainer_context=trainer_context,
         trainer_client_repository=trainer_client_repository,
@@ -227,9 +290,11 @@ async def issue_private_upload_url(
         requested_client_id=request.client_id,
     )
 
+    admin_client = get_supabase_admin_client()
     bucket_name = str(settings.storage_private_bucket).strip()
-    expires_in = max(30, min(int(settings.storage_signed_url_ttl_seconds), 900))
-    signed_upload = get_supabase_admin_client().storage.from_(bucket_name).create_signed_upload_url(object_path)
+    signed_ttl = max(30, min(int(settings.storage_signed_url_ttl_seconds), 900))
+    upload_window = max(30, min(int(settings.storage_upload_window_seconds), 300))
+    signed_upload = admin_client.storage.from_(bucket_name).create_signed_upload_url(object_path)
 
     signed_url = (
         str(getattr(signed_upload, "signed_url", "") or "").strip()
@@ -242,12 +307,34 @@ async def issue_private_upload_url(
             detail="Unable to issue upload URL",
         )
 
+    lifecycle_service = StorageLifecycleService(StorageLifecycleRepository(admin_client))
+    try:
+        lifecycle_service.record_upload_grant(
+            upload_token=token,
+            bucket=bucket_name,
+            object_path=object_path,
+            scope=request.scope,
+            owner_user_id=user.id,
+            owner_trainer_id=owner_trainer_id,
+            owner_client_id=owner_client_id,
+            expires_in_seconds=upload_window,
+        )
+    except Exception as exc:
+        logger.exception(
+            "Unable to persist upload grant user_id=%s scope=%s object_path=%s",
+            user.id,
+            request.scope,
+            object_path,
+            exc_info=exc,
+        )
+        raise HTTPException(status_code=500, detail="Upload lifecycle storage unavailable")
+
     return PrivateUploadUrlResponse(
         bucket=bucket_name,
         object_path=object_path,
         signed_upload_url=signed_url,
         upload_token=token,
-        expires_in=expires_in,
+        expires_in=min(signed_ttl, upload_window),
     )
 
 
@@ -297,4 +384,72 @@ async def issue_private_download_url(
         object_path=object_path,
         signed_url=signed_url,
         expires_in=expires_in,
+    )
+
+
+@router.post("/private/upload-complete", response_model=PrivateUploadCompleteResponse)
+async def complete_private_upload(
+    request: PrivateUploadCompleteRequest,
+    http_request: Request,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    trainer_client_repository: TrainerClientRepository = Depends(get_trainer_client_repository),
+):
+    enforce_rate_limit(
+        group="file_upload",
+        user=user,
+        request=http_request,
+        context={
+            "tenant_id": trainer_context.tenant_id,
+            "trainer_id": trainer_context.trainer_id,
+            "client_id": trainer_context.client_id,
+            "scope": "upload_complete",
+        },
+    )
+
+    object_path = _normalize_object_path(request.object_path)
+    _authorize_download_path(
+        path=object_path,
+        user=user,
+        trainer_context=trainer_context,
+        trainer_client_repository=trainer_client_repository,
+    )
+    owner_trainer_id, owner_client_id = _ownership_from_authorized_path(
+        object_path=object_path,
+        trainer_context=trainer_context,
+        user=user,
+    )
+
+    bucket_name = str(request.bucket or settings.storage_private_bucket or "").strip()
+    if not bucket_name:
+        raise HTTPException(status_code=500, detail="Storage bucket is not configured")
+
+    admin_client = get_supabase_admin_client()
+    lifecycle_service = StorageLifecycleService(StorageLifecycleRepository(admin_client))
+    try:
+        result = lifecycle_service.verify_upload_completion(
+            upload_token=request.upload_token,
+            bucket=bucket_name,
+            object_path=object_path,
+            owner_user_id=user.id,
+            owner_trainer_id=owner_trainer_id,
+            owner_client_id=owner_client_id,
+        )
+    except StorageLifecycleError as exc:
+        logger.warning(
+            "legacy_storage_access_denied reason=upload_complete_validation_failed user_id=%s status=%s path=%s",
+            user.id,
+            exc.status_code,
+            object_path,
+        )
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+    except Exception as exc:
+        logger.exception("Unexpected upload completion failure user_id=%s path=%s", user.id, object_path, exc_info=exc)
+        raise HTTPException(status_code=500, detail="Unable to finalize upload") from exc
+
+    return PrivateUploadCompleteResponse(
+        bucket=result.bucket,
+        object_path=result.object_path,
+        status=result.status,
+        verified=result.verified,
     )

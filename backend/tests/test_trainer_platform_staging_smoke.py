@@ -555,6 +555,25 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
         )
         self.assertEqual(trainer_2_cross_response.status_code, 404, trainer_2_cross_response.text)
 
+    def test_storage_private_routes_are_tenant_scoped(self):
+        random_name = f"{uuid4().hex}_{uuid4().hex[:24]}.pdf"
+        cross_trainer_path = f"trainer/{self.trainer_2_id}/workspace/{random_name}"
+        cross_client_path = f"client/{self.client_2_id}/{random_name}"
+
+        trainer_cross_response = self.client.post(
+            "/api/v1/storage/private/download-url",
+            json={"object_path": cross_trainer_path},
+            headers=self._headers(self.trainer_1_access_token),
+        )
+        self.assertEqual(trainer_cross_response.status_code, 403, trainer_cross_response.text)
+
+        client_cross_response = self.client.post(
+            "/api/v1/storage/private/download-url",
+            json={"object_path": cross_client_path},
+            headers=self._headers(self.client_1_access_token),
+        )
+        self.assertEqual(client_cross_response.status_code, 403, client_cross_response.text)
+
     def test_trainer_knowledge_ingest_persists_and_lists_for_owner(self):
         ingest_response = self.client.post(
             "/api/v1/trainer-knowledge/ingest",

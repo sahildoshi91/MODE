@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     app_env: str = "development"
     startup_guard_enabled: bool = True
     account_deletion_enabled: bool = True
+    account_deletion_contract_enforced: bool = True
+    personal_data_inventory_path: str = "security/personal_data_inventory.json"
+    account_deletion_active_sink_categories: str = "file_storage,retrieval_caches,analytics_events"
+    account_deletion_disabled_sink_categories: str = (
+        "vector_indexes,embedding_stores,logs,notification_providers,email_providers,ai_memory_retrieval_systems"
+    )
     auth_password_proxy_enabled: bool = True
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
@@ -58,6 +64,9 @@ class Settings(BaseSettings):
     supabase_service_role_key: str | None = None
     storage_private_bucket: str = "private-user-files"
     storage_signed_url_ttl_seconds: int = 300
+    storage_upload_window_seconds: int = 180
+    storage_upload_verification_grace_seconds: int = 30
+    storage_cleanup_known_prefixes: str = "client,trainer,user,users,auth"
     storage_max_file_size_bytes: int = 10 * 1024 * 1024
     storage_allowed_extensions: str = "pdf,png,jpg,jpeg,webp,txt,csv,json"
     storage_allowed_mime_types: str = (
@@ -104,6 +113,18 @@ class Settings(BaseSettings):
     @property
     def production_block_staging_supabase_hosts_list(self) -> list[str]:
         return [item.lower() for item in _split_csv(self.production_block_staging_supabase_hosts, fallback=[])]
+
+    @property
+    def account_deletion_active_sink_categories_list(self) -> list[str]:
+        return [item for item in _split_csv(self.account_deletion_active_sink_categories, fallback=[])]
+
+    @property
+    def account_deletion_disabled_sink_categories_list(self) -> list[str]:
+        return [item for item in _split_csv(self.account_deletion_disabled_sink_categories, fallback=[])]
+
+    @property
+    def storage_cleanup_known_prefixes_list(self) -> list[str]:
+        return [item for item in _split_csv(self.storage_cleanup_known_prefixes, fallback=[])]
 
 
 settings = Settings()

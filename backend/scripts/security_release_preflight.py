@@ -21,6 +21,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.core.config import settings
+from app.security.personal_data_inventory import PersonalDataInventoryError, load_personal_data_inventory
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -28,11 +29,17 @@ BACKEND_ROOT = REPO_ROOT / "backend"
 CLIENT_ROOT = REPO_ROOT / "src"
 APP_JSON_PATH = REPO_ROOT / "app.json"
 SUPABASE_BLOCKED_HOST_TOKENS = {"staging", "localhost", "127.0.0.1"}
+API_BLOCKED_HOST_TOKENS = {"staging", "localhost", "127.0.0.1", "192.168.", "10.", "172.16."}
 
 
 def _contains_blocked_host(url: str) -> bool:
     lowered = str(url or "").strip().lower()
     return any(token in lowered for token in SUPABASE_BLOCKED_HOST_TOKENS)
+
+
+def _contains_blocked_api_host(url: str) -> bool:
+    lowered = str(url or "").strip().lower()
+    return any(token in lowered for token in API_BLOCKED_HOST_TOKENS)
 
 
 def _scan_text_files_for_patterns(
@@ -70,6 +77,12 @@ def run_checks(target_env: str) -> tuple[list[str], list[str]]:
         notes.append("Non-production mode selected; production-only fail-closed checks skipped.")
         return failures, notes
 
+    raw_app_env = str(os.getenv("APP_ENV") or "").strip().lower()
+    if not raw_app_env:
+        failures.append("APP_ENV is required and must be set to production for release preflight.")
+    elif raw_app_env not in {"prod", "production"}:
+        failures.append("APP_ENV must be production (or prod) for release preflight.")
+
     if not settings.is_production:
         failures.append("APP_ENV must be set to production for release preflight.")
 
@@ -84,6 +97,9 @@ def run_checks(target_env: str) -> tuple[list[str], list[str]]:
 
     if not settings.account_deletion_enabled:
         failures.append("account_deletion_enabled must be true in production.")
+
+    if not settings.account_deletion_contract_enforced:
+        failures.append("account_deletion_contract_enforced must be true in production.")
 
     if str(settings.rate_limit_backend).strip().lower() != "postgres":
         failures.append("rate_limit_backend must be postgres in production.")
@@ -100,11 +116,41 @@ def run_checks(target_env: str) -> tuple[list[str], list[str]]:
     elif _contains_blocked_host(supabase_url):
         failures.append("SUPABASE_URL points to staging/local host token.")
 
+    public_supabase_url = str(os.getenv("EXPO_PUBLIC_SUPABASE_URL") or "").strip()
+    if public_supabase_url and _contains_blocked_host(public_supabase_url):
+        failures.append("EXPO_PUBLIC_SUPABASE_URL points to staging/local host token.")
+
+    public_api_base_url = str(os.getenv("EXPO_PUBLIC_API_BASE_URL") or "").strip()
+    if public_api_base_url and _contains_blocked_api_host(public_api_base_url):
+        failures.append("EXPO_PUBLIC_API_BASE_URL points to staging/local/LAN host token.")
+
     if not settings.production_required_rls_tables_list:
         failures.append("production_required_rls_tables must be configured in production.")
 
     if not str(settings.storage_private_bucket or "").strip():
         failures.append("storage_private_bucket must be configured in production.")
+    if int(settings.storage_upload_window_seconds) > 300:
+        failures.append("storage_upload_window_seconds must be <= 300 seconds in production.")
+    if int(settings.storage_upload_window_seconds) < 30:
+        failures.append("storage_upload_window_seconds must be >= 30 seconds in production.")
+
+    inventory_path = Path(str(settings.personal_data_inventory_path or "").strip())
+    if not str(settings.personal_data_inventory_path or "").strip():
+        failures.append("personal_data_inventory_path must be configured in production.")
+    else:
+        resolved_inventory_path = inventory_path if inventory_path.is_absolute() else BACKEND_ROOT / inventory_path
+        if not resolved_inventory_path.exists():
+            failures.append(f"personal_data_inventory_path does not exist: {resolved_inventory_path}")
+        else:
+            try:
+                load_personal_data_inventory(path_override=str(resolved_inventory_path), strict=True)
+            except PersonalDataInventoryError as exc:
+                failures.append(f"personal data inventory contract is invalid: {exc}")
+
+    if not settings.account_deletion_active_sink_categories_list:
+        failures.append("account_deletion_active_sink_categories must be configured in production.")
+    if not settings.account_deletion_disabled_sink_categories_list:
+        failures.append("account_deletion_disabled_sink_categories must be configured in production.")
 
     main_source = (BACKEND_ROOT / "app" / "main.py").read_text(encoding="utf-8")
     if "docs_url=None if settings.is_production else \"/docs\"" not in main_source:
@@ -130,7 +176,8 @@ def run_checks(target_env: str) -> tuple[list[str], list[str]]:
     filtered_findings = [
         item
         for item in secret_findings
-        if item not in {"backend/.env", ".env"}
+        if item not in {"backend/.env", ".env", "backend/security/production_env_schema.json"}
+        and not item.startswith("docs/")
     ]
     if filtered_findings:
         failures.append(

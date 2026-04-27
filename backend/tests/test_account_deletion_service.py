@@ -12,22 +12,16 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from app.core.auth import AuthenticatedUser
 from app.core.config import settings
 from app.modules.account_deletion.service import AccountDeletionService, AccountDeletionServiceError
+from app.security.personal_data_inventory import load_personal_data_inventory
 
 
 class FakeAccountDeletionRepository:
     def __init__(self):
-        self.accessible_tables = {
-            "user_accounts",
-            "user_roles",
-            "onboarding_states",
-            "clients",
-            "trainers",
-            "conversations",
-            "conversation_messages",
-            "coach_memory",
-            "trainer_invite_codes",
-        }
+        inventory = load_personal_data_inventory()
+        self.accessible_tables = set(inventory.table_names)
+        self.live_tables = set(inventory.table_names)
         self.storage_paths_by_prefix = {}
+        self.storage_ownership_paths = []
         self.deleted_by_column_calls = []
         self.deleted_many_calls = []
         self.audit_rows = []
@@ -38,16 +32,28 @@ class FakeAccountDeletionRepository:
             {"id": "trainer-1", "tenant_id": "tenant-1", "user_id": "user-123"},
         ]
         self.clients = [
-            {"id": "client-1", "tenant_id": "tenant-1", "user_id": "user-123", "assigned_trainer_id": "trainer-1"},
+            {
+                "id": "client-1",
+                "tenant_id": "tenant-1",
+                "user_id": "user-123",
+                "assigned_trainer_id": "trainer-1",
+            },
         ]
         self._fail_delete_auth_user = False
 
     def table_is_accessible(self, *, table: str) -> bool:
         return table in self.accessible_tables
 
+    def list_public_tables(self) -> list[str]:
+        return sorted(self.live_tables)
+
     def list_trainers_for_user(self, *, user_id: str):
         del user_id
         return list(self.trainers)
+
+    def get_user_account(self, *, user_id: str):
+        del user_id
+        return {"id": "ua-1", "auth_user_id": "user-123", "email": "user@example.com"}
 
     def list_clients_for_user(self, *, user_id: str):
         del user_id
@@ -64,6 +70,18 @@ class FakeAccountDeletionRepository:
         del bucket
         return list(self.storage_paths_by_prefix.get(prefix, []))
 
+    def list_storage_ownership_paths_for_subjects(self, *, user_id: str, trainer_ids: list[str], client_ids: list[str]) -> list[str]:
+        del user_id, trainer_ids, client_ids
+        return list(self.storage_ownership_paths)
+
+    def mark_storage_ownership_paths_deleted(self, *, paths: list[str], reason: str = "account_deletion") -> int:
+        del reason
+        return len(paths)
+
+    def delete_upload_grants_for_subjects(self, *, user_id: str, trainer_ids: list[str], client_ids: list[str]) -> int:
+        del user_id, trainer_ids, client_ids
+        return 2
+
     def delete_storage_paths(self, *, bucket: str, paths: list[str]) -> int:
         del bucket
         return len(paths)
@@ -77,17 +95,8 @@ class FakeAccountDeletionRepository:
         key = (table, column, tuple(values))
         return int(self.deletion_counts.get(key, 0))
 
-    def delete_clients_for_user(self, *, user_id: str) -> int:
-        del user_id
-        return 1
-
-    def delete_trainers_for_user(self, *, user_id: str) -> int:
-        del user_id
-        return 1
-
-    def delete_user_account_rows(self, *, user_id: str) -> int:
-        del user_id
-        return 1
+    def delete_mobile_analytics_events(self, *, user_id: str) -> int:
+        return int(self.deletion_counts.get(("mobile_analytics_events", "user_id", user_id), 0))
 
     def delete_auth_user(self, *, user_id: str) -> None:
         if self._fail_delete_auth_user:
@@ -119,14 +128,29 @@ class AccountDeletionServiceTests(unittest.TestCase):
         self.repo = FakeAccountDeletionRepository()
         self.service = AccountDeletionService(self.repo)
         self.user = AuthenticatedUser(id="user-123", email="user@example.com", access_token="token-123")
-        self._original_enabled = settings.account_deletion_enabled
-        self._original_bucket = settings.storage_private_bucket
+        self.original = {
+            "enabled": settings.account_deletion_enabled,
+            "contract": settings.account_deletion_contract_enforced,
+            "bucket": settings.storage_private_bucket,
+            "active_sinks": settings.account_deletion_active_sink_categories,
+            "disabled_sinks": settings.account_deletion_disabled_sink_categories,
+        }
         settings.account_deletion_enabled = True
+        settings.account_deletion_contract_enforced = True
         settings.storage_private_bucket = "private-user-files"
+        settings.account_deletion_active_sink_categories = "file_storage,retrieval_caches,analytics_events"
+        settings.account_deletion_disabled_sink_categories = (
+            "vector_indexes,embedding_stores,logs,notification_providers,email_providers,ai_memory_retrieval_systems"
+        )
+        os.environ.pop("MODE_EXTERNAL_SINK_VECTOR_INDEXES_ENABLED", None)
 
     def tearDown(self):
-        settings.account_deletion_enabled = self._original_enabled
-        settings.storage_private_bucket = self._original_bucket
+        settings.account_deletion_enabled = self.original["enabled"]
+        settings.account_deletion_contract_enforced = self.original["contract"]
+        settings.storage_private_bucket = self.original["bucket"]
+        settings.account_deletion_active_sink_categories = self.original["active_sinks"]
+        settings.account_deletion_disabled_sink_categories = self.original["disabled_sinks"]
+        os.environ.pop("MODE_EXTERNAL_SINK_VECTOR_INDEXES_ENABLED", None)
 
     def test_delete_account_requires_delete_confirmation(self):
         with self.assertRaises(AccountDeletionServiceError) as raised:
@@ -140,6 +164,8 @@ class AccountDeletionServiceTests(unittest.TestCase):
             "trainer/trainer-1": ["trainer/trainer-1/file-a.txt"],
             "client/client-1": ["client/client-1/file-b.txt"],
         }
+        self.repo.storage_ownership_paths = ["trainer/trainer-1/file-c.txt"]
+        self.repo.deletion_counts[("mobile_analytics_events", "user_id", "user-123")] = 3
 
         result = self.service.delete_account(user=self.user, confirmation="DELETE")
 
@@ -149,18 +175,30 @@ class AccountDeletionServiceTests(unittest.TestCase):
         self.assertEqual(len(self.repo.audit_rows), 1)
         self.assertEqual(self.repo.audit_rows[0]["outcome"], "succeeded")
         self.assertEqual(self.repo.audit_rows[0]["actor_role"], "mixed")
-        self.assertEqual(result.deleted_record_counts["storage_objects"], 2)
+        self.assertEqual(result.deleted_record_counts["sink:file_storage:objects_deleted"], 3)
+        self.assertEqual(result.deleted_record_counts["sink:file_storage:ownership_rows_deleted"], 3)
+        self.assertEqual(result.deleted_record_counts["sink:file_storage:upload_grants_deleted"], 2)
+        self.assertEqual(result.deleted_record_counts["sink:analytics_events:events_deleted"], 3)
         self.assertEqual(self.repo.rehome_calls, [("trainer-1", "tenant-self-guided")])
 
-    def test_delete_account_fails_fast_when_required_table_missing(self):
-        self.repo.accessible_tables.remove("coach_memory")
+    def test_delete_account_fails_when_live_schema_has_unknown_table(self):
+        self.repo.live_tables.add("future_personal_data_table")
 
         with self.assertRaises(AccountDeletionServiceError) as raised:
             self.service.delete_account(user=self.user, confirmation="DELETE")
 
         self.assertEqual(raised.exception.status_code, 500)
-        self.assertIn("required tables are present", str(raised.exception))
+        self.assertIn("classified in the personal-data inventory", str(raised.exception))
         self.assertEqual(self.repo.deleted_auth_users, [])
+
+    def test_delete_account_fails_when_disabled_sink_is_enabled(self):
+        os.environ["MODE_EXTERNAL_SINK_VECTOR_INDEXES_ENABLED"] = "true"
+
+        with self.assertRaises(AccountDeletionServiceError) as raised:
+            self.service.delete_account(user=self.user, confirmation="DELETE")
+
+        self.assertEqual(raised.exception.status_code, 500)
+        self.assertIn("external sink vector_indexes is enabled", str(raised.exception))
 
     def test_delete_account_failure_writes_failed_audit(self):
         self.repo._fail_delete_auth_user = True

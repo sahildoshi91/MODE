@@ -5,6 +5,7 @@ from typing import Any
 
 from app.core.config import settings
 from app.db.client import get_supabase_admin_client
+from app.security.personal_data_inventory import PersonalDataInventoryError, load_personal_data_inventory
 
 
 class StartupGuardError(RuntimeError):
@@ -38,6 +39,17 @@ def _assert_required_rls_tables() -> None:
     raise StartupGuardError(
         f"Production startup blocked: required RLS tables are missing or not forced ({missing})"
     )
+
+
+def _assert_personal_data_inventory_contract() -> None:
+    if not settings.account_deletion_contract_enforced:
+        raise StartupGuardError("Production startup blocked: account deletion contract enforcement must be enabled")
+    if not str(settings.personal_data_inventory_path or "").strip():
+        raise StartupGuardError("Production startup blocked: personal_data_inventory_path must be configured")
+    try:
+        load_personal_data_inventory(strict=True)
+    except PersonalDataInventoryError as exc:
+        raise StartupGuardError(f"Production startup blocked: personal data inventory contract is invalid ({exc})") from exc
 
 
 def run_startup_guards() -> None:
@@ -76,4 +88,5 @@ def run_startup_guards() -> None:
             "Production startup blocked: EXPO_PUBLIC_SUPABASE_SERVICE_ROLE_KEY must never be set"
         )
 
+    _assert_personal_data_inventory_contract()
     _assert_required_rls_tables()
