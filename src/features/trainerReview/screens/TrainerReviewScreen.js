@@ -162,7 +162,7 @@ export default function TrainerReviewScreen({
         outputId: selectedOutputId,
         editedOutputText,
         editedOutputJson,
-        autoApplyDeltas: true,
+        autoApplyDeltas: false,
       }),
       'Edit saved.',
     );
@@ -176,7 +176,7 @@ export default function TrainerReviewScreen({
         outputId: selectedOutputId,
         editedOutputText,
         editedOutputJson,
-        autoApplyDeltas: true,
+        autoApplyDeltas: false,
       }),
       'Output approved.',
     );

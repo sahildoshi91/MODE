@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1.account import router as account_router
 from app.api.v1.analytics import router as analytics_router
+from app.api.v1.atlas import router as atlas_router
 from app.api.v1.auth_password import router as auth_password_router
 from app.api.v1.chat import router as chat_router
 from app.api.v1.checkin import router as checkin_router
@@ -33,6 +34,7 @@ api_router.include_router(plans_router, prefix="/plans", tags=["plans"])
 api_router.include_router(workouts_router, prefix="/workouts", tags=["workouts"])
 api_router.include_router(onboarding_router, prefix="/onboarding", tags=["onboarding"])
 api_router.include_router(analytics_router, prefix="/analytics", tags=["analytics"])
+api_router.include_router(atlas_router, prefix="/atlas", tags=["atlas"])
 api_router.include_router(trainer_assignment_router, prefix="/trainer-assignment", tags=["trainer-assignment"])
 api_router.include_router(trainer_home_router, prefix="/trainer-home", tags=["trainer-home"])
 api_router.include_router(trainer_clients_router, prefix="/trainer-clients", tags=["trainer-clients"])

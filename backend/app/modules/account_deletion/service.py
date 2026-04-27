@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
@@ -14,6 +15,8 @@ from app.security.personal_data_inventory import (
     PersonalDataInventoryError,
     load_personal_data_inventory,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class AccountDeletionServiceError(RuntimeError):
@@ -42,8 +45,9 @@ class _DeletionExecutionContext:
 class AccountDeletionService:
     CONFIRMATION_TOKEN = "DELETE"
 
-    def __init__(self, repository: AccountDeletionRepository):
+    def __init__(self, repository: AccountDeletionRepository, atlas_trainer_deletion_observer=None):
         self.repository = repository
+        self.atlas_trainer_deletion_observer = atlas_trainer_deletion_observer
 
     def delete_account(self, *, user: AuthenticatedUser, confirmation: str) -> AccountDeletionResult:
         if not settings.account_deletion_enabled:
@@ -99,6 +103,11 @@ class AccountDeletionService:
                 user_account_id=user_account_id,
                 trainer_ids=trainer_ids,
                 client_ids=client_ids,
+            )
+            self._run_atlas_trainer_deletion_observer(
+                trainer_ids=trainer_ids,
+                deletion_request_id=deletion_request_id,
+                deleted_counts=deleted_counts,
             )
 
             self._run_external_sink_cleanup(
@@ -160,6 +169,25 @@ class AccountDeletionService:
                 f"Account deletion contract is invalid: {exc}",
                 status_code=500,
             ) from exc
+
+    def _run_atlas_trainer_deletion_observer(
+        self,
+        *,
+        trainer_ids: tuple[str, ...],
+        deletion_request_id: str,
+        deleted_counts: dict[str, int],
+    ) -> None:
+        if not trainer_ids or not self.atlas_trainer_deletion_observer:
+            return
+        try:
+            result = self.atlas_trainer_deletion_observer.observe_before_trainer_deletion(
+                trainer_ids=list(trainer_ids),
+                deletion_request_id=deletion_request_id,
+            )
+            for key, value in (result or {}).items():
+                deleted_counts[f"atlas:{key}"] = int(value)
+        except Exception:
+            logger.exception("Atlas trainer deletion observer failed deletion_request_id=%s", deletion_request_id)
 
     def _assert_inventory_sink_contract(self, inventory: PersonalDataInventory) -> None:
         required = set(inventory.required_sink_categories)

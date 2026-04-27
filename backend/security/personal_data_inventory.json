@@ -1,5 +1,5 @@
 {
-  "version": "2026-04-26",
+  "version": "2026-04-27",
   "required_sink_categories": [
     "vector_indexes",
     "embedding_stores",
@@ -100,6 +100,92 @@
         "column": "trainer_id",
         "execution_order": 935,
         "description": "Rule version history is tied to deleted trainer accounts."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_ai_review_queue",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 934,
+        "description": "Trainer-specific AI learning proposals are scoped to one identifiable trainer."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_ai_learning_events",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 933,
+        "description": "Trainer-specific learning events are tenant-scoped and may reveal trainer preferences."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_ai_knowledge",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 932,
+        "description": "Approved trainer-AI rules remain scoped to one trainer and are deleted with that trainer."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "atlas_learning_events",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "retention_ttl",
+        "execution_order": 931,
+        "description": "Atlas learning events store sanitized summaries only and are retained with bounded TTL."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "atlas_review_queue",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "retention_ttl",
+        "execution_order": 930,
+        "description": "Atlas review queue rows store sanitized, generalized proposals awaiting admin review."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "atlas_audit_logs",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "retention_ttl",
+        "execution_order": 929,
+        "description": "Atlas audit logs retain minimal privacy review and decision metadata."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "atlas_knowledge",
+      "classification": "non_personal",
+      "deletion_policy": {
+        "action": "keep",
+        "execution_order": 928,
+        "description": "Approved Atlas knowledge is anonymized generalized coaching doctrine with no trainer or client identifiers."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "atlas_profile",
+      "classification": "non_personal",
+      "deletion_policy": {
+        "action": "keep",
+        "execution_order": 927,
+        "description": "Atlas profile stores non-personal product persona defaults."
       }
     },
     {

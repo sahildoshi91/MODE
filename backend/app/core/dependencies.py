@@ -8,6 +8,13 @@ from app.modules.ai_feedback.repository import AIFeedbackRepository
 from app.modules.ai_feedback.service import AIFeedbackService
 from app.modules.account_deletion.repository import AccountDeletionRepository
 from app.modules.account_deletion.service import AccountDeletionService
+from app.modules.atlas.repository import AtlasRepository
+from app.modules.atlas.service import (
+    AtlasObserverService,
+    AtlasReviewQueueService,
+    AtlasTrainerDeletionObserver,
+    TrainerAiReviewQueueService,
+)
 from app.modules.conversation.repository import ConversationRepository
 from app.modules.conversation.service import ConversationService
 from app.modules.daily_checkins.repository import DailyCheckinRepository
@@ -54,14 +61,43 @@ def get_request_scoped_supabase_client(
     return get_supabase_user_client(user.access_token)
 
 
+def get_atlas_repository() -> AtlasRepository:
+    return AtlasRepository(get_supabase_admin_client())
+
+
+def get_atlas_observer_service(
+    repository: AtlasRepository = Depends(get_atlas_repository),
+) -> AtlasObserverService:
+    return AtlasObserverService(repository)
+
+
+def get_atlas_review_queue_service(
+    repository: AtlasRepository = Depends(get_atlas_repository),
+) -> AtlasReviewQueueService:
+    return AtlasReviewQueueService(repository)
+
+
+def get_trainer_ai_review_queue_service(
+    repository: AtlasRepository = Depends(get_atlas_repository),
+) -> TrainerAiReviewQueueService:
+    return TrainerAiReviewQueueService(repository)
+
+
+def get_atlas_trainer_deletion_observer(
+    repository: AtlasRepository = Depends(get_atlas_repository),
+) -> AtlasTrainerDeletionObserver:
+    return AtlasTrainerDeletionObserver(repository)
+
+
 def get_account_deletion_repository() -> AccountDeletionRepository:
     return AccountDeletionRepository(get_supabase_admin_client())
 
 
 def get_account_deletion_service(
     repository: AccountDeletionRepository = Depends(get_account_deletion_repository),
+    atlas_trainer_deletion_observer: AtlasTrainerDeletionObserver = Depends(get_atlas_trainer_deletion_observer),
 ) -> AccountDeletionService:
-    return AccountDeletionService(repository)
+    return AccountDeletionService(repository, atlas_trainer_deletion_observer=atlas_trainer_deletion_observer)
 
 
 def get_workout_repository(
@@ -190,8 +226,9 @@ def get_ai_feedback_admin_repository() -> AIFeedbackRepository:
 
 def get_ai_feedback_logger_service(
     repository: AIFeedbackRepository = Depends(get_ai_feedback_admin_repository),
+    atlas_observer_service: AtlasObserverService = Depends(get_atlas_observer_service),
 ) -> AIFeedbackService:
-    return AIFeedbackService(repository)
+    return AIFeedbackService(repository, atlas_observer_service=atlas_observer_service)
 
 
 def get_trainer_intelligence_repository() -> TrainerIntelligenceRepository:
@@ -240,8 +277,13 @@ def get_trainer_review_repository(
 def get_trainer_review_service(
     repository: TrainerReviewRepository = Depends(get_trainer_review_repository),
     ai_feedback_logger_service: AIFeedbackService = Depends(get_ai_feedback_logger_service),
+    atlas_observer_service: AtlasObserverService = Depends(get_atlas_observer_service),
 ) -> TrainerReviewService:
-    return TrainerReviewService(repository, ai_feedback_logger_service=ai_feedback_logger_service)
+    return TrainerReviewService(
+        repository,
+        ai_feedback_logger_service=ai_feedback_logger_service,
+        atlas_observer_service=atlas_observer_service,
+    )
 
 
 def get_trainer_program_repository(
@@ -270,19 +312,22 @@ def get_ai_feedback_repository(
 
 def get_ai_feedback_service(
     repository: AIFeedbackRepository = Depends(get_ai_feedback_repository),
+    atlas_observer_service: AtlasObserverService = Depends(get_atlas_observer_service),
 ) -> AIFeedbackService:
-    return AIFeedbackService(repository)
+    return AIFeedbackService(repository, atlas_observer_service=atlas_observer_service)
 
 
 def get_trainer_coach_service(
     repository: TrainerCoachRepository = Depends(get_trainer_coach_repository),
     ai_feedback_service: AIFeedbackService = Depends(get_ai_feedback_service),
     trainer_home_service: TrainerHomeService = Depends(get_trainer_home_service),
+    atlas_observer_service: AtlasObserverService = Depends(get_atlas_observer_service),
 ) -> TrainerCoachService:
     return TrainerCoachService(
         repository=repository,
         ai_feedback_service=ai_feedback_service,
         trainer_home_service=trainer_home_service,
+        atlas_observer_service=atlas_observer_service,
     )
 
 

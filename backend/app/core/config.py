@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     ai_request_timeout_seconds: float = 30.0
     ai_max_retries: int = 2
     expose_route_debug: bool = False
+    atlas_enabled: bool = True
+    atlas_background_learning_enabled: bool = True
+    atlas_review_required: bool = True
+    atlas_trainer_deletion_learning_enabled: bool = True
+    atlas_trainer_ai_manager_enabled: bool = True
+    trainer_ai_learning_enabled: bool = True
+    trainer_ai_review_required: bool = True
+    atlas_runtime_enabled: bool = False
+    atlas_generic_coach_enabled: bool = False
+    atlas_admin_email_allowlist: str = ""
     trainer_intelligence_orchestration_enabled: bool = False
     trainer_ai_review_auto_apply_enabled: bool = True
     trainer_assistant_v1_enabled: bool = True
@@ -125,6 +135,10 @@ class Settings(BaseSettings):
     @property
     def storage_cleanup_known_prefixes_list(self) -> list[str]:
         return [item for item in _split_csv(self.storage_cleanup_known_prefixes, fallback=[])]
+
+    @property
+    def atlas_admin_email_allowlist_list(self) -> list[str]:
+        return [item.lower() for item in _split_csv(self.atlas_admin_email_allowlist, fallback=[])]
 
 
 settings = Settings()

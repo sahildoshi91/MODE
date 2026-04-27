@@ -13,9 +13,11 @@ class TrainerReviewService:
         self,
         repository: TrainerReviewRepository,
         ai_feedback_logger_service: AIFeedbackService | None = None,
+        atlas_observer_service=None,
     ):
         self.repository = repository
         self.ai_feedback_logger_service = ai_feedback_logger_service
+        self.atlas_observer_service = atlas_observer_service
 
     def queue_unanswered_question(
         self,
@@ -54,6 +56,12 @@ class TrainerReviewService:
             }
         )
         self.repository.mark_resolved(queue_id)
+        self._notify_atlas_review_resolved(
+            trainer_id=trainer_id,
+            queue_id=queue_id,
+            approved_answer=request.approved_answer,
+            response_tags=request.response_tags,
+        )
         return approval
 
     def _mirror_queue_item_into_output_ledger(self, queue_row: dict) -> None:
@@ -84,3 +92,23 @@ class TrainerReviewService:
             )
         except Exception:
             logger.exception("Failed to mirror legacy trainer review queue row into ai_generated_outputs")
+
+    def _notify_atlas_review_resolved(
+        self,
+        *,
+        trainer_id: str,
+        queue_id: str,
+        approved_answer: str,
+        response_tags: list[str],
+    ) -> None:
+        if not self.atlas_observer_service:
+            return
+        try:
+            self.atlas_observer_service.observe_resolved_review_item(
+                trainer_id=trainer_id,
+                approved_answer=approved_answer,
+                queue_id=queue_id,
+                response_tags=response_tags,
+            )
+        except Exception:
+            logger.exception("Atlas observation failed for resolved review item queue_id=%s", queue_id)

@@ -137,6 +137,19 @@ jest.mock('../../../trainerReview/services/trainerReviewApi', () => ({
   rejectTrainerReviewOutput: jest.fn().mockResolvedValue({}),
 }));
 
+jest.mock('../../../atlas/services/atlasApi', () => ({
+  approveAtlasAdminReviewQueueItem: jest.fn().mockResolvedValue({}),
+  approveTrainerAiReviewQueueItem: jest.fn().mockResolvedValue({}),
+  deleteTrainerAiReviewQueueItem: jest.fn().mockResolvedValue({}),
+  getAtlasAdminMe: jest.fn().mockResolvedValue({ allowed: false }),
+  getAtlasAdminReviewQueue: jest.fn().mockResolvedValue([]),
+  getTrainerAiReviewQueue: jest.fn(),
+  rejectAtlasAdminReviewQueueItem: jest.fn().mockResolvedValue({}),
+  rejectTrainerAiReviewQueueItem: jest.fn().mockResolvedValue({}),
+  updateAtlasAdminReviewQueueItem: jest.fn().mockResolvedValue({}),
+  updateTrainerAiReviewQueueItem: jest.fn().mockResolvedValue({}),
+}));
+
 jest.mock('expo-constants', () => ({
   expoConfig: {
     version: '1.2.3',
@@ -165,6 +178,7 @@ import {
 import { getTrainerSettingsMe, listTrainerPersonas } from '../../../profile/services/profileApi';
 import { getTrainerCoachQueue } from '../../../trainerCoach/services/trainerCoachApi';
 import { getTrainerReviewOutputs } from '../../../trainerReview/services/trainerReviewApi';
+import { getTrainerAiReviewQueue } from '../../../atlas/services/atlasApi';
 import { theme } from '../../../../../lib/theme';
 import { generateKnowledgeNoteTitle } from '../../utils/knowledgeNoteTitleSummary';
 import TrainerSystemScreen from '../TrainerSystemScreen';
@@ -378,6 +392,7 @@ describe('TrainerSystemScreen', () => {
         { id: 'output-2', output_text: 'Open output 2', source_type: 'chat', review_status: 'open' },
       ],
     });
+    getTrainerAiReviewQueue.mockResolvedValue([]);
     fetchWithApiFallback.mockImplementation((path) => {
       if (path === '/api/v1/trainer-review/queue') {
         return Promise.resolve({

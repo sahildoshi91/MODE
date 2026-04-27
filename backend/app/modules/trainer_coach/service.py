@@ -36,10 +36,12 @@ class TrainerCoachService:
         repository: TrainerCoachRepository,
         ai_feedback_service: AIFeedbackService,
         trainer_home_service: TrainerHomeService,
+        atlas_observer_service: Any | None = None,
     ):
         self.repository = repository
         self.ai_feedback_service = ai_feedback_service
         self.trainer_home_service = trainer_home_service
+        self.atlas_observer_service = atlas_observer_service
 
     def build_workspace(
         self,
@@ -204,6 +206,8 @@ class TrainerCoachService:
             (event for event in detail.feedback_events if event.event_type == "approved"),
             detail.feedback_events[0] if detail.feedback_events else None,
         )
+        if feedback_event is not None:
+            self._notify_atlas(output=output, feedback_event=feedback_event)
 
         event_rows = transaction_payload.get("events")
         events = [
@@ -224,6 +228,18 @@ class TrainerCoachService:
             ),
             queue_count=self.repository.count_open_queue(trainer_id),
         )
+
+    def _notify_atlas(self, *, output: Any, feedback_event: Any) -> None:
+        if not self.atlas_observer_service:
+            return
+        try:
+            self.atlas_observer_service.observe_ai_feedback_event(
+                output=output,
+                feedback_event=feedback_event,
+                raw_source_type=getattr(output, "source_type", None),
+            )
+        except Exception:
+            logger.exception("Atlas observation failed for trainer coach feedback event")
 
     def edit_queue_item(
         self,

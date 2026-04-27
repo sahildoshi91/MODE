@@ -73,7 +73,7 @@ export async function editTrainerReviewOutput({
   editedOutputText,
   editedOutputJson,
   notes = null,
-  autoApplyDeltas = true,
+  autoApplyDeltas = false,
 }) {
   return requestTrainerReviewApi(`/api/v1/trainer-review/outputs/${encodeURIComponent(outputId)}/edit`, {
     accessToken,
@@ -93,7 +93,7 @@ export async function approveTrainerReviewOutput({
   editedOutputText = null,
   editedOutputJson = null,
   responseTags = [],
-  autoApplyDeltas = true,
+  autoApplyDeltas = false,
 }) {
   return requestTrainerReviewApi(`/api/v1/trainer-review/outputs/${encodeURIComponent(outputId)}/approve`, {
     accessToken,

@@ -30,6 +30,7 @@ import {
   SystemSectionHeader,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { ATLAS_ADMIN_REVIEW_ENABLED } from '../../../config/featureFlags';
 import { getApiDebugInfo } from '../../../services/apiBaseUrl';
 import { fetchWithApiFallback } from '../../../services/apiRequest';
 import {
@@ -71,6 +72,18 @@ import {
   getTrainerReviewOutputs,
   rejectTrainerReviewOutput,
 } from '../../trainerReview/services/trainerReviewApi';
+import {
+  approveAtlasAdminReviewQueueItem,
+  approveTrainerAiReviewQueueItem,
+  deleteTrainerAiReviewQueueItem,
+  getAtlasAdminMe,
+  getAtlasAdminReviewQueue,
+  getTrainerAiReviewQueue,
+  rejectAtlasAdminReviewQueueItem,
+  rejectTrainerAiReviewQueueItem,
+  updateAtlasAdminReviewQueueItem,
+  updateTrainerAiReviewQueueItem,
+} from '../../atlas/services/atlasApi';
 import { formatIsoWeekdaySummary } from '../../trainerClients/utils/scheduleResolver';
 import { generateKnowledgeNoteTitle } from '../utils/knowledgeNoteTitleSummary';
 
@@ -84,6 +97,7 @@ const SYSTEM_VIEW = {
   CLIENT_MANAGEMENT: 'client_management',
   CLIENT_DETAIL_MANAGEMENT: 'client_detail_management',
   REVIEW_HUB: 'review_hub',
+  ATLAS_ADMIN_REVIEW: 'atlas_admin_review',
   SYSTEM_ACCOUNT: 'system_account',
 };
 
@@ -91,6 +105,7 @@ const REVIEW_SEGMENT = {
   DRAFTS: 'drafts',
   OUTPUTS: 'outputs',
   QA: 'qa',
+  AI_LEARNING: 'ai_learning',
 };
 
 const MEMORY_FILTER = {
@@ -344,15 +359,6 @@ function buildCoachWorkspaceSummary({
   };
 }
 
-function isExtractionSoftNote(reason) {
-  return typeof reason === 'string' && (
-    reason.startsWith('extractor_exception:')
-    || reason.startsWith('rule_persistence_exception:')
-    || reason === 'ingest_request_failed'
-    || reason === 'tenant_context_missing_for_extraction'
-  );
-}
-
 async function parseApiError(response, fallbackMessage) {
   try {
     const payload = await response.json();
@@ -533,6 +539,7 @@ function TrainerSystemHubScreen({
   counts,
   onboardingState,
   onNavigate,
+  showAtlasAdminReview = false,
 }) {
   return (
     <SectionShell
@@ -613,6 +620,15 @@ function TrainerSystemHubScreen({
           onPress={() => onNavigate(SYSTEM_VIEW.REVIEW_HUB)}
           testID="trainer-system-nav-review-hub"
         />
+        {showAtlasAdminReview ? (
+          <SystemNavRow
+            icon="shield"
+            title="Atlas Review"
+            subtitle="Internal privacy queue for generalized coaching learnings."
+            onPress={() => onNavigate(SYSTEM_VIEW.ATLAS_ADMIN_REVIEW)}
+            testID="trainer-system-nav-atlas-review"
+          />
+        ) : null}
       </SystemSectionCard>
 
       <SystemSectionCard>
@@ -2757,6 +2773,7 @@ function ReviewHubScreen({
   const [draftPayload, setDraftPayload] = useState({ items: [], count: 0 });
   const [outputsPayload, setOutputsPayload] = useState({ items: [], count: 0 });
   const [qaItems, setQaItems] = useState([]);
+  const [aiLearningItems, setAiLearningItems] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedItem, setSelectedItem] = useState(null);
@@ -2768,20 +2785,23 @@ function ReviewHubScreen({
       setDraftPayload({ items: [], count: 0 });
       setOutputsPayload({ items: [], count: 0 });
       setQaItems([]);
+      setAiLearningItems([]);
       setIsLoading(false);
       return;
     }
     setIsLoading(true);
     setError(null);
     try {
-      const [draftResponse, outputResponse, qaResponse] = await Promise.all([
+      const [draftResponse, outputResponse, qaResponse, aiLearningResponse] = await Promise.all([
         getTrainerCoachQueue({ accessToken, limit: 50 }),
         getTrainerReviewOutputs({ accessToken, status: 'open', limit: 50, offset: 0 }),
         requestTrainerReviewQueue({ accessToken }),
+        getTrainerAiReviewQueue({ accessToken, status: 'pending', limit: 50 }).catch(() => []),
       ]);
       setDraftPayload(normalizeListPayload(draftResponse));
       setOutputsPayload(normalizeListPayload(outputResponse));
       setQaItems(Array.isArray(qaResponse) ? qaResponse : []);
+      setAiLearningItems(Array.isArray(aiLearningResponse) ? aiLearningResponse : []);
     } catch (nextError) {
       setError(nextError?.message || 'Unable to load review hub.');
     } finally {
@@ -2800,8 +2820,11 @@ function ReviewHubScreen({
     if (segment === REVIEW_SEGMENT.OUTPUTS) {
       return outputsPayload.items;
     }
+    if (segment === REVIEW_SEGMENT.AI_LEARNING) {
+      return aiLearningItems;
+    }
     return qaItems;
-  }, [draftPayload.items, outputsPayload.items, qaItems, segment]);
+  }, [aiLearningItems, draftPayload.items, outputsPayload.items, qaItems, segment]);
 
   const openItem = (item) => {
     setSelectedItem(item);
@@ -2811,6 +2834,7 @@ function ReviewHubScreen({
         || item?.edited_output_text
         || item?.output_text
         || item?.model_draft_answer
+        || item?.proposed_rule
         || '',
       ),
     );
@@ -2874,7 +2898,7 @@ function ReviewHubScreen({
           editedOutputText: editedText,
           editedOutputJson: null,
           notes: null,
-          autoApplyDeltas: true,
+          autoApplyDeltas: false,
         });
       } else if (action === 'approve') {
         await approveTrainerReviewOutput({
@@ -2883,7 +2907,7 @@ function ReviewHubScreen({
           editedOutputText: editedText,
           editedOutputJson: null,
           responseTags: [],
-          autoApplyDeltas: true,
+          autoApplyDeltas: false,
         });
       } else {
         await rejectTrainerReviewOutput({
@@ -2935,6 +2959,57 @@ function ReviewHubScreen({
     }
   };
 
+  const handleAiLearningMutation = async (action) => {
+    if (!selectedItem?.id || !accessToken || mutationState.isSaving) {
+      return;
+    }
+    setMutationState({ isSaving: true, error: null, success: null });
+    try {
+      if (action === 'edit') {
+        await updateTrainerAiReviewQueueItem({
+          accessToken,
+          queueId: selectedItem.id,
+          proposedRule: editedText,
+          reviewerNotes: null,
+        });
+      } else if (action === 'approve') {
+        const trimmedRule = editedText.trim();
+        if (trimmedRule && trimmedRule !== selectedItem.proposed_rule) {
+          await updateTrainerAiReviewQueueItem({
+            accessToken,
+            queueId: selectedItem.id,
+            proposedRule: trimmedRule,
+            reviewerNotes: null,
+          });
+        }
+        await approveTrainerAiReviewQueueItem({
+          accessToken,
+          queueId: selectedItem.id,
+        });
+      } else if (action === 'delete') {
+        await deleteTrainerAiReviewQueueItem({
+          accessToken,
+          queueId: selectedItem.id,
+        });
+      } else {
+        await rejectTrainerAiReviewQueueItem({
+          accessToken,
+          queueId: selectedItem.id,
+          reviewerNotes: 'Rejected from Trainer System Hub',
+        });
+      }
+      await loadReviewData();
+      setSelectedItem(null);
+      onReviewMutated?.();
+    } catch (nextError) {
+      setMutationState({
+        isSaving: false,
+        error: nextError?.message || 'Unable to update AI learning item.',
+        success: null,
+      });
+    }
+  };
+
   return (
     <SectionShell
       title="Review Hub"
@@ -2959,6 +3034,7 @@ function ReviewHubScreen({
           { key: REVIEW_SEGMENT.DRAFTS, label: `Draft Queue (${draftPayload.count})` },
           { key: REVIEW_SEGMENT.OUTPUTS, label: `Outputs (${outputsPayload.count})` },
           { key: REVIEW_SEGMENT.QA, label: `QA (${qaItems.length})` },
+          { key: REVIEW_SEGMENT.AI_LEARNING, label: `AI Learning (${aiLearningItems.length})` },
         ]}
       />
 
@@ -2968,8 +3044,15 @@ function ReviewHubScreen({
             ? 'Draft Queue'
             : segment === REVIEW_SEGMENT.OUTPUTS
               ? 'Outputs / Corrections'
-              : 'Low-Confidence QA'}
+              : segment === REVIEW_SEGMENT.AI_LEARNING
+                ? 'AI Learning'
+                : 'Low-Confidence QA'}
         />
+        {segment === REVIEW_SEGMENT.AI_LEARNING ? (
+          <ModeText variant="bodySm" tone="secondary">
+            Atlas noticed a pattern in how you coach. Approve this to help your AI sound more like you.
+          </ModeText>
+        ) : null}
         {isLoading ? (
           <View style={styles.loadingRow}>
             <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
@@ -2991,23 +3074,29 @@ function ReviewHubScreen({
             ? item?.headline || item?.client_name || 'Draft review item'
             : segment === REVIEW_SEGMENT.OUTPUTS
               ? item?.output_text || item?.source_type || 'Review output'
-              : item?.user_question || 'Low-confidence output';
+              : segment === REVIEW_SEGMENT.AI_LEARNING
+                ? item?.proposed_rule || 'Suggested AI learning'
+                : item?.user_question || 'Low-confidence output';
           const subtitle = segment === REVIEW_SEGMENT.DRAFTS
             ? `${item?.client_name || 'Client'} · ${item?.summary || item?.action_type || 'Open draft'}`
             : segment === REVIEW_SEGMENT.OUTPUTS
               ? `${item?.source_type || 'chat'}${item?.client_id ? ` · ${item.client_id}` : ''}`
-              : `Confidence ${typeof item?.confidence_score === 'number' ? `${(item.confidence_score * 100).toFixed(0)}%` : 'unknown'} · ${item?.status || 'open'}`;
+              : segment === REVIEW_SEGMENT.AI_LEARNING
+                ? item?.reason_detected || 'Trainer-specific AI rule pending approval'
+                : `Confidence ${typeof item?.confidence_score === 'number' ? `${(item.confidence_score * 100).toFixed(0)}%` : 'unknown'} · ${item?.status || 'open'}`;
           const badge = segment === REVIEW_SEGMENT.DRAFTS
             ? item?.priority_tier || null
             : segment === REVIEW_SEGMENT.OUTPUTS
               ? item?.review_status || null
+              : segment === REVIEW_SEGMENT.AI_LEARNING
+                ? item?.reviewer_status || null
               : typeof item?.confidence_score === 'number'
                 ? `${Math.round(item.confidence_score * 100)}%`
                 : null;
           return (
             <SystemNavRow
               key={key}
-              icon={segment === REVIEW_SEGMENT.QA ? 'alert-circle' : 'check-square'}
+              icon={segment === REVIEW_SEGMENT.QA ? 'alert-circle' : segment === REVIEW_SEGMENT.AI_LEARNING ? 'cpu' : 'check-square'}
               title={title}
               subtitle={subtitle}
               badge={badge}
@@ -3037,10 +3126,15 @@ function ReviewHubScreen({
                 </ModeText>
               </>
             ) : null}
+            {segment === REVIEW_SEGMENT.AI_LEARNING ? (
+              <ModeText variant="bodySm" tone="secondary">
+                Atlas noticed a pattern in how you coach. Approve this to help your AI sound more like you.
+              </ModeText>
+            ) : null}
             <ModeInput
               value={editedText}
               onChangeText={setEditedText}
-              placeholder="Review and edit the response text"
+              placeholder={segment === REVIEW_SEGMENT.AI_LEARNING ? 'Review and edit the learned rule' : 'Review and edit the response text'}
               multiline
               style={styles.multilineInput}
               testID="trainer-system-review-edit-input"
@@ -3104,6 +3198,37 @@ function ReviewHubScreen({
                   disabled={mutationState.isSaving}
                   testID="trainer-system-review-qa-approve"
                 />
+              ) : null}
+              {segment === REVIEW_SEGMENT.AI_LEARNING ? (
+                <>
+                  <ModeButton
+                    title={mutationState.isSaving ? 'Saving...' : 'Save learned rule'}
+                    onPress={() => handleAiLearningMutation('edit')}
+                    disabled={mutationState.isSaving}
+                    testID="trainer-system-review-ai-learning-save"
+                  />
+                  <ModeButton
+                    title="Approve learned rule"
+                    variant="secondary"
+                    onPress={() => handleAiLearningMutation('approve')}
+                    disabled={mutationState.isSaving}
+                    testID="trainer-system-review-ai-learning-approve"
+                  />
+                  <ModeButton
+                    title="Reject learned rule"
+                    variant="destructive"
+                    onPress={() => handleAiLearningMutation('reject')}
+                    disabled={mutationState.isSaving}
+                    testID="trainer-system-review-ai-learning-reject"
+                  />
+                  <ModeButton
+                    title="Delete suggestion"
+                    variant="ghost"
+                    onPress={() => handleAiLearningMutation('delete')}
+                    disabled={mutationState.isSaving}
+                    testID="trainer-system-review-ai-learning-delete"
+                  />
+                </>
               ) : null}
             </View>
           </View>
@@ -3172,6 +3297,234 @@ function SystemAccountScreen({
   );
 }
 
+function AtlasAdminReviewScreen({
+  accessToken,
+  bottomInset,
+  onBack,
+}) {
+  const [isAllowed, setIsAllowed] = useState(false);
+  const [items, setItems] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [selectedItem, setSelectedItem] = useState(null);
+  const [editedLearning, setEditedLearning] = useState('');
+  const [reviewerNotes, setReviewerNotes] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [mutationError, setMutationError] = useState(null);
+
+  const loadAtlasQueue = useCallback(async () => {
+    if (!accessToken || !ATLAS_ADMIN_REVIEW_ENABLED) {
+      setIsAllowed(false);
+      setItems([]);
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    try {
+      const me = await getAtlasAdminMe({ accessToken });
+      if (!me?.allowed) {
+        setIsAllowed(false);
+        setItems([]);
+        return;
+      }
+      setIsAllowed(true);
+      const response = await getAtlasAdminReviewQueue({ accessToken, status: 'pending', limit: 100 });
+      setItems(Array.isArray(response) ? response : []);
+    } catch (nextError) {
+      setError(nextError?.message || 'Unable to load Atlas review queue.');
+      setItems([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [accessToken]);
+
+  useEffect(() => {
+    loadAtlasQueue();
+  }, [loadAtlasQueue]);
+
+  const openItem = (item) => {
+    setSelectedItem(item);
+    setEditedLearning(String(item?.proposed_learning || ''));
+    setReviewerNotes(String(item?.reviewer_notes || ''));
+    setMutationError(null);
+  };
+
+  const runMutation = async (action) => {
+    if (!selectedItem?.id || !accessToken || isSaving) {
+      return;
+    }
+    setIsSaving(true);
+    setMutationError(null);
+    try {
+      if (action === 'edit') {
+        await updateAtlasAdminReviewQueueItem({
+          accessToken,
+          queueId: selectedItem.id,
+          updates: {
+            proposed_learning: editedLearning,
+            reviewer_notes: reviewerNotes || null,
+          },
+        });
+      } else if (action === 'approve') {
+        const trimmedLearning = editedLearning.trim();
+        if (trimmedLearning && trimmedLearning !== selectedItem.proposed_learning) {
+          await updateAtlasAdminReviewQueueItem({
+            accessToken,
+            queueId: selectedItem.id,
+            updates: {
+              proposed_learning: trimmedLearning,
+              reviewer_notes: reviewerNotes || null,
+            },
+          });
+        }
+        await approveAtlasAdminReviewQueueItem({
+          accessToken,
+          queueId: selectedItem.id,
+          reviewerNotes,
+        });
+      } else {
+        await rejectAtlasAdminReviewQueueItem({
+          accessToken,
+          queueId: selectedItem.id,
+          reviewerNotes,
+        });
+      }
+      await loadAtlasQueue();
+      setSelectedItem(null);
+    } catch (nextError) {
+      setMutationError(nextError?.message || 'Unable to update Atlas review item.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <SectionShell
+      title="Atlas Review"
+      subtitle="Internal privacy review for generalized coaching learnings."
+      onBack={onBack}
+      bottomInset={bottomInset}
+      rightSlot={(
+        <ModeButton
+          title={isLoading ? 'Loading...' : 'Refresh'}
+          variant="ghost"
+          size="sm"
+          onPress={loadAtlasQueue}
+          disabled={isLoading}
+          testID="trainer-system-atlas-review-refresh"
+        />
+      )}
+    >
+      {!ATLAS_ADMIN_REVIEW_ENABLED || (!isAllowed && !isLoading) ? (
+        <SystemSectionCard>
+          <EmptyListState
+            title="Atlas review is unavailable"
+            detail="This internal queue is hidden unless Atlas admin review is enabled and your account is allowed."
+          />
+        </SystemSectionCard>
+      ) : null}
+
+      {isLoading ? (
+        <View style={styles.loadingRow}>
+          <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
+          <ModeText variant="bodySm" tone="secondary">Loading Atlas review queue...</ModeText>
+        </View>
+      ) : null}
+
+      {!isLoading && error ? (
+        <SystemSectionCard>
+          <ModeText variant="bodySm" tone="error">{error}</ModeText>
+        </SystemSectionCard>
+      ) : null}
+
+      {!isLoading && isAllowed && !error ? (
+        <SystemSectionCard>
+          <SystemSectionHeader title="Pending Learnings" />
+          {items.length === 0 ? (
+            <EmptyListState
+              title="Nothing waiting right now"
+              detail="Sanitized Atlas proposals will appear here before they can enter Atlas knowledge."
+            />
+          ) : items.map((item) => (
+            <SystemNavRow
+              key={item.id}
+              icon="shield"
+              title={item.proposed_learning || 'Atlas proposal'}
+              subtitle={`${item.knowledge_type || 'learning'} · privacy ${Math.round(Number(item.privacy_risk_score || 0) * 100)}% · confidence ${Math.round(Number(item.confidence_score || 0) * 100)}%`}
+              badge={item.reviewer_status || 'pending'}
+              badgeVariant={Number(item.privacy_risk_score || 0) >= 0.15 ? 'warning' : 'default'}
+              onPress={() => openItem(item)}
+              testID={`trainer-system-atlas-review-row-${item.id}`}
+            />
+          ))}
+        </SystemSectionCard>
+      ) : null}
+
+      <SystemActionSheet
+        visible={Boolean(selectedItem)}
+        onClose={() => setSelectedItem(null)}
+        testID="trainer-system-atlas-review-sheet"
+      >
+        {selectedItem ? (
+          <View style={styles.sheetContent}>
+            <ModeText variant="label" tone="tertiary">Sanitized Proposal</ModeText>
+            <ModeText variant="caption" tone="secondary">
+              {selectedItem.knowledge_type} · Privacy {Math.round(Number(selectedItem.privacy_risk_score || 0) * 100)}% · Confidence {Math.round(Number(selectedItem.confidence_score || 0) * 100)}%
+            </ModeText>
+            {Array.isArray(selectedItem.privacy_flags) && selectedItem.privacy_flags.length > 0 ? (
+              <ModeText variant="caption" tone="secondary">
+                Flags: {selectedItem.privacy_flags.join(', ')}
+              </ModeText>
+            ) : null}
+            <ModeInput
+              value={editedLearning}
+              onChangeText={setEditedLearning}
+              placeholder="Edit generalized learning"
+              multiline
+              style={styles.multilineInput}
+              testID="trainer-system-atlas-review-learning-input"
+            />
+            <ModeInput
+              value={reviewerNotes}
+              onChangeText={setReviewerNotes}
+              placeholder="Reviewer notes"
+              multiline
+              style={styles.multilineInput}
+              testID="trainer-system-atlas-review-notes-input"
+            />
+            {mutationError ? (
+              <ModeText variant="caption" tone="error">{mutationError}</ModeText>
+            ) : null}
+            <View style={styles.buttonStack}>
+              <ModeButton
+                title={isSaving ? 'Saving...' : 'Save edit'}
+                onPress={() => runMutation('edit')}
+                disabled={isSaving}
+                testID="trainer-system-atlas-review-save"
+              />
+              <ModeButton
+                title="Approve"
+                variant="secondary"
+                onPress={() => runMutation('approve')}
+                disabled={isSaving}
+                testID="trainer-system-atlas-review-approve"
+              />
+              <ModeButton
+                title="Reject"
+                variant="destructive"
+                onPress={() => runMutation('reject')}
+                disabled={isSaving}
+                testID="trainer-system-atlas-review-reject"
+              />
+            </View>
+          </View>
+        ) : null}
+      </SystemActionSheet>
+    </SectionShell>
+  );
+}
+
 export default function TrainerSystemScreen({
   accessToken,
   bottomInset = 0,
@@ -3185,6 +3538,7 @@ export default function TrainerSystemScreen({
   const [trainerSettings, setTrainerSettings] = useState(null);
   const [trainerPersona, setTrainerPersona] = useState(null);
   const [isLoadingTrainerSettings, setIsLoadingTrainerSettings] = useState(false);
+  const [showAtlasAdminReview, setShowAtlasAdminReview] = useState(false);
 
   const onboardingState = useMemo(
     () => buildOnboardingState({
@@ -3239,12 +3593,13 @@ export default function TrainerSystemScreen({
       return;
     }
     try {
-      const [knowledgeResponse, clientsResponse, draftResponse, outputResponse, qaResponse] = await Promise.all([
+      const [knowledgeResponse, clientsResponse, draftResponse, outputResponse, qaResponse, aiLearningResponse] = await Promise.all([
         listTrainerKnowledgeEntries({ accessToken, includeArchived: false, limit: 220, offset: 0 }),
         listTrainerClients({ accessToken, limit: 1, offset: 0 }),
         getTrainerCoachQueue({ accessToken, limit: 50 }),
         getTrainerReviewOutputs({ accessToken, status: 'open', limit: 50, offset: 0 }),
         requestTrainerReviewQueue({ accessToken }),
+        getTrainerAiReviewQueue({ accessToken, status: 'pending', limit: 50 }).catch(() => []),
       ]);
       const clientsCount = normalizeListPayload(clientsResponse).count;
       const knowledgeCount = Array.isArray(knowledgeResponse)
@@ -3253,10 +3608,11 @@ export default function TrainerSystemScreen({
       const draftCount = normalizeListPayload(draftResponse).count;
       const outputCount = normalizeListPayload(outputResponse).count;
       const qaCount = Array.isArray(qaResponse) ? qaResponse.length : 0;
+      const aiLearningCount = Array.isArray(aiLearningResponse) ? aiLearningResponse.length : 0;
       setHubCounts({
         clients: clientsCount,
         knowledge: knowledgeCount,
-        review: draftCount + outputCount + qaCount,
+        review: draftCount + outputCount + qaCount + aiLearningCount,
       });
     } catch (_error) {
       setHubCounts((current) => current);
@@ -3297,6 +3653,30 @@ export default function TrainerSystemScreen({
     loadTrainerSettings();
     loadTrainerPersona();
   }, [loadTrainerPersona, refreshHubCounts, loadTrainerSettings]);
+
+  useEffect(() => {
+    let isMounted = true;
+    const loadAtlasAdminAccess = async () => {
+      if (!accessToken || !ATLAS_ADMIN_REVIEW_ENABLED) {
+        setShowAtlasAdminReview(false);
+        return;
+      }
+      try {
+        const payload = await getAtlasAdminMe({ accessToken });
+        if (isMounted) {
+          setShowAtlasAdminReview(Boolean(payload?.allowed));
+        }
+      } catch (_error) {
+        if (isMounted) {
+          setShowAtlasAdminReview(false);
+        }
+      }
+    };
+    loadAtlasAdminAccess();
+    return () => {
+      isMounted = false;
+    };
+  }, [accessToken]);
 
   const handleTrainerSettingsSaved = useCallback((payload) => {
     setTrainerSettings(payload);
@@ -3398,6 +3778,15 @@ export default function TrainerSystemScreen({
     );
   }
 
+  if (currentView.key === SYSTEM_VIEW.ATLAS_ADMIN_REVIEW && showAtlasAdminReview) {
+    return (
+      <AtlasAdminReviewScreen
+        {...commonViewProps}
+        onBack={popView}
+      />
+    );
+  }
+
   if (currentView.key === SYSTEM_VIEW.SYSTEM_ACCOUNT) {
     return (
       <SystemAccountScreen
@@ -3419,6 +3808,7 @@ export default function TrainerSystemScreen({
       counts={hubCounts}
       onboardingState={onboardingState}
       onNavigate={pushView}
+      showAtlasAdminReview={showAtlasAdminReview}
     />
   );
 }

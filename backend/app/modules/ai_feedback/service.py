@@ -29,9 +29,11 @@ class AIFeedbackService:
         repository: AIFeedbackRepository,
         *,
         delta_extractor: FeedbackDeltaExtractor | None = None,
+        atlas_observer_service: Any | None = None,
     ):
         self.repository = repository
         self.delta_extractor = delta_extractor
+        self.atlas_observer_service = atlas_observer_service
 
     def log_generated_output(
         self,
@@ -354,7 +356,20 @@ class AIFeedbackService:
         if not event_row:
             raise ValueError("Could not create feedback event")
         feedback_event = AIFeedbackEvent(**event_row)
+        self._notify_atlas(output=output, feedback_event=feedback_event)
         return feedback_event, auto_applied_count
+
+    def _notify_atlas(self, *, output: AIGeneratedOutput, feedback_event: AIFeedbackEvent) -> None:
+        if not self.atlas_observer_service:
+            return
+        try:
+            self.atlas_observer_service.observe_ai_feedback_event(
+                output=output,
+                feedback_event=feedback_event,
+                raw_source_type=output.source_type,
+            )
+        except Exception:
+            logger.exception("Atlas observation failed for ai_feedback_event id=%s", feedback_event.id)
 
     def _apply_deltas_to_coach_memory(
         self,
