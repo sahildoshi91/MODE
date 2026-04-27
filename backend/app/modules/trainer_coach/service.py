@@ -555,6 +555,23 @@ class TrainerCoachService:
         except Exception:
             return 0
 
+    @staticmethod
+    def _format_nutrition_macro_summary(
+        *,
+        meal_count: int,
+        total_calories: int,
+        total_protein: int,
+    ) -> str | None:
+        if meal_count <= 0:
+            return None
+        if total_calories > 0 and total_protein > 0:
+            return f"{meal_count} meals planned around about {total_calories:,} kcal and {total_protein}g protein."
+        if total_calories > 0:
+            return f"{meal_count} meals planned around about {total_calories:,} kcal."
+        if total_protein > 0:
+            return f"{meal_count} meals planned around about {total_protein}g protein."
+        return f"{meal_count} meals planned with portions and timing ready to review."
+
     @classmethod
     def _derive_nutrition_macro_summary(cls, structured: dict[str, Any]) -> str | None:
         meals = structured.get("meals")
@@ -578,11 +595,11 @@ class TrainerCoachService:
                 total_calories += cls._safe_int(meal.get("totalCalories"))
                 total_protein += cls._safe_int(meal.get("totalProtein"))
         meal_count = len([meal for meal in meals if isinstance(meal, dict)])
-        if meal_count == 0:
-            return None
-        if total_calories > 0 or total_protein > 0:
-            return f"{meal_count} meals | {total_calories} kcal | {total_protein}g protein"
-        return f"{meal_count} meals planned"
+        return cls._format_nutrition_macro_summary(
+            meal_count=meal_count,
+            total_calories=total_calories,
+            total_protein=total_protein,
+        )
 
     @classmethod
     def _derive_training_summary(cls, structured: dict[str, Any]) -> str | None:

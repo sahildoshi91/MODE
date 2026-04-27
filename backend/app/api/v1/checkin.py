@@ -89,6 +89,23 @@ def _safe_positive_int(value: object) -> int:
         return 0
 
 
+def _format_nutrition_preview_summary(
+    *,
+    meal_count: int,
+    total_calories: int,
+    total_protein: int,
+) -> str | None:
+    if meal_count <= 0:
+        return None
+    if total_calories > 0 and total_protein > 0:
+        return f"{meal_count} meals planned around about {total_calories:,} kcal and {total_protein}g protein."
+    if total_calories > 0:
+        return f"{meal_count} meals planned around about {total_calories:,} kcal."
+    if total_protein > 0:
+        return f"{meal_count} meals planned around about {total_protein}g protein."
+    return f"{meal_count} meals planned with portions and timing ready to review."
+
+
 def _derive_plan_preview(
     *,
     structured_payload: dict | None,
@@ -129,10 +146,10 @@ def _derive_plan_preview(
                 total_protein += _safe_positive_int(meal.get("totalProtein"))
         meal_count = len([meal for meal in meals if isinstance(meal, dict)])
         if meal_count > 0:
-            summary = (
-                f"{meal_count} meals | {total_calories} kcal | {total_protein}g protein"
-                if (total_calories > 0 or total_protein > 0)
-                else f"{meal_count} meals planned"
+            summary = _format_nutrition_preview_summary(
+                meal_count=meal_count,
+                total_calories=total_calories,
+                total_protein=total_protein,
             )
 
     exercises = structured_payload.get("exercises")

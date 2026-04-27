@@ -58,6 +58,23 @@ class TrainerClientInviteCodeCreateRequest(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class TrainerClientCheckinDailyResponse(BaseModel):
+    date: date
+    score: int | None = None
+
+
+class TrainerClientCheckinQuestionSummary(BaseModel):
+    key: str
+    label: str
+    average_7d: float | None = None
+    responses_7d: int = 0
+    low_days_7d: int = 0
+    latest_score: int | None = None
+    latest_date: date | None = None
+    status: Literal["low", "watch", "steady", "no_data"] = "no_data"
+    daily_responses: list[TrainerClientCheckinDailyResponse] = Field(default_factory=list)
+
+
 class TrainerClientActivitySummary(BaseModel):
     checkins_completed_7d: int = 0
     workouts_completed_7d: int = 0
@@ -66,6 +83,7 @@ class TrainerClientActivitySummary(BaseModel):
     latest_checkin_date: date | None = None
     latest_mode: str | None = None
     days_since_last_checkin: int | None = None
+    question_summaries: list[TrainerClientCheckinQuestionSummary] = Field(default_factory=list)
     scheduled_today: bool = False
     session_status: str | None = None
     session_type: str | None = None

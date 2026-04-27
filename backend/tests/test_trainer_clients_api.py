@@ -183,6 +183,71 @@ class FakeTrainerClientService:
                 "latest_checkin_date": "2026-04-11",
                 "latest_mode": "BUILD",
                 "days_since_last_checkin": 0,
+                "question_summaries": [
+                    {
+                        "key": "sleep",
+                        "label": "Sleep",
+                        "average_7d": 2.25,
+                        "responses_7d": 4,
+                        "low_days_7d": 3,
+                        "latest_score": 2,
+                        "latest_date": "2026-04-11",
+                        "status": "low",
+                        "daily_responses": [
+                            {"date": "2026-04-11", "score": 2},
+                            {"date": "2026-04-10", "score": None},
+                            {"date": "2026-04-09", "score": 2},
+                            {"date": "2026-04-08", "score": 3},
+                            {"date": "2026-04-07", "score": None},
+                            {"date": "2026-04-06", "score": 2},
+                            {"date": "2026-04-05", "score": 2},
+                        ],
+                    },
+                    {
+                        "key": "stress",
+                        "label": "Stress",
+                        "average_7d": 3.5,
+                        "responses_7d": 4,
+                        "low_days_7d": 0,
+                        "latest_score": 4,
+                        "latest_date": "2026-04-11",
+                        "status": "steady",
+                        "daily_responses": [],
+                    },
+                    {
+                        "key": "soreness",
+                        "label": "Soreness",
+                        "average_7d": 3.25,
+                        "responses_7d": 4,
+                        "low_days_7d": 0,
+                        "latest_score": 3,
+                        "latest_date": "2026-04-11",
+                        "status": "watch",
+                        "daily_responses": [],
+                    },
+                    {
+                        "key": "nutrition",
+                        "label": "Nutrition",
+                        "average_7d": 4.0,
+                        "responses_7d": 4,
+                        "low_days_7d": 0,
+                        "latest_score": 4,
+                        "latest_date": "2026-04-11",
+                        "status": "steady",
+                        "daily_responses": [],
+                    },
+                    {
+                        "key": "motivation",
+                        "label": "Motivation",
+                        "average_7d": 2.0,
+                        "responses_7d": 4,
+                        "low_days_7d": 4,
+                        "latest_score": 2,
+                        "latest_date": "2026-04-11",
+                        "status": "low",
+                        "daily_responses": [],
+                    },
+                ],
                 "scheduled_today": True,
                 "session_status": "scheduled",
                 "session_type": "strength",
@@ -439,6 +504,10 @@ class TrainerClientsApiTests(unittest.TestCase):
             detail_response.json()["activity_summary"]["meeting_location"],
             "Downtown Performance Lab",
         )
+        question_summaries = detail_response.json()["activity_summary"]["question_summaries"]
+        self.assertEqual(len(question_summaries), 5)
+        self.assertEqual(question_summaries[0]["key"], "sleep")
+        self.assertEqual(question_summaries[0]["status"], "low")
 
         list_response = self.client.get(
             "/api/v1/trainer-clients/client-1/memory",

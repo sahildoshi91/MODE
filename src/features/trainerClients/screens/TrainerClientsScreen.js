@@ -236,6 +236,134 @@ function formatAvgScore(value) {
   return `${value.toFixed(1)}/25`;
 }
 
+function formatQuestionAverage(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return 'N/A';
+  }
+  return `${value.toFixed(1)}/5`;
+}
+
+function normalizeSignalStatus(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'low' || normalized === 'watch' || normalized === 'steady' || normalized === 'no_data') {
+    return normalized;
+  }
+  return 'no_data';
+}
+
+function getQuestionSummaries(source) {
+  const summaries = Array.isArray(source?.question_summaries)
+    ? source.question_summaries
+    : [];
+  return summaries
+    .filter((summary) => summary && typeof summary === 'object')
+    .map((summary) => ({
+      ...summary,
+      key: String(summary.key || '').trim(),
+      label: String(summary.label || summary.key || 'Signal').trim(),
+      status: normalizeSignalStatus(summary.status),
+      daily_responses: Array.isArray(summary.daily_responses) ? summary.daily_responses : [],
+    }))
+    .filter((summary) => summary.key);
+}
+
+function hasQuestionSummariesField(source) {
+  return Boolean(source && Object.prototype.hasOwnProperty.call(source, 'question_summaries'));
+}
+
+function hasQuestionSignalResponses(questionSummaries) {
+  if (!Array.isArray(questionSummaries) || questionSummaries.length === 0) {
+    return false;
+  }
+  return questionSummaries.some((summary) => {
+    if ((Number(summary?.responses_7d) || 0) > 0) {
+      return true;
+    }
+    return (Array.isArray(summary?.daily_responses) ? summary.daily_responses : [])
+      .some((entry) => typeof entry?.score === 'number');
+  });
+}
+
+function getSignalTone(status) {
+  if (status === 'low') {
+    return 'error';
+  }
+  if (status === 'watch') {
+    return 'warning';
+  }
+  if (status === 'steady') {
+    return 'success';
+  }
+  return 'secondary';
+}
+
+function getSignalChipStyle(status) {
+  if (status === 'low') {
+    return {
+      backgroundColor: theme.colors.feedback.errorBg,
+      borderColor: theme.colors.feedback.errorBorder,
+    };
+  }
+  if (status === 'watch') {
+    return {
+      backgroundColor: theme.colors.feedback.warningBg,
+      borderColor: theme.colors.feedback.warningBorder,
+    };
+  }
+  if (status === 'steady') {
+    return {
+      backgroundColor: theme.colors.feedback.successBg,
+      borderColor: theme.colors.feedback.successBorder,
+    };
+  }
+  return {
+    backgroundColor: theme.colors.surface.elevated,
+    borderColor: theme.colors.glass.borderSoft,
+  };
+}
+
+function formatQuestionStatusLabel(status) {
+  if (status === 'no_data') {
+    return 'No data';
+  }
+  return toTitleCase(status);
+}
+
+function formatLatestSignal(summary) {
+  if (typeof summary?.latest_score !== 'number') {
+    return 'Latest: N/A';
+  }
+  return `Latest: ${summary.latest_score}/5 on ${formatCompactDateLabel(summary.latest_date)}`;
+}
+
+function buildSignalCoachingPrompt(summary) {
+  const status = normalizeSignalStatus(summary?.status);
+  if (status !== 'low' && status !== 'watch') {
+    return null;
+  }
+  const average = formatQuestionAverage(summary?.average_7d);
+  if (summary?.key === 'sleep') {
+    return `Sleep is ${status} at ${average}. Ask about bedtime consistency, wake-ups, caffeine, and whether today's work should stay controlled.`;
+  }
+  if (summary?.key === 'motivation') {
+    return `Motivation is ${status} at ${average}. Identify the main friction point, then set one small action they can complete today.`;
+  }
+  if (summary?.key === 'stress') {
+    return `Stress readiness is ${status} at ${average}. Ask what has felt heaviest and pair training with one simple downshift cue.`;
+  }
+  if (summary?.key === 'soreness') {
+    return `Body feel is ${status} at ${average}. Ask where soreness is showing up and adjust load or range before progressing.`;
+  }
+  if (summary?.key === 'nutrition') {
+    return `Nutrition is ${status} at ${average}. Confirm the easiest protein, hydration, or meal-prep anchor for the next 24 hours.`;
+  }
+  return `${summary?.label || 'This signal'} is ${status} at ${average}. Ask one specific follow-up before loading the session.`;
+}
+
+function formatResponseScore(score) {
+  return typeof score === 'number' ? `${score}` : 'N/A';
+}
+
 function normalizePriorityTier(value) {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'critical' || normalized === 'high' || normalized === 'medium') {
@@ -402,11 +530,19 @@ function toTitleCase(input) {
     .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
+function parseDateForLabel(value) {
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split('-').map((part) => Number(part));
+    return new Date(year, month - 1, day);
+  }
+  return new Date(value);
+}
+
 function formatDateLabel(value) {
   if (!value) {
     return 'No recent check-in';
   }
-  const parsed = new Date(value);
+  const parsed = parseDateForLabel(value);
   if (Number.isNaN(parsed.getTime())) {
     return 'No recent check-in';
   }
@@ -420,7 +556,7 @@ function formatCompactDateLabel(value) {
   if (!value) {
     return '';
   }
-  const parsed = new Date(value);
+  const parsed = parseDateForLabel(value);
   if (Number.isNaN(parsed.getTime())) {
     return '';
   }
@@ -470,6 +606,27 @@ function formatPlannerDateLabel(value) {
     month: 'short',
     day: 'numeric',
   });
+}
+
+function buildSignalWindowLabel(anchorDate) {
+  if (!anchorDate) {
+    return '';
+  }
+  const endDate = parseDateForLabel(anchorDate);
+  if (Number.isNaN(endDate.getTime())) {
+    return '';
+  }
+  const startDate = new Date(endDate);
+  startDate.setDate(endDate.getDate() - 6);
+  const startLabel = startDate.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+  const endLabel = endDate.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+  return `Window: ${startLabel}-${endLabel}`;
 }
 
 function buildClientScheduleDraft(client) {
@@ -725,10 +882,150 @@ function CommandCenterActionsSheet({
   );
 }
 
+function QuestionSignalChipRow({
+  questionSummaries,
+  testIDPrefix,
+}) {
+  if (!Array.isArray(questionSummaries) || questionSummaries.length === 0) {
+    return null;
+  }
+
+  return (
+    <View testID={`${testIDPrefix}-question-signals`} style={styles.questionSignalsBlock}>
+      <ModeText variant="caption" tone="tertiary" style={styles.questionSignalsLabel}>
+        7-day signals
+      </ModeText>
+      <View style={styles.questionSignalChipRow}>
+        {questionSummaries.map((summary) => {
+          const status = normalizeSignalStatus(summary.status);
+          return (
+            <View
+              key={`${testIDPrefix}-${summary.key}`}
+              testID={`${testIDPrefix}-signal-${summary.key}`}
+              style={[styles.questionSignalChip, getSignalChipStyle(status)]}
+            >
+              <ModeText variant="caption" tone={getSignalTone(status)} style={styles.questionSignalLabel}>
+                {summary.label}
+              </ModeText>
+              <ModeText variant="caption" tone={getSignalTone(status)} style={styles.questionSignalValue}>
+                {formatQuestionAverage(summary.average_7d)}
+              </ModeText>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function QuestionSignalDetailSection({
+  questionSummaries,
+  isMissingFromBackend,
+  windowLabel,
+}) {
+  const safeSummaries = Array.isArray(questionSummaries) ? questionSummaries : [];
+  const hasResponses = hasQuestionSignalResponses(safeSummaries);
+  let fallbackMessage = null;
+  if (isMissingFromBackend) {
+    fallbackMessage = 'Signal analysis not returned by backend.';
+  } else if (!hasResponses) {
+    fallbackMessage = 'No check-ins in selected 7-day window.';
+  }
+
+  return (
+    <ModeCard variant="surface" style={styles.questionSignalDetailCard}>
+      <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>
+        7-Day Check-In Signals
+      </ModeText>
+      {windowLabel ? (
+        <ModeText
+          testID="trainer-client-detail-signal-window"
+          variant="caption"
+          tone="secondary"
+          style={styles.questionSignalWindowLabel}
+        >
+          {windowLabel}
+        </ModeText>
+      ) : null}
+      {fallbackMessage ? (
+        <ModeText
+          testID="trainer-client-detail-signal-fallback"
+          variant="bodySm"
+          tone="secondary"
+        >
+          {fallbackMessage}
+        </ModeText>
+      ) : (
+        <View style={styles.questionSignalDetailList}>
+          {safeSummaries.map((summary) => {
+            const status = normalizeSignalStatus(summary.status);
+            const coachingPrompt = buildSignalCoachingPrompt(summary);
+            return (
+              <View
+                key={`detail-signal-${summary.key}`}
+                testID={`trainer-client-detail-signal-${summary.key}`}
+                style={styles.questionSignalDetailRow}
+              >
+                <View style={styles.questionSignalDetailHeader}>
+                  <View style={styles.questionSignalDetailTitle}>
+                    <ModeText variant="bodySm" style={styles.questionSignalDetailName}>
+                      {summary.label}
+                    </ModeText>
+                    <ModeText variant="caption" tone="secondary">
+                      {summary.responses_7d || 0}/7 responses • {summary.low_days_7d || 0} low days
+                    </ModeText>
+                  </View>
+                  <View style={[styles.questionSignalStatusBadge, getSignalChipStyle(status)]}>
+                    <ModeText variant="caption" tone={getSignalTone(status)} style={styles.questionSignalStatusText}>
+                      {formatQuestionAverage(summary.average_7d)} • {formatQuestionStatusLabel(status)}
+                    </ModeText>
+                  </View>
+                </View>
+
+                <ModeText variant="caption" tone="secondary">
+                  {formatLatestSignal(summary)}
+                </ModeText>
+
+                <View style={styles.questionSignalDayRow}>
+                  {summary.daily_responses.map((entry) => (
+                    <View
+                      key={`${summary.key}-${entry.date}`}
+                      style={styles.questionSignalDayPill}
+                    >
+                      <ModeText variant="caption" tone="tertiary" style={styles.questionSignalDayDate}>
+                        {formatCompactDateLabel(entry.date)}
+                      </ModeText>
+                      <ModeText variant="caption" style={styles.questionSignalDayScore}>
+                        {formatResponseScore(entry.score)}
+                      </ModeText>
+                    </View>
+                  ))}
+                </View>
+
+                {coachingPrompt ? (
+                  <ModeText
+                    testID={`trainer-client-detail-signal-${summary.key}-prompt`}
+                    variant="bodySm"
+                    tone="secondary"
+                    style={styles.questionSignalPrompt}
+                  >
+                    {coachingPrompt}
+                  </ModeText>
+                ) : null}
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </ModeCard>
+  );
+}
+
 function ClientSummaryBlock({
   title,
   concernBadge,
   briefBullets,
+  questionSummaries,
   sessionLine,
   metricLine,
   locationLine,
@@ -786,6 +1083,11 @@ function ClientSummaryBlock({
           </View>
         </View>
 
+        <QuestionSignalChipRow
+          questionSummaries={questionSummaries}
+          testIDPrefix={testIDPrefix}
+        />
+
         <View testID={`${testIDPrefix}-supporting-signals`} style={styles.supportingSignalBlock}>
           <ModeText variant="caption" tone="secondary" style={styles.supportingMetaLine}>{sessionLine}</ModeText>
           <ModeText variant="caption" tone="tertiary" style={styles.supportingMetaLine}>{metricLine}</ModeText>
@@ -827,6 +1129,7 @@ function ClientTodayCard({
     : resolveClientScheduledForFilter(client, null);
   const concernBadge = resolveConcernBadge(client);
   const coachingBrief = buildCoachingBrief(client, isScheduledForSelectedDay);
+  const questionSummaries = getQuestionSummaries(client?.week_summary);
   const sessionWindow = formatSessionWindow(client?.session_start_at, client?.session_end_at);
   const sessionLine = isScheduledForSelectedDay
     ? `Next Session: ${plannerDayLabel}${sessionWindow !== 'No session scheduled' ? ` • ${sessionWindow}` : ''}`
@@ -845,6 +1148,7 @@ function ClientTodayCard({
         title={client?.client_name || 'Client'}
         concernBadge={concernBadge}
         briefBullets={coachingBrief.bullets}
+        questionSummaries={questionSummaries}
         sessionLine={sessionLine}
         metricLine={metricLine}
         locationLine={locationLine}
@@ -2653,6 +2957,9 @@ export default function TrainerClientsScreen({
       isScheduledForSelectedDay: detailScheduledToday,
     });
     const detailMetricLine = `${activity.checkins_completed_7d || 0} check-ins • avg ${formatAvgScore(activity.avg_score_7d)} • ${activity.workouts_completed_7d || 0} workouts`;
+    const detailQuestionSummaries = getQuestionSummaries(activity);
+    const isDetailQuestionSummariesMissing = !hasQuestionSummariesField(activity);
+    const detailSignalWindowLabel = buildSignalWindowLabel(plannerDate);
     const aiUsableMemory = Array.isArray(aiContextPayload?.applied_ai_usable_memory)
       ? aiContextPayload.applied_ai_usable_memory
       : [];
@@ -2720,6 +3027,12 @@ export default function TrainerClientsScreen({
 
           {!isLoadingDetail && !detailError ? (
             <>
+              <QuestionSignalDetailSection
+                questionSummaries={detailQuestionSummaries}
+                isMissingFromBackend={isDetailQuestionSummariesMissing}
+                windowLabel={detailSignalWindowLabel}
+              />
+
               <ModeCard variant="surface" style={styles.memoryHubCard}>
                 <View style={styles.memorySectionHeaderRow}>
                   <ModeText variant="label" tone="tertiary" style={styles.memorySectionLabel}>Client Memory</ModeText>
@@ -3511,6 +3824,32 @@ const styles = StyleSheet.create({
   coachingBriefBullet: {
     lineHeight: theme.typography.body2.lineHeight + 2,
   },
+  questionSignalsBlock: {
+    gap: theme.spacing[1] - 2,
+  },
+  questionSignalsLabel: {
+    textTransform: 'uppercase',
+    letterSpacing: 0.56,
+  },
+  questionSignalChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: theme.spacing[1],
+  },
+  questionSignalChip: {
+    minWidth: 82,
+    borderWidth: 1,
+    borderRadius: theme.radii.m,
+    paddingHorizontal: theme.spacing[1],
+    paddingVertical: 5,
+    gap: 1,
+  },
+  questionSignalLabel: {
+    fontWeight: '600',
+  },
+  questionSignalValue: {
+    fontWeight: '700',
+  },
   supportingSignalBlock: {
     borderTopWidth: 1,
     borderTopColor: theme.colors.glass.borderSoft,
@@ -3704,6 +4043,71 @@ const styles = StyleSheet.create({
   },
   memoryInput: {
     marginTop: theme.spacing[1],
+  },
+  questionSignalDetailCard: {
+    marginBottom: theme.spacing[1],
+  },
+  questionSignalWindowLabel: {
+    marginTop: -theme.spacing[1],
+    marginBottom: theme.spacing[1],
+  },
+  questionSignalDetailList: {
+    gap: theme.spacing[2],
+  },
+  questionSignalDetailRow: {
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.glass.borderSoft,
+    paddingTop: theme.spacing[2],
+    gap: theme.spacing[1],
+  },
+  questionSignalDetailHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: theme.spacing[2],
+  },
+  questionSignalDetailTitle: {
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  questionSignalDetailName: {
+    fontWeight: '700',
+  },
+  questionSignalStatusBadge: {
+    borderWidth: 1,
+    borderRadius: theme.radii.m,
+    paddingHorizontal: theme.spacing[1],
+    paddingVertical: 4,
+    maxWidth: 150,
+  },
+  questionSignalStatusText: {
+    fontWeight: '700',
+  },
+  questionSignalDayRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  questionSignalDayPill: {
+    minWidth: 44,
+    borderRadius: theme.radii.s,
+    borderWidth: 1,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: theme.colors.glass.base,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    alignItems: 'center',
+    gap: 1,
+  },
+  questionSignalDayDate: {
+    fontSize: 10,
+  },
+  questionSignalDayScore: {
+    fontWeight: '700',
+  },
+  questionSignalPrompt: {
+    lineHeight: theme.typography.body2.lineHeight + 2,
   },
   memoryHubCard: {
     marginBottom: theme.spacing[1],

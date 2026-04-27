@@ -60,7 +60,7 @@ class FakeDailyCheckinService:
                         "duration": "30-45 min",
                         "intensity": "Moderate",
                     },
-                    nutrition={"rule": "Keep meals balanced and steady all day."},
+                    nutrition={"rule": "Anchor each meal with protein, add balanced carbs, and keep snacks intentional."},
                     mindset={"cue": "Build momentum with disciplined reps."},
                     time_to_complete=11,
                     completion_timestamp=datetime(2026, 3, 27, 16, 0, tzinfo=timezone.utc),
@@ -133,7 +133,7 @@ class FakeDailyCheckinService:
                 "duration": "45-60 min",
                 "intensity": "High",
             },
-            nutrition={"rule": "Fuel hard with protein and performance carbs."},
+            nutrition={"rule": "Prioritize protein early, add performance carbs around training, and keep fluids steady."},
             mindset={"cue": "Attack the day. You are cleared to push."},
             time_to_complete=time_to_complete,
             completion_timestamp=datetime(2026, 3, 27, 16, 0, tzinfo=timezone.utc),
@@ -965,6 +965,116 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertIn("do not use emoji", prompt[0]["content"].lower())
         self.assertIn("make the warmup specific and descriptive", prompt[1]["content"].lower())
         self.assertIn("emoji-free", prompt[1]["content"].lower())
+
+    def test_nutrition_generation_prompt_demands_meal_focused_coach_note(self):
+        service = DailyCheckinService(repository=None)
+        prompt = service._build_generation_prompt(
+            checkin={
+                "date": "2026-04-08",
+                "assigned_mode": "BUILD",
+                "total_score": 18,
+            },
+            profile={"primary_goal": "strength", "experience_level": "intermediate", "equipment_access": "gym"},
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.NUTRITION,
+            ),
+            yesterday=None,
+            last_workout={"title": "Tempo Builder", "feel_rating": 4},
+            inputs=DailyCheckinInputs(sleep=4, stress=4, soreness=3, nutrition=4, motivation=3),
+        )
+
+        self.assertIn("meal-focused sentence", prompt[0]["content"].lower())
+        self.assertIn("fuel, protein, hydration", prompt[0]["content"].lower())
+        self.assertIn("do not refer to workout load", prompt[0]["content"].lower())
+        self.assertIn("rather than workout mechanics", prompt[1]["content"].lower())
+
+    def test_fallback_nutrition_plan_uses_nutrition_specific_coach_note(self):
+        service = DailyCheckinService(repository=None)
+        inputs = DailyCheckinInputs(sleep=4, stress=3, soreness=3, nutrition=4, motivation=4)
+
+        plan = service._build_fallback_plan(
+            plan_type=PlanType.NUTRITION,
+            mode="BUILD",
+            inputs=inputs,
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.NUTRITION,
+            ),
+            profile={},
+            last_workout={"title": "Tempo Builder", "feel_rating": 4},
+        )
+
+        note = plan.coachNote.lower()
+        self.assertIn("meals", note)
+        self.assertIn("protein", note)
+        self.assertIn("hydration", note)
+        self.assertNotIn("workout", note)
+        self.assertNotIn("session", note)
+        self.assertNotIn("load", note)
+        self.assertNotIn("progression", note)
+
+    def test_generated_nutrition_plan_replaces_training_like_coach_note(self):
+        class GeneratePlanRepository:
+            def __init__(self):
+                self.saved_payload = None
+
+            def get_by_client_and_id(self, _client_id, checkin_id):
+                return {
+                    "id": checkin_id,
+                    "client_id": "client-1",
+                    "date": "2026-04-08",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 3,
+                        "nutrition": 4,
+                        "motivation": 3,
+                    },
+                    "total_score": 18,
+                    "assigned_mode": "BUILD",
+                }
+
+            def get_previous_checkin(self, _client_id, _before_date):
+                return None
+
+            def get_latest_workout_session(self, _user_id):
+                return {"title": "Tempo Builder", "feel_rating": 4}
+
+            def upsert_generated_plan(self, payload):
+                self.saved_payload = payload
+                return {"id": "generated-nutrition-plan"}
+
+        class TrainingLikeNutritionLlm:
+            def create_chat_completion(self, **_kwargs):
+                return (
+                    '{"title":"Steady Fuel","totalCalories":2000,"totalProtein":150,'
+                    '"meals":[{"name":"Breakfast","timing":"Morning","emoji":"",'
+                    '"foods":[{"name":"Greek yogurt","amount":"1 bowl","calories":300,"protein":30}],'
+                    '"totalCalories":300,"totalProtein":30,"notes":"Start steady."}],'
+                    '"coachNote":"The session intensity can progress because the last workout felt manageable."}'
+                )
+
+        repository = GeneratePlanRepository()
+        service = DailyCheckinService(repository=repository, llm_client=TrainingLikeNutritionLlm())
+
+        result = service.generate_plan(
+            client_id="client-1",
+            user_id="user-1",
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.NUTRITION,
+            ),
+        )
+
+        note = result.structured["coachNote"].lower()
+        self.assertIn("meals", note)
+        self.assertIn("protein", note)
+        self.assertIn("hydration", note)
+        self.assertNotIn("session", note)
+        self.assertNotIn("workout", note)
+        self.assertNotIn("progress", note)
+        self.assertEqual(repository.saved_payload["structured_content"]["coachNote"], result.structured["coachNote"])
 
     def test_fallback_training_plan_supports_hotel_room_environment(self):
         service = DailyCheckinService(repository=None)

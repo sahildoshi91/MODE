@@ -35,6 +35,7 @@ describe('draftReviewModel', () => {
     expect(model.title).toBe('Lean Build');
     expect(model.calories).toBe(2150);
     expect(model.protein).toBe(170);
+    expect(model.summary).toBe('Lean Build gives you about 2,150 kcal and 170g protein for the day.');
     expect(model.meals).toHaveLength(1);
   });
 
@@ -246,7 +247,7 @@ describe('draftReviewModel', () => {
     expect(rebuilt.editedOutputJson.structured.totalCalories).toBe(2250);
     expect(rebuilt.editedOutputJson.structured.totalProtein).toBe(180);
     expect(rebuilt.editedOutputJson.structured.meals[0].foods[0].name).toBe('Oats');
-    expect(rebuilt.editedOutputText).toContain('2250 kcal');
+    expect(rebuilt.editedOutputText).toContain('2,250 kcal');
   });
 
   it('normalizes missing and null training values', () => {

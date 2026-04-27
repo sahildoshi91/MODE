@@ -11,6 +11,11 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from app.core.tenancy import TrainerContext
+from app.modules.checkin_signals import (
+    CHECKIN_SIGNAL_SUMMARY_VERSION,
+    build_checkin_question_summaries,
+    build_signal_fingerprint,
+)
 from app.modules.trainer_home.service import TrainerHomeService
 
 
@@ -92,9 +97,27 @@ class FakeCommandCenterRepository:
     def list_checkins_between(self, start_date, end_date):
         del start_date, end_date
         return [
-            {"client_id": "client-1", "date": "2026-04-11", "total_score": 18, "assigned_mode": "BUILD"},
-            {"client_id": "client-1", "date": "2026-04-10", "total_score": 17, "assigned_mode": "BUILD"},
-            {"client_id": "client-2", "date": "2026-04-07", "total_score": 12, "assigned_mode": "RECOVER"},
+            {
+                "client_id": "client-1",
+                "date": "2026-04-11",
+                "inputs": {"sleep": 4, "stress": 4, "soreness": 3, "nutrition": 4, "motivation": 3},
+                "total_score": 18,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-10",
+                "inputs": {"sleep": 4, "stress": 3, "soreness": 3, "nutrition": 4, "motivation": 3},
+                "total_score": 17,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-2",
+                "date": "2026-04-07",
+                "inputs": {"sleep": 2, "stress": 3, "soreness": 3, "nutrition": 3, "motivation": 1},
+                "total_score": 12,
+                "assigned_mode": "RECOVER",
+            },
         ]
 
     def list_completed_workouts_between(self, start_time, end_time):
@@ -136,6 +159,19 @@ class FakeCommandCenterRepository:
         return self.cache[key]
 
 
+def build_signal_cache_metadata(repository, client_id, target_date):
+    rows = [
+        row
+        for row in repository.list_checkins_between(target_date - timedelta(days=6), target_date)
+        if row.get("client_id") == client_id
+    ]
+    summaries = build_checkin_question_summaries(rows, target_date)
+    return {
+        "signal_summary_version": CHECKIN_SIGNAL_SUMMARY_VERSION,
+        "signal_fingerprint": build_signal_fingerprint(summaries),
+    }
+
+
 class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
     def test_build_command_center_prioritizes_clients_and_returns_three_talking_points(self):
         repository = FakeCommandCenterRepository()
@@ -165,6 +201,14 @@ class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
         self.assertEqual(len(first_client.talking_points.points), 3)
         self.assertEqual(len(second_client.talking_points.points), 3)
         self.assertTrue(
+            any("motivation averaged 1.0/5" in point.lower() for point in first_client.talking_points.points),
+            msg=f"Unexpected talking points: {first_client.talking_points.points}",
+        )
+        self.assertTrue(
+            any(flag.code == "low_motivation_7d" for flag in first_client.risk_flags),
+            msg=f"Unexpected risk flags: {first_client.risk_flags}",
+        )
+        self.assertTrue(
             any("knee" in point.lower() for point in first_client.talking_points.points),
             msg=f"Unexpected talking points: {first_client.talking_points.points}",
         )
@@ -172,6 +216,7 @@ class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
 
     def test_build_command_center_uses_cache_when_fresh(self):
         repository = FakeCommandCenterRepository()
+        target_date = date(2026, 4, 11)
         repository.cache[("trainer-1", "client-1")] = {
             "trainer_id": "trainer-1",
             "client_id": "client-1",
@@ -183,6 +228,7 @@ class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
             "generation_strategy": "llm",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "expires_at": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            "metadata": build_signal_cache_metadata(repository, "client-1", target_date),
         }
         repository.cache[("trainer-1", "client-2")] = {
             "trainer_id": "trainer-1",
@@ -195,6 +241,39 @@ class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
             "generation_strategy": "deterministic",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "expires_at": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            "metadata": build_signal_cache_metadata(repository, "client-2", target_date),
+        }
+        service = TrainerHomeService(repository, openai_client=False)
+        trainer_context = TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id=None,
+        )
+
+        response = service.build_command_center(trainer_context, target_date)
+
+        self.assertEqual(len(repository.upsert_calls), 0)
+        for client in response.clients:
+            self.assertTrue(client.talking_points.cache_hit)
+            self.assertTrue(client.talking_points.generation_strategy.startswith("cache:"))
+            self.assertEqual(len(client.talking_points.points), 3)
+
+    def test_build_command_center_regenerates_cache_without_signal_fingerprint(self):
+        repository = FakeCommandCenterRepository()
+        repository.cache[("trainer-1", "client-2")] = {
+            "trainer_id": "trainer-1",
+            "client_id": "client-2",
+            "points_json": [
+                "Old cache point A",
+                "Old cache point B",
+                "Old cache point C",
+            ],
+            "generation_strategy": "deterministic",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            "metadata": {},
         }
         service = TrainerHomeService(repository, openai_client=False)
         trainer_context = TrainerContext(
@@ -207,11 +286,17 @@ class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
 
         response = service.build_command_center(trainer_context, date(2026, 4, 11))
 
-        self.assertEqual(len(repository.upsert_calls), 0)
-        for client in response.clients:
-            self.assertTrue(client.talking_points.cache_hit)
-            self.assertTrue(client.talking_points.generation_strategy.startswith("cache:"))
-            self.assertEqual(len(client.talking_points.points), 3)
+        client_two = next(client for client in response.clients if client.client_id == "client-2")
+        self.assertFalse(client_two.talking_points.cache_hit)
+        self.assertTrue(repository.upsert_calls)
+        refreshed_payload = next(
+            payload for payload in repository.upsert_calls if payload["client_id"] == "client-2"
+        )
+        self.assertEqual(
+            refreshed_payload["metadata"]["signal_summary_version"],
+            CHECKIN_SIGNAL_SUMMARY_VERSION,
+        )
+        self.assertTrue(refreshed_payload["metadata"]["signal_fingerprint"])
 
     def test_build_command_center_applies_recurring_and_add_exception(self):
         repository = FakeCommandCenterRepository()

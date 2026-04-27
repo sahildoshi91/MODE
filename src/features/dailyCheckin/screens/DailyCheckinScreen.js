@@ -37,7 +37,6 @@ import {
   GlassSlider,
   HeroOverlayCard,
   MiniStat,
-  MacroBar,
   ProgressRing,
   SectionHeader,
 } from '../../../../lib/components';
@@ -165,7 +164,7 @@ const MODE_RECOMMENDATIONS = {
       intensity: 'High',
     },
     nutrition: {
-      rule: 'Fuel hard with protein and performance carbs.',
+      rule: 'Prioritize protein early, add performance carbs around training, and keep fluids steady.',
     },
     mindset: {
       cue: 'Attack the day. You are cleared to push.',
@@ -179,7 +178,7 @@ const MODE_RECOMMENDATIONS = {
       intensity: 'Moderate',
     },
     nutrition: {
-      rule: 'Keep meals balanced and steady all day.',
+      rule: 'Anchor each meal with protein, add balanced carbs, and keep snacks intentional.',
     },
     mindset: {
       cue: 'Build momentum with disciplined reps.',
@@ -193,7 +192,7 @@ const MODE_RECOMMENDATIONS = {
       intensity: 'Low',
     },
     nutrition: {
-      rule: 'Hydrate well and lean on whole foods.',
+      rule: 'Keep protein steady, choose easy whole-food meals, and hydrate before chasing intensity.',
     },
     mindset: {
       cue: 'Recovery done well is progress.',
@@ -207,7 +206,7 @@ const MODE_RECOMMENDATIONS = {
       intensity: 'Very low',
     },
     nutrition: {
-      rule: 'Keep it simple: fluids, protein, and micronutrients.',
+      rule: 'Stay consistent with protein, colorful plants, and fluids so recovery has what it needs.',
     },
     mindset: {
       cue: 'Rest with intent so you can return stronger.',
@@ -832,6 +831,7 @@ function HomeOverviewCard({ result, isModeInfoOpen, onToggleModeInfo, onOpenInsi
 
       <View style={styles.homeOverviewMetricsRow}>
         <ProgressRing
+          testID="daily-checkin-home-readiness-ring"
           value={scoreProgress}
           centerValue={result.score}
           label="/25"
@@ -882,15 +882,6 @@ function HomeOverviewCard({ result, isModeInfoOpen, onToggleModeInfo, onOpenInsi
         <ModeText variant="h3" style={styles.homeOverviewMindsetValue}>
           {result?.mindset?.cue || 'Show up with disciplined reps.'}
         </ModeText>
-      </View>
-      <View style={styles.homeOverviewProgressWrap}>
-        <MacroBar
-          label="Readiness"
-          valueLabel={`${result.score}/25`}
-          progress={scoreProgress}
-          accentColor={modeTheme.accent}
-          style={styles.homeOverviewProgress}
-        />
       </View>
       <View style={styles.homeOverviewActions}>
         <ModeButton title="Coach insights" variant="ghost" onPress={onOpenInsights} />
@@ -3008,12 +2999,6 @@ const styles = StyleSheet.create({
   homeOverviewMindsetValue: {
     marginTop: theme.spacing[1],
     color: theme.colors.text.primary,
-  },
-  homeOverviewProgressWrap: {
-    marginTop: theme.spacing[3],
-  },
-  homeOverviewProgress: {
-    marginTop: theme.spacing[1],
   },
   homeOverviewActions: {
     marginTop: theme.spacing[2],

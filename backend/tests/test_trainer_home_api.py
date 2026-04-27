@@ -58,10 +58,34 @@ class FakeTrainerHomeRepository:
     def list_checkins_between(self, start_date, end_date):
         del start_date, end_date
         return [
-            {"client_id": "client-1", "date": "2026-04-10", "total_score": 18, "assigned_mode": "BUILD"},
-            {"client_id": "client-1", "date": "2026-04-09", "total_score": 17, "assigned_mode": "BUILD"},
-            {"client_id": "client-1", "date": "2026-04-08", "total_score": 19, "assigned_mode": "BUILD"},
-            {"client_id": "client-2", "date": "2026-04-09", "total_score": 12, "assigned_mode": "RECOVER"},
+            {
+                "client_id": "client-1",
+                "date": "2026-04-10",
+                "inputs": {"sleep": 4, "stress": 3, "soreness": 4, "nutrition": 3, "motivation": 4},
+                "total_score": 18,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-09",
+                "inputs": {"sleep": 2, "stress": 3, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 17,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-08",
+                "inputs": {"sleep": 3, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 19,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-2",
+                "date": "2026-04-09",
+                "inputs": {"sleep": 2, "stress": 3, "soreness": 3, "nutrition": 3, "motivation": 1},
+                "total_score": 12,
+                "assigned_mode": "RECOVER",
+            },
         ]
 
     def list_completed_workouts_between(self, start_time, end_time):
@@ -139,8 +163,15 @@ class TrainerHomeApiTests(unittest.TestCase):
         self.assertEqual(taylor["week_summary"]["checkins_completed_7d"], 3)
         self.assertEqual(taylor["week_summary"]["avg_mode_7d"], "BUILD")
         self.assertEqual(taylor["week_summary"]["workouts_completed_7d"], 2)
+        taylor_sleep = next(item for item in taylor["week_summary"]["question_summaries"] if item["key"] == "sleep")
+        self.assertEqual(taylor_sleep["average_7d"], 3.0)
+        self.assertEqual(taylor_sleep["responses_7d"], 3)
+        self.assertEqual(len(taylor_sleep["daily_responses"]), 7)
         self.assertEqual(jordan["week_summary"]["checkins_completed_7d"], 1)
         self.assertEqual(jordan["week_summary"]["workouts_completed_7d"], 1)
+        jordan_motivation = next(item for item in jordan["week_summary"]["question_summaries"] if item["key"] == "motivation")
+        self.assertEqual(jordan_motivation["status"], "low")
+        self.assertEqual(jordan_motivation["average_7d"], 1.0)
         self.assertLessEqual(len(jordan["talking_points"]), 3)
         self.assertTrue(
             any("No check-in logged today" in point for point in jordan["talking_points"]),

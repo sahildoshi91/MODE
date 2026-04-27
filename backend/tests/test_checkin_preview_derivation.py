@@ -27,7 +27,19 @@ class CheckinPreviewDerivationTests(unittest.TestCase):
         )
 
         self.assertEqual(headline, "Lean Builder")
-        self.assertEqual(summary, "3 meals | 2150 kcal | 155g protein")
+        self.assertEqual(summary, "3 meals planned around about 2,150 kcal and 155g protein.")
+
+    def test_derives_nutrition_preview_without_macro_totals(self):
+        headline, summary = _derive_plan_preview(
+            structured_payload={
+                "title": "Simple Fuel",
+                "meals": [{"name": "Breakfast"}, {"name": "Lunch"}, {"name": "Dinner"}],
+            },
+            plan_type_value="nutrition",
+        )
+
+        self.assertEqual(headline, "Simple Fuel")
+        self.assertEqual(summary, "3 meals planned with portions and timing ready to review.")
 
     def test_derives_training_preview_from_exercise_list(self):
         headline, summary = _derive_plan_preview(

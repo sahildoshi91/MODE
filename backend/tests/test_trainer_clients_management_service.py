@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -78,6 +79,29 @@ class FakeTrainerClientRepository:
                 "created_at": "2026-04-11T09:00:00+00:00",
                 "updated_at": "2026-04-11T09:00:00+00:00",
             }
+        ]
+        self.checkins = [
+            {
+                "client_id": "client-1",
+                "date": "2026-04-11",
+                "inputs": {"sleep": 2, "stress": 3, "soreness": 4, "nutrition": 4, "motivation": 2},
+                "total_score": 15,
+                "assigned_mode": "RECOVER",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-09",
+                "inputs": {"sleep": 2, "stress": 4, "soreness": 4, "nutrition": 5, "motivation": 2},
+                "total_score": 17,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-07",
+                "inputs": {"sleep": 3, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 1},
+                "total_score": 16,
+                "assigned_mode": "BUILD",
+            },
         ]
 
     def list_clients_for_trainer(self, trainer_id: str):
@@ -160,6 +184,61 @@ class FakeTrainerClientRepository:
             if client_id in self.profile_status_by_client_id
         }
 
+    def get_trainer_settings(self, trainer_id: str):
+        del trainer_id
+        return {
+            "id": "trainer-123",
+            "display_name": "Coach Alex",
+            "default_meeting_location": "Main Gym",
+            "auto_fill_meeting_location": True,
+        }
+
+    def get_schedule_preferences(self, trainer_id: str, client_id: str):
+        del trainer_id, client_id
+        return None
+
+    def get_schedule_exception_for_day(self, trainer_id: str, client_id: str, session_date):
+        del trainer_id, client_id, session_date
+        return None
+
+    def list_schedule_exceptions_between(self, trainer_id: str, start_date, end_date, client_ids=None):
+        del trainer_id, start_date, end_date, client_ids
+        return []
+
+    def get_profile(self, client_id: str):
+        return {
+            "client_id": client_id,
+            "primary_goal": "Build strength",
+            "onboarding_status": "completed",
+        }
+
+    def create_empty_profile(self, client_id: str):
+        return {"client_id": client_id}
+
+    def list_checkins_between(self, client_id: str, start_date, end_date):
+        return [
+            dict(row)
+            for row in self.checkins
+            if row["client_id"] == client_id
+            and start_date.isoformat() <= row["date"] <= end_date.isoformat()
+        ]
+
+    def get_latest_checkin(self, client_id: str):
+        rows = [dict(row) for row in self.checkins if row["client_id"] == client_id]
+        return sorted(rows, key=lambda row: row["date"], reverse=True)[0] if rows else None
+
+    def list_completed_workouts_between(self, user_id: str, start_time, end_time):
+        del user_id, start_time, end_time
+        return []
+
+    def get_schedule_for_day(self, trainer_id: str, client_id: str, session_date):
+        del trainer_id, client_id, session_date
+        return None
+
+    def list_memory(self, trainer_id: str, client_id: str, include_archived=False):
+        del trainer_id, client_id, include_archived
+        return []
+
 
 class TrainerClientManagementServiceTests(unittest.TestCase):
     def setUp(self):
@@ -223,6 +302,22 @@ class TrainerClientManagementServiceTests(unittest.TestCase):
         self.assertFalse(by_client_id["client-1"].is_pending_user)
         self.assertTrue(by_client_id["client-2"].is_pending_user)
         self.assertTrue(by_client_id["client-3"].is_pending_user)
+
+    def test_client_detail_includes_question_summaries_with_missing_days(self):
+        detail = self.service.get_client_detail(
+            self.trainer_context,
+            "client-1",
+            target_date=date(2026, 4, 11),
+        )
+
+        summaries = {item.key: item for item in detail.activity_summary.question_summaries}
+        self.assertEqual(len(summaries), 5)
+        self.assertEqual(summaries["sleep"].average_7d, 2.33)
+        self.assertEqual(summaries["sleep"].responses_7d, 3)
+        self.assertEqual(summaries["sleep"].status, "low")
+        self.assertEqual(summaries["sleep"].daily_responses[1].score, None)
+        self.assertEqual(summaries["motivation"].latest_score, 2)
+        self.assertEqual(summaries["motivation"].low_days_7d, 3)
 
     def test_cross_tenant_context_cannot_mutate_clients(self):
         cross_tenant_context = TrainerContext(

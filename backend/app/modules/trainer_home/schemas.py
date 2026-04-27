@@ -16,12 +16,30 @@ class TrainerHomeTotals(BaseModel):
     workouts_completed_7d: int
 
 
+class TrainerHomeCheckinDailyResponse(BaseModel):
+    date: date
+    score: int | None = None
+
+
+class TrainerHomeCheckinQuestionSummary(BaseModel):
+    key: str
+    label: str
+    average_7d: float | None = None
+    responses_7d: int = 0
+    low_days_7d: int = 0
+    latest_score: int | None = None
+    latest_date: date | None = None
+    status: Literal["low", "watch", "steady", "no_data"] = "no_data"
+    daily_responses: list[TrainerHomeCheckinDailyResponse] = Field(default_factory=list)
+
+
 class TrainerHomeWeekSummary(BaseModel):
     checkins_completed_7d: int = 0
     checkins_completed_today: bool = False
     avg_score_7d: float | None = None
     avg_mode_7d: str | None = None
     workouts_completed_7d: int = 0
+    question_summaries: list[TrainerHomeCheckinQuestionSummary] = Field(default_factory=list)
 
 
 class TrainerHomeClientItem(BaseModel):

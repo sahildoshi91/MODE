@@ -37,7 +37,7 @@ MODE_BUNDLES = {
             duration="45-60 min",
             intensity="High",
         ),
-        "nutrition": NutritionRecommendation(rule="Fuel hard with protein and performance carbs."),
+        "nutrition": NutritionRecommendation(rule="Prioritize protein early, add performance carbs around training, and keep fluids steady."),
         "mindset": MindsetRecommendation(cue="Attack the day. You are cleared to push."),
         "tagline": "Full-send readiness with permission to push the pace.",
         "quote": "Discipline feels lighter when your body and mind are both ready to move.",
@@ -49,7 +49,7 @@ MODE_BUNDLES = {
             duration="30-45 min",
             intensity="Moderate",
         ),
-        "nutrition": NutritionRecommendation(rule="Keep meals balanced and steady all day."),
+        "nutrition": NutritionRecommendation(rule="Anchor each meal with protein, add balanced carbs, and keep snacks intentional."),
         "mindset": MindsetRecommendation(cue="Build momentum with disciplined reps."),
         "tagline": "Stable readiness for strong, intentional work.",
         "quote": "Consistency compounds when you keep showing up with control.",
@@ -61,7 +61,7 @@ MODE_BUNDLES = {
             duration="20-30 min",
             intensity="Low",
         ),
-        "nutrition": NutritionRecommendation(rule="Hydrate well and lean on whole foods."),
+        "nutrition": NutritionRecommendation(rule="Keep protein steady, choose easy whole-food meals, and hydrate before chasing intensity."),
         "mindset": MindsetRecommendation(cue="Recovery done well is progress."),
         "tagline": "A recovery-leaning day that still rewards smart action.",
         "quote": "Listening to your body is not backing off. It is how you stay in the game.",
@@ -73,7 +73,7 @@ MODE_BUNDLES = {
             duration="10-20 min",
             intensity="Very low",
         ),
-        "nutrition": NutritionRecommendation(rule="Keep it simple: fluids, protein, and micronutrients."),
+        "nutrition": NutritionRecommendation(rule="Stay consistent with protein, colorful plants, and fluids so recovery has what it needs."),
         "mindset": MindsetRecommendation(cue="Rest with intent so you can return stronger."),
         "tagline": "Restore the system and protect tomorrow's ceiling.",
         "quote": "Restraint is a form of discipline when recovery is what your body is asking for.",
@@ -650,7 +650,10 @@ class DailyCheckinService:
                 last_workout=last_workout,
             )
 
-        if not parsed.coachNote.strip():
+        if request.plan_type == PlanType.NUTRITION:
+            if not parsed.coachNote.strip() or self._looks_like_training_note(parsed.coachNote):
+                parsed.coachNote = self._build_nutrition_adaptive_note(mode, request, inputs)
+        elif not parsed.coachNote.strip():
             parsed.coachNote = self._build_adaptive_note(mode, last_workout)
 
         return {"structured_model": parsed}
@@ -668,16 +671,26 @@ class DailyCheckinService:
     ):
         mode = self._normalize_mode(checkin["assigned_mode"])
         why = profile.get("primary_goal") or "general fitness"
-        adaptive_note = self._build_adaptive_note(mode, last_workout)
+        adaptive_note = (
+            self._build_nutrition_adaptive_note(mode, request, inputs)
+            if request.plan_type == PlanType.NUTRITION
+            else self._build_adaptive_note(mode, last_workout)
+        )
         schema_text = TRAINING_SCHEMA_TEXT if request.plan_type == PlanType.TRAINING else NUTRITION_SCHEMA_TEXT
-        training_prompt_rules = ""
+        prompt_rules = ""
         if request.plan_type == PlanType.TRAINING:
-            training_prompt_rules = (
+            prompt_rules = (
                 " Build a workout that treats the selected environment and exact time available as hard constraints. "
                 "Use warmup descriptions that explain the movement focus and why that block prepares the athlete for the main work. "
                 "Make the exercise selection feel specific to the day's readiness, not like a generic template. "
                 "Change block structure, exercise selection, and pacing when environment or time changes. "
                 "Do not use emoji in any training-plan field."
+            )
+        elif request.plan_type == PlanType.NUTRITION:
+            prompt_rules = (
+                " Build nutrition coachNote as a readable, meal-focused sentence tied to today's readiness and nutrition context. "
+                "Mention fuel, protein, hydration, meal timing, or simple food choices. "
+                "Do not refer to workout load, session intensity, sets, reps, or progression in nutrition coachNote."
             )
         workout_context = self._build_workout_context(
             generated_plan_id=None,
@@ -725,7 +738,7 @@ class DailyCheckinService:
                 "content": (
                     f"You are Coach {MODE_BUNDLES[mode]['coach']} writing a {request.plan_type.value} plan for MODE. "
                     "Respond with strict JSON only, no markdown fences, and ensure coachNote is personalized."
-                    f"{training_prompt_rules}{delta_instruction}"
+                    f"{prompt_rules}{delta_instruction}"
                 ),
             },
             {
@@ -734,6 +747,7 @@ class DailyCheckinService:
                     f"Build a {request.plan_type.value} plan using this context:\n"
                     f"{json.dumps(request_details)}\n"
                     "If this is a training plan, make the warmup specific and descriptive, make the main work match the selected environment and time cap, and keep every field emoji-free.\n"
+                    "If this is a nutrition plan, keep coachNote practical, human-readable, and focused on meals, fuel, protein, and hydration rather than workout mechanics.\n"
                     f"Return JSON matching exactly this schema:\n{schema_text}"
                 ),
             },
@@ -935,7 +949,7 @@ class DailyCheckinService:
             totalCalories=sum(meal["totalCalories"] for meal in meals),
             totalProtein=sum(meal["totalProtein"] for meal in meals),
             meals=meals,
-            coachNote=self._build_adaptive_note(mode, last_workout),
+            coachNote=self._build_nutrition_adaptive_note(mode, request, inputs),
         )
 
     def _fallback_workout_type(self, mode: str, environment: Environment | None) -> str:
@@ -1086,6 +1100,48 @@ class DailyCheckinService:
         if last_title:
             return f"Your last logged session was '{last_title}', so today's {mode.lower()} plan keeps the effort targeted and sustainable."
         return f"Coach {MODE_BUNDLES[mode]['coach']} tuned this {mode.lower()} plan to match today's readiness instead of forcing a generic template."
+
+    def _build_nutrition_adaptive_note(
+        self,
+        mode: str,
+        request: GenerateCheckinPlanRequest | None = None,
+        inputs: DailyCheckinInputs | None = None,
+    ) -> str:
+        note = request.nutrition_day_note.strip() if request and request.nutrition_day_note else ""
+        if note:
+            return (
+                f"Use today's note as the anchor: {note}. Keep meals protein-forward, hydrated, "
+                "and easy to follow from the first meal through dinner."
+            )
+
+        nutrition_score = inputs.nutrition if inputs else None
+        if isinstance(nutrition_score, int) and nutrition_score <= 2:
+            return "Keep food simple today: protein at each meal, steady fluids, and easy carbs that help energy feel more predictable."
+
+        mode_notes = {
+            "BEAST": "Use this as a high-readiness fuel day: get protein in early, place carbs near training, and keep fluids steady.",
+            "BUILD": "Use steady meals today: anchor protein at each meal, add balanced carbs, and keep hydration visible.",
+            "RECOVER": "Keep recovery easy to execute today: steady protein, simple whole-food meals, and fluids before extra caffeine.",
+            "REST": "Treat this as recovery support: protein, colorful plants, and fluids without overcomplicating the day.",
+        }
+        return mode_notes.get(mode, mode_notes["RECOVER"])
+
+    @staticmethod
+    def _looks_like_training_note(value: str) -> bool:
+        text = str(value or "").lower()
+        if not text:
+            return False
+        blocked_terms = (
+            "workout",
+            "session",
+            "load",
+            "intensity",
+            "sets",
+            "reps",
+            "progression",
+            "exercise",
+        )
+        return any(term in text for term in blocked_terms)
 
 
 TRAINING_SCHEMA_TEXT = json.dumps(

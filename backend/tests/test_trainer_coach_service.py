@@ -66,8 +66,32 @@ class TrainerCoachServiceQueuePreviewTests(unittest.TestCase):
         item = self.service._to_queue_item(row, client_name_by_id={})
 
         self.assertEqual(item.headline, "Cut Plan")
-        self.assertEqual(item.summary, "3 meals | 2100 kcal | 165g protein")
+        self.assertEqual(item.summary, "3 meals planned around about 2,100 kcal and 165g protein.")
         self.assertEqual(item.action_type, "nutrition")
+
+    def test_to_queue_item_derives_nutrition_summary_without_macro_totals(self):
+        row = {
+            "id": "output-2b",
+            "trainer_id": "trainer-1",
+            "source_type": "generated_checkin_plan",
+            "review_status": "open",
+            "queue_state": "pending",
+            "priority_tier": "normal",
+            "queue_priority": 2,
+            "delivery_state": "draft",
+            "output_json": {
+                "plan_type": "nutrition",
+                "structured": {
+                    "title": "Simple Fuel",
+                    "meals": [{"name": "Breakfast"}, {"name": "Lunch"}, {"name": "Dinner"}],
+                },
+            },
+        }
+
+        item = self.service._to_queue_item(row, client_name_by_id={})
+
+        self.assertEqual(item.headline, "Simple Fuel")
+        self.assertEqual(item.summary, "3 meals planned with portions and timing ready to review.")
 
     def test_to_queue_item_derives_training_summary_from_structured_payload(self):
         row = {

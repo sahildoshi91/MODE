@@ -112,7 +112,7 @@ class TrainerHomeRepository:
         response = (
             self.supabase
             .table("daily_checkins")
-            .select("client_id, date, total_score, assigned_mode")
+            .select("client_id, date, inputs, total_score, assigned_mode")
             .gte("date", start_date.isoformat())
             .lte("date", end_date.isoformat())
             .execute()

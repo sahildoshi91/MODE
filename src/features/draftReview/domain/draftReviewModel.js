@@ -209,7 +209,20 @@ function isTrainingPayload(innerPayload, outerPayload = {}) {
 
 function buildNutritionSummaryText(title, calories, protein) {
   const safeTitle = firstNonEmpty(title, 'Nutrition plan');
-  return `${safeTitle} · ${toPositiveInt(calories)} kcal · ${toPositiveInt(protein)}g protein`;
+  const safeCalories = toPositiveInt(calories, 0);
+  const safeProtein = toPositiveInt(protein, 0);
+  const formattedCalories = safeCalories.toLocaleString('en-US');
+
+  if (safeCalories > 0 && safeProtein > 0) {
+    return `${safeTitle} gives you about ${formattedCalories} kcal and ${safeProtein}g protein for the day.`;
+  }
+  if (safeCalories > 0) {
+    return `${safeTitle} gives you about ${formattedCalories} kcal for the day.`;
+  }
+  if (safeProtein > 0) {
+    return `${safeTitle} gives you about ${safeProtein}g protein for the day.`;
+  }
+  return `${safeTitle} is ready to review.`;
 }
 
 function buildTrainingSummaryText(title, exercises, durationMinutes) {

@@ -7,6 +7,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 from app.core.tenancy import TrainerContext
+from app.modules.checkin_signals import build_checkin_question_summaries
 from app.modules.trainer_clients.repository import TrainerClientRepository
 from app.modules.trainer_clients.schemas import (
     ClientTrainerScheduleResponse,
@@ -656,6 +657,7 @@ class TrainerClientService:
 
         avg_score = round(sum(score_values) / len(score_values), 2) if score_values else None
         avg_mode = Counter(mode_values).most_common(1)[0][0] if mode_values else None
+        question_summaries = build_checkin_question_summaries(checkins, target_date)
         latest_date = self._coerce_date((latest_checkin or {}).get("date"), None)
         latest_mode = self._normalize_mode((latest_checkin or {}).get("assigned_mode"))
         days_since_last = (target_date - latest_date).days if latest_date else None
@@ -718,6 +720,7 @@ class TrainerClientService:
             latest_checkin_date=latest_date,
             latest_mode=latest_mode,
             days_since_last_checkin=days_since_last,
+            question_summaries=question_summaries,
             scheduled_today=bool(resolved_schedule["scheduled"]),
             session_status=resolved_schedule["session_status"],
             session_type=resolved_schedule["session_type"],

@@ -146,6 +146,133 @@ function buildCommandCenterClient(overrides = {}) {
   };
 }
 
+function buildQuestionSummaries(overrides = {}) {
+  const baseDates = [
+    '2026-04-19',
+    '2026-04-18',
+    '2026-04-17',
+    '2026-04-16',
+    '2026-04-15',
+    '2026-04-14',
+    '2026-04-13',
+  ];
+  const buildDaily = (scores) => baseDates.map((date, index) => ({
+    date,
+    score: typeof scores[index] === 'number' ? scores[index] : null,
+  }));
+  const summaries = [
+    {
+      key: 'sleep',
+      label: 'Sleep',
+      average_7d: 2.2,
+      responses_7d: 5,
+      low_days_7d: 4,
+      latest_score: 2,
+      latest_date: '2026-04-19',
+      status: 'low',
+      daily_responses: buildDaily([2, null, 2, 3, 2, null, 2]),
+    },
+    {
+      key: 'stress',
+      label: 'Stress',
+      average_7d: 3.2,
+      responses_7d: 5,
+      low_days_7d: 1,
+      latest_score: 3,
+      latest_date: '2026-04-19',
+      status: 'watch',
+      daily_responses: buildDaily([3, null, 4, 3, 3, null, 3]),
+    },
+    {
+      key: 'soreness',
+      label: 'Soreness',
+      average_7d: 4.0,
+      responses_7d: 5,
+      low_days_7d: 0,
+      latest_score: 4,
+      latest_date: '2026-04-19',
+      status: 'steady',
+      daily_responses: buildDaily([4, null, 4, 4, 4, null, 4]),
+    },
+    {
+      key: 'nutrition',
+      label: 'Nutrition',
+      average_7d: 3.8,
+      responses_7d: 5,
+      low_days_7d: 0,
+      latest_score: 4,
+      latest_date: '2026-04-19',
+      status: 'steady',
+      daily_responses: buildDaily([4, null, 4, 4, 3, null, 4]),
+    },
+    {
+      key: 'motivation',
+      label: 'Motivation',
+      average_7d: 2.0,
+      responses_7d: 5,
+      low_days_7d: 5,
+      latest_score: 2,
+      latest_date: '2026-04-19',
+      status: 'low',
+      daily_responses: buildDaily([2, null, 2, 2, 2, null, 2]),
+    },
+  ];
+  return summaries.map((summary) => ({
+    ...summary,
+    ...(overrides[summary.key] || {}),
+  }));
+}
+
+function buildEmptyQuestionSummaries() {
+  return buildQuestionSummaries({
+    sleep: {
+      average_7d: null,
+      responses_7d: 0,
+      low_days_7d: 0,
+      latest_score: null,
+      latest_date: null,
+      status: 'no_data',
+      daily_responses: [],
+    },
+    stress: {
+      average_7d: null,
+      responses_7d: 0,
+      low_days_7d: 0,
+      latest_score: null,
+      latest_date: null,
+      status: 'no_data',
+      daily_responses: [],
+    },
+    soreness: {
+      average_7d: null,
+      responses_7d: 0,
+      low_days_7d: 0,
+      latest_score: null,
+      latest_date: null,
+      status: 'no_data',
+      daily_responses: [],
+    },
+    nutrition: {
+      average_7d: null,
+      responses_7d: 0,
+      low_days_7d: 0,
+      latest_score: null,
+      latest_date: null,
+      status: 'no_data',
+      daily_responses: [],
+    },
+    motivation: {
+      average_7d: null,
+      responses_7d: 0,
+      low_days_7d: 0,
+      latest_score: null,
+      latest_date: null,
+      status: 'no_data',
+      daily_responses: [],
+    },
+  });
+}
+
 function buildOffsetIsoDate(offsetDays = 0) {
   const next = new Date();
   next.setHours(0, 0, 0, 0);
@@ -1049,6 +1176,7 @@ describe('TrainerClientsScreen summary-first card and setup flow', () => {
             avg_score_7d: 20.2,
             avg_mode_7d: 'BEAST',
             workouts_completed_7d: 2,
+            question_summaries: buildQuestionSummaries(),
           },
           meeting_location: 'Underground Fitness',
           risk_flags: [],
@@ -1077,6 +1205,11 @@ describe('TrainerClientsScreen summary-first card and setup flow', () => {
     const narrativeNode = tree.root.findByProps({ testID: 'trainer-client-card-client-1-readiness-narrative' });
     expect(readNodeText(narrativeNode)).toContain('consider a small progression today once form stays crisp');
     expect(narrativeNode.props.numberOfLines).toBeUndefined();
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('7-day signals');
+    expect(rendered).toContain('2.2/5');
+    expect(rendered).toContain('2.0/5');
+    expect(rendered).toContain('3.2/5');
 
     const stableChips = tree.root.findAll((node) => node.props?.label === 'Stable');
     expect(stableChips).toHaveLength(0);
@@ -1421,6 +1554,7 @@ describe('TrainerClientsScreen dense client memory detail', () => {
         workouts_completed_7d: 3,
         avg_score_7d: 21.3,
         latest_checkin_date: '2026-04-18',
+        question_summaries: buildQuestionSummaries(),
         scheduled_today: true,
         session_status: 'scheduled',
         session_start_at: '2026-04-20T16:00:00.000Z',
@@ -1492,6 +1626,107 @@ describe('TrainerClientsScreen dense client memory detail', () => {
     createTrainerClientMemory.mockResolvedValue({ id: 'mem-new' });
     updateTrainerClientMemory.mockResolvedValue({ id: 'mem-updated' });
     archiveTrainerClientMemory.mockResolvedValue({ id: 'mem-archived' });
+  });
+
+  it('renders five 7-day check-in signal breakdowns in client detail', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+    await openClientDetail(tree);
+
+    expect(JSON.stringify(tree.toJSON())).toContain('7-Day Check-In Signals');
+    expect(readNodeText(tree.root.findByProps({ testID: 'trainer-client-detail-signal-window' }))).toContain('Window:');
+    expect(findHostNodesByTestID(tree.root, 'trainer-client-detail-signal-sleep')).toHaveLength(1);
+    expect(findHostNodesByTestID(tree.root, 'trainer-client-detail-signal-stress')).toHaveLength(1);
+    expect(findHostNodesByTestID(tree.root, 'trainer-client-detail-signal-soreness')).toHaveLength(1);
+    expect(findHostNodesByTestID(tree.root, 'trainer-client-detail-signal-nutrition')).toHaveLength(1);
+    expect(findHostNodesByTestID(tree.root, 'trainer-client-detail-signal-motivation')).toHaveLength(1);
+    expect(readNodeText(tree.root.findByProps({ testID: 'trainer-client-detail-signal-sleep-prompt' }))).toContain('bedtime consistency');
+    expect(readNodeText(tree.root.findByProps({ testID: 'trainer-client-detail-signal-motivation-prompt' }))).toContain('friction point');
+    expect(JSON.stringify(tree.toJSON())).toContain('/7 responses');
+    expect(JSON.stringify(tree.toJSON())).toContain('low days');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows a backend fallback when detail omits question summaries', async () => {
+    getTrainerClientDetail.mockResolvedValueOnce(buildClientDetailPayload({
+      activity_summary: {
+        checkins_completed_7d: 5,
+        workouts_completed_7d: 3,
+        avg_score_7d: 21.3,
+        latest_checkin_date: '2026-04-26',
+        scheduled_today: true,
+        session_status: 'scheduled',
+        session_start_at: '2026-04-20T16:00:00.000Z',
+        session_end_at: '2026-04-20T17:00:00.000Z',
+        meeting_location: 'Underground Fitness',
+      },
+    }));
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+    await openClientDetail(tree);
+
+    expect(readNodeText(tree.root.findByProps({ testID: 'trainer-client-detail-signal-fallback' }))).toContain(
+      'Signal analysis not returned by backend.',
+    );
+    expect(readNodeText(tree.root.findByProps({ testID: 'trainer-client-detail-signal-window' }))).toContain('Window:');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows an empty-window fallback when summaries have no responses', async () => {
+    const payload = buildClientDetailPayload();
+    getTrainerClientDetail.mockResolvedValueOnce({
+      ...payload,
+      activity_summary: {
+        ...payload.activity_summary,
+        checkins_completed_7d: 0,
+        avg_score_7d: null,
+        question_summaries: buildEmptyQuestionSummaries(),
+      },
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+    await openClientDetail(tree);
+
+    expect(readNodeText(tree.root.findByProps({ testID: 'trainer-client-detail-signal-fallback' }))).toContain(
+      'No check-ins in selected 7-day window.',
+    );
+    expect(findHostNodesByTestID(tree.root, 'trainer-client-detail-signal-sleep')).toHaveLength(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
   });
 
   it('defaults composer to internal visibility, supports AI toggle, and reveals tags on demand', async () => {

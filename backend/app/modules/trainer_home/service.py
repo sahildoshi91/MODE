@@ -10,6 +10,11 @@ from app.ai.client import GPT_5_4_MINI_MODEL, OpenAIClient
 from app.core.config import settings
 from app.core.tenancy import TrainerContext
 from app.modules.ai_feedback.service import AIFeedbackService
+from app.modules.checkin_signals import (
+    CHECKIN_SIGNAL_SUMMARY_VERSION,
+    build_checkin_question_summaries,
+    build_signal_fingerprint,
+)
 from app.modules.trainer_home.repository import TrainerHomeRepository
 from app.modules.trainer_home.schemas import (
     TrainerHomeCommandCenterClientItem,
@@ -367,12 +372,14 @@ class TrainerHomeService:
 
         avg_score = round(sum(scores) / len(scores), 2) if scores else None
         avg_mode = self._dominant_mode(modes, avg_score)
+        question_summaries = build_checkin_question_summaries(client_checkins, target_date)
         return TrainerHomeWeekSummary(
             checkins_completed_7d=len(client_checkins),
             checkins_completed_today=self._has_today_checkin(client_checkins, target_date),
             avg_score_7d=avg_score,
             avg_mode_7d=avg_mode,
             workouts_completed_7d=workouts_completed_7d,
+            question_summaries=question_summaries,
         )
 
     def _build_risk_flags(
@@ -403,6 +410,21 @@ class TrainerHomeService:
                     label="Low 7-Day Readiness",
                     severity="high" if week_summary.avg_score_7d < 13 else "medium",
                     detail=f"Average readiness is {week_summary.avg_score_7d:.1f}/25 over the last 7 days.",
+                )
+            )
+
+        for signal in self._actionable_question_summaries(week_summary, statuses={"low"})[:2]:
+            average = signal.average_7d
+            detail_average = f"{average:.1f}/5" if average is not None else "N/A"
+            flags.append(
+                TrainerHomeRiskFlag(
+                    code=f"low_{signal.key}_7d",
+                    label=f"Low {signal.label}",
+                    severity="high" if average is not None and average <= 2 else "medium",
+                    detail=(
+                        f"{signal.label} averaged {detail_average} across "
+                        f"{signal.responses_7d} check-ins in the last 7 days."
+                    ),
                 )
             )
 
@@ -488,6 +510,9 @@ class TrainerHomeService:
         elif week_summary.avg_score_7d < 18:
             score += 1.0
 
+        low_signal_count = len(self._actionable_question_summaries(week_summary, statuses={"low"})[:2])
+        score += low_signal_count * 1.25
+
         if week_summary.workouts_completed_7d <= 0:
             score += 2.5
         elif week_summary.workouts_completed_7d <= 1:
@@ -515,6 +540,66 @@ class TrainerHomeService:
         if score >= 4:
             return "medium"
         return "low"
+
+    def _actionable_question_summaries(
+        self,
+        week_summary: TrainerHomeWeekSummary,
+        *,
+        statuses: set[str],
+    ) -> list[Any]:
+        summaries = [
+            summary
+            for summary in week_summary.question_summaries
+            if summary.status in statuses and summary.average_7d is not None
+        ]
+        return sorted(summaries, key=self._question_summary_sort_key)
+
+    def _question_summary_sort_key(self, summary: Any) -> tuple[Any, ...]:
+        status_rank = {"low": 0, "watch": 1, "steady": 2, "no_data": 3}
+        key_rank = {
+            "sleep": 0,
+            "motivation": 1,
+            "stress": 2,
+            "soreness": 3,
+            "nutrition": 4,
+        }
+        average = summary.average_7d if summary.average_7d is not None else 99
+        return (
+            status_rank.get(summary.status, 9),
+            average,
+            key_rank.get(summary.key, 9),
+        )
+
+    def _build_signal_talking_points(self, week_summary: TrainerHomeWeekSummary) -> list[str]:
+        points: list[str] = []
+        for signal in self._actionable_question_summaries(week_summary, statuses={"low", "watch"})[:2]:
+            average = f"{signal.average_7d:.1f}/5" if signal.average_7d is not None else "N/A"
+            response_line = f"{signal.responses_7d} responses"
+            if signal.key == "sleep":
+                points.append(
+                    f"Sleep averaged {average} over 7 days; ask about bedtime consistency, wake-ups, and whether today's intensity should stay controlled."
+                )
+            elif signal.key == "motivation":
+                points.append(
+                    f"Motivation averaged {average} over 7 days; identify the main friction point and set one small action they can complete today."
+                )
+            elif signal.key == "stress":
+                points.append(
+                    f"Stress readiness averaged {average}; ask what has felt heaviest and pair training with one simple downshift cue."
+                )
+            elif signal.key == "soreness":
+                points.append(
+                    f"Body feel averaged {average}; ask where soreness is showing up and adjust load or range before progressing."
+                )
+            elif signal.key == "nutrition":
+                points.append(
+                    f"Nutrition averaged {average}; confirm the easiest protein, hydration, or meal-prep anchor for the next 24 hours."
+                )
+            else:
+                points.append(
+                    f"{signal.label} is trending {signal.status} at {average} across {response_line}; ask one specific follow-up before loading the session."
+                )
+        return points
 
     def _map_preferred_schedule_rows(self, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         mapped: dict[str, dict[str, Any]] = {}
@@ -709,6 +794,7 @@ class TrainerHomeService:
         trainer_id = trainer_context.trainer_id
         client_id = client_row.get("id")
         now = datetime.now(timezone.utc)
+        signal_fingerprint = build_signal_fingerprint(week_summary.question_summaries)
         if not trainer_id or not client_id:
             return TrainerHomeTalkingPointSet(
                 points=self._ensure_three_points([]),
@@ -719,7 +805,12 @@ class TrainerHomeService:
         if cache_row and not refresh_talking_points:
             cache_points = self._sanitize_points(cache_row.get("points_json"))
             cache_expires = self._coerce_datetime(cache_row.get("expires_at"))
-            if len(cache_points) == 3 and cache_expires and cache_expires > now:
+            cache_metadata = cache_row.get("metadata") if isinstance(cache_row.get("metadata"), dict) else {}
+            cache_matches_signals = (
+                cache_metadata.get("signal_summary_version") == CHECKIN_SIGNAL_SUMMARY_VERSION
+                and cache_metadata.get("signal_fingerprint") == signal_fingerprint
+            )
+            if len(cache_points) == 3 and cache_expires and cache_expires > now and cache_matches_signals:
                 return TrainerHomeTalkingPointSet(
                     points=cache_points,
                     generation_strategy=f"cache:{cache_row.get('generation_strategy') or 'deterministic'}",
@@ -772,6 +863,12 @@ class TrainerHomeService:
                     "metadata": {
                         "risk_flags": [flag.code for flag in risk_flags],
                         "ai_memory_count": len(ai_usable_memory),
+                        "signal_summary_version": CHECKIN_SIGNAL_SUMMARY_VERSION,
+                        "signal_fingerprint": signal_fingerprint,
+                        "low_signal_keys": [
+                            signal.key
+                            for signal in self._actionable_question_summaries(week_summary, statuses={"low"})
+                        ],
                     },
                     "updated_at": now.isoformat(),
                 }
@@ -805,6 +902,8 @@ class TrainerHomeService:
         ai_usable_memory: list[dict[str, Any]],
     ) -> list[str]:
         points: list[str] = []
+
+        points.extend(self._build_signal_talking_points(week_summary))
 
         if ai_usable_memory:
             first_memory_text = str(ai_usable_memory[0].get("text") or "").strip()
@@ -853,6 +952,14 @@ class TrainerHomeService:
         payload = {
             "client_name": client_name,
             "week_summary": week_summary.model_dump(mode="json"),
+            "checkin_question_summaries": [
+                summary.model_dump(mode="json")
+                for summary in week_summary.question_summaries
+            ],
+            "priority_checkin_signals": [
+                summary.model_dump(mode="json")
+                for summary in self._actionable_question_summaries(week_summary, statuses={"low", "watch"})[:3]
+            ],
             "risk_flags": [flag.model_dump(mode="json") for flag in risk_flags],
             "ai_usable_memory": [
                 {
@@ -868,6 +975,8 @@ class TrainerHomeService:
                 "exact_points": 3,
                 "style": "high-signal talking points for a trainer preparing to coach this client today",
                 "constraints": [
+                    "When low or watch check-in question signals exist, lead with those specifics.",
+                    "Give extra attention to low sleep or low motivation when present.",
                     "Keep each point concise and action-oriented.",
                     "Avoid medical certainty.",
                     "No markdown bullets; plain strings only.",
@@ -1004,6 +1113,8 @@ class TrainerHomeService:
                     "points": points,
                     "risk_flags": [flag.code for flag in risk_flags],
                     "week_summary": week_summary.model_dump(mode="json"),
+                    "signal_summary_version": CHECKIN_SIGNAL_SUMMARY_VERSION,
+                    "signal_fingerprint": build_signal_fingerprint(week_summary.question_summaries),
                 },
                 generation_metadata={
                     "producer": "trainer_home_command_center",
@@ -1038,6 +1149,7 @@ class TrainerHomeService:
         points: list[str] = []
         if not week_summary.checkins_completed_today:
             points.append("No check-in logged today. Start the session by confirming readiness and energy.")
+        points.extend(self._build_signal_talking_points(week_summary))
         if week_summary.avg_score_7d is not None and week_summary.avg_score_7d < 15:
             points.append("Readiness trended low this week. Prioritize recovery, sleep, and controlled intensity.")
         if week_summary.checkins_completed_7d <= 2:

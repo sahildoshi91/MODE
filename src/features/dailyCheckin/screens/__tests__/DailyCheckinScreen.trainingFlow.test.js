@@ -115,8 +115,18 @@ jest.mock('../../../../../lib/components', () => {
       React.createElement(Text, null, value),
       helper ? React.createElement(Text, null, helper) : null,
     ),
-    MacroBar: ({ style }) => React.createElement(View, { style }),
-    ProgressRing: ({ style }) => React.createElement(View, { style }),
+    MacroBar: ({ style, testID, label, valueLabel }) => React.createElement(
+      View,
+      { style, testID: testID || 'macro-bar' },
+      label ? React.createElement(Text, null, label) : null,
+      valueLabel ? React.createElement(Text, null, valueLabel) : null,
+    ),
+    ProgressRing: ({ style, testID, centerValue, label }) => React.createElement(
+      View,
+      { style, testID: testID || 'progress-ring' },
+      centerValue !== undefined ? React.createElement(Text, null, centerValue) : null,
+      label ? React.createElement(Text, null, label) : null,
+    ),
     SectionHeader: ({ style, title, subtitle }) => React.createElement(
       View,
       { style },
@@ -202,7 +212,7 @@ describe('DailyCheckinScreen training routine flow', () => {
           intensity: 'Moderate',
         },
         nutrition: {
-          rule: 'Keep meals balanced and steady all day.',
+          rule: 'Anchor each meal with protein, add balanced carbs, and keep snacks intentional.',
         },
         mindset: {
           cue: 'Build momentum with disciplined reps.',
@@ -276,6 +286,12 @@ describe('DailyCheckinScreen training routine flow', () => {
     await flushEffects();
 
     expect(tree.root.findByProps({ testID: 'daily-checkin-home-overview' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'daily-checkin-home-readiness-ring' })).toBeTruthy();
+    expect(tree.root.findAllByProps({ testID: 'daily-checkin-home-readiness-bar' })).toHaveLength(0);
+
+    const homeRendered = JSON.stringify(tree.toJSON());
+    expect(homeRendered).toContain('Anchor each meal with protein, add balanced carbs, and keep snacks intentional.');
+    expect(homeRendered).not.toContain('Readiness');
 
     await act(async () => {
       tree.root.findByProps({ testID: 'build-training-routine-action' }).props.onPress();

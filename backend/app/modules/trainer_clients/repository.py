@@ -235,7 +235,7 @@ class TrainerClientRepository:
         response = (
             self.supabase
             .table("daily_checkins")
-            .select("client_id, date, total_score, assigned_mode")
+            .select("client_id, date, inputs, total_score, assigned_mode")
             .eq("client_id", client_id)
             .gte("date", start_date.isoformat())
             .lte("date", end_date.isoformat())
@@ -248,7 +248,7 @@ class TrainerClientRepository:
         response = (
             self.supabase
             .table("daily_checkins")
-            .select("client_id, date, total_score, assigned_mode")
+            .select("client_id, date, inputs, total_score, assigned_mode")
             .eq("client_id", client_id)
             .order("date", desc=True)
             .limit(1)

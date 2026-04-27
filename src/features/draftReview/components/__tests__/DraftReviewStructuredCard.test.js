@@ -76,7 +76,7 @@ function buildNutritionModel(overrides = {}) {
     protein: 170,
     status: 'open',
     sourceType: 'generated_checkin_plan',
-    summary: 'Performance Plan · 2200 kcal · 170g protein',
+    summary: 'Performance Plan gives you about 2,200 kcal and 170g protein for the day.',
     notes: 'Dial portions based on hunger cues.',
     meals: [
       {
