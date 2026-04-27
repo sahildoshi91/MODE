@@ -1,5 +1,6 @@
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
+import Feather from '@expo/vector-icons/Feather';
 
 import { ModeText } from '../../../../../lib/components';
 import { theme } from '../../../../../lib/theme';
@@ -61,19 +62,24 @@ export default function ClientRow({
         <ModeText variant="bodySm" numberOfLines={1} style={styles.nameLabel}>{client.name}</ModeText>
         <ModeText variant="caption" tone="secondary" numberOfLines={1}>{microContext}</ModeText>
       </View>
+      {selected ? (
+        <View style={styles.checkWrap}>
+          <Feather name="check" size={14} color={theme.colors.text.primary} />
+        </View>
+      ) : null}
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   row: {
-    minHeight: 48,
+    minHeight: 46,
     borderRadius: theme.radii.l,
     borderWidth: 1,
-    borderColor: theme.colors.glass.borderSoft,
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: 'rgba(255, 255, 255, 0.025)',
     paddingHorizontal: theme.spacing[2],
-    paddingVertical: 9,
+    paddingVertical: 8,
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing[2],
@@ -82,8 +88,8 @@ const styles = StyleSheet.create({
     opacity: theme.interaction.pressedOpacity,
   },
   selectedRow: {
-    borderColor: theme.colors.nav.activeBorder,
-    backgroundColor: theme.colors.nav.activeBg,
+    borderColor: 'rgba(143, 178, 255, 0.32)',
+    backgroundColor: 'rgba(123, 162, 255, 0.1)',
   },
   avatarWrap: {
     width: 30,
@@ -107,5 +113,15 @@ const styles = StyleSheet.create({
   },
   nameLabel: {
     fontWeight: '600',
+  },
+  checkWrap: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(143, 178, 255, 0.32)',
+    backgroundColor: 'rgba(123, 162, 255, 0.16)',
   },
 });

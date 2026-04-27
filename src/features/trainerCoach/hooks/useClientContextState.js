@@ -36,6 +36,7 @@ const INITIAL_STATE = {
   todayClients: [],
   recentClients: [],
   allClients: [],
+  clientListError: null,
   isSavingNote: false,
   saveStatus: SAVE_STATUS.IDLE,
   saveMessage: null,
@@ -100,6 +101,11 @@ function reduceState(state, action) {
         todayClients: action.payload.todayClients,
         recentClients: action.payload.recentClients,
         allClients: action.payload.allClients,
+      };
+    case 'SET_CLIENT_LIST_ERROR':
+      return {
+        ...state,
+        clientListError: action.payload || null,
       };
     case 'SET_LOADING_CLIENTS':
       return {
@@ -183,6 +189,20 @@ function mergeRecentWithSelection(recentClients, selectedClient) {
   return normalized.slice(0, 5);
 }
 
+async function captureListResult(loader) {
+  try {
+    return {
+      value: await loader(),
+      error: null,
+    };
+  } catch (error) {
+    return {
+      value: [],
+      error,
+    };
+  }
+}
+
 export function useClientContextState({
   accessToken,
   trainerId,
@@ -199,8 +219,13 @@ export function useClientContextState({
     () => (String(trainerId || '').trim() || 'shared'),
     [trainerId],
   );
+  const selectedClientIdRef = useRef(initialSelectedClientId || null);
   const searchSequenceRef = useRef(0);
   const summarySequenceRef = useRef(0);
+
+  useEffect(() => {
+    selectedClientIdRef.current = state.selectedClientId;
+  }, [state.selectedClientId]);
 
   const loadClients = useCallback(async () => {
     if (!accessToken) {
@@ -208,24 +233,27 @@ export function useClientContextState({
     }
     dispatch({ type: 'SET_LOADING_CLIENTS', payload: true });
     try {
-      const [todayClients, recentClients, allClients, persistedClientId] = await Promise.all([
-        fetchTodayClients({
+      const [todayResult, recentResult, allResult, persistedClientId] = await Promise.all([
+        captureListResult(() => fetchTodayClients({
           accessToken,
           trainerId,
           date,
-        }).catch(() => []),
-        fetchRecentClients({
+        })),
+        captureListResult(() => fetchRecentClients({
           accessToken,
           storageScope: scope,
-        }).catch(() => []),
-        fetchAllClients({
+        })),
+        captureListResult(() => fetchAllClients({
           accessToken,
           trainerId,
-        }).catch(() => []),
+        })),
         loadPersistedActiveCoachClientId({
           storageScope: scope,
         }).catch(() => null),
       ]);
+      const todayClients = todayResult.value;
+      const recentClients = recentResult.value;
+      const allClients = allResult.value;
 
       dispatch({
         type: 'SET_CLIENT_LISTS',
@@ -235,6 +263,12 @@ export function useClientContextState({
           allClients,
         },
       });
+      dispatch({
+        type: 'SET_CLIENT_LIST_ERROR',
+        payload: todayResult.error && recentResult.error && allResult.error
+          ? 'Unable to load clients.'
+          : null,
+      });
 
       const fallbackClientId = (
         String(initialSelectedClientId || '').trim()
@@ -243,8 +277,10 @@ export function useClientContextState({
         || String(recentClients[0]?.id || '').trim()
         || null
       );
+      const currentSelectedClientId = String(selectedClientIdRef.current || '').trim();
 
-      if (fallbackClientId && fallbackClientId !== state.selectedClientId) {
+      if (fallbackClientId && !currentSelectedClientId) {
+        selectedClientIdRef.current = fallbackClientId;
         dispatch({ type: 'SET_SELECTED_CLIENT', payload: fallbackClientId });
         onSelectedClientChange?.(fallbackClientId);
       }
@@ -257,7 +293,6 @@ export function useClientContextState({
     initialSelectedClientId,
     onSelectedClientChange,
     scope,
-    state.selectedClientId,
     trainerId,
   ]);
 
@@ -338,8 +373,9 @@ export function useClientContextState({
             allClients,
           },
         });
+        dispatch({ type: 'SET_CLIENT_LIST_ERROR', payload: null });
       } catch (_error) {
-        // Keep prior list on search failure.
+        dispatch({ type: 'SET_CLIENT_LIST_ERROR', payload: 'Unable to refresh clients.' });
       } finally {
         if (searchSequenceRef.current === sequenceId) {
           dispatch({ type: 'SET_SEARCHING', payload: false });
@@ -360,6 +396,7 @@ export function useClientContextState({
 
   const setSelectedClient = useCallback(async (clientId, { keepOpen = true } = {}) => {
     const normalizedClientId = String(clientId || '').trim();
+    selectedClientIdRef.current = normalizedClientId || null;
     dispatch({ type: 'SET_SELECTED_CLIENT', payload: normalizedClientId || null });
     onSelectedClientChange?.(normalizedClientId || null);
 
@@ -541,6 +578,7 @@ export function useClientContextState({
     refreshClients: loadClients,
     hydrateSelectedClientId: (clientId) => {
       const normalized = String(clientId || '').trim() || null;
+      selectedClientIdRef.current = normalized;
       dispatch({ type: 'SET_SELECTED_CLIENT', payload: normalized });
     },
   }), [

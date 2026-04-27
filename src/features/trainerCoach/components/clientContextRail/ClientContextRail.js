@@ -13,9 +13,7 @@ import Feather from '@expo/vector-icons/Feather';
 import { ModeText } from '../../../../../lib/components';
 import { theme } from '../../../../../lib/theme';
 import { CLIENT_CONTEXT_RAIL_MODE } from '../../hooks/useClientContextState';
-import { summarizeClientDisplay } from '../../services/coachClientContextApi';
 import ClientContextChip from './ClientContextChip';
-import ContextSettingsShortcuts from './ContextSettingsShortcuts';
 import FullClientContextSheet from './FullClientContextSheet';
 import QuickNoteComposer from './QuickNoteComposer';
 import SmartClientPicker from './SmartClientPicker';
@@ -39,6 +37,7 @@ export default function ClientContextRail({
   const panelOpacity = useRef(new Animated.Value(0)).current;
   const panelLift = useRef(new Animated.Value(18)).current;
   const dragY = useRef(new Animated.Value(0)).current;
+  const [noteFocusSignal, setNoteFocusSignal] = useState(0);
 
   useEffect(() => {
     if (state.railMode === CLIENT_CONTEXT_RAIL_MODE.COLLAPSED) {
@@ -82,6 +81,12 @@ export default function ClientContextRail({
     ]).start();
   }, [dragY, panelLift, panelOpacity, state.railMode]);
 
+  useEffect(() => {
+    if (state.railMode === CLIENT_CONTEXT_RAIL_MODE.EXPANDED) {
+      setNoteFocusSignal((value) => value + 1);
+    }
+  }, [state.railMode]);
+
   const panResponder = useMemo(() => PanResponder.create({
     onMoveShouldSetPanResponder: (_event, gestureState) => (
       Math.abs(gestureState.dy) > 6 && gestureState.dy > Math.abs(gestureState.dx)
@@ -113,17 +118,13 @@ export default function ClientContextRail({
     },
   }), [actions, dragY]);
 
-  const selectedClientLabel = selectedClientSummary
-    ? summarizeClientDisplay(selectedClientSummary, { includeTodayPrefix: true })
-    : null;
-
   return (
     <View style={[styles.root, style]}>
       <ClientContextChip
         testID={`${testIDPrefix}-chip`}
         selectedClient={selectedClientSummary}
         onPress={() => {
-          actions?.expandRail?.({ focusSearch: !state?.selectedClientId });
+          actions?.expandRail?.();
         }}
       />
 
@@ -144,26 +145,21 @@ export default function ClientContextRail({
         >
           <View style={styles.panelHeader} {...panResponder.panHandlers}>
             <View style={styles.dragHandle} />
-            <View style={styles.headerCopyWrap}>
-              <ModeText variant="bodySm" style={styles.headerTitle}>Client Context</ModeText>
-              {selectedClientLabel ? (
-                <ModeText variant="caption" tone="secondary" numberOfLines={1}>
-                  {selectedClientLabel}
-                </ModeText>
-              ) : null}
+            <View style={styles.headerRow}>
+              <ModeText variant="bodySm" style={styles.headerTitle}>Client</ModeText>
+              <Pressable
+                testID={`${testIDPrefix}-dismiss`}
+                onPress={() => actions?.dismissRail?.()}
+                accessibilityRole="button"
+                accessibilityLabel="Dismiss client context"
+                style={({ pressed }) => [
+                  styles.dismissButton,
+                  pressed && styles.dismissButtonPressed,
+                ]}
+              >
+                <Feather name="x" size={16} color={theme.colors.text.secondary} />
+              </Pressable>
             </View>
-            <Pressable
-              testID={`${testIDPrefix}-dismiss`}
-              onPress={() => actions?.dismissRail?.()}
-              accessibilityRole="button"
-              accessibilityLabel="Dismiss client context"
-              style={({ pressed }) => [
-                styles.dismissButton,
-                pressed && styles.dismissButtonPressed,
-              ]}
-            >
-              <Feather name="x" size={16} color={theme.colors.text.secondary} />
-            </Pressable>
           </View>
 
           <ScrollView
@@ -185,33 +181,29 @@ export default function ClientContextRail({
               />
             ) : (
               <>
+                <QuickNoteComposer
+                  quickNoteText={state.quickNoteText}
+                  isSavingNote={state.isSavingNote}
+                  saveStatus={state.saveStatus}
+                  saveMessage={state.saveMessage}
+                  hasSelectedClient={Boolean(state.selectedClientId)}
+                  onQuickNoteTextChange={actions?.setQuickNoteText}
+                  onSave={() => actions?.saveQuickNote?.({ createdByTrainerId })}
+                  autoFocus={state.railMode === CLIENT_CONTEXT_RAIL_MODE.EXPANDED}
+                  focusSignal={noteFocusSignal}
+                  testIDPrefix={`${testIDPrefix}-note`}
+                />
                 <SmartClientPicker
                   selectedClientId={state.selectedClientId}
                   todayClients={state.todayClients}
                   recentClients={state.recentClients}
                   allClients={state.allClients}
                   searchQuery={state.searchQuery}
-                  onSearchQueryChange={actions?.setSearchQuery}
                   onSelectClient={(clientId) => actions?.setSelectedClient?.(clientId, { keepOpen: true })}
                   isSearching={state.isSearching}
-                  autoFocusSearch={!state.selectedClientId}
+                  isLoading={state.isLoadingClients}
+                  errorMessage={state.clientListError}
                   testIDPrefix={`${testIDPrefix}-picker`}
-                />
-                <QuickNoteComposer
-                  quickNoteText={state.quickNoteText}
-                  allowAIUse={state.allowAIUse}
-                  isSavingNote={state.isSavingNote}
-                  saveStatus={state.saveStatus}
-                  saveMessage={state.saveMessage}
-                  hasSelectedClient={Boolean(state.selectedClientId)}
-                  onQuickNoteTextChange={actions?.setQuickNoteText}
-                  onAllowAIUseChange={actions?.setAllowAIUse}
-                  onSave={() => actions?.saveQuickNote?.({ createdByTrainerId })}
-                  testIDPrefix={`${testIDPrefix}-note`}
-                />
-                <ContextSettingsShortcuts
-                  onOpen={actions?.openFullRail}
-                  testIDPrefix={`${testIDPrefix}-settings`}
                 />
               </>
             )}
@@ -243,27 +235,25 @@ const styles = StyleSheet.create({
     paddingTop: theme.spacing[2],
     paddingBottom: theme.spacing[1],
     gap: theme.spacing[1],
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(255,255,255,0.06)',
   },
   dragHandle: {
     alignSelf: 'center',
-    width: 40,
+    width: 38,
     height: 4,
     borderRadius: 99,
     backgroundColor: theme.colors.glass.borderStrong,
   },
-  headerCopyWrap: {
-    paddingRight: 40,
-    gap: 2,
+  headerRow: {
+    minHeight: 30,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[2],
   },
   headerTitle: {
     fontWeight: '700',
   },
   dismissButton: {
-    position: 'absolute',
-    top: 10,
-    right: theme.spacing[2],
     width: 28,
     height: 28,
     borderRadius: 14,
@@ -281,8 +271,8 @@ const styles = StyleSheet.create({
   },
   panelContent: {
     paddingHorizontal: theme.spacing[3],
-    paddingTop: theme.spacing[2],
-    paddingBottom: theme.spacing[3],
+    paddingTop: theme.spacing[1],
+    paddingBottom: theme.spacing[2],
     gap: theme.spacing[2],
   },
 });

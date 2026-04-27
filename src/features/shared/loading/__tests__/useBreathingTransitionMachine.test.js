@@ -10,9 +10,9 @@ function HookHarness({
   active,
   showAfterMs = 140,
   minVisibleMs = 280,
-  inhaleMs = 3000,
-  holdMs = 300,
-  exhaleMs = 3000,
+  inhaleMs = 4000,
+  holdMs = 550,
+  exhaleMs = 4000,
   onExitComplete = undefined,
   onState,
 }) {
@@ -76,6 +76,53 @@ describe('useBreathingTransitionMachine', () => {
     });
     expect(latestState.phase).toBe(BREATHING_PHASE.INHALE);
     expect(latestState.isMounted).toBe(true);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('uses calm guided-breath defaults for inhale, hold, and exhale', () => {
+    let latestState = null;
+    const onState = (state) => {
+      latestState = state;
+    };
+
+    let tree;
+    act(() => {
+      tree = renderer.create(
+        <HookHarness
+          active
+          showAfterMs={0}
+          minVisibleMs={0}
+          onState={onState}
+        />,
+      );
+    });
+
+    act(() => {
+      jest.advanceTimersByTime(260);
+    });
+    expect(latestState.phase).toBe(BREATHING_PHASE.INHALE);
+    expect(latestState.durationMs).toBe(4000);
+
+    act(() => {
+      jest.advanceTimersByTime(4000);
+    });
+    expect(latestState.phase).toBe(BREATHING_PHASE.EXHALE);
+    expect(latestState.durationMs).toBe(4000);
+
+    act(() => {
+      jest.advanceTimersByTime(4000);
+    });
+    expect(latestState.phase).toBe(BREATHING_PHASE.INHALE);
+    expect(latestState.durationMs).toBe(4000);
+
+    act(() => {
+      jest.advanceTimersByTime(4000);
+    });
+    expect(latestState.phase).toBe(BREATHING_PHASE.HOLD);
+    expect(latestState.durationMs).toBe(550);
 
     act(() => {
       tree.unmount();

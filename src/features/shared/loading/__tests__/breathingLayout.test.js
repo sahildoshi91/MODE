@@ -9,7 +9,7 @@ describe('getBreathingLayout', () => {
     });
 
     expect(layout.compact).toBe(true);
-    expect(layout.orbDiameter).toBe(176);
+    expect(layout.orbDiameter).toBe(190);
     expect(layout.subtitleGap).toBe(24);
     expect(layout.horizontalPadding).toBe(28);
     expect(layout.subtitleMaxWidth).toBe(264);
@@ -24,7 +24,7 @@ describe('getBreathingLayout', () => {
     });
 
     expect(layout.compact).toBe(false);
-    expect(layout.orbDiameter).toBe(195);
+    expect(layout.orbDiameter).toBe(211);
     expect(layout.subtitleGap).toBe(28);
     expect(layout.subtitleMaxWidth).toBe(320);
     expect(layout.orbCenterY).toBeCloseTo(382.72, 2);
@@ -37,7 +37,7 @@ describe('getBreathingLayout', () => {
       insets: { top: 59, bottom: 34 },
     });
 
-    expect(layout.orbDiameter).toBe(248);
-    expect(layout.orbRadius).toBe(124);
+    expect(layout.orbDiameter).toBe(268);
+    expect(layout.orbRadius).toBe(134);
   });
 });

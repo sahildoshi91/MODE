@@ -313,6 +313,34 @@ describe('TrainerCoachScreen', () => {
     });
   });
 
+  it('keeps loading sync status in the header without rendering composer helper copy', async () => {
+    mockUseTrainerCoachWorkspace.mockReturnValue(buildWorkspaceSnapshot({
+      state: {
+        ...buildWorkspaceSnapshot().state,
+        loading: true,
+      },
+    }));
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerCoachScreen
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          bottomInset={12}
+        />,
+      );
+    });
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Syncing');
+    expect(rendered).not.toContain('is syncing your workspace');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('does not render the legacy draft queue dock in Coach screen layout', async () => {
     mockUseTrainerCoachWorkspace.mockReturnValue(buildWorkspaceSnapshot());
 

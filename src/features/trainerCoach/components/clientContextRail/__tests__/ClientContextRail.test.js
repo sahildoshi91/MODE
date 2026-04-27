@@ -14,4 +14,17 @@ describe('ClientContextRail source contract', () => {
     expect(dismissTestIdMatches).toHaveLength(1);
     expect(source).toContain('onPress={() => actions?.dismissRail?.()}');
   });
+
+  it('keeps the quick client sheet compact without duplicated context headings', () => {
+    const sourcePath = path.resolve(
+      __dirname,
+      '..',
+      'ClientContextRail.js',
+    );
+    const source = fs.readFileSync(sourcePath, 'utf8');
+
+    expect(source).not.toContain('Client Context');
+    expect(source).not.toContain('ContextSettingsShortcuts');
+    expect(source.indexOf('<QuickNoteComposer')).toBeLessThan(source.indexOf('<SmartClientPicker'));
+  });
 });

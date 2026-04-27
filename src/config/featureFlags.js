@@ -49,3 +49,7 @@ export const BREATHING_TRANSITIONS_ENABLED = parseBooleanFlag(
   process.env.EXPO_PUBLIC_BREATHING_TRANSITIONS_ENABLED,
   true,
 );
+export const BREATHING_TRANSITION_DEMO_ENABLED = parseBooleanFlag(
+  process.env.EXPO_PUBLIC_BREATHING_TRANSITION_DEMO_ENABLED,
+  false,
+);

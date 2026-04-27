@@ -42,10 +42,11 @@ function mergeUnique(...lists) {
   return Array.from(byId.values());
 }
 
-function HookHarness({ onSnapshot }) {
+function HookHarness({ onSnapshot, onSelectedClientChange }) {
   const snapshot = useClientContextState({
     accessToken: 'token',
     trainerId: 'trainer-1',
+    onSelectedClientChange,
   });
 
   useEffect(() => {
@@ -171,5 +172,39 @@ describe('useClientContextState', () => {
     }));
     expect(latestSnapshot.state.saveStatus).toBe('saved');
     expect(latestSnapshot.state.quickNoteText).toBe('');
+  });
+
+  it('updates active coach client and recent ordering when selecting a client', async () => {
+    let latestSnapshot = null;
+    const onSnapshot = (snapshot) => {
+      latestSnapshot = snapshot;
+    };
+    const onSelectedClientChange = jest.fn();
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          onSnapshot={onSnapshot}
+          onSelectedClientChange={onSelectedClientChange}
+        />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await latestSnapshot.actions.setSelectedClient('client-2', { keepOpen: true });
+    });
+
+    expect(latestSnapshot.state.selectedClientId).toBe('client-2');
+    expect(latestSnapshot.state.recentClients[0]).toEqual(expect.objectContaining({
+      id: 'client-2',
+      name: 'Jordan Lee',
+    }));
+    expect(onSelectedClientChange).toHaveBeenCalledWith('client-2');
+    expect(setActiveCoachClient).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'token',
+      clientId: 'client-2',
+      storageScope: 'trainer-1',
+    }));
   });
 });

@@ -56,11 +56,31 @@ describe('BreathingTransitionOverlay', () => {
     return tree;
   }
 
-  it('uses fixed primary copy with contextual secondary copy', () => {
+  it('uses guided inhale/exhale primary copy with contextual secondary copy', () => {
     const tree = renderOverlay({ progressLabel: 'Loading your role and onboarding state.' });
 
-    expect(tree.root.findByProps({ children: 'Take a breath.' })).toBeTruthy();
+    expect(tree.root.findByProps({ children: 'Inhale' })).toBeTruthy();
     expect(tree.root.findByProps({ children: 'Loading your role and onboarding state.' })).toBeTruthy();
+
+    act(() => {
+      jest.advanceTimersByTime(200);
+    });
+    expect(tree.root.findByProps({ children: 'Exhale' })).toBeTruthy();
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('preserves an explicit custom primary title', () => {
+    const tree = renderOverlay({ title: 'Preparing MODE' });
+
+    expect(tree.root.findByProps({ children: 'Preparing MODE' })).toBeTruthy();
+
+    act(() => {
+      jest.advanceTimersByTime(200);
+    });
+    expect(tree.root.findByProps({ children: 'Preparing MODE' })).toBeTruthy();
 
     act(() => {
       tree.unmount();
@@ -68,29 +88,39 @@ describe('BreathingTransitionOverlay', () => {
   });
 
   it('exports balanced premium inhale/exhale motion targets', () => {
-    expect(BREATHING_MOTION_TARGETS.scale.inhale).toBe(1.065);
-    expect(BREATHING_MOTION_TARGETS.scale.hold).toBe(1.065);
-    expect(BREATHING_MOTION_TARGETS.scale.exhale).toBe(0.965);
+    expect(BREATHING_MOTION_TARGETS.scale.rest).toBe(0.84);
+    expect(BREATHING_MOTION_TARGETS.scale.inhale).toBe(1.15);
+    expect(BREATHING_MOTION_TARGETS.scale.hold).toBe(1.15);
+    expect(BREATHING_MOTION_TARGETS.scale.exhale).toBe(0.84);
+    expect(BREATHING_MOTION_TARGETS.scale.settling).toBe(0.96);
 
-    expect(BREATHING_MOTION_TARGETS.atmosphere.inhale.screen).toBe(0.46);
-    expect(BREATHING_MOTION_TARGETS.atmosphere.inhale.overlay).toBe(0.33);
-    expect(BREATHING_MOTION_TARGETS.atmosphere.exhale.screen).toBe(0.14);
-    expect(BREATHING_MOTION_TARGETS.atmosphere.exhale.overlay).toBe(0.08);
+    expect(BREATHING_MOTION_TARGETS.atmosphere.inhale.screen).toBe(0.34);
+    expect(BREATHING_MOTION_TARGETS.atmosphere.inhale.overlay).toBe(0.24);
+    expect(BREATHING_MOTION_TARGETS.atmosphere.exhale.screen).toBe(0.1);
+    expect(BREATHING_MOTION_TARGETS.atmosphere.exhale.overlay).toBe(0.06);
 
-    expect(BREATHING_MOTION_TARGETS.orbInnerOpacity.inhale).toBe(0.38);
-    expect(BREATHING_MOTION_TARGETS.orbInnerOpacity.hold).toBe(0.36);
-    expect(BREATHING_MOTION_TARGETS.orbInnerOpacity.exhale).toBe(0.1);
+    expect(BREATHING_MOTION_TARGETS.auraOpacity.entering).toBe(0.16);
+    expect(BREATHING_MOTION_TARGETS.auraOpacity.inhale).toBe(0.42);
+    expect(BREATHING_MOTION_TARGETS.auraOpacity.exhale).toBe(0.16);
+
+    expect(BREATHING_MOTION_TARGETS.orbInnerOpacity.inhale).toBe(0.3);
+    expect(BREATHING_MOTION_TARGETS.orbInnerOpacity.hold).toBe(0.28);
+    expect(BREATHING_MOTION_TARGETS.orbInnerOpacity.exhale).toBe(0.12);
   });
 
-  it('renders a single subtle guide ring and no bordered/shadowed orb shell', () => {
+  it('renders a soft aura with no guide ring or bordered orb shell', () => {
     const tree = renderOverlay();
 
-    const guideRings = tree.root.findAll((node) => (
-      node.props?.testID === 'breathing-guide-ring'
-      && node.type === 'View'
-      && StyleSheet.flatten(node.props?.style)?.borderWidth === 1
-    ));
-    expect(guideRings).toHaveLength(1);
+    expect(tree.root.findAllByProps({ testID: 'breathing-guide-ring' })).toHaveLength(0);
+
+    const aura = tree.root.findByProps({ testID: 'breathing-outer-aura' });
+    const auraStyle = StyleSheet.flatten(aura.props.style);
+
+    expect(auraStyle.borderWidth).toBeUndefined();
+    expect(auraStyle.borderColor).toBeUndefined();
+    expect(auraStyle.shadowOpacity).toBeUndefined();
+    expect(auraStyle.shadowRadius).toBeUndefined();
+    expect(auraStyle.elevation).toBeUndefined();
 
     const orb = tree.root.findByProps({ testID: 'breathing-orb-core' });
     const orbStyle = StyleSheet.flatten(orb.props.style);

@@ -166,30 +166,13 @@ export default function TrainerCoachScreen({
     : null;
 
   const helperLabel = useMemo(() => {
-    if (isSendingMessage) {
-      return `${assistantDisplayName} is reviewing...`;
-    }
-    if (state.sync.replaying) {
-      return 'Replaying pending operations...';
-    }
-    if (state.hasPendingSync) {
-      return 'Pending changes will sync automatically when online.';
-    }
-    if (state.loading) {
-      return `${assistantDisplayName} is syncing your workspace...`;
-    }
     if (state.error && !staleRouteError) {
       return state.error;
     }
     return null;
   }, [
-    isSendingMessage,
     state.error,
-    state.hasPendingSync,
-    state.loading,
-    state.sync.replaying,
     staleRouteError,
-    assistantDisplayName,
   ]);
   const headerStatusLabel = useMemo(() => {
     if (isSendingMessage || state.loading || state.sync.replaying) {

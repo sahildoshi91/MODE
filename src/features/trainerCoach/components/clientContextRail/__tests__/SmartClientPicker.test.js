@@ -23,7 +23,7 @@ function buildClient(id, name, overrides = {}) {
 }
 
 describe('SmartClientPicker', () => {
-  it('renders sections in Today, Recent, then All Clients order', async () => {
+  it('renders sections in Most Recent, Seeing Today, then All Clients order', async () => {
     let tree;
     await act(async () => {
       tree = renderer.create(
@@ -54,8 +54,8 @@ describe('SmartClientPicker', () => {
     );
 
     expect(uniqueRowTestIds).toEqual([
-      'picker-today-client-1',
-      'picker-recent-client-2',
+      'picker-most-recent-client-2',
+      'picker-seeing-today-client-1',
       'picker-all-clients-client-3',
     ]);
 
@@ -88,8 +88,8 @@ describe('SmartClientPicker', () => {
       );
     });
 
-    expect(() => tree.root.findByProps({ testID: 'picker-recent-client-2' })).not.toThrow();
-    expect(() => tree.root.findByProps({ testID: 'picker-today-client-1' })).toThrow();
+    expect(() => tree.root.findByProps({ testID: 'picker-most-recent-client-2' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'picker-seeing-today-client-1' })).toThrow();
     expect(() => tree.root.findByProps({ testID: 'picker-all-clients-client-3' })).toThrow();
 
     await act(async () => {

@@ -2,7 +2,6 @@ import React, { useMemo } from 'react';
 import {
   ActivityIndicator,
   StyleSheet,
-  TextInput,
   Vibration,
   View,
 } from 'react-native';
@@ -36,27 +35,38 @@ function triggerSelectionHaptic() {
   }
 }
 
-function Section({ title, clients, selectedClientId, onSelectClient, testIDPrefix }) {
-  if (!Array.isArray(clients) || clients.length === 0) {
-    return null;
-  }
+function Section({
+  title,
+  clients,
+  emptyMessage,
+  selectedClientId,
+  onSelectClient,
+  testIDPrefix,
+}) {
+  const safeClients = Array.isArray(clients) ? clients : [];
 
   return (
     <View style={styles.section}>
       <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>{title}</ModeText>
       <View style={styles.listWrap}>
-        {clients.map((client) => (
-          <ClientRow
-            key={`${title}-${client.id}`}
-            testID={`${testIDPrefix}-${title.toLowerCase().replace(/\s+/g, '-')}-${client.id}`}
-            client={client}
-            selected={selectedClientId === client.id}
-            onPress={() => {
-              triggerSelectionHaptic();
-              onSelectClient?.(client.id);
-            }}
-          />
-        ))}
+        {safeClients.length > 0 ? (
+          safeClients.map((client) => (
+            <ClientRow
+              key={`${title}-${client.id}`}
+              testID={`${testIDPrefix}-${title.toLowerCase().replace(/\s+/g, '-')}-${client.id}`}
+              client={client}
+              selected={selectedClientId === client.id}
+              onPress={() => {
+                triggerSelectionHaptic();
+                onSelectClient?.(client.id);
+              }}
+            />
+          ))
+        ) : (
+          <ModeText variant="caption" tone="secondary" style={styles.emptyCaption}>
+            {emptyMessage}
+          </ModeText>
+        )}
       </View>
     </View>
   );
@@ -68,76 +78,73 @@ export default function SmartClientPicker({
   recentClients,
   allClients,
   searchQuery,
-  onSearchQueryChange,
   onSelectClient,
   isSearching = false,
-  autoFocusSearch = false,
+  isLoading = false,
+  errorMessage = null,
   testIDPrefix = 'client-context-picker',
 }) {
-  const filteredTodayClients = useMemo(
-    () => filterInPlace(todayClients, searchQuery),
-    [todayClients, searchQuery],
-  );
   const filteredRecentClients = useMemo(
     () => filterInPlace(recentClients, searchQuery),
     [recentClients, searchQuery],
+  );
+  const filteredTodayClients = useMemo(
+    () => filterInPlace(todayClients, searchQuery),
+    [todayClients, searchQuery],
   );
   const filteredAllClients = useMemo(
     () => filterInPlace(allClients, searchQuery),
     [allClients, searchQuery],
   );
 
-  const todayIds = useMemo(
-    () => (Array.isArray(filteredTodayClients) ? filteredTodayClients.map((item) => item.id) : []),
-    [filteredTodayClients],
+  const recentIds = useMemo(
+    () => (Array.isArray(filteredRecentClients) ? filteredRecentClients.map((item) => item.id) : []),
+    [filteredRecentClients],
   );
-  const recentCandidates = useMemo(
-    () => removeByIds(filteredRecentClients, todayIds),
-    [filteredRecentClients, todayIds],
+  const todayCandidates = useMemo(
+    () => removeByIds(filteredTodayClients, recentIds),
+    [filteredTodayClients, recentIds],
   );
   const highlightedIds = useMemo(
-    () => new Set([...todayIds, ...recentCandidates.map((item) => item.id)]),
-    [todayIds, recentCandidates],
+    () => new Set([...recentIds, ...todayCandidates.map((item) => item.id)]),
+    [recentIds, todayCandidates],
   );
 
   const allCandidates = useMemo(
     () => filteredAllClients.filter((item) => !highlightedIds.has(item.id)),
     [filteredAllClients, highlightedIds],
   );
+  const isBusy = isLoading || isSearching;
 
   return (
     <View style={styles.root}>
-      <ModeText variant="bodySm" style={styles.sectionTitle}>Client</ModeText>
-      <TextInput
-        testID={`${testIDPrefix}-search`}
-        value={searchQuery}
-        onChangeText={onSearchQueryChange}
-        placeholder="Search clients"
-        placeholderTextColor={theme.colors.text.disabled}
-        autoCorrect={false}
-        autoCapitalize="words"
-        autoFocus={autoFocusSearch}
-        accessibilityLabel="Search clients"
-        style={styles.searchInput}
-      />
-
-      {isSearching ? (
+      {isBusy ? (
         <View style={styles.loadingRow}>
           <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
-          <ModeText variant="caption" tone="secondary">Searching clients...</ModeText>
+          <ModeText variant="caption" tone="secondary">
+            {isSearching ? 'Refreshing clients...' : 'Loading clients...'}
+          </ModeText>
         </View>
       ) : null}
 
+      {errorMessage ? (
+        <ModeText variant="caption" tone="error" style={styles.errorText}>
+          {errorMessage}
+        </ModeText>
+      ) : null}
+
       <Section
-        title="Today"
-        clients={filteredTodayClients}
+        title="Most Recent"
+        clients={filteredRecentClients}
+        emptyMessage="No recent clients yet."
         selectedClientId={selectedClientId}
         onSelectClient={onSelectClient}
         testIDPrefix={testIDPrefix}
       />
       <Section
-        title="Recent"
-        clients={recentCandidates}
+        title="Seeing Today"
+        clients={todayCandidates}
+        emptyMessage="No sessions today."
         selectedClientId={selectedClientId}
         onSelectClient={onSelectClient}
         testIDPrefix={testIDPrefix}
@@ -145,50 +152,39 @@ export default function SmartClientPicker({
       <Section
         title="All Clients"
         clients={allCandidates}
+        emptyMessage="No clients found."
         selectedClientId={selectedClientId}
         onSelectClient={onSelectClient}
         testIDPrefix={testIDPrefix}
       />
-
-      {!isSearching && filteredTodayClients.length === 0 && recentCandidates.length === 0 && allCandidates.length === 0 ? (
-        <ModeText variant="caption" tone="secondary">No clients found.</ModeText>
-      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: {
-    gap: theme.spacing[1],
-  },
-  sectionTitle: {
-    fontWeight: '700',
-  },
-  searchInput: {
-    minHeight: 42,
-    borderRadius: theme.radii.l,
-    borderWidth: 1,
-    borderColor: theme.colors.glass.borderSoft,
-    backgroundColor: 'rgba(255,255,255,0.03)',
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
-    color: theme.colors.text.primary,
-    fontFamily: theme.typography.fontFamily,
-    fontSize: theme.typography.body2.fontSize,
+    gap: theme.spacing[2],
   },
   loadingRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: theme.spacing[1],
   },
+  errorText: {
+    paddingHorizontal: 2,
+  },
   section: {
     gap: theme.spacing[1],
   },
   sectionLabel: {
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 0,
   },
   listWrap: {
     gap: theme.spacing[1],
+  },
+  emptyCaption: {
+    paddingHorizontal: 2,
+    paddingVertical: 2,
   },
 });

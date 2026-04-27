@@ -42,10 +42,12 @@ import {
 import {
   AUTH_PASSWORD_ENABLED,
   AUTH_SOCIAL_ENABLED,
+  BREATHING_TRANSITION_DEMO_ENABLED,
   BREATHING_TRANSITIONS_ENABLED,
   TRAINER_ROUTE_FOUNDATION_ENABLED,
 } from '../config/featureFlags';
 import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../features/shared/loading';
+import BreathingTransitionDemoScreen from '../features/shared/loading/BreathingTransitionDemoScreen';
 import { supabase } from '../services/supabaseClient';
 
 const FLOATING_NAV_BOTTOM_OFFSET = NAV_BOTTOM_OFFSET;
@@ -1209,7 +1211,11 @@ function AppShell() {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <AppShell />
+      {__DEV__ && BREATHING_TRANSITION_DEMO_ENABLED ? (
+        <BreathingTransitionDemoScreen />
+      ) : (
+        <AppShell />
+      )}
     </SafeAreaProvider>
   );
 }

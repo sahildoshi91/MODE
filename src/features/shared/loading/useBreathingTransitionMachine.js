@@ -48,9 +48,9 @@ export function useBreathingTransitionMachine({
   active,
   showAfterMs = 140,
   minVisibleMs = 280,
-  inhaleMs = 3000,
-  holdMs = 300,
-  exhaleMs = 3000,
+  inhaleMs = 4000,
+  holdMs = 550,
+  exhaleMs = 4000,
   reducedMotion = false,
   onExitComplete,
 } = {}) {
@@ -68,9 +68,9 @@ export function useBreathingTransitionMachine({
   const handlePhaseCompleteRef = useRef(() => {});
 
   const config = useMemo(() => {
-    const inhaleDuration = coerceDuration(inhaleMs, 3000);
-    const holdDuration = coerceDuration(holdMs, 300);
-    const exhaleDuration = coerceDuration(exhaleMs, 3000);
+    const inhaleDuration = coerceDuration(inhaleMs, 4000);
+    const holdDuration = coerceDuration(holdMs, 550);
+    const exhaleDuration = coerceDuration(exhaleMs, 4000);
     return {
       enterDuration: reducedMotion ? REDUCED_ENTER_MS : DEFAULT_ENTER_MS,
       inhaleDuration,
