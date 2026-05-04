@@ -1,16 +1,18 @@
 import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 
-const mockTrainerCoachScreen = jest.fn();
+const mockChatShell = jest.fn();
 const mockTrainerCoachWorkspace = jest.fn();
 const mockTrainerClientsScreen = jest.fn();
 const mockTrainerSystemScreen = jest.fn();
 
-jest.mock('../../../trainerCoach/screens/TrainerCoachScreen', () => {
+jest.mock('../../../chat/components', () => {
   const React = require('react');
-  return function MockTrainerCoachScreen(props) {
-    mockTrainerCoachScreen(props);
-    return React.createElement('MockTrainerCoachScreen', props);
+  return {
+    ChatShell: function MockChatShell(props) {
+      mockChatShell(props);
+      return React.createElement('MockChatShell', props);
+    },
   };
 });
 
@@ -42,7 +44,7 @@ import TrainerRouteHost from '../TrainerRouteHost';
 
 describe('TrainerRouteHost', () => {
   beforeEach(() => {
-    mockTrainerCoachScreen.mockReset();
+    mockChatShell.mockReset();
     mockTrainerCoachWorkspace.mockReset();
     mockTrainerClientsScreen.mockReset();
     mockTrainerSystemScreen.mockReset();
@@ -83,7 +85,7 @@ describe('TrainerRouteHost', () => {
     });
 
     expect(mockTrainerCoachWorkspace).toHaveBeenCalledTimes(1);
-    expect(mockTrainerCoachScreen).not.toHaveBeenCalled();
+    expect(mockChatShell).not.toHaveBeenCalled();
     const props = mockTrainerCoachWorkspace.mock.calls.at(-1)?.[0];
     expect(props.chatLaunchContext).toEqual({
       entrypoint: 'trainer_agent_training',
@@ -93,10 +95,14 @@ describe('TrainerRouteHost', () => {
     expect(props.trainerOnboardingCompletedSteps).toBe(3);
   });
 
-  it('routes standard coach tab to TrainerCoachScreen when onboarding launch context is absent', async () => {
+  it('routes standard coach tab to shared trainer ChatShell when onboarding launch context is absent', async () => {
     await renderHost({ chatLaunchContext: null });
 
-    expect(mockTrainerCoachScreen).toHaveBeenCalledTimes(1);
+    expect(mockChatShell).toHaveBeenCalledTimes(1);
     expect(mockTrainerCoachWorkspace).not.toHaveBeenCalled();
+    const props = mockChatShell.mock.calls.at(-1)?.[0];
+    expect(props.role).toBe('trainer');
+    expect(props.sessionType).toBe('coach_ai');
+    expect(props.trainerId).toBe('trainer-1');
   });
 });

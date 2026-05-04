@@ -1,7 +1,7 @@
 import React from 'react';
 
 import TrainerClientsScreen from '../../trainerClients/screens/TrainerClientsScreen';
-import TrainerCoachScreen from '../../trainerCoach/screens/TrainerCoachScreen';
+import { ChatShell } from '../../chat/components';
 import TrainerCoachWorkspace from '../screens/TrainerCoachWorkspace';
 import TrainerSystemScreen from '../screens/TrainerSystemScreen';
 
@@ -48,11 +48,12 @@ export default function TrainerRouteHost({
       );
     }
     return (
-      <TrainerCoachScreen
+      <ChatShell
+        role="trainer"
+        sessionType="coach_ai"
         accessToken={accessToken}
         trainerId={assignmentStatus?.trainer_id || assignmentStatus?.assigned_trainer_id || null}
         bottomInset={coachChatBottomInset}
-        onOpenTrainerCoach={onOpenTrainerCoach}
       />
     );
   }
@@ -81,11 +82,12 @@ export default function TrainerRouteHost({
   }
 
   return (
-    <TrainerCoachScreen
+    <ChatShell
+      role="trainer"
+      sessionType="coach_ai"
       accessToken={accessToken}
       trainerId={assignmentStatus?.trainer_id || assignmentStatus?.assigned_trainer_id || null}
       bottomInset={coachChatBottomInset}
-      onOpenTrainerCoach={onOpenTrainerCoach}
     />
   );
 }

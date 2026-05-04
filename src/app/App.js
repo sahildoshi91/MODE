@@ -10,6 +10,7 @@ import {
 } from '../../lib/components';
 import { theme } from '../../lib/theme';
 import OnboardingLandingScreen from '../features/auth/screens/OnboardingLandingScreen';
+import { ChatShell } from '../features/chat/components';
 import CoachChatScreen from '../features/chat/screens/CoachChatScreen';
 import DailyCheckinScreen from '../features/dailyCheckin/screens/DailyCheckinScreen';
 import CoachInsightsScreen from '../features/insights/screens/CoachInsightsScreen';
@@ -1123,7 +1124,17 @@ function AppShell() {
   const contentBottomInset = navBottomInset + 108;
   const coachChatBottomInset = navBottomInset + COACH_CHAT_DOCK_CLEARANCE;
   const shouldUseTrainerRouteFoundation = useCoachOsTrainerNav;
-  const hasAssignedTrainer = Boolean(assignmentStatus?.assigned_trainer_id || bootstrap?.assigned_trainer_id);
+  const assignedTrainerId = assignmentStatus?.assigned_trainer_id || bootstrap?.assigned_trainer_id || null;
+  const hasAssignedTrainer = Boolean(assignedTrainerId);
+  const legacyCoachLaunchEntrypoint = resolvedTrainerCoachLaunchContext?.entrypoint;
+  const clientCoachCurrentMode = resolvedTrainerCoachLaunchContext?.checkin_context?.assigned_mode || null;
+  const shouldUseLegacyCoachChat = Boolean(
+    isTrainerViewer
+    || (
+      legacyCoachLaunchEntrypoint
+      && legacyCoachLaunchEntrypoint !== 'post_checkin'
+    ),
+  );
 
   if (!BREATHING_TRANSITIONS_ENABLED && isBlockingAssignmentLoad) {
     return (
@@ -1184,11 +1195,22 @@ function AppShell() {
             ) : null}
 
             {activeTab === 'coach' && hasAssignedTrainer ? (
-              <CoachChatScreen
-                accessToken={session.access_token}
-                launchContext={resolvedTrainerCoachLaunchContext}
-                bottomInset={coachChatBottomInset}
-              />
+              shouldUseLegacyCoachChat ? (
+                <CoachChatScreen
+                  accessToken={session.access_token}
+                  launchContext={resolvedTrainerCoachLaunchContext}
+                  bottomInset={coachChatBottomInset}
+                />
+              ) : (
+                <ChatShell
+                  role="client"
+                  sessionType="client_chat"
+                  trainerId={assignedTrainerId}
+                  accessToken={session.access_token}
+                  currentMode={clientCoachCurrentMode}
+                  bottomInset={coachChatBottomInset}
+                />
+              )
             ) : null}
 
             {activeTab === 'coach' && !hasAssignedTrainer && !isTrainerViewer ? (

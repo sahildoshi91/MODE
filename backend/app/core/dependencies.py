@@ -15,6 +15,8 @@ from app.modules.atlas.service import (
     AtlasTrainerDeletionObserver,
     TrainerAiReviewQueueService,
 )
+from app.modules.chat_sessions.repository import ChatSessionRepository
+from app.modules.chat_sessions.service import ChatSessionService
 from app.modules.conversation.repository import ConversationRepository
 from app.modules.conversation.service import ConversationService
 from app.modules.daily_checkins.repository import DailyCheckinRepository
@@ -375,4 +377,22 @@ def get_conversation_service(
         trainer_onboarding_service=trainer_onboarding_service,
         ai_feedback_logger_service=ai_feedback_logger_service,
         trainer_intelligence_service=trainer_intelligence_service,
+    )
+
+
+def get_chat_session_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> ChatSessionRepository:
+    return ChatSessionRepository(supabase)
+
+
+def get_chat_session_service(
+    repository: ChatSessionRepository = Depends(get_chat_session_repository),
+    conversation_service: ConversationService = Depends(get_conversation_service),
+    trainer_home_service: TrainerHomeService = Depends(get_trainer_home_service),
+) -> ChatSessionService:
+    return ChatSessionService(
+        repository,
+        conversation_service=conversation_service,
+        trainer_home_service=trainer_home_service,
     )

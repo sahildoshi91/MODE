@@ -5,6 +5,7 @@ from app.api.v1.analytics import router as analytics_router
 from app.api.v1.atlas import router as atlas_router
 from app.api.v1.auth_password import router as auth_password_router
 from app.api.v1.chat import router as chat_router
+from app.api.v1.chat_sessions import router as chat_sessions_router
 from app.api.v1.checkin import router as checkin_router
 from app.api.v1.onboarding import router as onboarding_router
 from app.api.v1.plans import router as plans_router
@@ -28,6 +29,7 @@ api_router.include_router(account_router, prefix="/account", tags=["account"])
 api_router.include_router(auth_password_router, prefix="/auth/password", tags=["auth-password"])
 api_router.include_router(storage_private_router, prefix="/storage", tags=["storage-private"])
 api_router.include_router(chat_router, prefix="/chat", tags=["chat"])
+api_router.include_router(chat_sessions_router, prefix="/chat/sessions", tags=["chat-sessions"])
 api_router.include_router(checkin_router, prefix="/checkin", tags=["checkin"])
 api_router.include_router(profiles_router, prefix="/profiles", tags=["profiles"])
 api_router.include_router(plans_router, prefix="/plans", tags=["plans"])
