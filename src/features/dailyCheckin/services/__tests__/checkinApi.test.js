@@ -9,6 +9,7 @@ jest.mock('../../../../services/apiNetworkError', () => ({
 import { fetchWithApiFallback } from '../../../../services/apiRequest';
 import {
   getCheckinProgress,
+  getLastTrainingSetup,
   getLocalDateString,
   getPreviousCheckin,
   getTodayCheckin,
@@ -97,6 +98,17 @@ describe('checkinApi date defaults', () => {
     expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
       2,
       '/api/v1/checkin/progress?as_of_date=2026-04-08',
+      expect.objectContaining({
+        method: 'GET',
+      }),
+    );
+  });
+
+  it('fetches the last training setup with optional current check-in exclusion', async () => {
+    await getLastTrainingSetup({ accessToken: 'token', excludeCheckinId: 'checkin-1' });
+
+    expect(fetchWithApiFallback).toHaveBeenCalledWith(
+      '/api/v1/checkin/last-training-setup?exclude_checkin_id=checkin-1',
       expect.objectContaining({
         method: 'GET',
       }),

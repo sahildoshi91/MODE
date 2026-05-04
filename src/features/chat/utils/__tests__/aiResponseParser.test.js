@@ -1,4 +1,4 @@
-import { parseAIResponseText } from '../aiResponseParser';
+import { parseAIResponseText, sanitizeAssistantDisplayText } from '../aiResponseParser';
 import { AI_BLOCK_TYPES } from '../../rendering/model';
 
 function collectInlineText(value) {
@@ -112,6 +112,47 @@ describe('parseAIResponseText', () => {
     const flattenedText = collectInlineText(model.blocks).join(' ');
     expect(flattenedText).not.toContain('🔥');
     expect(flattenedText).not.toContain('✅');
+  });
+
+  it('removes fenced trailing internal metadata from rendered assistant text', () => {
+    const model = parseAIResponseText(
+      [
+        '10. **Calf Stretch (Wall):** Stand facing a wall and keep your heel down.',
+        '',
+        'Take your time and do not push into pain.',
+        '',
+        '```json',
+        '{"task_type":"stretching"}',
+        '```',
+      ].join('\n'),
+    );
+
+    const flattenedText = collectInlineText(model.blocks).join(' ');
+    expect(flattenedText).toContain('Calf Stretch');
+    expect(flattenedText).not.toContain('task_type');
+    expect(flattenedText).not.toMatch(/\bjson\b/i);
+  });
+
+  it('removes bare json-labeled trailing internal metadata', () => {
+    const text = sanitizeAssistantDisplayText(
+      'Let me know how you feel after running through these!\njson {"task_type":"stretching"}',
+    );
+
+    expect(text).toBe('Let me know how you feel after running through these!');
+  });
+
+  it('removes bare trailing internal metadata objects', () => {
+    const text = sanitizeAssistantDisplayText(
+      'Let me know how you feel after running through these!\n{"task_type":"stretching"}',
+    );
+
+    expect(text).toBe('Let me know how you feel after running through these!');
+  });
+
+  it('preserves user-facing json without internal metadata keys', () => {
+    const rawText = 'Use this JSON:\n{"exercise":"calf stretch","duration":"30s"}';
+
+    expect(sanitizeAssistantDisplayText(rawText)).toBe(rawText);
   });
 
   it('supports indented continuation lines for option bodies', () => {

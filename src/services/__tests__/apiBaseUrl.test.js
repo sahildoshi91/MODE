@@ -87,7 +87,7 @@ describe('apiBaseUrl', () => {
     expect(candidates).not.toContain('http://127.0.0.1:8000');
   });
 
-  it('suppresses localhost loopback fallbacks whenever LAN API base URL is configured', () => {
+  it('keeps localhost loopback fallbacks on simulators with LAN API base URL', () => {
     const apiBaseUrl = loadApiBaseUrlModule({
       apiBaseUrl: 'http://192.168.1.50:8000',
       isDevice: false,
@@ -96,9 +96,11 @@ describe('apiBaseUrl', () => {
     });
 
     const candidates = apiBaseUrl.getApiBaseUrls();
-    expect(candidates).toEqual(['http://192.168.1.50:8000']);
-    expect(candidates).not.toContain('http://localhost:8000');
-    expect(candidates).not.toContain('http://127.0.0.1:8000');
+    expect(candidates).toEqual([
+      'http://192.168.1.50:8000',
+      'http://localhost:8000',
+      'http://127.0.0.1:8000',
+    ]);
   });
 
   it('requires https API base URL in production builds', () => {

@@ -64,6 +64,17 @@ class PreviousCheckinResponse(BaseModel):
     checkin: YesterdayCheckinSummary | None = None
 
 
+class LastTrainingSetup(BaseModel):
+    generated_plan_id: str
+    environment: str
+    time_available: int
+    created_at: datetime
+
+
+class LastTrainingSetupResponse(BaseModel):
+    setup: LastTrainingSetup | None = None
+
+
 class ScoreWindowChange(BaseModel):
     value: float | None = None
     previous_average: float | None = None

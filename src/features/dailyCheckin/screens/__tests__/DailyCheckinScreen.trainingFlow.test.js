@@ -94,9 +94,18 @@ jest.mock('../../../../../lib/components', () => {
       { style, onPress, testID },
       React.createElement(Text, null, label),
     ),
-    GlassToggle: ({ value, onValueChange, style }) => React.createElement(
+    GlassToggle: ({ value, onValueChange, disabled, style, testID }) => React.createElement(
       Pressable,
-      { style, onPress: () => onValueChange?.(!value) },
+      {
+        disabled,
+        style,
+        onPress: () => {
+          if (!disabled) {
+            onValueChange?.(!value);
+          }
+        },
+        testID,
+      },
       React.createElement(Text, null, value ? 'on' : 'off'),
     ),
     GlassSlider: ({ style, testID }) => React.createElement(View, { style, testID }),
@@ -156,6 +165,7 @@ jest.mock('../../../../services/apiRequest', () => ({
 
 jest.mock('../../services/checkinApi', () => ({
   generateCheckinPlan: jest.fn(),
+  getLastTrainingSetup: jest.fn(),
   getPreviousCheckin: jest.fn(),
   getTodayCheckin: jest.fn(),
   logGeneratedWorkout: jest.fn(),
@@ -165,12 +175,14 @@ jest.mock('../../services/checkinApi', () => ({
 }));
 
 import React from 'react';
+import { StyleSheet } from 'react-native';
 import renderer, { act } from 'react-test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import DailyCheckinScreen from '../DailyCheckinScreen';
 import {
   generateCheckinPlan,
+  getLastTrainingSetup,
   getPreviousCheckin,
   getTodayCheckin,
   logGeneratedWorkout,
@@ -220,6 +232,7 @@ describe('DailyCheckinScreen training routine flow', () => {
       },
     });
     getPreviousCheckin.mockResolvedValue({ checkin: null });
+    getLastTrainingSetup.mockResolvedValue({ setup: null });
     generateCheckinPlan.mockResolvedValue({
       plan_id: 'generated-plan-1',
       content: '{"title":"Builder Blast"}',
@@ -300,12 +313,20 @@ describe('DailyCheckinScreen training routine flow', () => {
     await flushEffects();
 
     const setupRendered = JSON.stringify(tree.toJSON());
+    expect(setupRendered).toContain('Use Last Training Setup');
+    expect(setupRendered).toContain('No previous setup found');
     expect(setupRendered).toContain('Hotel Room');
     expect(setupRendered).not.toContain('Home Gym');
     expect(setupRendered).not.toContain('Limited');
+    expect(tree.root.findByProps({ testID: 'last-training-setup-toggle' }).props.disabled).toBe(true);
+    expect(tree.root.findByProps({ testID: 'last-training-setup-switch' }).props.disabled).toBe(true);
     expect(tree.root.findByProps({ testID: 'training-time-scroller' }).props.horizontal).toBe(true);
     expect(tree.root.findByProps({ testID: 'training-time-row' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'training-time-slider' })).toBeTruthy();
+    expect(
+      StyleSheet.flatten(tree.root.findByProps({ testID: 'mode-button-generate-my-workout' }).props.style)
+        .backgroundColor,
+    ).toBeUndefined();
 
     await act(async () => {
       tree.root.findByProps({ testID: 'environment-option-hotel_room' }).props.onPress();
@@ -350,6 +371,72 @@ describe('DailyCheckinScreen training routine flow', () => {
     });
 
     expect(tree.root.findByProps({ testID: 'training-guided-exercise-icon-0' })).toBeTruthy();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('applies the last training setup when the setup toggle is enabled', async () => {
+    getLastTrainingSetup.mockResolvedValueOnce({
+      setup: {
+        generated_plan_id: 'generated-plan-prior',
+        environment: 'home_gym',
+        time_available: 40,
+        created_at: '2026-04-10T17:00:00+00:00',
+      },
+    });
+
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <DailyCheckinScreen
+            accessToken="client-token"
+            bottomInset={0}
+            floatingNavClearance={74}
+          />
+        </SafeAreaProvider>,
+      );
+    });
+
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'build-training-routine-action' }).props.onPress();
+    });
+
+    await flushEffects();
+
+    expect(getLastTrainingSetup).toHaveBeenCalledWith({
+      accessToken: 'client-token',
+      excludeCheckinId: 'checkin-1',
+    });
+
+    const setupRendered = JSON.stringify(tree.toJSON());
+    expect(setupRendered).toContain('Use Last Training Setup');
+    expect(setupRendered).toContain('Full Gym • 45m');
+    expect(tree.root.findByProps({ testID: 'last-training-setup-toggle' }).props.disabled).toBe(false);
+    expect(tree.root.findByProps({ testID: 'last-training-setup-switch' }).props.disabled).toBe(false);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'last-training-setup-toggle' }).props.onPress();
+    });
+
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'mode-button-generate-my-workout' }).props.onPress();
+    });
+
+    await flushEffects();
+
+    expect(generateCheckinPlan).toHaveBeenCalledWith(expect.objectContaining({
+      environment: 'full_gym',
+      timeAvailable: 45,
+      includeYesterdayContext: false,
+    }));
 
     await act(async () => {
       tree.unmount();

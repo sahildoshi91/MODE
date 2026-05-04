@@ -34,7 +34,6 @@ import {
 } from '../../draftReview/domain/draftReviewModel';
 import {
   approveTrainerCoachQueueItem,
-  editTrainerCoachQueueItem,
   getTrainerCoachQueue,
   rejectTrainerCoachQueueItem,
 } from '../../trainerCoach/services/trainerCoachApi';
@@ -101,7 +100,6 @@ const SESSION_FILTERS = [
 const DRAFT_QUEUE_FETCH_LIMIT = 100;
 
 const DRAFT_REVIEW_ACTION_TYPE = {
-  SAVE_EDIT: 'save_edit',
   APPROVE: 'approve',
   REJECT: 'reject',
 };
@@ -174,7 +172,7 @@ function resolveDraftQueueSelection(items, preferredOutputId, { allowNullSelecti
   return queueItems[0].output_id;
 }
 
-function buildNextDraftReviewState(items, currentOutputId, actionType) {
+function buildNextDraftReviewState(items, currentOutputId) {
   const queueItems = Array.isArray(items) ? items : [];
   if (queueItems.length === 0) {
     return {
@@ -186,15 +184,6 @@ function buildNextDraftReviewState(items, currentOutputId, actionType) {
 
   const currentIndex = queueItems.findIndex((item) => item.output_id === currentOutputId);
   const resolvedIndex = currentIndex >= 0 ? currentIndex : 0;
-
-  if (actionType === DRAFT_REVIEW_ACTION_TYPE.SAVE_EDIT) {
-    const nextOutputId = queueItems[resolvedIndex + 1]?.output_id || null;
-    return {
-      optimisticItems: queueItems,
-      nextOutputId,
-      allowNullSelection: nextOutputId === null,
-    };
-  }
 
   const optimisticItems = queueItems.filter((item) => item.output_id !== currentOutputId);
   if (optimisticItems.length === 0) {
@@ -2772,22 +2761,14 @@ export default function TrainerClientsScreen({
       ? activeDraftModel
       : transformPlan(activeDraft);
     const { editedOutputJson, editedOutputText } = rebuildJSON(uiState, activeDraft);
-    const nextQueueState = buildNextDraftReviewState(draftQueueItems, outputId, actionType);
+    const nextQueueState = buildNextDraftReviewState(draftQueueItems, outputId);
 
     setIsMutatingDraftReview(true);
     setDraftReviewMutationError(null);
     setDraftReviewMutationSuccess(null);
 
     try {
-      if (actionType === DRAFT_REVIEW_ACTION_TYPE.SAVE_EDIT) {
-        await editTrainerCoachQueueItem({
-          accessToken,
-          outputId,
-          editedOutputText,
-          editedOutputJson,
-          notes: 'Saved from Clients Draft Review flow.',
-        });
-      } else if (actionType === DRAFT_REVIEW_ACTION_TYPE.APPROVE) {
+      if (actionType === DRAFT_REVIEW_ACTION_TYPE.APPROVE) {
         await approveTrainerCoachQueueItem({
           accessToken,
           outputId,
@@ -2818,9 +2799,7 @@ export default function TrainerClientsScreen({
       );
       setDraftReviewTracker(trackerSnapshot);
 
-      if (actionType === DRAFT_REVIEW_ACTION_TYPE.SAVE_EDIT) {
-        setDraftReviewMutationSuccess('Edit saved. Moving to the next draft.');
-      } else if (actionType === DRAFT_REVIEW_ACTION_TYPE.APPROVE) {
+      if (actionType === DRAFT_REVIEW_ACTION_TYPE.APPROVE) {
         setDraftReviewMutationSuccess('Draft approved. Moving to the next draft.');
       } else if (launchRegenerationIntent) {
         setDraftReviewMutationSuccess('Draft rejected and regeneration launched in Coach.');
@@ -3502,27 +3481,8 @@ export default function TrainerClientsScreen({
 
                 <View style={styles.draftReviewActionRow}>
                   <ModeButton
-                    testID="trainer-clients-draft-review-save-next"
-                    title={isMutatingDraftReview ? 'Working...' : 'Save & Next'}
-                    size="sm"
-                    variant="secondary"
-                    disabled={isMutatingDraftReview}
-                    onPress={() => runDraftReviewMutation(DRAFT_REVIEW_ACTION_TYPE.SAVE_EDIT)}
-                    style={styles.draftReviewActionButton}
-                  />
-                  <ModeButton
-                    testID="trainer-clients-draft-review-approve-next"
-                    title={isMutatingDraftReview ? 'Working...' : 'Approve & Next'}
-                    size="sm"
-                    disabled={isMutatingDraftReview}
-                    onPress={() => runDraftReviewMutation(DRAFT_REVIEW_ACTION_TYPE.APPROVE)}
-                    style={styles.draftReviewActionButton}
-                  />
-                </View>
-                <View style={styles.draftReviewActionRow}>
-                  <ModeButton
-                    testID="trainer-clients-draft-review-reject-next"
-                    title={isMutatingDraftReview ? 'Working...' : 'Reject & Next'}
+                    testID="trainer-clients-draft-review-reject"
+                    title={isMutatingDraftReview ? 'Working...' : 'Reject'}
                     size="sm"
                     variant="destructive"
                     disabled={isMutatingDraftReview}
@@ -3530,11 +3490,11 @@ export default function TrainerClientsScreen({
                     style={styles.draftReviewActionButton}
                   />
                   <ModeButton
-                    title="Refresh Queue"
+                    testID="trainer-clients-draft-review-approve"
+                    title={isMutatingDraftReview ? 'Working...' : 'Approve'}
                     size="sm"
-                    variant="ghost"
                     disabled={isMutatingDraftReview}
-                    onPress={() => loadDraftQueue()}
+                    onPress={() => runDraftReviewMutation(DRAFT_REVIEW_ACTION_TYPE.APPROVE)}
                     style={styles.draftReviewActionButton}
                   />
                 </View>

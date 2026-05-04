@@ -36,6 +36,7 @@ class FakeDailyCheckinService:
         self.last_generate = None
         self.last_log = None
         self.last_progress = None
+        self.last_training_setup = None
 
     def get_status(self, client_id: str, checkin_date: date) -> DailyCheckinStatusResponse:
         if client_id == "client-complete":
@@ -115,6 +116,22 @@ class FakeDailyCheckinService:
             ],
         }
 
+    def get_last_training_setup(self, client_id: str, *, exclude_checkin_id: str | None = None):
+        self.last_training_setup = {
+            "client_id": client_id,
+            "exclude_checkin_id": exclude_checkin_id,
+        }
+        if client_id == "client-generate":
+            return {
+                "setup": {
+                    "generated_plan_id": "generated-plan-last",
+                    "environment": "full_gym",
+                    "time_available": 45,
+                    "created_at": "2026-04-10T17:00:00+00:00",
+                }
+            }
+        return {"setup": None}
+
     def submit_checkin(self, client_id: str, checkin_date: date, inputs: DailyCheckinInputs, time_to_complete=None):
         self.last_submit = {
             "client_id": client_id,
@@ -139,11 +156,12 @@ class FakeDailyCheckinService:
             completion_timestamp=datetime(2026, 3, 27, 16, 0, tzinfo=timezone.utc),
         )
 
-    def generate_plan(self, client_id: str, user_id: str, request):
+    def generate_plan(self, client_id: str, user_id: str, request, trainer_id: str | None = None):
         self.last_generate = {
             "client_id": client_id,
             "user_id": user_id,
             "request": request.model_dump(),
+            "trainer_id": trainer_id,
         }
         return {
             "plan_id": "generated-plan-1",
@@ -170,7 +188,7 @@ class FailingDailyCheckinService(FakeDailyCheckinService):
 
 
 class FailingGenerateDailyCheckinService(FakeDailyCheckinService):
-    def generate_plan(self, client_id: str, user_id: str, request):
+    def generate_plan(self, client_id: str, user_id: str, request, trainer_id: str | None = None):
         raise DailyCheckinRepositoryError(
             "Could not find the table 'public.generated_checkin_plans' in the schema cache",
             status_code=404,
@@ -225,33 +243,51 @@ class StubTable:
         self.last_insert_payload = None
         self._pending_upsert = False
         self._pending_insert = False
+        self.calls = []
 
     def upsert(self, payload, on_conflict=None):
+        self.calls.append(("upsert", (payload,), {"on_conflict": on_conflict}))
         self.last_upsert_payload = payload
         self._pending_upsert = True
         return self
 
     def insert(self, payload):
+        self.calls.append(("insert", (payload,), {}))
         self.last_insert_payload = payload
         self._pending_insert = True
         return self
 
-    def select(self, *_args, **_kwargs):
+    def select(self, *args, **kwargs):
+        self.calls.append(("select", args, kwargs))
         return self
 
-    def eq(self, *_args, **_kwargs):
+    def eq(self, *args, **kwargs):
+        self.calls.append(("eq", args, kwargs))
         return self
 
-    def neq(self, *_args, **_kwargs):
+    def neq(self, *args, **kwargs):
+        self.calls.append(("neq", args, kwargs))
         return self
 
-    def lte(self, *_args, **_kwargs):
+    @property
+    def not_(self):
+        self.calls.append(("not_", (), {}))
         return self
 
-    def order(self, *_args, **_kwargs):
+    def is_(self, *args, **kwargs):
+        self.calls.append(("is_", args, kwargs))
         return self
 
-    def limit(self, *_args, **_kwargs):
+    def lte(self, *args, **kwargs):
+        self.calls.append(("lte", args, kwargs))
+        return self
+
+    def order(self, *args, **kwargs):
+        self.calls.append(("order", args, kwargs))
+        return self
+
+    def limit(self, *args, **kwargs):
+        self.calls.append(("limit", args, kwargs))
         return self
 
     def execute(self):
@@ -602,6 +638,45 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertEqual(result.checkins_last_7_days, 0)
         self.assertIsNone(result.avg_score_last_7_days)
         self.assertEqual(result.recent_checkins, [])
+
+    def test_get_last_training_setup_returns_latest_setup(self):
+        class FakeRepository:
+            def __init__(self):
+                self.last_args = None
+
+            def get_latest_training_setup(self, client_id, *, exclude_checkin_id=None):
+                self.last_args = {
+                    "client_id": client_id,
+                    "exclude_checkin_id": exclude_checkin_id,
+                }
+                return {
+                    "id": "generated-plan-last",
+                    "environment": "hotel_room",
+                    "time_available": 45,
+                    "created_at": "2026-04-10T17:00:00+00:00",
+                }
+
+        repository = FakeRepository()
+        service = DailyCheckinService(repository=repository, profile_service=None)
+
+        result = service.get_last_training_setup("client-1", exclude_checkin_id="checkin-current")
+
+        self.assertEqual(repository.last_args["client_id"], "client-1")
+        self.assertEqual(repository.last_args["exclude_checkin_id"], "checkin-current")
+        self.assertEqual(result.setup.generated_plan_id, "generated-plan-last")
+        self.assertEqual(result.setup.environment, "hotel_room")
+        self.assertEqual(result.setup.time_available, 45)
+
+    def test_get_last_training_setup_returns_null_when_missing(self):
+        class FakeRepository:
+            def get_latest_training_setup(self, _client_id, *, exclude_checkin_id=None):
+                return None
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+
+        result = service.get_last_training_setup("client-1")
+
+        self.assertIsNone(result.setup)
 
     def test_build_result_succeeds_when_profile_lookup_raises(self):
         class FakeProfileService:
@@ -988,6 +1063,475 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertIn("fuel, protein, hydration", prompt[0]["content"].lower())
         self.assertIn("do not refer to workout load", prompt[0]["content"].lower())
         self.assertIn("rather than workout mechanics", prompt[1]["content"].lower())
+
+    def test_nutrition_generation_prompt_uses_ai_usable_client_memory_only(self):
+        service = DailyCheckinService(repository=None)
+        client_memory = service._normalize_ai_usable_client_memory(
+            [
+                {
+                    "memory_type": "preference",
+                    "memory_key": "diet",
+                    "value_json": {
+                        "visibility": "ai_usable",
+                        "is_archived": False,
+                        "text": "Vegetarian nutrition preference.",
+                        "tags": ["nutrition"],
+                    },
+                    "updated_at": "2026-04-08T12:00:00+00:00",
+                },
+                {
+                    "memory_type": "note",
+                    "memory_key": "private",
+                    "value_json": {
+                        "visibility": "internal_only",
+                        "is_archived": False,
+                        "text": "Trainer-only private note.",
+                    },
+                    "updated_at": "2026-04-08T13:00:00+00:00",
+                },
+                {
+                    "memory_type": "preference",
+                    "memory_key": "old",
+                    "value_json": {
+                        "visibility": "ai_usable",
+                        "is_archived": True,
+                        "text": "Archived vegan preference.",
+                    },
+                    "updated_at": "2026-04-08T14:00:00+00:00",
+                },
+            ]
+        )
+
+        prompt = service._build_generation_prompt(
+            checkin={
+                "date": "2026-04-08",
+                "assigned_mode": "BUILD",
+                "total_score": 18,
+            },
+            profile={"primary_goal": "strength"},
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.NUTRITION,
+            ),
+            yesterday=None,
+            last_workout=None,
+            inputs=DailyCheckinInputs(sleep=4, stress=4, soreness=3, nutrition=4, motivation=3),
+            client_memory=client_memory,
+        )
+
+        prompt_text = "\n".join(message["content"] for message in prompt)
+        self.assertIn("Vegetarian nutrition preference.", prompt_text)
+        self.assertIn("hard constraints", prompt_text)
+        self.assertNotIn("Trainer-only private note.", prompt_text)
+        self.assertNotIn("Archived vegan preference.", prompt_text)
+
+    def test_training_generation_prompt_uses_ai_usable_client_memory_only(self):
+        service = DailyCheckinService(repository=None)
+        client_memory = service._normalize_ai_usable_client_memory(
+            [
+                {
+                    "memory_type": "constraint",
+                    "memory_key": "knee",
+                    "value_json": {
+                        "visibility": "ai_usable",
+                        "is_archived": False,
+                        "text": "Client has knee pain. Avoid squats and lunges.",
+                        "tags": ["injury"],
+                    },
+                    "updated_at": "2026-04-08T12:00:00+00:00",
+                },
+                {
+                    "memory_type": "note",
+                    "memory_key": "private",
+                    "value_json": {
+                        "visibility": "internal_only",
+                        "is_archived": False,
+                        "text": "Trainer-only shoulder detail.",
+                    },
+                    "updated_at": "2026-04-08T13:00:00+00:00",
+                },
+                {
+                    "memory_type": "constraint",
+                    "memory_key": "old",
+                    "value_json": {
+                        "visibility": "ai_usable",
+                        "is_archived": True,
+                        "text": "Archived wrist pain.",
+                    },
+                    "updated_at": "2026-04-08T14:00:00+00:00",
+                },
+            ]
+        )
+
+        prompt = service._build_generation_prompt(
+            checkin={
+                "date": "2026-04-08",
+                "assigned_mode": "BUILD",
+                "total_score": 18,
+            },
+            profile={"primary_goal": "strength"},
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.TRAINING,
+                environment=Environment.HOME_GYM,
+                time_available=30,
+            ),
+            yesterday=None,
+            last_workout=None,
+            inputs=DailyCheckinInputs(sleep=4, stress=4, soreness=3, nutrition=4, motivation=3),
+            client_memory=client_memory,
+        )
+
+        prompt_text = "\n".join(message["content"] for message in prompt)
+        self.assertIn("Client has knee pain. Avoid squats and lunges.", prompt_text)
+        self.assertIn("training_constraints", prompt_text)
+        self.assertIn("hard constraints", prompt_text)
+        self.assertNotIn("Trainer-only shoulder detail.", prompt_text)
+        self.assertNotIn("Archived wrist pain.", prompt_text)
+
+    def test_generated_workout_uses_fallback_when_knee_memory_is_violated(self):
+        class GeneratePlanRepository:
+            def __init__(self):
+                self.saved_payload = None
+
+            def get_by_client_and_id(self, _client_id, checkin_id):
+                return {
+                    "id": checkin_id,
+                    "client_id": "client-1",
+                    "date": "2026-04-08",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 3,
+                        "nutrition": 4,
+                        "motivation": 3,
+                    },
+                    "total_score": 18,
+                    "assigned_mode": "BUILD",
+                }
+
+            def get_previous_checkin(self, _client_id, _before_date):
+                return None
+
+            def get_latest_workout_session(self, _user_id):
+                return None
+
+            def list_client_coach_memory(self, **_kwargs):
+                return [
+                    {
+                        "memory_type": "constraint",
+                        "memory_key": "knee",
+                        "value_json": {
+                            "visibility": "ai_usable",
+                            "is_archived": False,
+                            "text": "Client has knee pain. Avoid squats, lunges, and step-ups.",
+                            "tags": ["injury"],
+                        },
+                        "updated_at": "2026-04-08T12:00:00+00:00",
+                    }
+                ]
+
+            def insert_generated_plan(self, payload):
+                self.saved_payload = payload
+                return {"id": "generated-workout-plan", **payload}
+
+        class KneeViolatingLlm:
+            def create_chat_completion(self, **_kwargs):
+                return (
+                    '{"title":"Leg Builder","type":"strength","difficulty":"intermediate","durationMinutes":30,'
+                    '"description":"A lower-body workout.","warmup":[{"name":"Squat prep","duration":"4 min",'
+                    '"description":"Practice squat depth."}],"exercises":[{"name":"Goblet squat","sets":3,'
+                    '"reps":"8-10","rest":"60 sec","muscleGroup":"legs","description":"Load the squat pattern.",'
+                    '"coachTip":"Stay smooth."},{"name":"Reverse lunge","sets":3,"reps":"8 / side",'
+                    '"rest":"60 sec","muscleGroup":"legs","description":"Step back and drive up.",'
+                    '"coachTip":"Control the knee."}],"cooldown":[{"name":"Reset","duration":"2 min",'
+                    '"description":"Bring breathing down."}],"coachNote":"Keep reps clean."}'
+                )
+
+        repository = GeneratePlanRepository()
+        service = DailyCheckinService(repository=repository, llm_client=KneeViolatingLlm())
+
+        result = service.generate_plan(
+            client_id="client-1",
+            user_id="user-1",
+            trainer_id="trainer-1",
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.TRAINING,
+                environment=Environment.HOME_GYM,
+                time_available=30,
+            ),
+        )
+
+        plan_text = str(result.structured).lower()
+        for blocked in ["squat", "lunge", "step-up", "step up", "running"]:
+            self.assertNotIn(blocked, plan_text)
+        self.assertIn("breathing", plan_text)
+        self.assertEqual(repository.saved_payload["structured_content"], result.structured)
+
+    def test_fallback_training_plan_respects_common_injury_memory(self):
+        service = DailyCheckinService(repository=None)
+        inputs = DailyCheckinInputs(sleep=4, stress=3, soreness=3, nutrition=4, motivation=4)
+        request = GenerateCheckinPlanRequest(
+            checkin_id="checkin-1",
+            plan_type=PlanType.TRAINING,
+            environment=Environment.HOME_GYM,
+            time_available=30,
+        )
+        memory = service._normalize_ai_usable_client_memory(
+            [
+                {
+                    "memory_type": "constraint",
+                    "memory_key": "injury",
+                    "value_json": {
+                        "visibility": "ai_usable",
+                        "text": "Knee pain, shoulder pain, and lower back irritation. Avoid deadlifts and push-ups.",
+                    },
+                }
+            ]
+        )
+
+        plan = service._build_fallback_plan(
+            plan_type=PlanType.TRAINING,
+            mode="BUILD",
+            inputs=inputs,
+            request=request,
+            profile={},
+            last_workout=None,
+            client_memory=memory,
+        )
+
+        plan_text = str(plan.model_dump()).lower()
+        for blocked in [
+            "squat",
+            "lunge",
+            "step-up",
+            "step up",
+            "running",
+            "push-up",
+            "push up",
+            "press",
+            "deadlift",
+            "hinge",
+            "suitcase",
+        ]:
+            self.assertNotIn(blocked, plan_text)
+        self.assertIn("breathing", plan_text)
+
+    def test_training_request_fingerprint_changes_when_client_memory_changes(self):
+        service = DailyCheckinService(repository=None)
+        request = GenerateCheckinPlanRequest(
+            checkin_id="checkin-1",
+            plan_type=PlanType.TRAINING,
+            environment=Environment.HOME_GYM,
+            time_available=30,
+        )
+        knee_memory = service._normalize_ai_usable_client_memory(
+            [
+                {
+                    "memory_type": "constraint",
+                    "memory_key": "knee",
+                    "value_json": {
+                        "visibility": "ai_usable",
+                        "text": "Knee pain. Avoid squats.",
+                    },
+                }
+            ]
+        )
+        shoulder_memory = service._normalize_ai_usable_client_memory(
+            [
+                {
+                    "memory_type": "constraint",
+                    "memory_key": "shoulder",
+                    "value_json": {
+                        "visibility": "ai_usable",
+                        "text": "Shoulder pain. Avoid pressing.",
+                    },
+                }
+            ]
+        )
+
+        knee_fingerprint = service._build_request_fingerprint(request, client_memory=knee_memory)
+        repeated_fingerprint = service._build_request_fingerprint(request, client_memory=knee_memory)
+        shoulder_fingerprint = service._build_request_fingerprint(request, client_memory=shoulder_memory)
+
+        self.assertEqual(knee_fingerprint, repeated_fingerprint)
+        self.assertNotEqual(knee_fingerprint, shoulder_fingerprint)
+
+    def test_generated_nutrition_plan_uses_fallback_when_vegetarian_memory_is_violated(self):
+        class GeneratePlanRepository:
+            def __init__(self):
+                self.saved_payload = None
+
+            def get_by_client_and_id(self, _client_id, checkin_id):
+                return {
+                    "id": checkin_id,
+                    "client_id": "client-1",
+                    "date": "2026-04-08",
+                    "inputs": {
+                        "sleep": 4,
+                        "stress": 4,
+                        "soreness": 3,
+                        "nutrition": 4,
+                        "motivation": 3,
+                    },
+                    "total_score": 18,
+                    "assigned_mode": "BUILD",
+                }
+
+            def get_previous_checkin(self, _client_id, _before_date):
+                return None
+
+            def get_latest_workout_session(self, _user_id):
+                return None
+
+            def list_client_coach_memory(self, **_kwargs):
+                return [
+                    {
+                        "memory_type": "preference",
+                        "memory_key": "diet",
+                        "value_json": {
+                            "visibility": "ai_usable",
+                            "is_archived": False,
+                            "text": "Client is vegetarian. Do not suggest meat or fish.",
+                            "tags": ["nutrition"],
+                        },
+                        "updated_at": "2026-04-08T12:00:00+00:00",
+                    }
+                ]
+
+            def insert_generated_plan(self, payload):
+                self.saved_payload = payload
+                return {"id": "generated-nutrition-plan", **payload}
+
+        class MeatServingLlm:
+            def create_chat_completion(self, **_kwargs):
+                return (
+                    '{"title":"Steady Fuel","totalCalories":1600,"totalProtein":119,'
+                    '"meals":[{"name":"Lunch","timing":"Midday","emoji":"",'
+                    '"foods":[{"name":"Chicken bowl","amount":"1 serving","calories":600,"protein":45}],'
+                    '"totalCalories":600,"totalProtein":45,"notes":"Add salmon at dinner."}],'
+                    '"coachNote":"Keep meals steady with protein and hydration."}'
+                )
+
+        repository = GeneratePlanRepository()
+        service = DailyCheckinService(repository=repository, llm_client=MeatServingLlm())
+
+        result = service.generate_plan(
+            client_id="client-1",
+            user_id="user-1",
+            trainer_id="trainer-1",
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.NUTRITION,
+            ),
+        )
+
+        plan_text = str(result.structured).lower()
+        self.assertNotIn("chicken", plan_text)
+        self.assertNotIn("salmon", plan_text)
+        self.assertIn("lentil", plan_text)
+        self.assertEqual(repository.saved_payload["structured_content"], result.structured)
+
+    def test_fallback_nutrition_plan_respects_vegetarian_and_vegan_memory(self):
+        service = DailyCheckinService(repository=None)
+        inputs = DailyCheckinInputs(sleep=4, stress=3, soreness=3, nutrition=4, motivation=4)
+        vegetarian_memory = service._normalize_ai_usable_client_memory(
+            [
+                {
+                    "memory_type": "preference",
+                    "memory_key": "vegetarian",
+                    "value_json": {
+                        "visibility": "ai_usable",
+                        "text": "Vegetarian options only.",
+                    },
+                }
+            ]
+        )
+        vegan_memory = service._normalize_ai_usable_client_memory(
+            [
+                {
+                    "memory_type": "preference",
+                    "memory_key": "vegan",
+                    "value_json": {
+                        "visibility": "ai_usable",
+                        "text": "Vegan nutrition preference.",
+                    },
+                }
+            ]
+        )
+
+        vegetarian_plan = service._build_fallback_plan(
+            plan_type=PlanType.NUTRITION,
+            mode="BUILD",
+            inputs=inputs,
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.NUTRITION,
+            ),
+            profile={},
+            last_workout=None,
+            client_memory=vegetarian_memory,
+        )
+        vegan_plan = service._build_fallback_plan(
+            plan_type=PlanType.NUTRITION,
+            mode="BUILD",
+            inputs=inputs,
+            request=GenerateCheckinPlanRequest(
+                checkin_id="checkin-1",
+                plan_type=PlanType.NUTRITION,
+            ),
+            profile={},
+            last_workout=None,
+            client_memory=vegan_memory,
+        )
+
+        vegetarian_text = str(vegetarian_plan.model_dump()).lower()
+        vegan_text = str(vegan_plan.model_dump()).lower()
+        for blocked in ["chicken", "salmon", "beef", "pork", "turkey"]:
+            self.assertNotIn(blocked, vegetarian_text)
+            self.assertNotIn(blocked, vegan_text)
+        for blocked in ["greek yogurt", "egg", "milk", "cheese", "whey"]:
+            self.assertNotIn(blocked, vegan_text)
+        self.assertIn("pea protein", vegan_text)
+
+    def test_nutrition_request_fingerprint_changes_when_client_memory_changes(self):
+        service = DailyCheckinService(repository=None)
+        request = GenerateCheckinPlanRequest(
+            checkin_id="checkin-1",
+            plan_type=PlanType.NUTRITION,
+        )
+        vegetarian_memory = service._normalize_ai_usable_client_memory(
+            [
+                {
+                    "memory_type": "preference",
+                    "memory_key": "diet",
+                    "value_json": {
+                        "visibility": "ai_usable",
+                        "text": "Vegetarian nutrition preference.",
+                    },
+                }
+            ]
+        )
+        vegan_memory = service._normalize_ai_usable_client_memory(
+            [
+                {
+                    "memory_type": "preference",
+                    "memory_key": "diet",
+                    "value_json": {
+                        "visibility": "ai_usable",
+                        "text": "Vegan nutrition preference.",
+                    },
+                }
+            ]
+        )
+
+        vegetarian_fingerprint = service._build_request_fingerprint(request, client_memory=vegetarian_memory)
+        repeated_fingerprint = service._build_request_fingerprint(request, client_memory=vegetarian_memory)
+        vegan_fingerprint = service._build_request_fingerprint(request, client_memory=vegan_memory)
+
+        self.assertEqual(vegetarian_fingerprint, repeated_fingerprint)
+        self.assertNotEqual(vegetarian_fingerprint, vegan_fingerprint)
 
     def test_fallback_nutrition_plan_uses_nutrition_specific_coach_note(self):
         service = DailyCheckinService(repository=None)
@@ -1383,6 +1927,32 @@ class DailyCheckinRepositoryTests(unittest.TestCase):
         self.assertEqual(result[0]["date"], "2026-03-27")
         self.assertEqual(result[1]["assigned_mode"], "YELLOW")
 
+    def test_get_latest_training_setup_filters_client_training_and_excludes_current_checkin(self):
+        table = StubTable(
+            lookup_data=[
+                {
+                    "id": "generated-plan-last",
+                    "environment": "full_gym",
+                    "time_available": 30,
+                    "created_at": "2026-04-10T17:00:00+00:00",
+                }
+            ],
+        )
+        repository = DailyCheckinRepository(StubSupabase(table))
+
+        result = repository.get_latest_training_setup(
+            "client-1",
+            exclude_checkin_id="checkin-current",
+        )
+
+        self.assertEqual(result["id"], "generated-plan-last")
+        self.assertIn(("eq", ("client_id", "client-1"), {}), table.calls)
+        self.assertIn(("eq", ("plan_type", "training"), {}), table.calls)
+        self.assertIn(("is_", ("environment", None), {}), table.calls)
+        self.assertIn(("is_", ("time_available", None), {}), table.calls)
+        self.assertIn(("neq", ("checkin_id", "checkin-current"), {}), table.calls)
+        self.assertIn(("order", ("created_at",), {"desc": True}), table.calls)
+
     def test_upsert_checkin_surfaces_supabase_error_details(self):
         table = StubTable(
             execute_error=FakeSupabaseFailure(FailingResponse()),
@@ -1572,6 +2142,29 @@ class DailyCheckinApiTests(unittest.TestCase):
         self.assertIn("has_enough_for_30d", payload)
         self.assertEqual(payload["recent_checkins"][0]["score"], 19)
         self.assertEqual(self.fake_service.last_progress["client_id"], "client-complete")
+
+    def test_last_training_setup_returns_client_scoped_setup_and_excludes_current_checkin(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id="client-generate",
+            client_user_id="user-123",
+        )
+
+        response = self.client.get(
+            "/api/v1/checkin/last-training-setup?exclude_checkin_id=checkin-1",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["setup"]["generated_plan_id"], "generated-plan-last")
+        self.assertEqual(payload["setup"]["environment"], "full_gym")
+        self.assertEqual(payload["setup"]["time_available"], 45)
+        self.assertEqual(self.fake_service.last_training_setup["client_id"], "client-generate")
+        self.assertEqual(self.fake_service.last_training_setup["exclude_checkin_id"], "checkin-1")
 
     def test_progress_rejects_missing_client_context(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
@@ -1775,6 +2368,7 @@ class DailyCheckinApiTests(unittest.TestCase):
         self.assertEqual(response.json()["structured"]["title"], "Builder")
         self.assertEqual(self.fake_service.last_generate["client_id"], "client-generate")
         self.assertEqual(self.fake_service.last_generate["user_id"], "user-123")
+        self.assertEqual(self.fake_service.last_generate["trainer_id"], "trainer-1")
         self.assertFalse(self.fake_service.last_generate["request"]["refresh_requested"])
 
     def test_generate_plan_passes_refresh_requested_flag(self):

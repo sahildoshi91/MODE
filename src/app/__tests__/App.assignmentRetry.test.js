@@ -4,6 +4,8 @@ import renderer, { act } from 'react-test-renderer';
 const mockGetSession = jest.fn();
 const mockOnAuthStateChange = jest.fn();
 const mockSignOut = jest.fn();
+const mockClearSupabaseAuthSessionStorage = jest.fn();
+const mockIsInvalidRefreshTokenError = jest.fn();
 const mockGetTrainerAssignmentStatus = jest.fn();
 const mockAssignTrainer = jest.fn();
 const mockGetOnboardingBootstrap = jest.fn();
@@ -20,6 +22,8 @@ jest.mock('react-native-safe-area-context', () => {
 });
 
 jest.mock('../../services/supabaseClient', () => ({
+  clearSupabaseAuthSessionStorage: (...args) => mockClearSupabaseAuthSessionStorage(...args),
+  isInvalidRefreshTokenError: (...args) => mockIsInvalidRefreshTokenError(...args),
   supabase: {
     auth: {
       getSession: (...args) => mockGetSession(...args),
@@ -172,6 +176,12 @@ describe('App assignment status retry behavior', () => {
       },
     });
     mockAssignTrainer.mockResolvedValue({});
+    mockClearSupabaseAuthSessionStorage.mockResolvedValue();
+    mockIsInvalidRefreshTokenError.mockImplementation((error) => (
+      String(error?.message || '').toLowerCase().includes('invalid refresh token')
+      || String(error?.message || '').toLowerCase().includes('refresh token not found')
+      || String(error?.code || '').toLowerCase().includes('refresh_token_not_found')
+    ));
     mockGetOnboardingBootstrap.mockResolvedValue({
       role: 'client',
       onboarding_complete: true,
@@ -278,6 +288,30 @@ describe('App assignment status retry behavior', () => {
     expect(welcome.props.authProps.layoutMode).toBe('inline');
     expect(typeof welcome.props.authProps.onContinueWithEmail).toBe('function');
     expect(typeof welcome.props.onOpenPreview).toBe('function');
+    expect(mockGetTrainerAssignmentStatus).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('clears stale stored auth when session restore finds an invalid refresh token', async () => {
+    mockGetSession.mockResolvedValueOnce({
+      data: {
+        session: null,
+      },
+      error: new Error('Invalid Refresh Token: Refresh Token Not Found'),
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const welcome = tree.root.findByType('MockOnboardingLandingScreen');
+    expect(mockClearSupabaseAuthSessionStorage).toHaveBeenCalledTimes(1);
+    expect(welcome.props.authProps.infoMessage).toBe('Your previous sign-in expired. Please sign in again.');
     expect(mockGetTrainerAssignmentStatus).not.toHaveBeenCalled();
 
     await act(async () => {

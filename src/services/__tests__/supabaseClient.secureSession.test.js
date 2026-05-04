@@ -23,6 +23,31 @@ describe('supabaseClient secure session config', () => {
     expect(mockCreateClient).toHaveBeenCalledTimes(1)
     const [, , options] = mockCreateClient.mock.calls[0]
     expect(options.auth.storage).toBe(secureSessionStorage)
+    expect(options.auth.storageKey).toBe('sb-example-auth-token')
+    expect(options.auth.autoRefreshToken).toBe(false)
     expect(options.auth.persistSession).toBe(true)
+  })
+
+  it('clears Supabase auth session storage keys', async () => {
+    const { clearSupabaseAuthSessionStorage } = require('../supabaseClient')
+    const { secureSessionStorage } = require('../secureSessionStorage')
+
+    await clearSupabaseAuthSessionStorage()
+
+    expect(secureSessionStorage.removeItem).toHaveBeenCalledWith('sb-example-auth-token')
+    expect(secureSessionStorage.removeItem).toHaveBeenCalledWith('sb-example-auth-token-code-verifier')
+    expect(secureSessionStorage.removeItem).toHaveBeenCalledWith('sb-example-auth-token-user')
+  })
+
+  it('recognizes invalid refresh token errors', () => {
+    const { isInvalidRefreshTokenError } = require('../supabaseClient')
+
+    expect(
+      isInvalidRefreshTokenError(new Error('Invalid Refresh Token: Refresh Token Not Found')),
+    ).toBe(true)
+    expect(
+      isInvalidRefreshTokenError({ code: 'refresh_token_not_found' }),
+    ).toBe(true)
+    expect(isInvalidRefreshTokenError(new Error('Network request failed'))).toBe(false)
   })
 })

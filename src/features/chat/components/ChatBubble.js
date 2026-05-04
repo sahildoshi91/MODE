@@ -6,7 +6,7 @@ import { theme } from '../../../../lib/theme';
 import { ChatBubbleAI, ChatBubbleUser } from '../../../../lib/components/glass';
 import { AI_RESPONSE_RENDERING_V1_ENABLED } from '../../../config/featureFlags';
 import AIResponseRenderer from './AIResponseRenderer';
-import { parseAIResponseText, stripEmojiForDisplay } from '../utils/aiResponseParser';
+import { parseAIResponseText, sanitizeAssistantDisplayText } from '../utils/aiResponseParser';
 
 export default function ChatBubble({
   role,
@@ -21,7 +21,7 @@ export default function ChatBubble({
   const isUser = role === 'user';
   const resolvedSpeakerLabel = speakerLabel || (isUser ? 'You' : 'Coach');
   const safeAssistantText = useMemo(
-    () => stripEmojiForDisplay(String(text || '')),
+    () => sanitizeAssistantDisplayText(text),
     [text],
   );
   const shouldRenderStructuredAssistant = (

@@ -1,6 +1,7 @@
 import json
 import hashlib
 import logging
+import re
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -13,6 +14,8 @@ from app.modules.daily_checkins.schemas import (
     Environment,
     GenerateCheckinPlanRequest,
     GenerateCheckinPlanResponse,
+    LastTrainingSetup,
+    LastTrainingSetupResponse,
     LogGeneratedWorkoutResponse,
     MindsetRecommendation,
     NutritionRecommendation,
@@ -103,8 +106,103 @@ CANONICAL_TO_LEGACY_MODE = {
 }
 LEGACY_TO_CANONICAL_MODE = {legacy: canonical for canonical, legacy in CANONICAL_TO_LEGACY_MODE.items()}
 
+VEGETARIAN_EXCLUDED_FOOD_TERMS = (
+    "bacon",
+    "beef",
+    "chicken",
+    "fish",
+    "ham",
+    "pork",
+    "salmon",
+    "seafood",
+    "shellfish",
+    "shrimp",
+    "steak",
+    "tuna",
+    "turkey",
+)
+VEGAN_EXCLUDED_FOOD_TERMS = VEGETARIAN_EXCLUDED_FOOD_TERMS + (
+    "cheese",
+    "cottage cheese",
+    "egg",
+    "eggs",
+    "greek yogurt",
+    "honey",
+    "milk",
+    "whey",
+    "yogurt",
+)
+PESCATARIAN_EXCLUDED_FOOD_TERMS = (
+    "bacon",
+    "beef",
+    "chicken",
+    "ham",
+    "pork",
+    "steak",
+    "turkey",
+)
+COMMON_NUTRITION_RESTRICTIONS = (
+    (("dairy-free", "dairy free", "no dairy", "lactose"), ("cheese", "cottage cheese", "greek yogurt", "milk", "whey", "yogurt")),
+    (("gluten-free", "gluten free", "no gluten", "celiac"), ("barley", "bread", "flour", "gluten", "pasta", "rye", "wheat")),
+    (("peanut allergy", "peanut-free", "peanut free", "no peanuts"), ("peanut", "peanuts")),
+    (("tree nut allergy", "nut allergy", "nut-free", "nut free", "no nuts"), ("almond", "almonds", "cashew", "cashews", "nuts", "walnut", "walnuts")),
+    (("shellfish allergy", "no shellfish"), ("crab", "lobster", "shellfish", "shrimp")),
+    (("fish allergy", "no fish"), ("fish", "salmon", "tuna")),
+    (("egg-free", "egg free", "no eggs", "egg allergy"), ("egg", "eggs")),
+    (("soy-free", "soy free", "no soy", "soy allergy"), ("soy", "soy milk", "tempeh", "tofu")),
+)
+TRAINING_CONSTRAINT_RULES = (
+    (
+        ("knee", "lower body pain", "lower-body pain", "leg pain", "acl", "meniscus", "patella"),
+        (
+            "box jump",
+            "front squat",
+            "goblet squat",
+            "jump",
+            "jumping",
+            "leg press",
+            "lunge",
+            "reverse lunge",
+            "run",
+            "running",
+            "sprint",
+            "squat",
+            "step up",
+            "step-up",
+        ),
+    ),
+    (
+        ("shoulder", "wrist", "rotator cuff", "elbow pain"),
+        (
+            "bench press",
+            "dumbbell press",
+            "floor press",
+            "incline push-up",
+            "machine press",
+            "press",
+            "push up",
+            "push-up",
+            "wall press",
+        ),
+    ),
+    (
+        ("back pain", "low back", "lower back", "back injury", "sciatica"),
+        (
+            "deadlift",
+            "hinge",
+            "loaded carry",
+            "loaded hinge",
+            "romanian deadlift",
+            "suitcase",
+            "suitcase squat",
+        ),
+    ),
+)
+
 
 class DailyCheckinService:
+    CLIENT_MEMORY_LIMIT = 24
+
     def __init__(self, repository: DailyCheckinRepository, profile_service=None, llm_client=None):
         self.repository = repository
         self.profile_service = profile_service
@@ -125,6 +223,38 @@ class DailyCheckinService:
     def get_previous_checkin_summary(self, client_id: str, before_date: date):
         record = self.repository.get_previous_checkin(client_id, before_date)
         return self._build_yesterday_summary(record)
+
+    def get_last_training_setup(
+        self,
+        client_id: str,
+        *,
+        exclude_checkin_id: str | None = None,
+    ) -> LastTrainingSetupResponse:
+        if not self.repository or not hasattr(self.repository, "get_latest_training_setup"):
+            return LastTrainingSetupResponse()
+
+        record = self.repository.get_latest_training_setup(
+            client_id,
+            exclude_checkin_id=exclude_checkin_id,
+        )
+        if not record:
+            return LastTrainingSetupResponse()
+
+        environment = record.get("environment")
+        time_available = record.get("time_available")
+        generated_plan_id = record.get("id")
+        created_at = record.get("created_at")
+        if not environment or time_available is None or not generated_plan_id or not created_at:
+            return LastTrainingSetupResponse()
+
+        return LastTrainingSetupResponse(
+            setup=LastTrainingSetup(
+                generated_plan_id=str(generated_plan_id),
+                environment=str(environment),
+                time_available=int(time_available),
+                created_at=created_at,
+            )
+        )
 
     def get_progress_analytics(self, client_id: str, as_of_date: date) -> CheckinProgressResponse:
         if not self.repository or not hasattr(self.repository, "list_checkins_on_or_before"):
@@ -255,6 +385,7 @@ class DailyCheckinService:
         client_id: str,
         user_id: str,
         request: GenerateCheckinPlanRequest,
+        trainer_id: str | None = None,
     ) -> GenerateCheckinPlanResponse:
         checkin = self.repository.get_by_client_and_id(client_id, request.checkin_id)
         if not checkin:
@@ -284,7 +415,12 @@ class DailyCheckinService:
         if request.plan_type == PlanType.NUTRITION and request.nutrition_day_note is not None and not request.nutrition_day_note.strip():
             raise ValueError("Nutrition day note must not be empty")
 
-        request_fingerprint = self._build_request_fingerprint(request)
+        client_memory = self._load_ai_usable_client_memory(
+            trainer_id=trainer_id,
+            client_id=client_id,
+        )
+
+        request_fingerprint = self._build_request_fingerprint(request, client_memory=client_memory)
         latest_variant = None
         if hasattr(self.repository, "get_latest_generated_plan_variant"):
             latest_variant = self.repository.get_latest_generated_plan_variant(
@@ -315,6 +451,7 @@ class DailyCheckinService:
             yesterday=yesterday,
             last_workout=last_workout,
             prior_variant=prior_variant,
+            client_memory=client_memory,
         )
         structured_model = generated["structured_model"]
         if (
@@ -334,6 +471,7 @@ class DailyCheckinService:
                 request=request,
                 profile=profile or {},
                 last_workout=last_workout,
+                client_memory=client_memory,
             )
         structured_payload = structured_model.model_dump()
         raw_content = json.dumps(structured_payload)
@@ -583,6 +721,289 @@ class DailyCheckinService:
             return f"{quote} Every smart choice still moves {goal_text} forward."
         return quote
 
+    def _load_ai_usable_client_memory(
+        self,
+        *,
+        trainer_id: str | None,
+        client_id: str,
+    ) -> list[dict[str, Any]]:
+        if not trainer_id or not client_id or not hasattr(self.repository, "list_client_coach_memory"):
+            return []
+        try:
+            rows = self.repository.list_client_coach_memory(
+                trainer_id=trainer_id,
+                client_id=client_id,
+                limit=self.CLIENT_MEMORY_LIMIT * 2,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Generate-plan coach memory lookup failed for trainer_id=%s client_id=%s: %s",
+                trainer_id,
+                client_id,
+                exc,
+            )
+            return []
+        return self._normalize_ai_usable_client_memory(rows)[: self.CLIENT_MEMORY_LIMIT]
+
+    def _normalize_ai_usable_client_memory(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        normalized: list[dict[str, Any]] = []
+        for row in rows or []:
+            value_json = row.get("value_json")
+            value = value_json if isinstance(value_json, dict) else {}
+            if bool(value.get("is_archived")):
+                continue
+            visibility = str(value.get("visibility") or "internal_only").strip().lower()
+            if visibility != "ai_usable":
+                continue
+            memory_key = str(row.get("memory_key") or "").strip()
+            text = self._normalize_memory_text(value.get("text"))
+            summary = self._normalize_memory_text(value.get("summary"))
+            structured_data = value.get("structured_data") if isinstance(value.get("structured_data"), dict) else {}
+            if not text and not summary and not memory_key and not structured_data:
+                continue
+            normalized.append(
+                {
+                    "memory_type": self._normalize_memory_type(row.get("memory_type")),
+                    "memory_key": memory_key,
+                    "text": text,
+                    "summary": summary,
+                    "tags": self._normalize_memory_tags(value.get("tags")),
+                    "structured_data": structured_data,
+                    "updated_at": str(row.get("updated_at") or "").strip() or None,
+                }
+            )
+        return normalized
+
+    def _normalize_memory_type(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"note", "preference", "constraint"}:
+            return normalized
+        return "note"
+
+    def _normalize_memory_text(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized[:500] if normalized else None
+
+    def _normalize_memory_tags(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        tags: list[str] = []
+        seen: set[str] = set()
+        for item in value:
+            tag = str(item or "").strip().lower()
+            if not tag or tag in seen:
+                continue
+            seen.add(tag)
+            tags.append(tag[:40])
+        return tags
+
+    def _client_memory_search_text(self, client_memory: list[dict[str, Any]]) -> str:
+        parts: list[str] = []
+        for memory in client_memory or []:
+            for key in ("memory_type", "memory_key", "text", "summary"):
+                value = memory.get(key)
+                if value:
+                    parts.append(str(value))
+            tags = memory.get("tags")
+            if isinstance(tags, list):
+                parts.extend(str(tag) for tag in tags if tag)
+            structured_data = memory.get("structured_data")
+            if isinstance(structured_data, dict) and structured_data:
+                parts.append(json.dumps(structured_data, sort_keys=True, default=str))
+        return " ".join(parts).lower()
+
+    def _contains_context_phrase(self, text: str, phrase: str) -> bool:
+        normalized = phrase.strip().lower()
+        if not normalized:
+            return False
+        if " " in normalized or "-" in normalized:
+            return normalized in text
+        return re.search(rf"\b{re.escape(normalized)}\b", text) is not None
+
+    def _derive_nutrition_constraints(self, client_memory: list[dict[str, Any]] | None) -> dict[str, Any]:
+        memory = client_memory or []
+        text = self._client_memory_search_text(memory)
+        excluded_terms: set[str] = set()
+        diet_type = None
+        if self._contains_context_phrase(text, "vegan") and "not vegan" not in text:
+            diet_type = "vegan"
+            excluded_terms.update(VEGAN_EXCLUDED_FOOD_TERMS)
+        elif (
+            self._contains_context_phrase(text, "vegetarian")
+            and "not vegetarian" not in text
+            and "not a vegetarian" not in text
+        ):
+            diet_type = "vegetarian"
+            excluded_terms.update(VEGETARIAN_EXCLUDED_FOOD_TERMS)
+        elif self._contains_context_phrase(text, "pescatarian") and "not pescatarian" not in text:
+            diet_type = "pescatarian"
+            excluded_terms.update(PESCATARIAN_EXCLUDED_FOOD_TERMS)
+
+        for triggers, terms in COMMON_NUTRITION_RESTRICTIONS:
+            if any(self._contains_context_phrase(text, trigger) for trigger in triggers):
+                excluded_terms.update(terms)
+
+        excluded_terms.update(self._structured_excluded_food_terms(memory))
+        return {
+            "diet_type": diet_type,
+            "excluded_food_terms": sorted(term for term in excluded_terms if term),
+            "memory_count": len(memory),
+        }
+
+    def _structured_excluded_food_terms(self, client_memory: list[dict[str, Any]]) -> set[str]:
+        terms: set[str] = set()
+        watched_key_parts = ("allerg", "avoid", "dislike", "exclude", "intoler")
+
+        def visit(value: Any, *, key_hint: str = "") -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    next_hint = str(key or "").strip().lower()
+                    visit(child, key_hint=next_hint)
+                return
+            if isinstance(value, list):
+                for child in value:
+                    visit(child, key_hint=key_hint)
+                return
+            if not any(part in key_hint for part in watched_key_parts):
+                return
+            normalized = str(value or "").strip().lower()
+            for part in re.split(r"[,;/]", normalized):
+                food_term = part.strip()
+                if 1 <= len(food_term) <= 40:
+                    terms.add(food_term)
+
+        for memory in client_memory or []:
+            structured_data = memory.get("structured_data")
+            if isinstance(structured_data, dict):
+                visit(structured_data)
+        return terms
+
+    def _derive_training_constraints(self, client_memory: list[dict[str, Any]] | None) -> dict[str, Any]:
+        memory = client_memory or []
+        text = self._client_memory_search_text(memory)
+        blocked_terms: set[str] = set()
+        matched_constraints: list[str] = []
+        for triggers, terms in TRAINING_CONSTRAINT_RULES:
+            matched_trigger = next((trigger for trigger in triggers if self._contains_context_phrase(text, trigger)), None)
+            if not matched_trigger:
+                continue
+            matched_constraints.append(matched_trigger)
+            blocked_terms.update(terms)
+
+        blocked_terms.update(self._explicit_training_avoid_terms(memory))
+        return {
+            "matched_constraints": matched_constraints,
+            "blocked_exercise_terms": sorted(term for term in blocked_terms if term),
+            "memory_count": len(memory),
+        }
+
+    def _explicit_training_avoid_terms(self, client_memory: list[dict[str, Any]]) -> set[str]:
+        terms: set[str] = set()
+        watched_key_parts = ("avoid", "dislike", "exclude", "exercise", "movement", "restriction")
+
+        def add_term(value: Any) -> None:
+            normalized = str(value or "").strip().lower()
+            if not normalized:
+                return
+            for part in re.split(r"[,;/]", normalized):
+                term = re.split(r"\b(?:because|due to|during|for now|right now|until)\b", part, maxsplit=1)[0].strip()
+                if 2 <= len(term) <= 40:
+                    terms.add(term)
+
+        def visit_structured(value: Any, *, key_hint: str = "") -> None:
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    visit_structured(child, key_hint=str(key or "").strip().lower())
+                return
+            if isinstance(value, list):
+                for child in value:
+                    visit_structured(child, key_hint=key_hint)
+                return
+            if any(part in key_hint for part in watched_key_parts):
+                add_term(value)
+
+        for memory in client_memory or []:
+            for key in ("text", "summary", "memory_key"):
+                source = str(memory.get(key) or "").lower()
+                if not source:
+                    continue
+                for pattern in (
+                    r"\b(?:avoid|avoids|dislike|dislikes|hate|hates|cannot do|can't do|do not do|don't do|no)\s+([a-z][a-z0-9 -]{1,40})",
+                ):
+                    for match in re.finditer(pattern, source):
+                        add_term(match.group(1))
+            structured_data = memory.get("structured_data")
+            if isinstance(structured_data, dict):
+                visit_structured(structured_data)
+        return terms
+
+    def _training_plan_constraint_violation(
+        self,
+        plan: StructuredTrainingPlan,
+        constraints: dict[str, Any],
+    ) -> str | None:
+        blocked_terms = constraints.get("blocked_exercise_terms")
+        if not isinstance(blocked_terms, list) or not blocked_terms:
+            return None
+        plan_text = self._training_plan_text(plan)
+        for term in blocked_terms:
+            normalized = str(term or "").strip().lower()
+            if normalized and self._contains_blocked_term(plan_text, normalized):
+                return normalized
+        return None
+
+    def _training_plan_text(self, plan: StructuredTrainingPlan) -> str:
+        parts = [plan.title, plan.description, plan.coachNote]
+        for item in [*plan.warmup, *plan.cooldown]:
+            parts.extend([item.name, item.duration, item.description or ""])
+        for exercise in plan.exercises:
+            parts.extend([
+                exercise.name,
+                exercise.reps,
+                exercise.rest,
+                exercise.muscleGroup,
+                exercise.description,
+                exercise.coachTip,
+            ])
+        return " ".join(part for part in parts if part).lower()
+
+    def _build_client_memory_hash(self, client_memory: list[dict[str, Any]] | None) -> str:
+        payload = client_memory or []
+        return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+    def _contains_blocked_term(self, text: str, term: str) -> bool:
+        normalized = term.strip().lower()
+        if not normalized:
+            return False
+        if " " in normalized:
+            return re.search(rf"\b{re.escape(normalized)}\b", text) is not None
+        return re.search(rf"\b{re.escape(normalized)}s?\b", text) is not None
+
+    def _nutrition_plan_constraint_violation(
+        self,
+        plan: StructuredNutritionPlan,
+        constraints: dict[str, Any],
+    ) -> str | None:
+        excluded_terms = constraints.get("excluded_food_terms")
+        if not isinstance(excluded_terms, list) or not excluded_terms:
+            return None
+        plan_text = self._nutrition_plan_text(plan)
+        for term in excluded_terms:
+            normalized = str(term or "").strip().lower()
+            if normalized and self._contains_blocked_term(plan_text, normalized):
+                return normalized
+        return None
+
+    def _nutrition_plan_text(self, plan: StructuredNutritionPlan) -> str:
+        parts = [plan.title, plan.coachNote]
+        for meal in plan.meals:
+            parts.extend([meal.name, meal.timing, meal.notes or ""])
+            for food in meal.foods:
+                parts.extend([food.name, food.amount])
+        return " ".join(part for part in parts if part).lower()
+
     def _generate_structured_plan(
         self,
         checkin: dict,
@@ -591,6 +1012,7 @@ class DailyCheckinService:
         yesterday: dict | None,
         last_workout: dict | None,
         prior_variant: dict | None = None,
+        client_memory: list[dict[str, Any]] | None = None,
     ):
         mode = self._normalize_mode(checkin["assigned_mode"])
         inputs = DailyCheckinInputs(**checkin["inputs"])
@@ -602,6 +1024,7 @@ class DailyCheckinService:
             last_workout=last_workout,
             inputs=inputs,
             prior_variant=prior_variant,
+            client_memory=client_memory,
         )
         raw_text = ""
         try:
@@ -629,6 +1052,7 @@ class DailyCheckinService:
                 inputs=inputs,
                 prior_variant=prior_variant,
                 require_delta=True,
+                client_memory=client_memory,
             )
             try:
                 retry_raw_text = self.llm_client.create_chat_completion(
@@ -648,13 +1072,49 @@ class DailyCheckinService:
                 request=request,
                 profile=profile,
                 last_workout=last_workout,
+                client_memory=client_memory,
             )
 
-        if request.plan_type == PlanType.NUTRITION:
+        if request.plan_type == PlanType.TRAINING:
+            constraints = self._derive_training_constraints(client_memory)
+            violation = self._training_plan_constraint_violation(parsed, constraints)
+            if violation:
+                logger.warning(
+                    "Generated workout violated client memory constraints checkin_id=%s violation=%s; using fallback",
+                    request.checkin_id,
+                    violation,
+                )
+                parsed = self._build_fallback_plan(
+                    plan_type=request.plan_type,
+                    mode=mode,
+                    inputs=inputs,
+                    request=request,
+                    profile=profile,
+                    last_workout=last_workout,
+                    client_memory=client_memory,
+                )
+            if not parsed.coachNote.strip():
+                parsed.coachNote = self._build_adaptive_note(mode, last_workout)
+        elif request.plan_type == PlanType.NUTRITION:
+            constraints = self._derive_nutrition_constraints(client_memory)
+            violation = self._nutrition_plan_constraint_violation(parsed, constraints)
+            if violation:
+                logger.warning(
+                    "Generated nutrition plan violated client memory constraints checkin_id=%s violation=%s; using fallback",
+                    request.checkin_id,
+                    violation,
+                )
+                parsed = self._build_fallback_plan(
+                    plan_type=request.plan_type,
+                    mode=mode,
+                    inputs=inputs,
+                    request=request,
+                    profile=profile,
+                    last_workout=last_workout,
+                    client_memory=client_memory,
+                )
             if not parsed.coachNote.strip() or self._looks_like_training_note(parsed.coachNote):
                 parsed.coachNote = self._build_nutrition_adaptive_note(mode, request, inputs)
-        elif not parsed.coachNote.strip():
-            parsed.coachNote = self._build_adaptive_note(mode, last_workout)
 
         return {"structured_model": parsed}
 
@@ -668,6 +1128,7 @@ class DailyCheckinService:
         inputs: DailyCheckinInputs,
         prior_variant: dict | None = None,
         require_delta: bool = False,
+        client_memory: list[dict[str, Any]] | None = None,
     ):
         mode = self._normalize_mode(checkin["assigned_mode"])
         why = profile.get("primary_goal") or "general fitness"
@@ -681,6 +1142,8 @@ class DailyCheckinService:
         if request.plan_type == PlanType.TRAINING:
             prompt_rules = (
                 " Build a workout that treats the selected environment and exact time available as hard constraints. "
+                "Saved client memory is authoritative: injuries, pain areas, movement restrictions, exercise dislikes, and equipment limits are hard constraints. "
+                "Avoid exercises and movement patterns that conflict with client_memory.training_constraints. "
                 "Use warmup descriptions that explain the movement focus and why that block prepares the athlete for the main work. "
                 "Make the exercise selection feel specific to the day's readiness, not like a generic template. "
                 "Change block structure, exercise selection, and pacing when environment or time changes. "
@@ -690,6 +1153,8 @@ class DailyCheckinService:
             prompt_rules = (
                 " Build nutrition coachNote as a readable, meal-focused sentence tied to today's readiness and nutrition context. "
                 "Mention fuel, protein, hydration, meal timing, or simple food choices. "
+                "Saved client memory is authoritative: diet type, allergies, dislikes, and saved preferences are hard constraints. "
+                "If client memory says vegetarian, every meal and food must be vegetarian. If it says vegan, use plant-based foods only. "
                 "Do not refer to workout load, session intensity, sets, reps, or progression in nutrition coachNote."
             )
         workout_context = self._build_workout_context(
@@ -719,6 +1184,15 @@ class DailyCheckinService:
             "coach_name": MODE_BUNDLES[mode]["coach"],
             "workout_context": workout_context,
         }
+        if request.plan_type in {PlanType.TRAINING, PlanType.NUTRITION}:
+            normalized_memory = client_memory or []
+            request_details["client_memory"] = {
+                "ai_usable": normalized_memory,
+            }
+            if request.plan_type == PlanType.TRAINING:
+                request_details["client_memory"]["training_constraints"] = self._derive_training_constraints(normalized_memory)
+            else:
+                request_details["client_memory"]["nutrition_constraints"] = self._derive_nutrition_constraints(normalized_memory)
         if prior_variant:
             request_details["prior_variant"] = {
                 "request_fingerprint": prior_variant.get("request_fingerprint"),
@@ -746,8 +1220,8 @@ class DailyCheckinService:
                 "content": (
                     f"Build a {request.plan_type.value} plan using this context:\n"
                     f"{json.dumps(request_details)}\n"
-                    "If this is a training plan, make the warmup specific and descriptive, make the main work match the selected environment and time cap, and keep every field emoji-free.\n"
-                    "If this is a nutrition plan, keep coachNote practical, human-readable, and focused on meals, fuel, protein, and hydration rather than workout mechanics.\n"
+                    "If this is a training plan, make the warmup specific and descriptive, make the main work match the selected environment and time cap, keep every field emoji-free, and apply client_memory.ai_usable plus training_constraints as hard constraints for injuries, pain areas, movement restrictions, exercise dislikes, and equipment limits.\n"
+                    "If this is a nutrition plan, keep coachNote practical, human-readable, and focused on meals, fuel, protein, and hydration rather than workout mechanics. Apply client_memory.ai_usable as hard constraints and never include foods that violate saved dietary preferences, allergies, dislikes, or restrictions.\n"
                     f"Return JSON matching exactly this schema:\n{schema_text}"
                 ),
             },
@@ -774,7 +1248,12 @@ class DailyCheckinService:
             )
             return None
 
-    def _build_request_fingerprint(self, request: GenerateCheckinPlanRequest) -> str:
+    def _build_request_fingerprint(
+        self,
+        request: GenerateCheckinPlanRequest,
+        *,
+        client_memory: list[dict[str, Any]] | None = None,
+    ) -> str:
         payload = {
             "checkin_id": request.checkin_id,
             "plan_type": request.plan_type.value,
@@ -783,6 +1262,8 @@ class DailyCheckinService:
             "nutrition_day_note": request.nutrition_day_note.strip() if request.nutrition_day_note else None,
             "include_yesterday_context": bool(request.include_yesterday_context),
         }
+        if request.plan_type in {PlanType.TRAINING, PlanType.NUTRITION}:
+            payload["client_memory_hash"] = self._build_client_memory_hash(client_memory)
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
     def _build_generate_plan_response(
@@ -885,14 +1366,33 @@ class DailyCheckinService:
             "exercise_sets": [item.get("sets") for item in plan.get("exercises", []) if isinstance(item, dict)],
         }
 
-    def _build_fallback_plan(self, plan_type: PlanType, mode: str, inputs: DailyCheckinInputs, request: GenerateCheckinPlanRequest, profile: dict, last_workout: dict | None):
+    def _build_fallback_plan(
+        self,
+        plan_type: PlanType,
+        mode: str,
+        inputs: DailyCheckinInputs,
+        request: GenerateCheckinPlanRequest,
+        profile: dict,
+        last_workout: dict | None,
+        client_memory: list[dict[str, Any]] | None = None,
+    ):
         if plan_type == PlanType.TRAINING:
             duration = request.time_available or profile.get("preferred_session_length") or 30
             difficulty = "advanced" if inputs.motivation >= 4 and inputs.sleep >= 4 else "intermediate"
-            workout_type = self._fallback_workout_type(mode, request.environment)
+            training_constraints = self._derive_training_constraints(client_memory)
+            has_training_constraints = bool(training_constraints.get("blocked_exercise_terms"))
+            workout_type = "mobility" if has_training_constraints and mode in {"REST", "RECOVER"} else self._fallback_workout_type(mode, request.environment)
             title, description = self._fallback_training_framing(mode, request.environment, duration)
-            warmup = self._fallback_warmup(request.environment, workout_type)
-            exercises = self._fallback_training_exercises(request.environment, duration, mode)
+            warmup = (
+                self._fallback_warmup_for_constraints(training_constraints)
+                if has_training_constraints
+                else self._fallback_warmup(request.environment, workout_type)
+            )
+            exercises = (
+                self._fallback_training_exercises_for_constraints(training_constraints, duration)
+                if has_training_constraints
+                else self._fallback_training_exercises(request.environment, duration, mode)
+            )
             cooldown = self._fallback_cooldown(request.environment)
             return StructuredTrainingPlan(
                 title=title,
@@ -906,7 +1406,78 @@ class DailyCheckinService:
                 coachNote=self._build_adaptive_note(mode, last_workout),
             )
 
-        meals = [
+        meals = self._build_fallback_nutrition_meals(request, client_memory)
+        return StructuredNutritionPlan(
+            title=f"{mode.title()} Mode Fuel Plan",
+            totalCalories=sum(meal["totalCalories"] for meal in meals),
+            totalProtein=sum(meal["totalProtein"] for meal in meals),
+            meals=meals,
+            coachNote=self._build_nutrition_adaptive_note(mode, request, inputs),
+        )
+
+    def _build_fallback_nutrition_meals(
+        self,
+        request: GenerateCheckinPlanRequest,
+        client_memory: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        constraints = self._derive_nutrition_constraints(client_memory)
+        excluded_terms = set(constraints.get("excluded_food_terms") or [])
+        constrained = bool(excluded_terms or constraints.get("diet_type"))
+        dairy_limited = bool({"cheese", "greek yogurt", "milk", "whey", "yogurt"}.intersection(excluded_terms))
+        gluten_limited = bool({"bread", "flour", "gluten", "oats", "pasta", "wheat"}.intersection(excluded_terms))
+
+        if constrained:
+            breakfast_foods = (
+                [
+                    {"name": "Rice porridge", "amount": "1 bowl", "calories": 300, "protein": 6},
+                    {"name": "Pea protein", "amount": "1 scoop", "calories": 120, "protein": 24},
+                    {"name": "Berries", "amount": "1 cup", "calories": 70, "protein": 1},
+                ]
+                if dairy_limited or gluten_limited or constraints.get("diet_type") == "vegan"
+                else [
+                    {"name": "Greek yogurt", "amount": "1 bowl", "calories": 220, "protein": 25},
+                    {"name": "Berries", "amount": "1 cup", "calories": 70, "protein": 1},
+                ]
+            )
+            breakfast_calories = sum(food["calories"] for food in breakfast_foods)
+            breakfast_protein = sum(food["protein"] for food in breakfast_foods)
+            return [
+                {
+                    "name": "Breakfast",
+                    "timing": "Morning",
+                    "emoji": "",
+                    "foods": breakfast_foods,
+                    "totalCalories": breakfast_calories,
+                    "totalProtein": breakfast_protein,
+                    "notes": "Start with a simple protein anchor that respects saved food preferences.",
+                },
+                {
+                    "name": "Lunch",
+                    "timing": "Midday",
+                    "emoji": "",
+                    "foods": [
+                        {"name": "Lentil quinoa bowl", "amount": "1 serving", "calories": 520, "protein": 28},
+                        {"name": "Fruit", "amount": "1 piece", "calories": 90, "protein": 1},
+                    ],
+                    "totalCalories": 610,
+                    "totalProtein": 29,
+                    "notes": request.nutrition_day_note or "Keep lunch balanced, repeatable, and aligned with saved constraints.",
+                },
+                {
+                    "name": "Dinner",
+                    "timing": "Evening",
+                    "emoji": "",
+                    "foods": [
+                        {"name": "Chickpea rice plate", "amount": "1 plate", "calories": 560, "protein": 24},
+                        {"name": "Vegetables", "amount": "2 cups", "calories": 120, "protein": 6},
+                    ],
+                    "totalCalories": 680,
+                    "totalProtein": 30,
+                    "notes": "End the day with steady carbs, plants, and protein without violating saved preferences.",
+                },
+            ]
+
+        return [
             {
                 "name": "Breakfast",
                 "timing": "Morning",
@@ -944,13 +1515,121 @@ class DailyCheckinService:
                 "notes": "End the day with recovery-supportive protein and carbs.",
             },
         ]
-        return StructuredNutritionPlan(
-            title=f"{mode.title()} Mode Fuel Plan",
-            totalCalories=sum(meal["totalCalories"] for meal in meals),
-            totalProtein=sum(meal["totalProtein"] for meal in meals),
-            meals=meals,
-            coachNote=self._build_nutrition_adaptive_note(mode, request, inputs),
-        )
+
+    def _fallback_warmup_for_constraints(self, constraints: dict[str, Any]) -> list[dict]:
+        matched = constraints.get("matched_constraints")
+        matched_text = ", ".join(matched) if isinstance(matched, list) and matched else "saved constraints"
+        return [
+            {
+                "name": "Breathing and range scan",
+                "duration": "3 min",
+                "description": f"Check today's comfort against {matched_text} and keep every movement inside a pain-free range.",
+            },
+            {
+                "name": "Low-impact activation",
+                "duration": "4 min",
+                "description": "Use slow controlled joint circles, bracing, and unloaded movement to prepare without testing restricted patterns.",
+            },
+        ]
+
+    def _fallback_training_exercises_for_constraints(
+        self,
+        constraints: dict[str, Any],
+        duration: int,
+    ) -> list[dict]:
+        short_session = duration <= 10
+        candidate_sets = 1 if short_session else 2
+        candidates = [
+            {
+                "name": "Seated breathing reset",
+                "sets": candidate_sets,
+                "reps": "5 breaths",
+                "rest": "20 sec",
+                "muscleGroup": "recovery",
+                "description": "Sit tall, keep ribs stacked, and use slow exhales to downshift before controlled work.",
+                "coachTip": "Stop and adjust if any saved restriction starts to feel irritated.",
+            },
+            {
+                "name": "Dead bug heel tap",
+                "sets": candidate_sets,
+                "reps": "6 / side",
+                "rest": "30 sec",
+                "muscleGroup": "core",
+                "description": "Brace gently and alternate heel taps while keeping the range small and controlled.",
+                "coachTip": "Move slowly enough that your trunk stays quiet throughout the set.",
+            },
+            {
+                "name": "Side-lying hip abduction",
+                "sets": candidate_sets,
+                "reps": "8 / side",
+                "rest": "30 sec",
+                "muscleGroup": "hips",
+                "description": "Lift from the side hip with a short smooth range and no momentum.",
+                "coachTip": "Keep this easy and controlled rather than chasing fatigue.",
+            },
+            {
+                "name": "Standing band row",
+                "sets": candidate_sets,
+                "reps": "10-12",
+                "rest": "30 sec",
+                "muscleGroup": "back",
+                "description": "Use light band tension and pull with smooth control while staying tall.",
+                "coachTip": "Keep the range comfortable and avoid any position that bothers a saved restriction.",
+            },
+            {
+                "name": "Anti-rotation hold",
+                "sets": candidate_sets,
+                "reps": "15 sec / side",
+                "rest": "30 sec",
+                "muscleGroup": "core",
+                "description": "Hold a stable torso against light band tension without twisting or bracing hard.",
+                "coachTip": "Make this feel steady and clean, not maximal.",
+            },
+        ]
+        filtered = [
+            exercise
+            for exercise in candidates
+            if not self._exercise_violates_training_constraints(exercise, constraints)
+        ]
+        if len(filtered) >= 3:
+            return filtered[:3]
+        fallback = [
+            {
+                "name": "Comfort-limited mobility",
+                "sets": 2,
+                "reps": "45 sec",
+                "rest": "30 sec",
+                "muscleGroup": "mobility",
+                "description": "Move only through ranges that feel clear today and skip any restricted pattern.",
+                "coachTip": "The win is staying within the constraint, not forcing output.",
+            },
+            {
+                "name": "Easy core brace",
+                "sets": 2,
+                "reps": "6 breaths",
+                "rest": "30 sec",
+                "muscleGroup": "core",
+                "description": "Brace lightly while breathing slowly and keeping the body relaxed.",
+                "coachTip": "Keep the effort low enough that form never changes.",
+            },
+            {
+                "name": "Controlled balance hold",
+                "sets": 2,
+                "reps": "20 sec",
+                "rest": "30 sec",
+                "muscleGroup": "stability",
+                "description": "Use support as needed and hold a stable, comfortable position.",
+                "coachTip": "Choose the setup that feels safest for today's restriction.",
+            },
+        ]
+        return fallback
+
+    def _exercise_violates_training_constraints(self, exercise: dict[str, Any], constraints: dict[str, Any]) -> bool:
+        blocked_terms = constraints.get("blocked_exercise_terms")
+        if not isinstance(blocked_terms, list) or not blocked_terms:
+            return False
+        exercise_text = " ".join(str(value or "") for value in exercise.values()).lower()
+        return any(self._contains_blocked_term(exercise_text, str(term or "")) for term in blocked_terms)
 
     def _fallback_workout_type(self, mode: str, environment: Environment | None) -> str:
         if environment == Environment.OUTDOORS:

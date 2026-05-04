@@ -81,7 +81,7 @@ function isLocalNetworkUrl(url) {
 }
 
 function shouldSuppressLoopbackFallbacks(configuredBaseUrl) {
-  return isLocalNetworkUrl(configuredBaseUrl) && !isLoopbackUrl(configuredBaseUrl);
+  return Boolean(Constants.isDevice) && isLocalNetworkUrl(configuredBaseUrl) && !isLoopbackUrl(configuredBaseUrl);
 }
 
 export function getConfiguredApiBaseUrl() {
@@ -116,21 +116,21 @@ export function getApiBaseUrls() {
   if (prioritizeConfiguredFirst) {
     pushCandidate(configuredBaseUrl);
     autoDetectedBaseUrls.forEach(pushCandidate);
-    return candidates;
+  } else {
+    pushCandidate(preferredApiBaseUrl);
+    if (shouldSuppressLoopbackFallbacks(configuredBaseUrl)) {
+      pushCandidate(configuredBaseUrl);
+    } else {
+      if (preferAutoDetectedBaseUrls) {
+        autoDetectedBaseUrls.forEach(pushCandidate);
+      }
+      pushCandidate(configuredBaseUrl);
+      if (!preferAutoDetectedBaseUrls) {
+        autoDetectedBaseUrls.forEach(pushCandidate);
+      }
+    }
   }
 
-  pushCandidate(preferredApiBaseUrl);
-  if (shouldSuppressLoopbackFallbacks(configuredBaseUrl)) {
-    pushCandidate(configuredBaseUrl);
-  } else {
-    if (preferAutoDetectedBaseUrls) {
-      autoDetectedBaseUrls.forEach(pushCandidate);
-    }
-    pushCandidate(configuredBaseUrl);
-    if (!preferAutoDetectedBaseUrls) {
-      autoDetectedBaseUrls.forEach(pushCandidate);
-    }
-  }
   if (includeLoopbackBaseUrls) {
     loopbackBaseUrls.forEach(pushCandidate);
   }

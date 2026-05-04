@@ -10,6 +10,7 @@ import {
   AI_PROGRESS_STAGES,
 } from '../../messaging';
 import { getChatHistory, sendChatMessage, streamChatMessage } from '../services/chatApi';
+import { sanitizeAssistantDisplayText } from '../utils/aiResponseParser';
 
 const DEFAULT_WELCOME_MESSAGE = 'I am here to help you make steady progress that fits your day. Share what you need and we will choose the next smart step together.';
 const DEFAULT_QUICK_REPLIES = ['Plan my next best action', 'Adjust today\'s training', 'Help with consistency'];
@@ -53,6 +54,8 @@ const NUTRITION_ADJUSTMENT_QUICK_REPLIES = [
   'Make this easier to follow',
 ];
 const CHAT_HISTORY_PATH_PREFIX = '/api/v1/chat/history';
+const INITIAL_HISTORY_LIMIT = 10;
+const LOAD_MORE_HISTORY_LIMIT = 30;
 const STALE_CHAT_HISTORY_WARNING_ID = 'assistant-stale-chat-history-route';
 const STALE_CHAT_HISTORY_ROUTE_MESSAGE = (
   'The running backend is missing chat history route support (/api/v1/chat/history). '
@@ -98,18 +101,43 @@ function mapHydratedHistoryMessages(payload) {
   }
   return historyItems
     .filter((item) => typeof item?.message_text === 'string' && item.message_text.trim().length > 0)
-    .map((item) => ({
-      id: String(item?.id || `history-${Date.now()}`),
-      role: item?.role === 'user' ? 'user' : 'assistant',
-      text: item.message_text,
-      kind: typeof item?.kind === 'string' ? item.kind : 'chat_message',
-      visibility: typeof item?.visibility === 'string' ? item.visibility : 'trainer_private',
-      status: typeof item?.status === 'string' ? item.status : 'confirmed',
-      createdAt: item?.created_at || null,
-      memorySuggestions: normalizeMemorySuggestions(
-        item?.structured_payload?.memory_suggestions || item?.memory_suggestions,
-      ),
-    }));
+    .map((item) => {
+      const role = item?.role === 'user' ? 'user' : 'assistant';
+      const text = role === 'assistant'
+        ? sanitizeAssistantDisplayText(item.message_text)
+        : item.message_text;
+      if (!String(text || '').trim()) {
+        return null;
+      }
+      return {
+        id: String(item?.id || `history-${Date.now()}`),
+        role,
+        text,
+        kind: typeof item?.kind === 'string' ? item.kind : 'chat_message',
+        visibility: typeof item?.visibility === 'string' ? item.visibility : 'trainer_private',
+        status: typeof item?.status === 'string' ? item.status : 'confirmed',
+        createdAt: item?.created_at || null,
+        memorySuggestions: normalizeMemorySuggestions(
+          item?.structured_payload?.memory_suggestions || item?.memory_suggestions,
+        ),
+      };
+    })
+    .filter(Boolean);
+}
+
+function getUniqueOlderMessages(olderMessages, currentMessages) {
+  const currentIds = new Set((Array.isArray(currentMessages) ? currentMessages : [])
+    .map((item) => item?.id)
+    .filter(Boolean));
+  const olderIds = new Set();
+  return (Array.isArray(olderMessages) ? olderMessages : []).filter((item) => {
+    const itemId = item?.id;
+    if (!itemId || currentIds.has(itemId) || olderIds.has(itemId)) {
+      return false;
+    }
+    olderIds.add(itemId);
+    return true;
+  });
 }
 
 function normalizeMemorySuggestions(rawSuggestions) {
@@ -371,6 +399,9 @@ export function useChatConversation(accessToken, launchContext = null) {
   const [activeAssistantRequests, setActiveAssistantRequests] = useState(0);
   const [isBootstrapping, setIsBootstrapping] = useState(() => shouldBootstrapTrainerOnboarding);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [historyCursor, setHistoryCursor] = useState(null);
+  const [isLoadingMoreHistory, setIsLoadingMoreHistory] = useState(false);
+  const [historyPaginationError, setHistoryPaginationError] = useState(null);
   const [error, setError] = useState(null);
   const [errorDetails, setErrorDetails] = useState(null);
   const [failedRequest, setFailedRequest] = useState(null);
@@ -415,24 +446,33 @@ export function useChatConversation(accessToken, launchContext = null) {
     setActiveAssistantRequests(0);
     setIsBootstrapping(shouldBootstrapTrainerOnboarding);
     setIsHistoryLoading(false);
+    setHistoryCursor(null);
+    setIsLoadingMoreHistory(false);
+    setHistoryPaginationError(null);
   }, [launchContextPayload, shouldBootstrapTrainerOnboarding]);
 
   const hydrateHistory = useCallback(async ({ isActive = () => true } = {}) => {
     try {
-      const payload = await getChatHistory({ accessToken, limit: 120 });
+      const payload = await getChatHistory({ accessToken, limit: INITIAL_HISTORY_LIMIT });
       if (!isActive()) {
         return false;
       }
 
       const hydratedMessages = mapHydratedHistoryMessages(payload);
+      setConversationId(payload?.conversation_id || null);
+      conversationIdRef.current = payload?.conversation_id || null;
+      setHistoryCursor(payload?.next_cursor || null);
+      setHistoryPaginationError(null);
       if (hydratedMessages.length > 0) {
-        setConversationId(payload?.conversation_id || null);
-        conversationIdRef.current = payload?.conversation_id || null;
         setMessages(hydratedMessages);
         messagesRef.current = hydratedMessages;
         setQuickReplies(payload?.quick_replies || []);
       } else {
-        setMessages((current) => current.filter((item) => item?.id !== STALE_CHAT_HISTORY_WARNING_ID));
+        setMessages((current) => {
+          const next = current.filter((item) => item?.id !== STALE_CHAT_HISTORY_WARNING_ID);
+          messagesRef.current = next;
+          return next;
+        });
       }
       setError(null);
       setErrorDetails(null);
@@ -448,9 +488,51 @@ export function useChatConversation(accessToken, launchContext = null) {
         setFailedRequest({ type: 'history' });
         setMessages((current) => appendStaleChatHistoryWarning(current));
       }
+      setHistoryCursor(null);
       return false;
     }
   }, [accessToken]);
+
+  const loadMoreHistory = useCallback(async () => {
+    if (!accessToken || isLoadingMoreHistory || !historyCursor) {
+      return false;
+    }
+    const activeConversationId = conversationIdRef.current;
+    if (!activeConversationId) {
+      setHistoryCursor(null);
+      return false;
+    }
+
+    setIsLoadingMoreHistory(true);
+    setHistoryPaginationError(null);
+    try {
+      const payload = await getChatHistory({
+        accessToken,
+        conversationId: activeConversationId,
+        limit: LOAD_MORE_HISTORY_LIMIT,
+        cursor: historyCursor,
+      });
+      const olderMessages = mapHydratedHistoryMessages(payload);
+      const uniqueOlderMessages = getUniqueOlderMessages(olderMessages, messagesRef.current);
+      setHistoryCursor(payload?.next_cursor || null);
+      if (uniqueOlderMessages.length > 0) {
+        setMessages((current) => {
+          const next = [
+            ...getUniqueOlderMessages(uniqueOlderMessages, current),
+            ...current,
+          ];
+          messagesRef.current = next;
+          return next;
+        });
+      }
+      return uniqueOlderMessages.length > 0;
+    } catch (requestError) {
+      setHistoryPaginationError(requestError?.message || 'Unable to load more messages.');
+      return false;
+    } finally {
+      setIsLoadingMoreHistory(false);
+    }
+  }, [accessToken, historyCursor, isLoadingMoreHistory]);
 
   useEffect(() => {
     if (!accessToken || shouldBootstrapTrainerOnboarding) {
@@ -497,12 +579,15 @@ export function useChatConversation(accessToken, launchContext = null) {
       }
       setConversationId(payload.conversation_id || null);
       conversationIdRef.current = payload.conversation_id || null;
+      setHistoryCursor(null);
+      setHistoryPaginationError(null);
       setQuickReplies(payload.quick_replies || []);
       const bootstrapMessages = [
         {
           id: `assistant-bootstrap-${Date.now()}`,
           role: 'assistant',
-          text: payload.assistant_message,
+          text: sanitizeAssistantDisplayText(payload.assistant_message)
+            || "I'm here with you. Could you rephrase that and I'll try again?",
           fallbackTriggered: payload.fallback_triggered,
           profilePatch: normalizeProfilePatch(payload.profile_patch),
           memorySuggestions: normalizeMemorySuggestions(payload?.memory_suggestions),
@@ -596,6 +681,7 @@ export function useChatConversation(accessToken, launchContext = null) {
     setError(null);
     setErrorDetails(null);
     setFailedRequest(null);
+    setHistoryPaginationError(null);
     setActiveAssistantRequests((value) => value + 1);
 
     const requestId = buildRequestId('chat-request');
@@ -661,7 +747,7 @@ export function useChatConversation(accessToken, launchContext = null) {
             role: 'assistant',
             kind: 'assistant_stream',
             requestId,
-            text: collectedAssistantText,
+            text: sanitizeAssistantDisplayText(collectedAssistantText),
             status: 'streaming',
           };
           const existingIndex = withoutProgress.findIndex((item) => item?.id === streamMessageId);
@@ -758,12 +844,12 @@ export function useChatConversation(accessToken, launchContext = null) {
       setActiveAssistantRequests((value) => Math.max(0, value - 1));
     }
 
-    const finalAssistantText = String(
+    const finalAssistantText = sanitizeAssistantDisplayText(
       responsePayload?.assistant_message
       || responsePayload?.text
       || collectedAssistantText
       || '',
-    ).trim() || "I'm here with you. Could you rephrase that and I'll try again?";
+    ) || "I'm here with you. Could you rephrase that and I'll try again?";
 
     setMessages((current) => {
       const withoutTransient = current.filter((item) => (
@@ -909,6 +995,10 @@ export function useChatConversation(accessToken, launchContext = null) {
     errorDetails,
     lastFailedMessage,
     hasRetryableFailure: Boolean(error && failedRequest),
+    hasMoreHistory: Boolean(historyCursor),
+    isLoadingMoreHistory,
+    historyPaginationError,
+    loadMoreHistory,
     sendMessage,
     retryFailedRequest,
     retryLastFailedMessage: retryFailedRequest,

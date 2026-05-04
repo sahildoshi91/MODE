@@ -51,6 +51,7 @@ import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/load
 import { resolveTrainingItemVisual, TRAINING_ITEM_SECTIONS } from './trainingVisuals';
 import {
   generateCheckinPlan,
+  getLastTrainingSetup,
   getPreviousCheckin,
   getTodayCheckin,
   logGeneratedWorkout,
@@ -270,6 +271,16 @@ const ENVIRONMENT_OPTIONS = [
     description: 'No equipment needed',
   },
 ];
+const SUPPORTED_ENVIRONMENT_VALUES = new Set(ENVIRONMENT_OPTIONS.map((option) => option.value));
+const ENVIRONMENT_LABEL_BY_VALUE = ENVIRONMENT_OPTIONS.reduce((lookup, option) => ({
+  ...lookup,
+  [option.value]: option.label,
+}), {});
+const SUPPORTED_TIME_VALUES = new Set(TIME_OPTIONS);
+const LAST_TRAINING_SETUP_ENVIRONMENT_ALIASES = {
+  home_gym: 'full_gym',
+  limited: 'bodyweight',
+};
 const TRAINING_TEXT_EMOJI_PATTERN = /[\u200D\uFE0F\u{1F1E6}-\u{1F1FF}\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu;
 
 function getLocalDateString() {
@@ -354,6 +365,57 @@ function withFallback(value) {
   }
 
   return String(value);
+}
+
+function getEnvironmentLabel(value) {
+  return ENVIRONMENT_LABEL_BY_VALUE[value] || null;
+}
+
+function normalizeTrainingSetupTime(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  return TIME_OPTIONS.reduce((currentBest, candidate) => (
+    Math.abs(candidate - parsed) < Math.abs(currentBest - parsed)
+      ? candidate
+      : currentBest
+  ), TIME_OPTIONS[0]);
+}
+
+function normalizeLastTrainingSetupPayload(payload) {
+  const setup = payload?.setup;
+  if (!setup || typeof setup !== 'object') {
+    return null;
+  }
+
+  const rawEnvironment = typeof setup.environment === 'string' ? setup.environment : null;
+  const environment = LAST_TRAINING_SETUP_ENVIRONMENT_ALIASES[rawEnvironment] || rawEnvironment;
+  const timeAvailable = normalizeTrainingSetupTime(setup.time_available);
+  if (!SUPPORTED_ENVIRONMENT_VALUES.has(environment) || !SUPPORTED_TIME_VALUES.has(timeAvailable)) {
+    return null;
+  }
+
+  return {
+    generatedPlanId: setup.generated_plan_id || null,
+    environment,
+    timeAvailable,
+    createdAt: setup.created_at || null,
+  };
+}
+
+function formatTrainingSetupMeta(setup) {
+  if (!setup) {
+    return null;
+  }
+
+  const environmentLabel = getEnvironmentLabel(setup.environment);
+  if (!environmentLabel) {
+    return null;
+  }
+
+  return `${environmentLabel} • ${setup.timeAvailable}m`;
 }
 
 function buildSupportBundle({ date, result, submitError }) {
@@ -1078,6 +1140,50 @@ function PreviousContextToggle({ previousCheckin, isLoadingPreviousCheckin, incl
   );
 }
 
+function LastTrainingSetupToggle({ lastTrainingSetup, isLoadingLastTrainingSetup, useLastTrainingSetup, onToggle }) {
+  const isDisabled = isLoadingLastTrainingSetup || !lastTrainingSetup;
+  const meta = isLoadingLastTrainingSetup
+    ? 'Looking up last training setup...'
+    : formatTrainingSetupMeta(lastTrainingSetup) || 'No previous setup found';
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: isDisabled }}
+      disabled={isDisabled}
+      onPress={() => {
+        if (!isDisabled) {
+          onToggle(!useLastTrainingSetup);
+        }
+      }}
+      style={[
+        styles.previousCard,
+        styles.lastTrainingSetupCard,
+        isDisabled && styles.previousCardDisabled,
+      ]}
+      testID="last-training-setup-toggle"
+    >
+      <View style={styles.previousLeft}>
+        <MaterialCommunityIcons name="dumbbell" size={18} color={theme.colors.accent.primary} />
+        <View style={styles.previousCopyWrap}>
+          <Text style={styles.previousTitle}>Use Last Training Setup</Text>
+          <Text style={styles.previousMeta}>{meta}</Text>
+        </View>
+      </View>
+      {isLoadingLastTrainingSetup ? (
+        <ActivityIndicator size="small" color={theme.colors.accent.primary} />
+      ) : (
+        <GlassToggle
+          disabled={isDisabled}
+          value={Boolean(lastTrainingSetup && useLastTrainingSetup)}
+          onValueChange={onToggle}
+          testID="last-training-setup-switch"
+        />
+      )}
+    </Pressable>
+  );
+}
+
 function TrainingIconBadge({
   Icon,
   icon,
@@ -1403,6 +1509,9 @@ export default function DailyCheckinScreen({
   const [previousCheckin, setPreviousCheckin] = useState(null);
   const [isLoadingPreviousCheckin, setIsLoadingPreviousCheckin] = useState(false);
   const [includeYesterdayContext, setIncludeYesterdayContext] = useState(false);
+  const [lastTrainingSetup, setLastTrainingSetup] = useState(null);
+  const [isLoadingLastTrainingSetup, setIsLoadingLastTrainingSetup] = useState(false);
+  const [useLastTrainingSetup, setUseLastTrainingSetup] = useState(false);
   const [planLoading, setPlanLoading] = useState(false);
   const [planError, setPlanError] = useState(null);
   const [planContent, setPlanContent] = useState(null);
@@ -1421,6 +1530,7 @@ export default function DailyCheckinScreen({
   const [isHealthzProbeRunning, setIsHealthzProbeRunning] = useState(false);
   const [isTodayProbeRunning, setIsTodayProbeRunning] = useState(false);
   const copyFeedbackTimerRef = useRef(null);
+  const manualTrainingSetupRef = useRef({ environment: null, timeAvailable: 30 });
   const currentQuestion = QUESTIONS[questionIndex];
   const glowProgress = useRef(new Animated.Value(1)).current;
   const glowTargetRef = useRef(QUESTIONS[0].color);
@@ -1616,16 +1726,56 @@ export default function DailyCheckinScreen({
   }, [accessToken, refreshConnectionDebug, today]);
 
   useEffect(() => {
-    if (step !== 'environment') {
+    if (step !== 'environment' || !planType) {
       return;
     }
 
     let cancelled = false;
 
+    if (planType === PLAN_TYPE.TRAINING) {
+      const loadLastTrainingSetup = async () => {
+        setIsLoadingLastTrainingSetup(true);
+        setLastTrainingSetup(null);
+        setUseLastTrainingSetup(false);
+        setPreviousCheckin(null);
+        setIsLoadingPreviousCheckin(false);
+        setIncludeYesterdayContext(false);
+
+        try {
+          const response = await getLastTrainingSetup({
+            accessToken,
+            excludeCheckinId: summaryResult?.id,
+          });
+          if (cancelled) {
+            return;
+          }
+          setLastTrainingSetup(normalizeLastTrainingSetupPayload(response));
+        } catch (_error) {
+          if (cancelled) {
+            return;
+          }
+          setLastTrainingSetup(null);
+        } finally {
+          if (!cancelled) {
+            setIsLoadingLastTrainingSetup(false);
+          }
+        }
+      };
+
+      loadLastTrainingSetup();
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const loadPreviousCheckin = async () => {
       setIsLoadingPreviousCheckin(true);
       setPreviousCheckin(null);
       setIncludeYesterdayContext(false);
+      setLastTrainingSetup(null);
+      setIsLoadingLastTrainingSetup(false);
+      setUseLastTrainingSetup(false);
 
       try {
         const response = await getPreviousCheckin({
@@ -1653,7 +1803,7 @@ export default function DailyCheckinScreen({
     return () => {
       cancelled = true;
     };
-  }, [accessToken, step, today]);
+  }, [accessToken, planType, step, summaryResult?.id, today]);
 
   useEffect(() => {
     if (step === 'environment' && planType === PLAN_TYPE.NUTRITION && nutritionDayType === 'custom') {
@@ -1789,7 +1939,12 @@ export default function DailyCheckinScreen({
     setNutritionDayType(null);
     setNutritionDayNote('');
     setPreviousCheckin(null);
+    setIsLoadingPreviousCheckin(false);
     setIncludeYesterdayContext(false);
+    setLastTrainingSetup(null);
+    setIsLoadingLastTrainingSetup(false);
+    setUseLastTrainingSetup(false);
+    manualTrainingSetupRef.current = { environment: null, timeAvailable: 30 };
     setPlanLoading(false);
     setPlanError(null);
     setPlanContent(null);
@@ -1868,6 +2023,40 @@ export default function DailyCheckinScreen({
     }));
   };
 
+  const handleToggleLastTrainingSetup = (nextValue) => {
+    if (nextValue) {
+      if (!lastTrainingSetup) {
+        return;
+      }
+      manualTrainingSetupRef.current = {
+        environment,
+        timeAvailable,
+      };
+      setUseLastTrainingSetup(true);
+      setEnvironment(lastTrainingSetup.environment);
+      setTimeAvailable(lastTrainingSetup.timeAvailable);
+      return;
+    }
+
+    setUseLastTrainingSetup(false);
+    setEnvironment(manualTrainingSetupRef.current.environment || null);
+    setTimeAvailable(manualTrainingSetupRef.current.timeAvailable || 30);
+  };
+
+  const handleSelectEnvironment = (nextEnvironment) => {
+    if (useLastTrainingSetup) {
+      setUseLastTrainingSetup(false);
+    }
+    setEnvironment(nextEnvironment);
+  };
+
+  const handleSelectTrainingTime = (nextTimeAvailable) => {
+    if (useLastTrainingSetup) {
+      setUseLastTrainingSetup(false);
+    }
+    setTimeAvailable(nextTimeAvailable);
+  };
+
   const canGeneratePlan = useMemo(() => {
     if (planType === PLAN_TYPE.TRAINING) {
       return Boolean(environment);
@@ -1905,7 +2094,7 @@ export default function DailyCheckinScreen({
         nutritionDayNote: planType === PLAN_TYPE.NUTRITION && nutritionDayType === 'custom'
           ? nutritionDayNote.trim()
           : undefined,
-        includeYesterdayContext,
+        includeYesterdayContext: planType === PLAN_TYPE.NUTRITION ? includeYesterdayContext : false,
         refreshRequested,
       });
 
@@ -1968,7 +2157,7 @@ export default function DailyCheckinScreen({
         timeAvailable,
         nutritionDayType,
         nutritionDayNote: nutritionDayType === 'custom' ? nutritionDayNote.trim() : null,
-        includeYesterdayContext,
+        includeYesterdayContext: planType === PLAN_TYPE.NUTRITION ? includeYesterdayContext : false,
         planError,
       });
       await Clipboard.setStringAsync(supportBundle);
@@ -2188,22 +2377,31 @@ export default function DailyCheckinScreen({
             contentContainerStyle={[
               styles.resultsContent,
               {
-                paddingTop: theme.spacing[3],
+                paddingTop: planType === PLAN_TYPE.TRAINING ? theme.spacing[1] : theme.spacing[3],
                 paddingBottom: theme.spacing[4] + bottomInset,
               },
             ]}
           >
             <View style={styles.phoneFrame}>
-              <Text style={styles.resultsTitle}>
-                {planType === PLAN_TYPE.TRAINING ? 'Dial in your workout context' : 'Dial in today\'s nutrition context'}
-              </Text>
+              {planType === PLAN_TYPE.NUTRITION ? (
+                <Text style={styles.resultsTitle}>Dial in today&apos;s nutrition context</Text>
+              ) : null}
 
-              <PreviousContextToggle
-                previousCheckin={previousCheckin}
-                isLoadingPreviousCheckin={isLoadingPreviousCheckin}
-                includeYesterdayContext={includeYesterdayContext}
-                onToggle={setIncludeYesterdayContext}
-              />
+              {planType === PLAN_TYPE.TRAINING ? (
+                <LastTrainingSetupToggle
+                  lastTrainingSetup={lastTrainingSetup}
+                  isLoadingLastTrainingSetup={isLoadingLastTrainingSetup}
+                  useLastTrainingSetup={useLastTrainingSetup}
+                  onToggle={handleToggleLastTrainingSetup}
+                />
+              ) : (
+                <PreviousContextToggle
+                  previousCheckin={previousCheckin}
+                  isLoadingPreviousCheckin={isLoadingPreviousCheckin}
+                  includeYesterdayContext={includeYesterdayContext}
+                  onToggle={setIncludeYesterdayContext}
+                />
+              )}
 
               {planType === PLAN_TYPE.TRAINING ? (
                 <>
@@ -2219,7 +2417,7 @@ export default function DailyCheckinScreen({
                       return (
                         <Pressable
                           key={option.value}
-                          onPress={() => setEnvironment(option.value)}
+                          onPress={() => handleSelectEnvironment(option.value)}
                           testID={`environment-option-${option.value}`}
                           accessibilityState={{ selected }}
                           style={({ pressed }) => [
@@ -2265,7 +2463,7 @@ export default function DailyCheckinScreen({
                         return (
                           <GlassPill
                             key={minutes}
-                            onPress={() => setTimeAvailable(minutes)}
+                            onPress={() => handleSelectTrainingTime(minutes)}
                             testID={`training-time-pill-${minutes}`}
                             label={`${minutes}m`}
                             selected={selected}
@@ -2285,7 +2483,7 @@ export default function DailyCheckinScreen({
                             ? candidate
                             : currentBest
                         ), TIME_OPTIONS[0]);
-                        setTimeAvailable(nearest);
+                        handleSelectTrainingTime(nearest);
                       }}
                       onComplete={(nextValue) => {
                         const nearest = TIME_OPTIONS.reduce((currentBest, candidate) => (
@@ -2293,7 +2491,7 @@ export default function DailyCheckinScreen({
                             ? candidate
                             : currentBest
                         ), TIME_OPTIONS[0]);
-                        setTimeAvailable(nearest);
+                        handleSelectTrainingTime(nearest);
                       }}
                       style={styles.timeSlider}
                     />
@@ -2353,7 +2551,7 @@ export default function DailyCheckinScreen({
               title={planType === PLAN_TYPE.TRAINING ? 'Generate My Workout' : 'Generate My Nutrition Plan'}
               onPress={() => handleGeneratePlan(false)}
               disabled={!canGeneratePlan || planLoading}
-              style={[styles.footerButton, styles.generateButton]}
+              style={styles.footerButton}
             />
             <ConnectionDebugCard
               debugState={connectionDebug}
@@ -3167,6 +3365,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     minHeight: 60,
   },
+  lastTrainingSetupCard: {
+    marginTop: 0,
+  },
+  previousCardDisabled: {
+    opacity: 0.78,
+  },
   previousLoadingText: {
     color: theme.colors.textMedium,
     ...theme.typography.body2,
@@ -3350,9 +3554,6 @@ const styles = StyleSheet.create({
     ...theme.typography.body2,
     fontFamily: theme.typography.fontFamily,
     padding: 12,
-  },
-  generateButton: {
-    backgroundColor: theme.colors.accent.primary,
   },
   planStepWrap: {
     flex: 1,

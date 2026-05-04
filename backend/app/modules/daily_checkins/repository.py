@@ -228,6 +228,50 @@ class DailyCheckinRepository:
         )
         return response.data[0] if response.data else None
 
+    def get_latest_training_setup(
+        self,
+        client_id: str,
+        *,
+        exclude_checkin_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        query = (
+            self.supabase
+            .table("generated_checkin_plans")
+            .select("id, environment, time_available, created_at, checkin_id")
+            .eq("client_id", client_id)
+            .eq("plan_type", "training")
+            .not_.is_("environment", None)
+            .not_.is_("time_available", None)
+        )
+        if exclude_checkin_id:
+            query = query.neq("checkin_id", exclude_checkin_id)
+        response = (
+            query
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def list_client_coach_memory(
+        self,
+        trainer_id: str,
+        client_id: str,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        response = (
+            self.supabase
+            .table("coach_memory")
+            .select("id, memory_type, memory_key, value_json, updated_at")
+            .eq("trainer_id", trainer_id)
+            .eq("client_id", client_id)
+            .order("updated_at", desc=True)
+            .limit(max(1, limit))
+            .execute()
+        )
+        return response.data or []
+
     def get_generated_plan_by_id(
         self,
         generated_plan_id: str,

@@ -5,6 +5,7 @@ import { FlatList, Keyboard, Platform, StyleSheet } from 'react-native';
 const mockUseChatConversation = jest.fn();
 const mockRetryFailedRequest = jest.fn();
 const mockSendMessage = jest.fn();
+const mockLoadMoreHistory = jest.fn();
 const mockSetStringAsync = jest.fn();
 const mockChatBubble = jest.fn();
 const mockCreateTrainerClientMemory = jest.fn();
@@ -78,6 +79,8 @@ describe('CoachChatScreen', () => {
   const closeEventName = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
   let keyboardListeners = {};
   let keyboardAddListenerSpy;
+  let originalScrollToOffset;
+  let originalScrollToEnd;
 
   function renderScreen({
     launchContext = { entrypoint: 'trainer_agent_training', onboarding_action: 'review' },
@@ -143,6 +146,11 @@ describe('CoachChatScreen', () => {
     });
     mockRetryFailedRequest.mockResolvedValue(true);
     mockSendMessage.mockResolvedValue(true);
+    mockLoadMoreHistory.mockResolvedValue(true);
+    originalScrollToOffset = FlatList.prototype.scrollToOffset;
+    originalScrollToEnd = FlatList.prototype.scrollToEnd;
+    FlatList.prototype.scrollToOffset = jest.fn();
+    FlatList.prototype.scrollToEnd = jest.fn();
     mockCreateTrainerClientMemory.mockResolvedValue({
       id: 'memory-1',
       visibility: 'ai_usable',
@@ -172,12 +180,18 @@ describe('CoachChatScreen', () => {
         raw_error_message: 'Network request failed',
       },
       hasRetryableFailure: true,
+      hasMoreHistory: false,
+      isLoadingMoreHistory: false,
+      historyPaginationError: null,
+      loadMoreHistory: mockLoadMoreHistory,
       sendMessage: mockSendMessage,
       retryFailedRequest: mockRetryFailedRequest,
     });
   });
 
   afterEach(() => {
+    FlatList.prototype.scrollToOffset = originalScrollToOffset;
+    FlatList.prototype.scrollToEnd = originalScrollToEnd;
     keyboardAddListenerSpy.mockRestore();
     global.requestAnimationFrame = originalRequestAnimationFrame;
   });
@@ -401,20 +415,124 @@ describe('CoachChatScreen', () => {
     });
   });
 
-  it('does not force a bottom jump when composer receives focus', () => {
+  it('re-anchors latest when composer receives focus', () => {
     const tree = renderScreen();
     const composer = tree.root.findByType('MockCoachComposer');
 
-    expect(composer.props.onFocus).toBeUndefined();
+    expect(composer.props.onFocus).toEqual(expect.any(Function));
     global.requestAnimationFrame.mockClear();
-    if (composer.props.onFocus) {
-      act(() => {
-        composer.props.onFocus();
-      });
-    }
-    expect(global.requestAnimationFrame).not.toHaveBeenCalled();
+    act(() => {
+      composer.props.onFocus();
+    });
+    expect(global.requestAnimationFrame).toHaveBeenCalled();
 
     act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('loads older history from the thread header', async () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        { id: 'assistant-msg-1', role: 'assistant', text: 'Newest assistant message' },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      hasMoreHistory: true,
+      isLoadingMoreHistory: false,
+      historyPaginationError: null,
+      loadMoreHistory: mockLoadMoreHistory,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+    const loadMoreButton = tree.root.findByProps({ testID: 'coach-chat-load-more-button' });
+
+    await act(async () => {
+      await loadMoreButton.props.onPress();
+    });
+
+    expect(mockLoadMoreHistory).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('disables load more while loading and shows pagination errors', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        { id: 'assistant-msg-1', role: 'assistant', text: 'Newest assistant message' },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      hasMoreHistory: true,
+      isLoadingMoreHistory: true,
+      historyPaginationError: 'Unable to load more messages.',
+      loadMoreHistory: mockLoadMoreHistory,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+    const loadMoreButton = tree.root.findByProps({ testID: 'coach-chat-load-more-button' });
+    expect(loadMoreButton.props.disabled).toBe(true);
+    expect(tree.root.findByProps({ testID: 'coach-chat-load-more-error' }).props.children)
+      .toBe('Unable to load more messages.');
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('preserves viewport offset when older history is prepended', async () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        { id: 'assistant-msg-1', role: 'assistant', text: 'Newest assistant message' },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      hasMoreHistory: true,
+      isLoadingMoreHistory: false,
+      historyPaginationError: null,
+      loadMoreHistory: mockLoadMoreHistory,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+    const flatList = tree.root.findByType(FlatList);
+    setListMetrics(tree, {
+      offset: 140,
+      contentHeight: 1000,
+      layoutHeight: 500,
+    });
+    FlatList.prototype.scrollToOffset.mockClear();
+
+    const loadMoreButton = tree.root.findByProps({ testID: 'coach-chat-load-more-button' });
+    await act(async () => {
+      await loadMoreButton.props.onPress();
+    });
+    act(() => {
+      flatList.props.onContentSizeChange?.(0, 1300);
+    });
+
+    expect(FlatList.prototype.scrollToOffset).toHaveBeenCalledWith({
+      offset: 440,
+      animated: false,
+    });
+
+    await act(async () => {
       tree.unmount();
     });
   });

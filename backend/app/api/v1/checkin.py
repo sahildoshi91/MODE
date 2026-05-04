@@ -17,6 +17,7 @@ from app.modules.daily_checkins.schemas import (
     DailyCheckinStatusResponse,
     GenerateCheckinPlanRequest,
     GenerateCheckinPlanResponse,
+    LastTrainingSetupResponse,
     LogGeneratedWorkoutRequest,
     LogGeneratedWorkoutResponse,
     PreviousCheckinResponse,
@@ -199,6 +200,21 @@ async def get_previous_checkin(
     return PreviousCheckinResponse(before_date=target_date, checkin=summary)
 
 
+@router.get("/last-training-setup", response_model=LastTrainingSetupResponse)
+async def get_last_training_setup(
+    exclude_checkin_id: str | None = None,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: DailyCheckinService = Depends(get_daily_checkin_service),
+):
+    _validate_client_write_access(user, trainer_context)
+    client_id = _resolve_client_id(trainer_context)
+    return service.get_last_training_setup(
+        client_id,
+        exclude_checkin_id=exclude_checkin_id,
+    )
+
+
 @router.get("/progress", response_model=CheckinProgressResponse)
 async def get_checkin_progress(
     as_of_date: date | None = None,
@@ -335,7 +351,12 @@ async def generate_checkin_plan(
     )
     request_id = uuid4().hex[:12]
     try:
-        response = service.generate_plan(client_id=client_id, user_id=user.id, request=request)
+        response = service.generate_plan(
+            client_id=client_id,
+            user_id=user.id,
+            request=request,
+            trainer_id=trainer_context.trainer_id,
+        )
         response_payload = (
             response.model_dump()
             if hasattr(response, "model_dump")

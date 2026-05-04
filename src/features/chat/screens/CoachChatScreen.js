@@ -342,6 +342,49 @@ function MemorySavedRow({
   );
 }
 
+function HistoryPaginationControl({
+  hasMoreHistory = false,
+  isLoading = false,
+  error = null,
+  onLoadMore,
+}) {
+  if (!hasMoreHistory && !error) {
+    return null;
+  }
+  return (
+    <View style={styles.historyPagination}>
+      {hasMoreHistory ? (
+        <Pressable
+          testID="coach-chat-load-more-button"
+          accessibilityRole="button"
+          accessibilityLabel={isLoading ? 'Loading more messages' : 'Load more messages'}
+          onPress={onLoadMore}
+          disabled={isLoading}
+          style={({ pressed }) => [
+            styles.loadMoreButton,
+            pressed && !isLoading && styles.loadMoreButtonPressed,
+            isLoading && styles.loadMoreButtonDisabled,
+          ]}
+        >
+          <ModeText variant="caption" tone="accent" style={styles.loadMoreButtonText}>
+            Load more
+          </ModeText>
+        </Pressable>
+      ) : null}
+      {error ? (
+        <ModeText
+          testID="coach-chat-load-more-error"
+          variant="caption"
+          tone="error"
+          style={styles.loadMoreError}
+        >
+          {error}
+        </ModeText>
+      ) : null}
+    </View>
+  );
+}
+
 export default function CoachChatScreen({
   accessToken,
   launchContext,
@@ -381,6 +424,7 @@ export default function CoachChatScreen({
   const [pendingMemorySave, setPendingMemorySave] = useState(null);
   const listRef = useRef(null);
   const pendingScrollRef = useRef(false);
+  const pendingHistoryPrependRef = useRef(null);
   const copyFeedbackTimerRef = useRef(null);
   const scrollTimeoutsRef = useRef([]);
   const seenMemorySuggestionHashesRef = useRef(new Set());
@@ -416,6 +460,10 @@ export default function CoachChatScreen({
     error,
     errorDetails,
     hasRetryableFailure,
+    hasMoreHistory,
+    isLoadingMoreHistory,
+    historyPaginationError,
+    loadMoreHistory,
     sendMessage,
     retryFailedRequest,
   } = useChatConversation(accessToken, launchContext);
@@ -496,6 +544,25 @@ export default function CoachChatScreen({
 
   const queueAutoScroll = useCallback(() => {
     pendingScrollRef.current = true;
+    scrollToLatestWithRetries(true);
+  }, [scrollToLatestWithRetries]);
+
+  const handleLoadMoreHistory = useCallback(async () => {
+    if (!hasMoreHistory || isLoadingMoreHistory) {
+      return;
+    }
+    const metrics = scrollMetricsRef.current;
+    pendingHistoryPrependRef.current = {
+      contentHeight: metrics.contentHeight,
+      offset: metrics.offset,
+    };
+    const didPrepend = await loadMoreHistory();
+    if (!didPrepend) {
+      pendingHistoryPrependRef.current = null;
+    }
+  }, [hasMoreHistory, isLoadingMoreHistory, loadMoreHistory]);
+
+  const handleComposerFocus = useCallback(() => {
     scrollToLatestWithRetries(true);
   }, [scrollToLatestWithRetries]);
 
@@ -1306,13 +1373,21 @@ export default function CoachChatScreen({
               { paddingBottom: chatListPaddingBottom },
             ]}
             ListHeaderComponent={(
-              <HeroOverlayCard
-                eyebrow={sessionIntro.eyebrow}
-                title={sessionIntro.title}
-                body={sessionIntro.body}
-                style={styles.sessionIntroCard}
-                testID="coach-chat-session-intro"
-              />
+              <View>
+                <HeroOverlayCard
+                  eyebrow={sessionIntro.eyebrow}
+                  title={sessionIntro.title}
+                  body={sessionIntro.body}
+                  style={styles.sessionIntroCard}
+                  testID="coach-chat-session-intro"
+                />
+                <HistoryPaginationControl
+                  hasMoreHistory={hasMoreHistory}
+                  isLoading={isLoadingMoreHistory}
+                  error={historyPaginationError}
+                  onLoadMore={handleLoadMoreHistory}
+                />
+              </View>
             )}
             ListFooterComponent={<View style={styles.threadSpacer} />}
             keyboardShouldPersistTaps="handled"
@@ -1329,7 +1404,14 @@ export default function CoachChatScreen({
             }}
             onContentSizeChange={(_width, height) => {
               const wasNearBottom = scrollMetricsRef.current.nearBottom;
+              const pendingHistoryPrepend = pendingHistoryPrependRef.current;
               updateScrollMetrics({ contentHeight: height });
+              if (pendingHistoryPrepend) {
+                pendingHistoryPrependRef.current = null;
+                const heightDelta = Math.max(height - pendingHistoryPrepend.contentHeight, 0);
+                scrollToOffset(pendingHistoryPrepend.offset + heightDelta, false);
+                return;
+              }
               if (pendingScrollRef.current) {
                 pendingScrollRef.current = false;
                 scrollToLatestWithRetries(true);
@@ -1427,6 +1509,7 @@ export default function CoachChatScreen({
                 value={draft}
                 onChangeText={setDraft}
                 onSend={handleSend}
+                onFocus={handleComposerFocus}
                 disabled={shouldDisableComposer}
               />
             </View>
@@ -1584,6 +1667,33 @@ const styles = StyleSheet.create({
   sessionIntroCard: {
     marginBottom: theme.spacing[2],
     ...theme.shadows.medium,
+  },
+  historyPagination: {
+    alignItems: 'center',
+    marginBottom: theme.spacing[2],
+    gap: 6,
+  },
+  loadMoreButton: {
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(182, 213, 255, 0.28)',
+    backgroundColor: 'rgba(13, 24, 40, 0.72)',
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[1],
+    overflow: 'hidden',
+  },
+  loadMoreButtonPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
+  },
+  loadMoreButtonDisabled: {
+    opacity: theme.interaction.disabledOpacity,
+  },
+  loadMoreButtonText: {
+    fontWeight: '700',
+  },
+  loadMoreError: {
+    textAlign: 'center',
   },
   messageItem: {
     width: '100%',

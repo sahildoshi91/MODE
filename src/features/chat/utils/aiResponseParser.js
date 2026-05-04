@@ -27,6 +27,31 @@ const OPTION_TITLE_STOPWORDS = new Set([
   'next',
 ]);
 const EMOJI_REGEX = /[\u{1F1E6}-\u{1F1FF}\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\uFE0F]/gu;
+const TRAILING_FENCED_JSON_REGEX = /(?:^|\n)[ \t]*```(?:json)?[ \t]*\n?([\s\S]*?)\n?[ \t]*```[ \t]*\s*$/i;
+const JSON_LABEL_BEFORE_OBJECT_REGEX = /(?:^|\s)json[ \t]*$/i;
+const INTERNAL_METADATA_KEYS = new Set([
+  'task_type',
+  'response_mode',
+  'route_debug',
+  'provider',
+  'model',
+  'flow',
+  'reason',
+  'risk_score',
+  'complexity_score',
+  'persona_score',
+  'structure_score',
+  'multimodal_score',
+  'retrieval_required',
+  'retrieval_confidence',
+  'needs_trainer_review',
+  'requires_async',
+  'selected_provider',
+  'selected_model',
+  'execution_provider',
+  'execution_model',
+  'fallback_reason',
+]);
 
 export function stripEmojiForDisplay(value) {
   if (typeof value !== 'string' || !value) {
@@ -35,8 +60,94 @@ export function stripEmojiForDisplay(value) {
   return value.replace(EMOJI_REGEX, '');
 }
 
+function parseJsonObjectCandidate(value) {
+  const candidate = String(value || '').trim();
+  if (!candidate.startsWith('{') || !candidate.endsWith('}')) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(candidate);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed
+      : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function containsInternalMetadataKey(value) {
+  if (!value || typeof value !== 'object') {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => containsInternalMetadataKey(item));
+  }
+  return Object.entries(value).some(([key, nestedValue]) => (
+    INTERNAL_METADATA_KEYS.has(String(key || '').trim().toLowerCase())
+      || containsInternalMetadataKey(nestedValue)
+  ));
+}
+
+function findTrailingJsonObject(source) {
+  const trimmedSource = String(source || '').replace(/\s+$/g, '');
+  if (!trimmedSource.endsWith('}')) {
+    return null;
+  }
+
+  let cursor = trimmedSource.lastIndexOf('{');
+  while (cursor >= 0) {
+    const rawJson = trimmedSource.slice(cursor);
+    const parsed = parseJsonObjectCandidate(rawJson);
+    if (parsed) {
+      return {
+        start: cursor,
+        end: trimmedSource.length,
+        parsed,
+      };
+    }
+    cursor = trimmedSource.lastIndexOf('{', cursor - 1);
+  }
+  return null;
+}
+
+function resolveMetadataRemovalStart(source, objectStart) {
+  const beforeObject = String(source || '').slice(0, objectStart);
+  const labelMatch = JSON_LABEL_BEFORE_OBJECT_REGEX.exec(beforeObject);
+  if (!labelMatch) {
+    return objectStart;
+  }
+  return labelMatch.index;
+}
+
+function stripTrailingAssistantMetadata(value) {
+  const source = String(value || '');
+  if (!source.trim()) {
+    return '';
+  }
+
+  const fencedMatch = TRAILING_FENCED_JSON_REGEX.exec(source);
+  if (fencedMatch) {
+    const parsed = parseJsonObjectCandidate(fencedMatch[1]);
+    if (parsed && containsInternalMetadataKey(parsed)) {
+      return source.slice(0, fencedMatch.index).trimEnd();
+    }
+  }
+
+  const trailingJson = findTrailingJsonObject(source);
+  if (!trailingJson || !containsInternalMetadataKey(trailingJson.parsed)) {
+    return source;
+  }
+
+  const removalStart = resolveMetadataRemovalStart(source, trailingJson.start);
+  return source.slice(0, removalStart).trimEnd();
+}
+
+export function sanitizeAssistantDisplayText(value) {
+  return stripEmojiForDisplay(stripTrailingAssistantMetadata(String(value || ''))).trim();
+}
+
 function normalizeRawText(value) {
-  const normalized = stripEmojiForDisplay(String(value || ''))
+  const normalized = sanitizeAssistantDisplayText(value)
     .replace(/\r\n?/g, '\n')
     .replace(/\u00A0/g, ' ')
     .replace(/\n{3,}/g, '\n\n');

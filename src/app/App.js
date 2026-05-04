@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Animated, Easing, Linking, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Animated, AppState, Easing, Linking, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
@@ -48,7 +48,11 @@ import {
 } from '../config/featureFlags';
 import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../features/shared/loading';
 import BreathingTransitionDemoScreen from '../features/shared/loading/BreathingTransitionDemoScreen';
-import { supabase } from '../services/supabaseClient';
+import {
+  clearSupabaseAuthSessionStorage,
+  isInvalidRefreshTokenError,
+  supabase,
+} from '../services/supabaseClient';
 
 const FLOATING_NAV_BOTTOM_OFFSET = NAV_BOTTOM_OFFSET;
 const FLOATING_NAV_PILL_HEIGHT = NAV_PILL_HEIGHT;
@@ -56,6 +60,7 @@ const COACH_CHAT_NAV_GAP = 10;
 const COACH_CHAT_DOCK_CLEARANCE =
   FLOATING_NAV_BOTTOM_OFFSET + FLOATING_NAV_PILL_HEIGHT + COACH_CHAT_NAV_GAP;
 const ASSIGNMENT_STATUS_AUTO_RETRY_DELAY_MS = 900;
+const SESSION_EXPIRED_MESSAGE = 'Your previous sign-in expired. Please sign in again.';
 const VIEWER_ROLE = {
   TRAINER: 'trainer',
   CLIENT: 'client',
@@ -206,6 +211,31 @@ function AppShell() {
   const analyticsQueueRef = useRef([]);
   const isFlushingAnalyticsRef = useRef(false);
 
+  const resetSignedOutState = useCallback(({
+    infoMessage = null,
+    errorMessage = null,
+  } = {}) => {
+    assignmentStatusAutoRetryUsedRef.current = false;
+    analyticsQueueRef.current = [];
+    setSession(null);
+    setBootstrap(null);
+    setBootstrapError(null);
+    setAuthStage('welcome');
+    setAuthEmail('');
+    setAuthPassword('');
+    setAuthUiError(errorMessage);
+    setAuthUiInfo(infoMessage);
+    setIsAuthUiSubmitting(false);
+    setIsSignInMode(true);
+    setActiveTab('home');
+    setProgressRoute('progress');
+    setInsightsOrigin('progress');
+    setChatLaunchContext(null);
+    setCoachOverlayContext(null);
+    setAssignmentStatus(null);
+    setAssignmentStatusError(null);
+  }, []);
+
   const flushAnalyticsQueue = useCallback(async (accessToken) => {
     if (!accessToken || isFlushingAnalyticsRef.current) {
       return;
@@ -266,16 +296,45 @@ function AppShell() {
   useEffect(() => {
     let isMounted = true;
 
-    const loadSession = async () => {
-      const { data } = await supabase.auth.getSession();
+    const handleSessionRestoreError = async (error) => {
+      if (isInvalidRefreshTokenError(error)) {
+        await clearSupabaseAuthSessionStorage();
+        if (!isMounted) {
+          return;
+        }
+        resetSignedOutState({ infoMessage: SESSION_EXPIRED_MESSAGE });
+        return;
+      }
+
       if (!isMounted) {
         return;
       }
-      setSession(data.session || null);
-      if (!data.session) {
-        setAuthStage('welcome');
+      resetSignedOutState({
+        errorMessage: 'Unable to restore your session. Please sign in again.',
+      });
+    };
+
+    const loadSession = async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (error) {
+          await handleSessionRestoreError(error);
+          return;
+        }
+        if (!isMounted) {
+          return;
+        }
+        setSession(data.session || null);
+        if (!data.session) {
+          setAuthStage('welcome');
+        }
+      } catch (error) {
+        await handleSessionRestoreError(error);
+      } finally {
+        if (isMounted) {
+          setIsSessionLoading(false);
+        }
       }
-      setIsSessionLoading(false);
     };
 
     loadSession();
@@ -293,8 +352,7 @@ function AppShell() {
       setChatLaunchContext(null);
       setCoachOverlayContext(null);
       if (!nextSession) {
-        setAuthStage('welcome');
-        setBootstrap(null);
+        resetSignedOutState();
       }
       setIsSessionLoading(false);
     });
@@ -303,7 +361,32 @@ function AppShell() {
       isMounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [resetSignedOutState]);
+
+  useEffect(() => {
+    if (!session?.refresh_token) {
+      supabase.auth.stopAutoRefresh?.();
+      return undefined;
+    }
+
+    const syncAutoRefresh = (nextAppState) => {
+      if (nextAppState === 'active') {
+        supabase.auth.startAutoRefresh?.();
+        return;
+      }
+      supabase.auth.stopAutoRefresh?.();
+    };
+
+    syncAutoRefresh(AppState.currentState);
+
+    const subscription = AppState.addEventListener('change', syncAutoRefresh);
+    return () => {
+      if (typeof subscription?.remove === 'function') {
+        subscription.remove();
+      }
+      supabase.auth.stopAutoRefresh?.();
+    };
+  }, [session?.refresh_token]);
 
   useEffect(() => {
     const handleUrlAuthCallback = async (url) => {
@@ -446,26 +529,15 @@ function AppShell() {
   }, [activeTab, tabOpacity, tabTranslateY]);
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    assignmentStatusAutoRetryUsedRef.current = false;
-    analyticsQueueRef.current = [];
-    setSession(null);
-    setBootstrap(null);
-    setBootstrapError(null);
-    setAuthStage('welcome');
-    setAuthEmail('');
-    setAuthPassword('');
-    setAuthUiError(null);
-    setAuthUiInfo(null);
-    setIsAuthUiSubmitting(false);
-    setIsSignInMode(true);
-    setActiveTab('home');
-    setProgressRoute('progress');
-    setInsightsOrigin('progress');
-    setChatLaunchContext(null);
-    setCoachOverlayContext(null);
-    setAssignmentStatus(null);
-    setAssignmentStatusError(null);
+    try {
+      const { error } = await supabase.auth.signOut();
+      if (error) {
+        await clearSupabaseAuthSessionStorage();
+      }
+    } catch (_error) {
+      await clearSupabaseAuthSessionStorage();
+    }
+    resetSignedOutState();
   };
 
   const handleDeleteAccount = async ({ confirmation }) => {
@@ -482,27 +554,10 @@ function AppShell() {
       await supabase.auth.signOut();
     } catch (_error) {
       // Session may already be invalidated by backend deletion; continue local cleanup.
+      await clearSupabaseAuthSessionStorage();
     }
 
-    assignmentStatusAutoRetryUsedRef.current = false;
-    analyticsQueueRef.current = [];
-    setSession(null);
-    setBootstrap(null);
-    setBootstrapError(null);
-    setAuthStage('welcome');
-    setAuthEmail('');
-    setAuthPassword('');
-    setAuthUiError(null);
-    setAuthUiInfo('Your account has been permanently deleted.');
-    setIsAuthUiSubmitting(false);
-    setIsSignInMode(true);
-    setActiveTab('home');
-    setProgressRoute('progress');
-    setInsightsOrigin('progress');
-    setChatLaunchContext(null);
-    setCoachOverlayContext(null);
-    setAssignmentStatus(null);
-    setAssignmentStatusError(null);
+    resetSignedOutState({ infoMessage: 'Your account has been permanently deleted.' });
   };
 
   const handleOpenChat = (launchContext = null) => {

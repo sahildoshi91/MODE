@@ -26,7 +26,6 @@ jest.mock('../../services/trainerHomeApi', () => ({
 
 jest.mock('../../../trainerCoach/services/trainerCoachApi', () => ({
   approveTrainerCoachQueueItem: jest.fn(),
-  editTrainerCoachQueueItem: jest.fn(),
   getTrainerCoachQueue: jest.fn(),
   rejectTrainerCoachQueueItem: jest.fn(),
 }));
@@ -57,7 +56,6 @@ import {
 } from '../../services/trainerHomeApi';
 import {
   approveTrainerCoachQueueItem,
-  editTrainerCoachQueueItem,
   getTrainerCoachQueue,
   rejectTrainerCoachQueueItem,
 } from '../../../trainerCoach/services/trainerCoachApi';
@@ -345,11 +343,10 @@ describe('TrainerClientsScreen draft review queue', () => {
       daily_count: 3,
       lifetime_count: 10,
       pending_sync_events: [
-        { id: 'evt-1', action_type: 'save_edit', output_id: 'output-1', sync_state: 'pending' },
+        { id: 'evt-1', action_type: 'approve', output_id: 'output-1', sync_state: 'pending' },
       ],
       updated_at: '2026-04-19T09:05:00.000Z',
     });
-    editTrainerCoachQueueItem.mockResolvedValue({ output: { id: 'output-1', review_status: 'open' } });
     approveTrainerCoachQueueItem.mockResolvedValue({ output: { id: 'output-1', review_status: 'approved' } });
     rejectTrainerCoachQueueItem.mockResolvedValue({ output: { id: 'output-2', review_status: 'rejected' } });
   });
@@ -385,23 +382,7 @@ describe('TrainerClientsScreen draft review queue', () => {
     });
   });
 
-  it('save and next increments tracker and advances to the next draft', async () => {
-    getTrainerCoachQueue
-      .mockResolvedValueOnce({
-        count: 2,
-        items: [
-          buildDraftItem({ output_id: 'output-1', headline: 'First Draft' }),
-          buildDraftItem({ output_id: 'output-2', headline: 'Second Draft', summary: 'Second summary' }),
-        ],
-      })
-      .mockResolvedValueOnce({
-        count: 2,
-        items: [
-          buildDraftItem({ output_id: 'output-1', headline: 'First Draft' }),
-          buildDraftItem({ output_id: 'output-2', headline: 'Second Draft', summary: 'Second summary' }),
-        ],
-      });
-
+  it('renders only equal reject and approve final actions', async () => {
     let tree;
     await act(async () => {
       tree = renderer.create(
@@ -413,32 +394,18 @@ describe('TrainerClientsScreen draft review queue', () => {
     });
     await flushEffects();
 
-    const saveButton = tree.root.findByProps({ testID: 'trainer-clients-draft-review-save-next' });
-    await act(async () => {
-      await saveButton.props.onPress();
-    });
-    await flushEffects();
+    const rejectButton = tree.root.findByProps({ testID: 'trainer-clients-draft-review-reject' });
+    const approveButton = tree.root.findByProps({ testID: 'trainer-clients-draft-review-approve' });
 
-    expect(editTrainerCoachQueueItem).toHaveBeenCalledWith(expect.objectContaining({
-      accessToken: 'trainer-token',
-      outputId: 'output-1',
-    }));
-    expect(recordDraftReviewAction).toHaveBeenCalledWith(
-      'trainer-1',
-      expect.objectContaining({
-        actionType: 'save_edit',
-        outputId: 'output-1',
-      }),
-    );
-
-    const activeTitle = tree.root.findByProps({ testID: 'trainer-clients-draft-review-active-title' });
-    expect(readNodeText(activeTitle)).toContain('Second Draft');
-
-    const dailyCount = tree.root.findByProps({ testID: 'trainer-clients-draft-review-daily-count' });
-    expect(readNodeText(dailyCount)).toContain('2 / 2 today');
-
-    const progressBar = tree.root.findByProps({ testID: 'trainer-clients-draft-review-progress' });
-    expect(progressBar.props.progress).toBe(1);
+    expect(rejectButton.props.title).toBe('Reject');
+    expect(approveButton.props.title).toBe('Approve');
+    expect(rejectButton.props.style).toEqual(approveButton.props.style);
+    expect(rejectButton.props.style).toMatchObject({ flex: 1 });
+    expect(tree.root.findAllByProps({ testID: 'trainer-clients-draft-review-save-next' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'trainer-clients-draft-review-approve-next' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'trainer-clients-draft-review-reject-next' })).toHaveLength(0);
+    expect(JSON.stringify(tree.toJSON())).not.toContain('Refresh Queue');
+    expect(JSON.stringify(tree.toJSON())).not.toContain('& Next');
 
     await act(async () => {
       tree.unmount();
@@ -492,7 +459,7 @@ describe('TrainerClientsScreen draft review queue', () => {
     });
     await flushEffects();
 
-    const approveButton = tree.root.findByProps({ testID: 'trainer-clients-draft-review-approve-next' });
+    const approveButton = tree.root.findByProps({ testID: 'trainer-clients-draft-review-approve' });
     await act(async () => {
       await approveButton.props.onPress();
     });
@@ -504,7 +471,7 @@ describe('TrainerClientsScreen draft review queue', () => {
       idempotencyKey: expect.any(String),
     }));
 
-    const rejectButton = tree.root.findByProps({ testID: 'trainer-clients-draft-review-reject-next' });
+    const rejectButton = tree.root.findByProps({ testID: 'trainer-clients-draft-review-reject' });
     await act(async () => {
       await rejectButton.props.onPress();
     });
