@@ -12,7 +12,6 @@
     "ios": {
       "supportsTablet": true,
       "associatedDomains": [
-        "applinks:mode.app",
         "applinks:mode.app"
       ],
       "infoPlist": {
