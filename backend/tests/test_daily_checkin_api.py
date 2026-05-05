@@ -716,6 +716,28 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertEqual(result.yesterday_checkin_summary, None)
         self.assertIsNotNone(result.nutrition_tip)
 
+    def test_build_result_uses_user_why_for_motivational_copy(self):
+        class FakeProfileService:
+            def get_or_create_profile(self, _client_id):
+                return {
+                    "primary_goal": "strength",
+                    "user_why": "Dance until I am 100 and never tell my kids I am tired.",
+                }
+
+        class FakeRepository:
+            def get_previous_checkin(self, _client_id, _parsed_date):
+                return None
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=FakeProfileService())
+
+        result = service._build_result(self._build_record())
+
+        self.assertEqual(result.primary_goal, "strength")
+        self.assertIn("Remember why:", result.mindset.cue)
+        self.assertIn("Dance until I am 100", result.mindset.cue)
+        self.assertIn("Dance until I am 100", result.nutrition_tip)
+        self.assertIn("Dance until I am 100", result.motivational_quote)
+
     def test_build_result_keeps_core_fields_when_enrichment_fails(self):
         class FakeProfileService:
             def get_or_create_profile(self, _client_id):
@@ -1023,7 +1045,12 @@ class DailyCheckinServiceTests(unittest.TestCase):
                 "assigned_mode": "BUILD",
                 "total_score": 18,
             },
-            profile={"primary_goal": "strength", "experience_level": "intermediate", "equipment_access": "gym"},
+            profile={
+                "primary_goal": "strength",
+                "user_why": "Never be too tired to play with my kid.",
+                "experience_level": "intermediate",
+                "equipment_access": "gym",
+            },
             request=GenerateCheckinPlanRequest(
                 checkin_id="checkin-1",
                 plan_type=PlanType.TRAINING,
@@ -1037,6 +1064,9 @@ class DailyCheckinServiceTests(unittest.TestCase):
 
         self.assertIn("warmup descriptions", prompt[0]["content"].lower())
         self.assertIn("selected environment and exact time available", prompt[0]["content"].lower())
+        self.assertIn("Never be too tired to play with my kid.", prompt[1]["content"])
+        self.assertIn("motivation_baseline", prompt[1]["content"])
+        self.assertIn("baseline reason for training", prompt[0]["content"].lower())
         self.assertIn("do not use emoji", prompt[0]["content"].lower())
         self.assertIn("make the warmup specific and descriptive", prompt[1]["content"].lower())
         self.assertIn("emoji-free", prompt[1]["content"].lower())
@@ -1061,6 +1091,8 @@ class DailyCheckinServiceTests(unittest.TestCase):
 
         self.assertIn("meal-focused sentence", prompt[0]["content"].lower())
         self.assertIn("fuel, protein, hydration", prompt[0]["content"].lower())
+        self.assertIn("baseline reason for nutrition", prompt[0]["content"].lower())
+        self.assertIn("motivation_baseline", prompt[1]["content"])
         self.assertIn("do not refer to workout load", prompt[0]["content"].lower())
         self.assertIn("rather than workout mechanics", prompt[1]["content"].lower())
 
@@ -1357,6 +1389,34 @@ class DailyCheckinServiceTests(unittest.TestCase):
 
         self.assertEqual(knee_fingerprint, repeated_fingerprint)
         self.assertNotEqual(knee_fingerprint, shoulder_fingerprint)
+
+    def test_training_request_fingerprint_changes_when_motivation_baseline_changes(self):
+        service = DailyCheckinService(repository=None)
+        request = GenerateCheckinPlanRequest(
+            checkin_id="checkin-1",
+            plan_type=PlanType.TRAINING,
+            environment=Environment.HOME_GYM,
+            time_available=30,
+        )
+
+        kid_fingerprint = service._build_request_fingerprint(
+            request,
+            client_memory=[],
+            motivation_baseline="Never be too tired to play with my kid.",
+        )
+        repeated_fingerprint = service._build_request_fingerprint(
+            request,
+            client_memory=[],
+            motivation_baseline="Never be too tired to play with my kid.",
+        )
+        dance_fingerprint = service._build_request_fingerprint(
+            request,
+            client_memory=[],
+            motivation_baseline="Dance until I am 100.",
+        )
+
+        self.assertEqual(kid_fingerprint, repeated_fingerprint)
+        self.assertNotEqual(kid_fingerprint, dance_fingerprint)
 
     def test_generated_nutrition_plan_uses_fallback_when_vegetarian_memory_is_violated(self):
         class GeneratePlanRepository:

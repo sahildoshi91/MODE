@@ -383,7 +383,7 @@ def get_conversation_service(
 def get_chat_session_repository(
     supabase: Client = Depends(get_request_scoped_supabase_client),
 ) -> ChatSessionRepository:
-    return ChatSessionRepository(supabase)
+    return ChatSessionRepository(supabase, admin_supabase=get_supabase_admin_client())
 
 
 def get_chat_session_service(

@@ -1,5 +1,34 @@
 import { buildApiNetworkError } from '../../../services/apiNetworkError';
+import {
+  probeBackendConnectivity,
+  selectRecommendedApiBaseUrl,
+} from '../../../services/backendConnectivityProbe';
 import { fetchWithApiFallback } from '../../../services/apiRequest';
+
+const ONBOARDING_BOOTSTRAP_PATH = '/api/v1/onboarding/bootstrap';
+
+function shouldAttachConnectivityProbe(path) {
+  return path === ONBOARDING_BOOTSTRAP_PATH;
+}
+
+async function attachConnectivityProbe(error, path) {
+  if (!shouldAttachConnectivityProbe(path)) {
+    return;
+  }
+  try {
+    const connectivityProbe = await probeBackendConnectivity({
+      endpointPath: '/healthz',
+      timeoutMs: 1800,
+    });
+    const recommendedApiBaseUrl = selectRecommendedApiBaseUrl(connectivityProbe);
+    error.connectivity_probe = connectivityProbe;
+    error.connectivityProbe = connectivityProbe;
+    error.recommended_api_base_url = recommendedApiBaseUrl;
+    error.recommendedApiBaseUrl = recommendedApiBaseUrl;
+  } catch (_probeError) {
+    // Keep original bootstrap network error behavior if the probe cannot run.
+  }
+}
 
 async function parseError(response) {
   try {
@@ -35,7 +64,13 @@ async function requestOnboarding(path, { accessToken, method = 'GET', body, time
       timeoutMs,
     }));
   } catch (error) {
-    throw buildApiNetworkError(error, path);
+    const networkError = buildApiNetworkError(error, path);
+    networkError.request_path = path;
+    networkError.attempted_base_urls = Array.isArray(networkError.attempted_base_urls)
+      ? networkError.attempted_base_urls
+      : (Array.isArray(error?.attemptedBaseUrls) ? error.attemptedBaseUrls : []);
+    await attachConnectivityProbe(networkError, path);
+    throw networkError;
   }
 
   if (!response.ok) {
@@ -54,7 +89,7 @@ async function requestOnboarding(path, { accessToken, method = 'GET', body, time
 }
 
 export function getOnboardingBootstrap({ accessToken }) {
-  return requestOnboarding('/api/v1/onboarding/bootstrap', { accessToken });
+  return requestOnboarding(ONBOARDING_BOOTSTRAP_PATH, { accessToken });
 }
 
 export function setOnboardingRole({ accessToken, role }) {

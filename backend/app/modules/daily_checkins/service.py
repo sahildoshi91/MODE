@@ -27,6 +27,7 @@ from app.modules.daily_checkins.schemas import (
     TrainingRecommendation,
     YesterdayCheckinSummary,
 )
+from app.modules.motivation import build_mindset_why_cue, resolve_motivation_baseline
 from app.ai.client import GPT_5_4_MINI_MODEL, OpenAIClient
 
 
@@ -419,8 +420,13 @@ class DailyCheckinService:
             trainer_id=trainer_id,
             client_id=client_id,
         )
+        motivation_baseline = resolve_motivation_baseline(profile)
 
-        request_fingerprint = self._build_request_fingerprint(request, client_memory=client_memory)
+        request_fingerprint = self._build_request_fingerprint(
+            request,
+            client_memory=client_memory,
+            motivation_baseline=motivation_baseline,
+        )
         latest_variant = None
         if hasattr(self.repository, "get_latest_generated_plan_variant"):
             latest_variant = self.repository.get_latest_generated_plan_variant(
@@ -586,13 +592,16 @@ class DailyCheckinService:
         client_id = record.get("client_id")
         inputs = DailyCheckinInputs(**record["inputs"])
         lowest_dimension = self._get_lowest_dimension(inputs)
+        profile = {}
         primary_goal = None
+        motivation_baseline = "general fitness"
         yesterday_record = None
 
         if self.profile_service and client_id:
             try:
                 profile = self.profile_service.get_or_create_profile(client_id) or {}
                 primary_goal = profile.get("primary_goal")
+                motivation_baseline = resolve_motivation_baseline(profile)
             except Exception as exc:
                 logger.warning(
                     "Daily check-in enrichment skipped profile lookup for client_id=%s: %s",
@@ -619,12 +628,12 @@ class DailyCheckinService:
             inputs=inputs,
             training=bundle["training"],
             nutrition=bundle["nutrition"],
-            mindset=bundle["mindset"],
+            mindset=self._build_mindset_recommendation(mode, profile),
             time_to_complete=record.get("time_to_complete"),
             completion_timestamp=parsed_completion_timestamp,
             mode_tagline=bundle["tagline"],
-            nutrition_tip=self._build_nutrition_tip(lowest_dimension, primary_goal),
-            motivational_quote=self._build_motivational_quote(mode, primary_goal),
+            nutrition_tip=self._build_nutrition_tip(lowest_dimension, motivation_baseline),
+            motivational_quote=self._build_motivational_quote(mode, motivation_baseline),
             primary_goal=primary_goal,
             yesterday_checkin_summary=self._build_yesterday_summary(yesterday_record),
         )
@@ -709,17 +718,30 @@ class DailyCheckinService:
         values = inputs.model_dump()
         return min(values, key=lambda key: values[key])
 
-    def _build_nutrition_tip(self, dimension: str, primary_goal: str | None) -> str:
-        goal_text = GOAL_LABELS.get(primary_goal or "", primary_goal or "your goal")
+    def _build_nutrition_tip(self, dimension: str, motivation_baseline: str | None) -> str:
+        goal_text = self._motivation_text(motivation_baseline)
         base_tip = LOWEST_DIMENSION_TIPS.get(dimension, LOWEST_DIMENSION_TIPS["nutrition"])
         return f"{base_tip} Keep it aligned with {goal_text}."
 
-    def _build_motivational_quote(self, mode: str, primary_goal: str | None) -> str:
+    def _build_motivational_quote(self, mode: str, motivation_baseline: str | None) -> str:
         quote = MODE_BUNDLES[mode]["quote"]
-        goal_text = GOAL_LABELS.get(primary_goal or "", primary_goal)
+        goal_text = self._motivation_text(motivation_baseline)
         if goal_text:
-            return f"{quote} Every smart choice still moves {goal_text} forward."
+            return f"{quote} Every smart choice still serves {goal_text}."
         return quote
+
+    def _build_mindset_recommendation(self, mode: str, profile: dict[str, Any] | None) -> MindsetRecommendation:
+        bundle_cue = MODE_BUNDLES[mode]["mindset"].cue
+        payload = profile if isinstance(profile, dict) else {}
+        return MindsetRecommendation(
+            cue=build_mindset_why_cue(bundle_cue, payload.get("user_why")),
+        )
+
+    def _motivation_text(self, value: str | None) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "your goal"
+        return GOAL_LABELS.get(text, text)
 
     def _load_ai_usable_client_memory(
         self,
@@ -753,7 +775,8 @@ class DailyCheckinService:
             if bool(value.get("is_archived")):
                 continue
             visibility = str(value.get("visibility") or "internal_only").strip().lower()
-            if visibility != "ai_usable":
+            ai_usable = bool(value.get("ai_usable")) if isinstance(value.get("ai_usable"), bool) else visibility == "ai_usable"
+            if not ai_usable:
                 continue
             memory_key = str(row.get("memory_key") or "").strip()
             text = self._normalize_memory_text(value.get("text"))
@@ -1094,7 +1117,11 @@ class DailyCheckinService:
                     client_memory=client_memory,
                 )
             if not parsed.coachNote.strip():
-                parsed.coachNote = self._build_adaptive_note(mode, last_workout)
+                parsed.coachNote = self._build_adaptive_note(
+                    mode,
+                    last_workout,
+                    motivation_baseline=resolve_motivation_baseline(profile),
+                )
         elif request.plan_type == PlanType.NUTRITION:
             constraints = self._derive_nutrition_constraints(client_memory)
             violation = self._nutrition_plan_constraint_violation(parsed, constraints)
@@ -1114,7 +1141,12 @@ class DailyCheckinService:
                     client_memory=client_memory,
                 )
             if not parsed.coachNote.strip() or self._looks_like_training_note(parsed.coachNote):
-                parsed.coachNote = self._build_nutrition_adaptive_note(mode, request, inputs)
+                parsed.coachNote = self._build_nutrition_adaptive_note(
+                    mode,
+                    request,
+                    inputs,
+                    motivation_baseline=resolve_motivation_baseline(profile),
+                )
 
         return {"structured_model": parsed}
 
@@ -1131,11 +1163,16 @@ class DailyCheckinService:
         client_memory: list[dict[str, Any]] | None = None,
     ):
         mode = self._normalize_mode(checkin["assigned_mode"])
-        why = profile.get("primary_goal") or "general fitness"
+        motivation_baseline = resolve_motivation_baseline(profile)
         adaptive_note = (
-            self._build_nutrition_adaptive_note(mode, request, inputs)
+            self._build_nutrition_adaptive_note(
+                mode,
+                request,
+                inputs,
+                motivation_baseline=motivation_baseline,
+            )
             if request.plan_type == PlanType.NUTRITION
-            else self._build_adaptive_note(mode, last_workout)
+            else self._build_adaptive_note(mode, last_workout, motivation_baseline=motivation_baseline)
         )
         schema_text = TRAINING_SCHEMA_TEXT if request.plan_type == PlanType.TRAINING else NUTRITION_SCHEMA_TEXT
         prompt_rules = ""
@@ -1143,6 +1180,7 @@ class DailyCheckinService:
             prompt_rules = (
                 " Build a workout that treats the selected environment and exact time available as hard constraints. "
                 "Saved client memory is authoritative: injuries, pain areas, movement restrictions, exercise dislikes, and equipment limits are hard constraints. "
+                "Use motivation_baseline as the client's baseline reason for training and motivational framing. "
                 "Avoid exercises and movement patterns that conflict with client_memory.training_constraints. "
                 "Use warmup descriptions that explain the movement focus and why that block prepares the athlete for the main work. "
                 "Make the exercise selection feel specific to the day's readiness, not like a generic template. "
@@ -1153,6 +1191,7 @@ class DailyCheckinService:
             prompt_rules = (
                 " Build nutrition coachNote as a readable, meal-focused sentence tied to today's readiness and nutrition context. "
                 "Mention fuel, protein, hydration, meal timing, or simple food choices. "
+                "Use motivation_baseline as the client's baseline reason for nutrition and motivational framing. "
                 "Saved client memory is authoritative: diet type, allergies, dislikes, and saved preferences are hard constraints. "
                 "If client memory says vegetarian, every meal and food must be vegetarian. If it says vegan, use plant-based foods only. "
                 "Do not refer to workout load, session intensity, sets, reps, or progression in nutrition coachNote."
@@ -1167,7 +1206,9 @@ class DailyCheckinService:
             "mode": mode,
             "score": checkin["total_score"],
             "inputs": inputs.model_dump(),
-            "why": why,
+            "why": motivation_baseline,
+            "motivation_baseline": motivation_baseline,
+            "user_why": profile.get("user_why"),
             "experience_level": profile.get("experience_level"),
             "equipment_access": profile.get("equipment_access"),
             "preferred_session_length": profile.get("preferred_session_length"),
@@ -1211,7 +1252,7 @@ class DailyCheckinService:
                 "role": "system",
                 "content": (
                     f"You are Coach {MODE_BUNDLES[mode]['coach']} writing a {request.plan_type.value} plan for MODE. "
-                    "Respond with strict JSON only, no markdown fences, and ensure coachNote is personalized."
+                    "Respond with strict JSON only, no markdown fences, and ensure coachNote is personalized around motivation_baseline."
                     f"{prompt_rules}{delta_instruction}"
                 ),
             },
@@ -1220,6 +1261,7 @@ class DailyCheckinService:
                 "content": (
                     f"Build a {request.plan_type.value} plan using this context:\n"
                     f"{json.dumps(request_details)}\n"
+                    "Treat motivation_baseline as the client's baseline why and use it to drive motivation factors without over-repeating it.\n"
                     "If this is a training plan, make the warmup specific and descriptive, make the main work match the selected environment and time cap, keep every field emoji-free, and apply client_memory.ai_usable plus training_constraints as hard constraints for injuries, pain areas, movement restrictions, exercise dislikes, and equipment limits.\n"
                     "If this is a nutrition plan, keep coachNote practical, human-readable, and focused on meals, fuel, protein, and hydration rather than workout mechanics. Apply client_memory.ai_usable as hard constraints and never include foods that violate saved dietary preferences, allergies, dislikes, or restrictions.\n"
                     f"Return JSON matching exactly this schema:\n{schema_text}"
@@ -1253,6 +1295,7 @@ class DailyCheckinService:
         request: GenerateCheckinPlanRequest,
         *,
         client_memory: list[dict[str, Any]] | None = None,
+        motivation_baseline: str | None = None,
     ) -> str:
         payload = {
             "checkin_id": request.checkin_id,
@@ -1264,6 +1307,7 @@ class DailyCheckinService:
         }
         if request.plan_type in {PlanType.TRAINING, PlanType.NUTRITION}:
             payload["client_memory_hash"] = self._build_client_memory_hash(client_memory)
+            payload["motivation_baseline"] = str(motivation_baseline or "").strip() or None
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
     def _build_generate_plan_response(
@@ -1376,6 +1420,7 @@ class DailyCheckinService:
         last_workout: dict | None,
         client_memory: list[dict[str, Any]] | None = None,
     ):
+        motivation_baseline = resolve_motivation_baseline(profile)
         if plan_type == PlanType.TRAINING:
             duration = request.time_available or profile.get("preferred_session_length") or 30
             difficulty = "advanced" if inputs.motivation >= 4 and inputs.sleep >= 4 else "intermediate"
@@ -1403,7 +1448,11 @@ class DailyCheckinService:
                 warmup=warmup,
                 exercises=exercises,
                 cooldown=cooldown,
-                coachNote=self._build_adaptive_note(mode, last_workout),
+                coachNote=self._build_adaptive_note(
+                    mode,
+                    last_workout,
+                    motivation_baseline=motivation_baseline,
+                ),
             )
 
         meals = self._build_fallback_nutrition_meals(request, client_memory)
@@ -1412,7 +1461,12 @@ class DailyCheckinService:
             totalCalories=sum(meal["totalCalories"] for meal in meals),
             totalProtein=sum(meal["totalProtein"] for meal in meals),
             meals=meals,
-            coachNote=self._build_nutrition_adaptive_note(mode, request, inputs),
+            coachNote=self._build_nutrition_adaptive_note(
+                mode,
+                request,
+                inputs,
+                motivation_baseline=motivation_baseline,
+            ),
         )
 
     def _build_fallback_nutrition_meals(
@@ -1750,7 +1804,20 @@ class DailyCheckinService:
             {"name": "Breathing reset", "duration": "2 min", "description": "Finish with slow exhales and relaxed shoulders so your body shifts out of go-mode cleanly."},
         ]
 
-    def _build_adaptive_note(self, mode: str, last_workout: dict | None) -> str:
+    def _motivation_clause(self, motivation_baseline: str | None) -> str:
+        text = self._motivation_text(motivation_baseline).rstrip(".")
+        if not text:
+            return ""
+        return f" Keep it connected to {text}."
+
+    def _build_adaptive_note(
+        self,
+        mode: str,
+        last_workout: dict | None,
+        *,
+        motivation_baseline: str | None = None,
+    ) -> str:
+        motivation_clause = self._motivation_clause(motivation_baseline)
         feel_rating = last_workout.get("feel_rating") if isinstance(last_workout, dict) else None
         if isinstance(feel_rating, int) and 1 <= feel_rating <= 5:
             feel_labels = {
@@ -1764,38 +1831,51 @@ class DailyCheckinService:
             if feel_rating <= 2:
                 return (
                     f"Your last session felt {feel_label}, so I've dialed intensity down today to protect recovery while "
-                    "still keeping momentum."
+                    f"still keeping momentum.{motivation_clause}"
                 )
             if feel_rating == 3:
                 return (
                     f"Your last session felt {feel_label}, so today's plan keeps the load balanced and repeatable without "
-                    "spiking fatigue."
+                    f"spiking fatigue.{motivation_clause}"
                 )
             return (
                 f"Your last session felt {feel_label}, so today's plan nudges intensity up with controlled progression."
+                f"{motivation_clause}"
             )
 
         last_title = last_workout.get("title") if isinstance(last_workout, dict) else None
         if last_title:
-            return f"Your last logged session was '{last_title}', so today's {mode.lower()} plan keeps the effort targeted and sustainable."
-        return f"Coach {MODE_BUNDLES[mode]['coach']} tuned this {mode.lower()} plan to match today's readiness instead of forcing a generic template."
+            return (
+                f"Your last logged session was '{last_title}', so today's {mode.lower()} plan keeps the effort "
+                f"targeted and sustainable.{motivation_clause}"
+            )
+        return (
+            f"Coach {MODE_BUNDLES[mode]['coach']} tuned this {mode.lower()} plan to match today's readiness "
+            f"instead of forcing a generic template.{motivation_clause}"
+        )
 
     def _build_nutrition_adaptive_note(
         self,
         mode: str,
         request: GenerateCheckinPlanRequest | None = None,
         inputs: DailyCheckinInputs | None = None,
+        *,
+        motivation_baseline: str | None = None,
     ) -> str:
+        motivation_clause = self._motivation_clause(motivation_baseline)
         note = request.nutrition_day_note.strip() if request and request.nutrition_day_note else ""
         if note:
             return (
                 f"Use today's note as the anchor: {note}. Keep meals protein-forward, hydrated, "
-                "and easy to follow from the first meal through dinner."
+                f"and easy to follow from the first meal through dinner.{motivation_clause}"
             )
 
         nutrition_score = inputs.nutrition if inputs else None
         if isinstance(nutrition_score, int) and nutrition_score <= 2:
-            return "Keep food simple today: protein at each meal, steady fluids, and easy carbs that help energy feel more predictable."
+            return (
+                "Keep food simple today: protein at each meal, steady fluids, and easy carbs that help energy "
+                f"feel more predictable.{motivation_clause}"
+            )
 
         mode_notes = {
             "BEAST": "Use this as a high-readiness fuel day: get protein in early, place carbs near training, and keep fluids steady.",
@@ -1803,7 +1883,7 @@ class DailyCheckinService:
             "RECOVER": "Keep recovery easy to execute today: steady protein, simple whole-food meals, and fluids before extra caffeine.",
             "REST": "Treat this as recovery support: protein, colorful plants, and fluids without overcomplicating the day.",
         }
-        return mode_notes.get(mode, mode_notes["RECOVER"])
+        return f"{mode_notes.get(mode, mode_notes['RECOVER'])}{motivation_clause}"
 
     @staticmethod
     def _looks_like_training_note(value: str) -> bool:

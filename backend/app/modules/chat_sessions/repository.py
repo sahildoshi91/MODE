@@ -10,8 +10,9 @@ class ChatSessionRepository:
     _SESSIONS_TABLE = "chat_sessions"
     _MESSAGES_TABLE = "chat_messages"
 
-    def __init__(self, supabase: Client):
+    def __init__(self, supabase: Client, admin_supabase: Client | None = None):
         self.supabase = supabase
+        self.admin_supabase = admin_supabase
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         response = (
@@ -210,6 +211,29 @@ class ChatSessionRepository:
             .execute()
         )
         return response.data[0] if response.data else None
+
+    def update_opening_summary_message(
+        self,
+        *,
+        session_id: str,
+        content: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        client = self.admin_supabase or self.supabase
+        response = (
+            client
+            .table(self._MESSAGES_TABLE)
+            .update({
+                "content": content,
+                "metadata": metadata,
+            })
+            .eq("session_id", session_id)
+            .contains("metadata", {"auto_generated_opening_summary": True})
+            .execute()
+        )
+        if response.data:
+            return response.data[0]
+        return self.get_opening_summary_message(session_id)
 
     def append_message(
         self,

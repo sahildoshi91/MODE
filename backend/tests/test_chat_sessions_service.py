@@ -29,6 +29,7 @@ class FakeChatSessionRepository:
         self.sessions = []
         self.messages = {}
         self.today_checkin = {
+            "id": "checkin-1",
             "date": TODAY.isoformat(),
             "total_score": 20,
             "assigned_mode": "BUILD",
@@ -41,6 +42,10 @@ class FakeChatSessionRepository:
                 "client_name": "Taylor",
                 "assigned_trainer_id": TRAINER_ID,
             },
+        }
+        self.profile = {
+            "primary_goal": "lean out and feel more in control",
+            "user_why": None,
         }
 
     def get_session(self, session_id):
@@ -120,6 +125,14 @@ class FakeChatSessionRepository:
             None,
         )
 
+    def update_opening_summary_message(self, *, session_id, content, metadata):
+        row = self.get_opening_summary_message(session_id)
+        if not row:
+            return None
+        row["content"] = content
+        row["metadata"] = metadata or {}
+        return row
+
     def append_message(self, *, session_id, sender_type, content, metadata=None):
         rows = self.messages.setdefault(session_id, [])
         row = {
@@ -149,7 +162,7 @@ class FakeChatSessionRepository:
 
     def get_profile(self, client_id):
         del client_id
-        return {"primary_goal": "lean out and feel more in control"}
+        return dict(self.profile)
 
     def get_checkin_by_date(self, client_id, session_date):
         del client_id, session_date
@@ -236,7 +249,7 @@ class ChatSessionServiceTests(unittest.TestCase):
         self.assertEqual(opening["message_index"], 0)
         self.assertTrue(opening["metadata"]["auto_generated_opening_summary"])
 
-    def test_client_opening_summary_starts_with_name_and_current_mode(self):
+    def test_client_opening_summary_is_compact_mode_brief(self):
         response = self.service.get_or_create_today_session(
             user_id=USER_ID,
             trainer_context=client_context(),
@@ -244,8 +257,59 @@ class ChatSessionServiceTests(unittest.TestCase):
         )
 
         opening = response.messages[0].content
-        self.assertTrue(opening.startswith("Hey Taylor, your current MODE is BUILD."))
+        self.assertLessEqual(len(opening.split()), 75)
+        for label in ["BUILD MODE", "\nTraining:", "\nNutrition:", "\nMindset:"]:
+            self.assertIn(label, opening)
+        self.assertNotIn("Build Today:", opening)
+        self.assertIn("What do you want to achieve today?", opening)
+        self.assertIn("20/25", opening)
+        self.assertIn("30-45 min", opening)
+        self.assertIn("Build me a training routine", response.suggested_actions)
+        self.assertIn("Build me a nutrition plan", response.suggested_actions)
         self.assertEqual(response.session.client_name, "Taylor")
+
+    def test_client_opening_summary_mindset_names_user_why(self):
+        self.repository.profile["user_why"] = "Dance until I am 100 and never tell my kids I am tired."
+
+        response = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY),
+        )
+
+        opening = response.messages[0].content
+        self.assertLessEqual(len(opening.split()), 75)
+        self.assertIn("Mindset: Build momentum with disciplined reps.", opening)
+        self.assertIn("Remember why: Dance until I am 100", opening)
+        self.assertTrue(response.messages[0].metadata["has_user_why"])
+
+    def test_client_mode_brief_word_cap_applies_to_all_modes(self):
+        for mode in ["BEAST", "BUILD", "RECOVER", "REST"]:
+            with self.subTest(mode=mode):
+                text = self.service._build_client_mode_brief({
+                    "id": f"checkin-{mode.lower()}",
+                    "date": TODAY.isoformat(),
+                    "total_score": 20,
+                    "assigned_mode": mode,
+                    "inputs": {"sleep": 4, "stress": 3, "soreness": 4, "nutrition": 3, "motivation": 5},
+                })
+                self.assertLessEqual(len(text.split()), 75)
+                for label in [f"{mode} MODE", "\nTraining:", "\nNutrition:", "\nMindset:"]:
+                    self.assertIn(label, text)
+                self.assertNotIn("Build Today:", text)
+                self.assertIn("What do you want to achieve today?", text)
+
+    def test_client_mode_brief_normalizes_legacy_color_modes(self):
+        text = self.service._build_client_mode_brief({
+            "id": "checkin-yellow",
+            "date": TODAY.isoformat(),
+            "total_score": 20,
+            "assigned_mode": "YELLOW",
+            "inputs": {"sleep": 4, "stress": 3, "soreness": 4, "nutrition": 3, "motivation": 5},
+        })
+
+        self.assertIn("BUILD MODE", text)
+        self.assertNotIn("YELLOW", text)
 
     def test_client_opening_summary_does_not_fake_mode_without_checkin(self):
         self.repository.today_checkin = None
@@ -259,6 +323,38 @@ class ChatSessionServiceTests(unittest.TestCase):
         opening = response.messages[0].content
         self.assertTrue(opening.startswith("Hey Taylor, I do not have today's MODE yet."))
         self.assertNotIn("current MODE is BUILD", opening)
+        self.assertNotIn("Build me a training routine", response.suggested_actions)
+        self.assertNotIn("Build me a nutrition plan", response.suggested_actions)
+
+    def test_client_opening_summary_refreshes_after_checkin_completion(self):
+        self.repository.today_checkin = None
+        request = ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY)
+
+        first = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=request,
+        )
+        self.assertIn("do not have today's MODE yet", first.messages[0].content)
+
+        self.repository.today_checkin = {
+            "id": "checkin-2",
+            "date": TODAY.isoformat(),
+            "total_score": 20,
+            "assigned_mode": "BUILD",
+            "inputs": {"sleep": 4, "stress": 3, "soreness": 4, "nutrition": 3, "motivation": 5},
+        }
+        second = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=request,
+        )
+
+        self.assertEqual(first.session.id, second.session.id)
+        self.assertEqual(len(self.repository.messages[first.session.id]), 1)
+        self.assertIn("BUILD MODE", second.messages[0].content)
+        self.assertEqual(second.messages[0].metadata["summary_source"], "client_daily_mode_brief_v1")
+        self.assertEqual(second.messages[0].metadata["checkin_id"], "checkin-2")
 
     def test_new_day_creates_new_session_and_archives_previous(self):
         first_date = date(2026, 5, 3)

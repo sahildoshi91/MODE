@@ -1,5 +1,5 @@
 import React, { useCallback, useRef } from 'react';
-import { FlatList, StyleSheet, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { ModeButton, ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
@@ -7,6 +7,64 @@ import { useOpeningSummary } from '../hooks/useOpeningSummary';
 import ChatMessageBubble from './ChatMessageBubble';
 import StreamingAIMessage from './StreamingAIMessage';
 import SuggestedActionChips from './SuggestedActionChips';
+
+function resolveMemorySaveStatus(message, memorySaveStatuses) {
+  if (!message || message.role !== 'user' || !memorySaveStatuses) {
+    return null;
+  }
+  const metadata = message.metadata && typeof message.metadata === 'object'
+    ? message.metadata
+    : {};
+  return memorySaveStatuses[message.id]
+    || memorySaveStatuses[metadata.client_message_id]
+    || memorySaveStatuses[metadata.idempotency_key]
+    || null;
+}
+
+function MemorySaveStatusRow({ status, onRetry }) {
+  if (!status) {
+    return null;
+  }
+  const isSaving = status.status === 'saving';
+  const isError = status.status === 'error';
+  const label = isSaving
+    ? 'Saving to memory...'
+    : (isError ? "Couldn't save memory" : 'Saved to what your coach knows');
+
+  return (
+    <View
+      testID="chat-memory-status-row"
+      style={[
+        styles.memoryStatusRow,
+        isError && styles.memoryStatusErrorRow,
+      ]}
+    >
+      <ModeText
+        variant="caption"
+        tone={isError ? 'error' : 'secondary'}
+        style={styles.memoryStatusText}
+      >
+        {label}
+      </ModeText>
+      {isError && typeof onRetry === 'function' ? (
+        <Pressable
+          testID="chat-memory-status-retry"
+          accessibilityRole="button"
+          accessibilityLabel="Retry saving memory"
+          onPress={onRetry}
+          style={({ pressed }) => [
+            styles.memoryRetryButton,
+            pressed && styles.memoryRetryButtonPressed,
+          ]}
+        >
+          <ModeText variant="caption" tone="accent" style={styles.memoryRetryText}>
+            Retry
+          </ModeText>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
 
 export default function ChatMessageList({
   messages = [],
@@ -16,6 +74,8 @@ export default function ChatMessageList({
   error = null,
   onRetry,
   onSelectSuggestedAction,
+  memorySaveStatuses = {},
+  onRetryMemorySave,
   bottomInset = 0,
   testID = 'chat-message-list',
 }) {
@@ -52,6 +112,7 @@ export default function ChatMessageList({
     const showChips = shouldShowChips && openingMessage?.id === item.id;
     const previousMessage = messages[index - 1];
     const showSpeakerLabel = !previousMessage || previousMessage.role !== item.role;
+    const memorySaveStatus = resolveMemorySaveStatus(item, memorySaveStatuses);
 
     return (
       <View style={styles.messageWrap}>
@@ -66,6 +127,16 @@ export default function ChatMessageList({
             showSpeakerLabel={showSpeakerLabel}
           />
         )}
+        {memorySaveStatus ? (
+          <MemorySaveStatusRow
+            status={memorySaveStatus}
+            onRetry={
+              memorySaveStatus.status === 'error'
+                ? () => onRetryMemorySave?.(memorySaveStatus.id)
+                : null
+            }
+          />
+        ) : null}
         {showChips ? (
           <SuggestedActionChips
             actions={chips}
@@ -75,7 +146,16 @@ export default function ChatMessageList({
         ) : null}
       </View>
     );
-  }, [chips, messages, onSelectSuggestedAction, openingMessage?.id, readOnly, shouldShowChips]);
+  }, [
+    chips,
+    memorySaveStatuses,
+    messages,
+    onRetryMemorySave,
+    onSelectSuggestedAction,
+    openingMessage?.id,
+    readOnly,
+    shouldShowChips,
+  ]);
 
   const errorDiagnostic = error && typeof __DEV__ === 'boolean' && __DEV__
     ? [error.request_path || error.path, error.api_base_url].filter(Boolean).join(' · ')
@@ -169,5 +249,35 @@ const styles = StyleSheet.create({
   retryButton: {
     marginTop: theme.spacing[3],
     maxWidth: 180,
+  },
+  memoryStatusRow: {
+    alignSelf: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing[1],
+    maxWidth: '82%',
+    borderRadius: theme.radii.pill,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 5,
+    backgroundColor: 'rgba(224, 237, 255, 0.1)',
+  },
+  memoryStatusErrorRow: {
+    backgroundColor: theme.colors.feedback.errorBg,
+  },
+  memoryStatusText: {
+    fontWeight: '600',
+    flexShrink: 1,
+  },
+  memoryRetryButton: {
+    borderRadius: theme.radii.pill,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 3,
+    backgroundColor: 'rgba(143, 178, 255, 0.14)',
+  },
+  memoryRetryButtonPressed: {
+    opacity: 0.78,
+  },
+  memoryRetryText: {
+    fontWeight: '700',
   },
 });

@@ -238,6 +238,7 @@ const PLAN_TYPE = {
   TRAINING: 'training',
   NUTRITION: 'nutrition',
 };
+export const CHECKIN_PLAN_TYPE = PLAN_TYPE;
 const COACH_BY_MODE = {
   BEAST: 'Rex',
   BUILD: 'Alex',
@@ -1477,10 +1478,902 @@ function NutritionPlanView({ plan }) {
   );
 }
 
+export function CheckinPlanBuilder({
+  accessToken,
+  initialPlanType = PLAN_TYPE.TRAINING,
+  initialResult = null,
+  date = null,
+  bottomInset = 0,
+  floatingNavClearance = null,
+  onBack,
+  onOpenChat,
+}) {
+  const today = useMemo(() => date || getLocalDateString(), [date]);
+  const nutritionDayNoteRef = useRef(null);
+  const manualTrainingSetupRef = useRef({ environment: null, timeAvailable: 30 });
+  const [summaryResult, setSummaryResult] = useState(initialResult);
+  const [step, setStep] = useState(initialResult ? 'environment' : 'loading');
+  const [resultError, setResultError] = useState(null);
+  const [planType] = useState(initialPlanType);
+  const [environment, setEnvironment] = useState(null);
+  const [timeAvailable, setTimeAvailable] = useState(30);
+  const [nutritionDayType, setNutritionDayType] = useState(null);
+  const [nutritionDayNote, setNutritionDayNote] = useState('');
+  const [previousCheckin, setPreviousCheckin] = useState(null);
+  const [isLoadingPreviousCheckin, setIsLoadingPreviousCheckin] = useState(false);
+  const [includeYesterdayContext, setIncludeYesterdayContext] = useState(false);
+  const [lastTrainingSetup, setLastTrainingSetup] = useState(null);
+  const [isLoadingLastTrainingSetup, setIsLoadingLastTrainingSetup] = useState(false);
+  const [useLastTrainingSetup, setUseLastTrainingSetup] = useState(false);
+  const [planLoading, setPlanLoading] = useState(false);
+  const [planError, setPlanError] = useState(null);
+  const [planContent, setPlanContent] = useState(null);
+  const [structuredPlan, setStructuredPlan] = useState(null);
+  const [structuredNutritionPlan, setStructuredNutritionPlan] = useState(null);
+  const [generatedPlanId, setGeneratedPlanId] = useState(null);
+  const [generatedWorkoutContext, setGeneratedWorkoutContext] = useState(null);
+  const [expandedExercises, setExpandedExercises] = useState({});
+  const [guidedStatus, setGuidedStatus] = useState('idle');
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [isLogOpen, setIsLogOpen] = useState(false);
+  const [feelRating, setFeelRating] = useState(3);
+  const [isLoggingWorkout, setIsLoggingWorkout] = useState(false);
+  const [logFeedback, setLogFeedback] = useState(null);
+  const [copyFeedback, setCopyFeedback] = useState(null);
+  const planDiagnosticsLine = useMemo(() => buildPlanDiagnosticsLine(planError), [planError]);
+
+  useEffect(() => {
+    if (initialResult) {
+      setSummaryResult(initialResult);
+      setStep('environment');
+      setResultError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadTodayResult = async () => {
+      setStep('loading');
+      setResultError(null);
+      try {
+        const status = await getTodayCheckin({ accessToken, date: today });
+        if (cancelled) {
+          return;
+        }
+        if (!status?.completed || !status?.checkin?.id) {
+          throw new Error('Complete today\'s check-in before building a plan.');
+        }
+        setSummaryResult(status.checkin);
+        setStep('environment');
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setResultError(error);
+        setStep('load-error');
+      }
+    };
+
+    loadTodayResult();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, initialResult, today]);
+
+  useEffect(() => {
+    if (step !== 'environment' || !planType || !summaryResult?.id) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    if (planType === PLAN_TYPE.TRAINING) {
+      const loadLastTrainingSetup = async () => {
+        setIsLoadingLastTrainingSetup(true);
+        setLastTrainingSetup(null);
+        setUseLastTrainingSetup(false);
+        setPreviousCheckin(null);
+        setIsLoadingPreviousCheckin(false);
+        setIncludeYesterdayContext(false);
+
+        try {
+          const response = await getLastTrainingSetup({
+            accessToken,
+            excludeCheckinId: summaryResult?.id,
+          });
+          if (!cancelled) {
+            setLastTrainingSetup(normalizeLastTrainingSetupPayload(response));
+          }
+        } catch (_error) {
+          if (!cancelled) {
+            setLastTrainingSetup(null);
+          }
+        } finally {
+          if (!cancelled) {
+            setIsLoadingLastTrainingSetup(false);
+          }
+        }
+      };
+
+      loadLastTrainingSetup();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadPreviousCheckin = async () => {
+      setIsLoadingPreviousCheckin(true);
+      setPreviousCheckin(null);
+      setIncludeYesterdayContext(false);
+      setLastTrainingSetup(null);
+      setIsLoadingLastTrainingSetup(false);
+      setUseLastTrainingSetup(false);
+
+      try {
+        const response = await getPreviousCheckin({
+          accessToken,
+          beforeDate: today,
+        });
+        if (!cancelled) {
+          setPreviousCheckin(response?.checkin || null);
+        }
+      } catch (_error) {
+        if (!cancelled) {
+          setPreviousCheckin(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingPreviousCheckin(false);
+        }
+      }
+    };
+
+    loadPreviousCheckin();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, planType, step, summaryResult?.id, today]);
+
+  useEffect(() => {
+    if (step === 'environment' && planType === PLAN_TYPE.NUTRITION && nutritionDayType === 'custom') {
+      setTimeout(() => {
+        nutritionDayNoteRef.current?.focus?.();
+      }, 25);
+    }
+  }, [nutritionDayType, planType, step]);
+
+  useEffect(() => {
+    if (step !== 'guided-workout' || guidedStatus !== 'running') {
+      return undefined;
+    }
+
+    const interval = setInterval(() => {
+      setElapsedSeconds((previous) => previous + 1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [step, guidedStatus]);
+
+  const canGeneratePlan = useMemo(() => {
+    if (planType === PLAN_TYPE.TRAINING) {
+      return Boolean(environment);
+    }
+    if (planType === PLAN_TYPE.NUTRITION) {
+      if (!nutritionDayType) {
+        return false;
+      }
+      if (nutritionDayType === 'custom') {
+        return nutritionDayNote.trim().length > 0;
+      }
+      return true;
+    }
+    return false;
+  }, [environment, nutritionDayNote, nutritionDayType, planType]);
+
+  const handleToggleLastTrainingSetup = (nextValue) => {
+    if (nextValue) {
+      if (!lastTrainingSetup) {
+        return;
+      }
+      manualTrainingSetupRef.current = {
+        environment,
+        timeAvailable,
+      };
+      setUseLastTrainingSetup(true);
+      setEnvironment(lastTrainingSetup.environment);
+      setTimeAvailable(lastTrainingSetup.timeAvailable);
+      return;
+    }
+
+    setUseLastTrainingSetup(false);
+    setEnvironment(manualTrainingSetupRef.current.environment || null);
+    setTimeAvailable(manualTrainingSetupRef.current.timeAvailable || 30);
+  };
+
+  const handleSelectEnvironment = (nextEnvironment) => {
+    if (useLastTrainingSetup) {
+      setUseLastTrainingSetup(false);
+    }
+    setEnvironment(nextEnvironment);
+  };
+
+  const handleSelectTrainingTime = (nextTimeAvailable) => {
+    if (useLastTrainingSetup) {
+      setUseLastTrainingSetup(false);
+    }
+    setTimeAvailable(nextTimeAvailable);
+  };
+
+  const handleGeneratePlan = async (refreshRequestedOrEvent = false) => {
+    const refreshRequested = refreshRequestedOrEvent === true;
+    if (!summaryResult?.id || !planType || !canGeneratePlan || planLoading) {
+      return;
+    }
+
+    setPlanLoading(true);
+    setPlanError(null);
+    setCopyFeedback(null);
+    setStep('plan');
+
+    try {
+      const result = await generateCheckinPlan({
+        accessToken,
+        checkinId: summaryResult.id,
+        planType,
+        environment: planType === PLAN_TYPE.TRAINING ? environment : undefined,
+        timeAvailable: planType === PLAN_TYPE.TRAINING ? timeAvailable : undefined,
+        nutritionDayNote: planType === PLAN_TYPE.NUTRITION && nutritionDayType === 'custom'
+          ? nutritionDayNote.trim()
+          : undefined,
+        includeYesterdayContext: planType === PLAN_TYPE.NUTRITION ? includeYesterdayContext : false,
+        refreshRequested,
+      });
+
+      setGeneratedPlanId(result.plan_id || null);
+      setPlanContent(result.content || null);
+      setStructuredPlan(null);
+      setStructuredNutritionPlan(null);
+      setGeneratedWorkoutContext(result.workout_context || null);
+
+      if (result.structured && planType === PLAN_TYPE.TRAINING) {
+        setStructuredPlan(result.structured);
+      } else if (result.structured && planType === PLAN_TYPE.NUTRITION) {
+        setStructuredNutritionPlan(result.structured);
+      }
+    } catch (error) {
+      const nextError = error instanceof Error
+        ? error
+        : new Error(error?.message || 'Unable to generate your plan right now.');
+      setPlanError(nextError);
+    } finally {
+      setPlanLoading(false);
+    }
+  };
+
+  const handleCopyPlanDiagnostics = async () => {
+    if (!planError) {
+      return;
+    }
+
+    try {
+      const supportBundle = buildPlanSupportBundle({
+        date: today,
+        planType,
+        checkinId: summaryResult?.id,
+        environment,
+        timeAvailable,
+        nutritionDayType,
+        nutritionDayNote: nutritionDayType === 'custom' ? nutritionDayNote.trim() : null,
+        includeYesterdayContext: planType === PLAN_TYPE.NUTRITION ? includeYesterdayContext : false,
+        planError,
+      });
+      await Clipboard.setStringAsync(supportBundle);
+      setCopyFeedback('Copied diagnostics');
+    } catch (_error) {
+      setCopyFeedback('Unable to copy diagnostics');
+    }
+  };
+
+  const handleToggleExercise = (index) => {
+    setExpandedExercises((previous) => ({
+      ...previous,
+      [index]: !previous[index],
+    }));
+  };
+
+  const handleBeginGuidedWorkout = () => {
+    setStep('guided-workout');
+    setGuidedStatus('running');
+    setElapsedSeconds(0);
+    setLogFeedback(null);
+  };
+
+  const handleBackFromGuidedWorkout = () => {
+    if (guidedStatus === 'running') {
+      setGuidedStatus('paused');
+    }
+    setStep('plan');
+  };
+
+  const handlePauseResume = () => {
+    setGuidedStatus((current) => (current === 'running' ? 'paused' : 'running'));
+  };
+
+  const handleOpenLogPanel = () => {
+    setGuidedStatus('paused');
+    setIsLogOpen(true);
+  };
+
+  const handleLogWorkout = async () => {
+    if (!generatedPlanId || !structuredPlan || isLoggingWorkout) {
+      return;
+    }
+
+    setIsLoggingWorkout(true);
+    setLogFeedback(null);
+
+    try {
+      await logGeneratedWorkout({
+        accessToken,
+        generatedPlanId,
+        title: structuredPlan.title || 'Guided Workout',
+        elapsedSeconds,
+        completed: true,
+        feelRating,
+      });
+      setIsLogOpen(false);
+      setGuidedStatus('idle');
+      setElapsedSeconds(0);
+      setLogFeedback('Workout logged successfully.');
+      setStep('plan');
+    } catch (error) {
+      setLogFeedback(error.message || 'Unable to log workout right now.');
+    } finally {
+      setIsLoggingWorkout(false);
+    }
+  };
+
+  const handleOpenWorkoutCoach = () => {
+    if (typeof onOpenChat !== 'function' || !structuredPlan) {
+      return;
+    }
+
+    onOpenChat(buildWorkoutLaunchContext({
+      result: summaryResult,
+      date: today,
+      workoutContext: generatedWorkoutContext || {
+        generated_plan_id: generatedPlanId || null,
+        environment: environment || null,
+        time_available: timeAvailable ?? null,
+        plan_title: structuredPlan?.title || null,
+        plan_summary: buildWorkoutSummary(structuredPlan),
+      },
+    }));
+  };
+
+  const handleOpenNutritionCoach = () => {
+    if (typeof onOpenChat !== 'function' || !structuredNutritionPlan) {
+      return;
+    }
+
+    onOpenChat(buildNutritionLaunchContext({
+      result: summaryResult,
+      date: today,
+      nutritionContext: {
+        generated_plan_id: generatedPlanId || null,
+        plan_title: structuredNutritionPlan?.title || null,
+        coach_note: structuredNutritionPlan?.coachNote || null,
+        plan_summary: buildNutritionSummary(structuredNutritionPlan),
+      },
+    }));
+  };
+
+  const coachName = getCoachName(summaryResult?.mode);
+  const inferredFloatingNavClearance = Math.max(bottomInset - 34, 0);
+  const resolvedFloatingNavClearance = typeof floatingNavClearance === 'number'
+    ? floatingNavClearance
+    : inferredFloatingNavClearance;
+  const planPrimaryCtaBottom = resolvedFloatingNavClearance + 2;
+  const planCtaOffset = planPrimaryCtaBottom + 64;
+  const guidedWorkoutCtaOffset = bottomInset + 116;
+  const breathingTransitionsEnabled = Boolean(BREATHING_TRANSITIONS_ENABLED);
+  const shouldShowPlanGenerationTransition = breathingTransitionsEnabled && step === 'plan' && planLoading;
+
+  if (step === 'loading') {
+    return (
+      <View style={styles.planBuilderCentered}>
+        <ActivityIndicator size="large" color={theme.colors.accent.primary} />
+        <Text style={styles.loadingTitle}>Loading today&apos;s check-in</Text>
+        <Text style={styles.loadingBody}>Opening the native plan builder from your Coach brief.</Text>
+      </View>
+    );
+  }
+
+  if (step === 'load-error') {
+    return (
+      <View style={styles.planBuilderCentered}>
+        <View style={styles.errorCard}>
+          <Text style={styles.errorTitle}>Plan builder needs today&apos;s check-in.</Text>
+          <Text style={styles.errorText}>{resultError?.message || 'Complete today&apos;s check-in first, then come back to Coach.'}</Text>
+          <ModeButton title="Back to coach" variant="secondary" onPress={onBack} style={styles.errorButton} />
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.planBuilderScreen}>
+      {step === 'environment' ? (
+        <View style={styles.planStepWrap}>
+          <HeaderBar
+            title={planType === PLAN_TYPE.TRAINING ? 'Training Setup' : 'Nutrition Setup'}
+            onBack={onBack}
+            backAccessibilityLabel="Back to coach"
+          />
+          <ScrollView
+            contentContainerStyle={[
+              styles.resultsContent,
+              {
+                paddingTop: planType === PLAN_TYPE.TRAINING ? theme.spacing[1] : theme.spacing[3],
+                paddingBottom: theme.spacing[4] + bottomInset,
+              },
+            ]}
+          >
+            <View style={styles.phoneFrame}>
+              {planType === PLAN_TYPE.NUTRITION ? (
+                <Text style={styles.resultsTitle}>Dial in today&apos;s nutrition context</Text>
+              ) : null}
+
+              {planType === PLAN_TYPE.TRAINING ? (
+                <LastTrainingSetupToggle
+                  lastTrainingSetup={lastTrainingSetup}
+                  isLoadingLastTrainingSetup={isLoadingLastTrainingSetup}
+                  useLastTrainingSetup={useLastTrainingSetup}
+                  onToggle={handleToggleLastTrainingSetup}
+                />
+              ) : (
+                <PreviousContextToggle
+                  previousCheckin={previousCheckin}
+                  isLoadingPreviousCheckin={isLoadingPreviousCheckin}
+                  includeYesterdayContext={includeYesterdayContext}
+                  onToggle={setIncludeYesterdayContext}
+                />
+              )}
+
+              {planType === PLAN_TYPE.TRAINING ? (
+                <>
+                  <SectionHeader
+                    title="Environment"
+                    subtitle="Select where and how hard to train today"
+                    style={styles.setupSectionHeader}
+                  />
+                  <View style={styles.environmentGrid}>
+                    {ENVIRONMENT_OPTIONS.map((option) => {
+                      const selected = environment === option.value;
+                      const Icon = option.Icon;
+                      return (
+                        <Pressable
+                          key={option.value}
+                          onPress={() => handleSelectEnvironment(option.value)}
+                          testID={`environment-option-${option.value}`}
+                          accessibilityState={{ selected }}
+                          style={({ pressed }) => [
+                            styles.environmentCard,
+                            selected && styles.environmentCardSelected,
+                            pressed && styles.environmentCardPressed,
+                          ]}
+                        >
+                          <TrainingIconBadge
+                            Icon={Icon}
+                            size={18}
+                            style={[
+                              styles.environmentIconBadge,
+                              selected && styles.environmentIconBadgeSelected,
+                            ]}
+                            testID={`environment-option-icon-${option.value}`}
+                          />
+                          <Text style={styles.environmentLabel}>{option.label}</Text>
+                          <Text style={styles.environmentDesc}>{option.description}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <View style={styles.timeSelectorRow} testID="training-time-row">
+                    <View style={styles.timeLabelRow}>
+                      <TrainingIconBadge
+                        Icon={Clock3}
+                        size={16}
+                        style={styles.timeIconBadge}
+                        testID="training-time-icon"
+                      />
+                      <Text style={styles.timeLabel}>Time available</Text>
+                    </View>
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      contentContainerStyle={styles.timePillRow}
+                      style={styles.timePillScroller}
+                      testID="training-time-scroller"
+                    >
+                      {TIME_OPTIONS.map((minutes) => {
+                        const selected = timeAvailable === minutes;
+                        return (
+                          <GlassPill
+                            key={minutes}
+                            onPress={() => handleSelectTrainingTime(minutes)}
+                            testID={`training-time-pill-${minutes}`}
+                            label={`${minutes}m`}
+                            selected={selected}
+                            style={[styles.timePill, selected && styles.timePillSelected]}
+                          />
+                        );
+                      })}
+                    </ScrollView>
+                    <GlassSlider
+                      testID="training-time-slider"
+                      value={timeAvailable}
+                      min={TIME_OPTIONS[0]}
+                      max={TIME_OPTIONS[TIME_OPTIONS.length - 1]}
+                      onChange={(nextValue) => {
+                        const nearest = TIME_OPTIONS.reduce((currentBest, candidate) => (
+                          Math.abs(candidate - nextValue) < Math.abs(currentBest - nextValue)
+                            ? candidate
+                            : currentBest
+                        ), TIME_OPTIONS[0]);
+                        handleSelectTrainingTime(nearest);
+                      }}
+                      onComplete={(nextValue) => {
+                        const nearest = TIME_OPTIONS.reduce((currentBest, candidate) => (
+                          Math.abs(candidate - nextValue) < Math.abs(currentBest - nextValue)
+                            ? candidate
+                            : currentBest
+                        ), TIME_OPTIONS[0]);
+                        handleSelectTrainingTime(nearest);
+                      }}
+                      style={styles.timeSlider}
+                    />
+                  </View>
+                </>
+              ) : (
+                <>
+                  <SectionHeader
+                    title="Day Type"
+                    subtitle="Set nutrition context for better planning"
+                    style={styles.setupSectionHeader}
+                  />
+                  <View style={styles.dayTypeList}>
+                    <GlassSurface
+                      onPress={() => {
+                        setNutritionDayType('normal');
+                        setNutritionDayNote('');
+                      }}
+                      style={[styles.dayTypeCard, nutritionDayType === 'normal' && styles.dayTypeCardSelected]}
+                      state={nutritionDayType === 'normal' ? 'active' : 'default'}
+                      radius="m"
+                      padding={theme.spacing[2]}
+                    >
+                      <Text style={styles.dayTypeTitle}>Normal day</Text>
+                      <Text style={styles.dayTypeBody}>Regular routine, no special context</Text>
+                    </GlassSurface>
+
+                    <GlassSurface
+                      onPress={() => setNutritionDayType('custom')}
+                      style={[styles.dayTypeCard, nutritionDayType === 'custom' && styles.dayTypeCardSelected]}
+                      state={nutritionDayType === 'custom' ? 'active' : 'default'}
+                      radius="m"
+                      padding={theme.spacing[2]}
+                    >
+                      <Text style={styles.dayTypeTitle}>Something different today</Text>
+                      <Text style={styles.dayTypeBody}>Travel, event, dietary change, etc.</Text>
+                    </GlassSurface>
+                  </View>
+
+                  {nutritionDayType === 'custom' ? (
+                    <TextInput
+                      ref={nutritionDayNoteRef}
+                      style={styles.nutritionNoteInput}
+                      value={nutritionDayNote}
+                      onChangeText={setNutritionDayNote}
+                      placeholder="I'm at a hotel in Austin, eating out for every meal"
+                      placeholderTextColor={theme.colors.textDisabled}
+                      multiline
+                      textAlignVertical="top"
+                    />
+                  ) : null}
+                </>
+              )}
+            </View>
+
+            <ModeButton
+              title={planType === PLAN_TYPE.TRAINING ? 'Generate My Workout' : 'Generate My Nutrition Plan'}
+              onPress={() => handleGeneratePlan(false)}
+              disabled={!canGeneratePlan || planLoading}
+              style={styles.footerButton}
+            />
+          </ScrollView>
+        </View>
+      ) : null}
+
+      {step === 'plan' ? (
+        <View style={styles.planStepWrap}>
+          {planType === PLAN_TYPE.TRAINING ? (
+            <>
+              <HeaderBar
+                title="Generated Workout"
+                style={styles.generatedWorkoutHeaderBar}
+                onBack={() => setStep('environment')}
+                backAccessibilityLabel="Back to options"
+                rightSlot={
+                  !planLoading && !planError && structuredPlan ? (
+                    <Pressable
+                      accessibilityLabel="Adjust with Coach"
+                      accessibilityRole="button"
+                      hitSlop={10}
+                      onPress={handleOpenWorkoutCoach}
+                      style={({ pressed }) => [
+                        styles.planAdjustButton,
+                        pressed && styles.planAdjustButtonPressed,
+                      ]}
+                    >
+                      <Feather name="message-circle" size={16} color={theme.colors.text.primary} />
+                      <Text style={styles.planAdjustButtonLabel}>Coach</Text>
+                    </Pressable>
+                  ) : null
+                }
+              />
+
+              {!breathingTransitionsEnabled && planLoading ? (
+                <View style={styles.planLoadingWrap}>
+                  <ActivityIndicator size="large" color={theme.colors.accent.primary} />
+                  <Text style={styles.planLoadingText}>Coach {coachName} is building your workout...</Text>
+                  <View style={styles.typingDotsRow}>
+                    <View style={styles.typingDot} />
+                    <View style={styles.typingDot} />
+                    <View style={styles.typingDot} />
+                  </View>
+                </View>
+              ) : null}
+
+              {!planLoading && planError ? (
+                <View style={styles.planErrorCard}>
+                  <Text style={styles.errorTitle}>Couldn&apos;t generate your plan</Text>
+                  <Text style={styles.errorText}>{planError?.message || 'Unable to generate your plan right now.'}</Text>
+                  {planDiagnosticsLine ? <Text style={styles.planDiagnosticsText}>{planDiagnosticsLine}</Text> : null}
+                  {planError?.hint ? <Text style={styles.planHintText}>Hint: {planError.hint}</Text> : null}
+                  <ModeButton title="Try again" onPress={() => handleGeneratePlan(false)} style={styles.errorButton} />
+                  <ModeButton
+                    title="Copy diagnostics"
+                    variant="secondary"
+                    onPress={handleCopyPlanDiagnostics}
+                    style={styles.errorButton}
+                  />
+                  {copyFeedback ? (
+                    <Text
+                      style={[
+                        styles.copyFeedback,
+                        copyFeedback === 'Copied diagnostics' ? styles.copyFeedbackSuccess : styles.copyFeedbackError,
+                      ]}
+                    >
+                      {copyFeedback}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {!planLoading && !planError && structuredPlan ? (
+                <>
+                  <TrainingPlanView
+                    plan={structuredPlan}
+                    expandedExercises={expandedExercises}
+                    onToggleExercise={handleToggleExercise}
+                    bottomPadding={planCtaOffset}
+                  />
+                  <View style={[styles.guidedActionDock, { bottom: planPrimaryCtaBottom }]}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Begin Guided Workout"
+                      onPress={handleBeginGuidedWorkout}
+                      testID="guided-workout-compact-cta"
+                      style={({ pressed }) => [
+                        styles.guidedActionButton,
+                        pressed && styles.guidedActionButtonPressed,
+                      ]}
+                    >
+                      <TrainingIconBadge
+                        Icon={PlayCircle}
+                        size={16}
+                        style={styles.guidedActionIconBadge}
+                        backgroundColor={withAlpha(theme.colors.surface.base, 0.18)}
+                        borderColor={withAlpha(theme.colors.surface.base, 0.22)}
+                        color={theme.colors.text.inverse}
+                        testID="guided-workout-compact-cta-icon"
+                      />
+                      <Text style={styles.guidedActionLabel}>Begin guided workout</Text>
+                    </Pressable>
+                    {logFeedback ? <Text style={styles.logFeedback}>{logFeedback}</Text> : null}
+                  </View>
+                </>
+              ) : null}
+
+              {!planLoading && !planError && !structuredPlan && planContent ? (
+                <ScrollView contentContainerStyle={[styles.planScrollContent, { paddingBottom: planCtaOffset }]}>
+                  <View style={styles.sectionCard}>
+                    <TrainingSectionHeader
+                      Icon={Info}
+                      title="Generated Content"
+                      iconTestID="training-section-icon-content"
+                    />
+                    <Text style={styles.simpleDesc}>{sanitizeTrainingText(planContent)}</Text>
+                  </View>
+                </ScrollView>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <HeaderBar
+                title="Generated Nutrition Plan"
+                style={styles.generatedWorkoutHeaderBar}
+                onBack={() => setStep('environment')}
+                backAccessibilityLabel="Back to options"
+                rightSlot={
+                  !planLoading && !planError && structuredNutritionPlan ? (
+                    <Pressable
+                      accessibilityLabel="Chat with Coach about nutrition plan"
+                      accessibilityRole="button"
+                      hitSlop={10}
+                      onPress={handleOpenNutritionCoach}
+                      style={({ pressed }) => [
+                        styles.planAdjustButton,
+                        pressed && styles.planAdjustButtonPressed,
+                      ]}
+                    >
+                      <Feather name="message-circle" size={16} color={theme.colors.text.primary} />
+                      <Text style={styles.planAdjustButtonLabel}>Coach</Text>
+                    </Pressable>
+                  ) : null
+                }
+              />
+
+              {!breathingTransitionsEnabled && planLoading ? (
+                <View style={styles.planLoadingWrap}>
+                  <ActivityIndicator size="large" color={theme.colors.accent.primary} />
+                  <Text style={styles.planLoadingText}>
+                    Coach {coachName} is building your nutrition plan...
+                  </Text>
+                  <View style={styles.typingDotsRow}>
+                    <View style={styles.typingDot} />
+                    <View style={styles.typingDot} />
+                    <View style={styles.typingDot} />
+                  </View>
+                </View>
+              ) : null}
+
+              {!planLoading && planError ? (
+                <View style={styles.planErrorCard}>
+                  <Text style={styles.errorTitle}>Couldn&apos;t generate your plan</Text>
+                  <Text style={styles.errorText}>{planError?.message || 'Unable to generate your plan right now.'}</Text>
+                  {planDiagnosticsLine ? <Text style={styles.planDiagnosticsText}>{planDiagnosticsLine}</Text> : null}
+                  {planError?.hint ? <Text style={styles.planHintText}>Hint: {planError.hint}</Text> : null}
+                  <ModeButton title="Try again" onPress={() => handleGeneratePlan(false)} style={styles.errorButton} />
+                  <ModeButton
+                    title="Copy diagnostics"
+                    variant="secondary"
+                    onPress={handleCopyPlanDiagnostics}
+                    style={styles.errorButton}
+                  />
+                  {copyFeedback ? (
+                    <Text
+                      style={[
+                        styles.copyFeedback,
+                        copyFeedback === 'Copied diagnostics' ? styles.copyFeedbackSuccess : styles.copyFeedbackError,
+                      ]}
+                    >
+                      {copyFeedback}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {!planLoading && !planError && structuredNutritionPlan ? (
+                <NutritionPlanView plan={structuredNutritionPlan} />
+              ) : null}
+
+              {!planLoading && !planError && !structuredNutritionPlan && planContent ? (
+                <ScrollView contentContainerStyle={styles.planScrollContent}>
+                  <View style={styles.sectionCard}>
+                    <Text style={styles.sectionTitle}>Generated Content</Text>
+                    <Text style={styles.simpleDesc}>{planContent}</Text>
+                  </View>
+                </ScrollView>
+              ) : null}
+            </>
+          )}
+        </View>
+      ) : null}
+
+      {step === 'guided-workout' ? (
+        <View style={styles.planStepWrap}>
+          <HeaderBar
+            title="Guided Workout"
+            onBack={handleBackFromGuidedWorkout}
+            backAccessibilityLabel="Back to generated workout"
+          />
+
+          <GuidedWorkoutView
+            plan={structuredPlan}
+            elapsedSeconds={elapsedSeconds}
+            guidedStatus={guidedStatus}
+            bottomPadding={guidedWorkoutCtaOffset}
+          />
+
+          <View style={[styles.bottomCtaBar, { bottom: bottomInset }]}>
+            <View style={styles.splitRow}>
+              <Pressable onPress={handlePauseResume} style={[styles.splitButton, styles.pauseButton]}>
+                <Text style={styles.splitButtonText}>{guidedStatus === 'paused' ? 'Resume' : 'Pause'}</Text>
+              </Pressable>
+              <Pressable onPress={handleOpenLogPanel} style={[styles.splitButton, styles.endButton]}>
+                <Text style={styles.splitButtonText}>End & Log</Text>
+              </Pressable>
+            </View>
+            {logFeedback ? <Text style={styles.logFeedback}>{logFeedback}</Text> : null}
+          </View>
+        </View>
+      ) : null}
+
+      {isLogOpen ? (
+        <View style={styles.logOverlay}>
+          <View style={styles.logSheet}>
+            <Text style={styles.logSheetTitle}>How did this session feel?</Text>
+            <View style={styles.feelRatingRow}>
+              {[1, 2, 3, 4, 5].map((value) => (
+                <Pressable
+                  key={value}
+                  onPress={() => setFeelRating(value)}
+                  style={[styles.ratingPill, feelRating === value && styles.ratingPillSelected]}
+                >
+                  <Text style={[styles.ratingPillText, feelRating === value && styles.ratingPillTextSelected]}>{value}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <View style={styles.logActionRow}>
+              <ModeButton
+                title="Cancel"
+                variant="secondary"
+                onPress={() => setIsLogOpen(false)}
+                style={styles.logActionButton}
+              />
+              <ModeButton
+                title={isLoggingWorkout ? 'Logging…' : 'End & Log'}
+                onPress={handleLogWorkout}
+                disabled={isLoggingWorkout}
+                style={styles.logActionButton}
+              />
+            </View>
+          </View>
+        </View>
+      ) : null}
+
+      {breathingTransitionsEnabled ? (
+        <BreathingTransitionOverlay
+          active={shouldShowPlanGenerationTransition}
+          context={BREATHING_CONTEXT.PLAN_GENERATION}
+          variant="overlay"
+          progressLabel={planType === PLAN_TYPE.NUTRITION
+            ? `Coach ${coachName} is building your nutrition plan...`
+            : `Coach ${coachName} is building your workout...`}
+          testID="daily-checkin-breathing-plan-generation"
+        />
+      ) : null}
+    </View>
+  );
+}
+
 export default function DailyCheckinScreen({
   accessToken,
   onOpenChat,
   onOpenInsights,
+  onCheckinComplete,
   bottomInset = 0,
   floatingNavClearance = null,
 }) {
@@ -1867,6 +2760,9 @@ export default function DailyCheckinScreen({
       setSubmitError(null);
       setCopyFeedback(null);
       setStep('summary');
+      if (result?.id && typeof onCheckinComplete === 'function') {
+        onCheckinComplete(result);
+      }
     } catch (error) {
       refreshConnectionDebug({
         lastProbe: {
@@ -2337,7 +3233,7 @@ export default function DailyCheckinScreen({
               result={summaryResult}
               onBuildTraining={() => handleSelectPlan(PLAN_TYPE.TRAINING)}
               onBuildNutrition={() => handleSelectPlan(PLAN_TYPE.NUTRITION)}
-              showPlanActions={submitState === 'saved' && Boolean(summaryResult?.id)}
+              showPlanActions={false}
             />
           </View>
           {submitState === 'pending' ? (
@@ -2915,6 +3811,16 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.colors.background.app,
   },
+  planBuilderScreen: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
+  planBuilderCentered: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: theme.spacing[3],
+  },
   centerStage: {
     flex: 1,
     alignItems: 'center',
@@ -3108,6 +4014,12 @@ const styles = StyleSheet.create({
     ...theme.typography.label,
     fontFamily: theme.typography.fontFamily,
     textTransform: 'uppercase',
+  },
+  resultsTitle: {
+    color: theme.colors.textHigh,
+    ...theme.typography.h3,
+    fontFamily: theme.typography.fontFamily,
+    marginBottom: theme.spacing[2],
   },
   summaryStatusCard: {
     marginTop: theme.spacing[3],

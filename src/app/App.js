@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Animated, AppState, Easing, Linking, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Clipboard from 'expo-clipboard';
 
 import {
   ModeButton,
@@ -12,7 +13,7 @@ import { theme } from '../../lib/theme';
 import OnboardingLandingScreen from '../features/auth/screens/OnboardingLandingScreen';
 import { ChatShell } from '../features/chat/components';
 import CoachChatScreen from '../features/chat/screens/CoachChatScreen';
-import DailyCheckinScreen from '../features/dailyCheckin/screens/DailyCheckinScreen';
+import AlgorithmHomeScreen from '../features/home/screens/AlgorithmHomeScreen';
 import CoachInsightsScreen from '../features/insights/screens/CoachInsightsScreen';
 import LiquidBottomNav, {
   NAV_BOTTOM_OFFSET,
@@ -62,6 +63,11 @@ const COACH_CHAT_DOCK_CLEARANCE =
   FLOATING_NAV_BOTTOM_OFFSET + FLOATING_NAV_PILL_HEIGHT + COACH_CHAT_NAV_GAP;
 const ASSIGNMENT_STATUS_AUTO_RETRY_DELAY_MS = 900;
 const SESSION_EXPIRED_MESSAGE = 'Your previous sign-in expired. Please sign in again.';
+const ONBOARDING_BOOTSTRAP_PATH = '/api/v1/onboarding/bootstrap';
+const SHOW_ACCOUNT_DIAGNOSTICS = (
+  (typeof __DEV__ === 'boolean' && __DEV__)
+  || String(process.env.EXPO_PUBLIC_SHOW_ACCOUNT_DIAGNOSTICS || '').trim().toLowerCase() === 'true'
+);
 const VIEWER_ROLE = {
   TRAINER: 'trainer',
   CLIENT: 'client',
@@ -148,7 +154,20 @@ function ShellLoadingState({
   );
 }
 
-function ShellErrorState({ title, subtitle, actionTitle, onPress }) {
+function ShellErrorState({
+  title,
+  subtitle,
+  actionTitle,
+  onPress,
+  diagnostics = null,
+  onCopyDiagnostics = null,
+  copyFeedback = null,
+}) {
+  const showDiagnostics = Boolean(diagnostics?.showDetails && diagnostics?.isNetworkError);
+  const attemptedBases = Array.isArray(diagnostics?.attemptedBases)
+    ? diagnostics.attemptedBases
+    : [];
+
   return (
     <SafeScreen style={styles.loadingScreen}>
       <ModeCard variant="tinted" noShadow style={styles.loadingCard}>
@@ -158,10 +177,171 @@ function ShellErrorState({ title, subtitle, actionTitle, onPress }) {
         <ModeText variant="bodySm" tone="secondary" style={styles.loadingSubtitle}>
           {subtitle}
         </ModeText>
-        <ModeButton title={actionTitle} onPress={onPress} style={styles.errorActionButton} />
+        {showDiagnostics ? (
+          <View style={styles.diagnosticsBlock}>
+            {diagnostics.requestPath ? (
+              <ModeText variant="caption" tone="tertiary" testID="app-bootstrap-request-path">
+                Path: {diagnostics.requestPath}
+              </ModeText>
+            ) : null}
+            {attemptedBases.length > 0 ? (
+              <ModeText variant="caption" tone="tertiary" testID="app-bootstrap-attempted-bases">
+                Tried hosts: {attemptedBases.join(', ')}
+              </ModeText>
+            ) : null}
+            {diagnostics.apiBase ? (
+              <ModeText variant="caption" tone="tertiary" testID="app-bootstrap-api-base">
+                Resolved API Base: {diagnostics.apiBase}
+              </ModeText>
+            ) : null}
+            {diagnostics.recommendedApiBase ? (
+              <ModeText variant="caption" tone="tertiary" testID="app-bootstrap-recommended-api-base">
+                Recommended API Base: {diagnostics.recommendedApiBase}
+              </ModeText>
+            ) : null}
+            {diagnostics.rawNetworkMessage ? (
+              <ModeText variant="caption" tone="tertiary" testID="app-bootstrap-raw-network-message">
+                Network detail: {diagnostics.rawNetworkMessage}
+              </ModeText>
+            ) : null}
+            {diagnostics.recoveryHint ? (
+              <ModeText variant="caption" tone="secondary" testID="app-bootstrap-recovery-hint">
+                {diagnostics.recoveryHint}
+              </ModeText>
+            ) : null}
+          </View>
+        ) : null}
+        <ModeButton
+          title={actionTitle}
+          onPress={onPress}
+          style={styles.errorActionButton}
+          testID="app-shell-error-retry-button"
+        />
+        {showDiagnostics && onCopyDiagnostics ? (
+          <ModeButton
+            title="Copy diagnostics"
+            variant="secondary"
+            onPress={onCopyDiagnostics}
+            style={styles.errorSecondaryActionButton}
+            testID="app-bootstrap-copy-diagnostics-button"
+          />
+        ) : null}
+        {showDiagnostics && copyFeedback ? (
+          <ModeText
+            variant="caption"
+            tone={copyFeedback === 'Copied diagnostics' ? 'secondary' : 'error'}
+            style={styles.copyFeedback}
+            testID="app-bootstrap-copy-feedback"
+          >
+            {copyFeedback}
+          </ModeText>
+        ) : null}
       </ModeCard>
     </SafeScreen>
   );
+}
+
+function valueOrFallback(value) {
+  if (value === null || value === undefined || value === '') {
+    return 'n/a';
+  }
+  if (Array.isArray(value)) {
+    return value.length > 0 ? value.join(', ') : 'n/a';
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch (_error) {
+      return '[unserializable]';
+    }
+  }
+  return String(value);
+}
+
+function connectivityProbeFromError(error) {
+  const probe = error?.connectivity_probe || error?.connectivityProbe || null;
+  return probe && typeof probe === 'object' ? probe : null;
+}
+
+function recommendedApiBaseFromError(error, connectivityProbe) {
+  if (error?.recommended_api_base_url) {
+    return String(error.recommended_api_base_url);
+  }
+  if (error?.recommendedApiBaseUrl) {
+    return String(error.recommendedApiBaseUrl);
+  }
+  if (connectivityProbe?.first_reachable_base_url) {
+    return String(connectivityProbe.first_reachable_base_url);
+  }
+  const candidates = Array.isArray(connectivityProbe?.candidate_api_base_urls)
+    ? connectivityProbe.candidate_api_base_urls
+    : [];
+  return candidates[0] || null;
+}
+
+function buildBootstrapRecoveryHint(connectivityProbe) {
+  const attempts = Array.isArray(connectivityProbe?.attempts) ? connectivityProbe.attempts : [];
+  const endpointPath = String(connectivityProbe?.endpoint_path || '');
+  const hasReachableHealthz = Boolean(connectivityProbe?.first_reachable_base_url);
+  const allHealthzAttemptsFailed = (
+    endpointPath === '/healthz'
+    && attempts.length > 0
+    && attempts.every((attempt) => !attempt?.ok)
+  );
+  if (!hasReachableHealthz && allHealthzAttemptsFailed) {
+    return 'Start backend: cd backend && ./venv/bin/python main.py. Then tap Retry.';
+  }
+  return null;
+}
+
+function formatBootstrapError(error, fallbackMessage) {
+  const message = error?.message || fallbackMessage;
+  const isNetworkError = error?.stage === 'network';
+  const requestPath = error?.request_path || error?.path || ONBOARDING_BOOTSTRAP_PATH;
+  const connectivityProbe = connectivityProbeFromError(error);
+  return {
+    message,
+    displayMessage: isNetworkError
+      ? `Unable to reach the backend for ${requestPath}. Check that the FastAPI server is running and reachable from your device.`
+      : message,
+    isNetworkError,
+    showDetails: SHOW_ACCOUNT_DIAGNOSTICS,
+    stage: error?.stage || null,
+    status: error?.status || null,
+    code: error?.code || null,
+    hint: error?.hint || null,
+    details: error?.details || null,
+    requestId: error?.request_id || null,
+    requestPath,
+    apiBase: error?.api_base_url || error?.resolved_api_base_url || null,
+    attemptedBases: Array.isArray(error?.attempted_base_urls) ? error.attempted_base_urls : [],
+    rawNetworkMessage: error?.raw_error_message || null,
+    connectivityProbe,
+    recommendedApiBase: recommendedApiBaseFromError(error, connectivityProbe),
+    recoveryHint: buildBootstrapRecoveryHint(connectivityProbe),
+  };
+}
+
+function buildBootstrapDiagnosticsBundle(errorDetails) {
+  return [
+    'MODE Onboarding Bootstrap Diagnostics',
+    `Timestamp: ${new Date().toISOString()}`,
+    `Message: ${valueOrFallback(errorDetails?.message)}`,
+    `Display Message: ${valueOrFallback(errorDetails?.displayMessage)}`,
+    `Stage: ${valueOrFallback(errorDetails?.stage)}`,
+    `Status: ${valueOrFallback(errorDetails?.status)}`,
+    `Request Path: ${valueOrFallback(errorDetails?.requestPath)}`,
+    `API Base: ${valueOrFallback(errorDetails?.apiBase)}`,
+    `Recommended API Base: ${valueOrFallback(errorDetails?.recommendedApiBase)}`,
+    `Attempted Hosts: ${valueOrFallback(errorDetails?.attemptedBases)}`,
+    `Request ID: ${valueOrFallback(errorDetails?.requestId)}`,
+    `Error Code: ${valueOrFallback(errorDetails?.code)}`,
+    `Hint: ${valueOrFallback(errorDetails?.hint)}`,
+    `Details: ${valueOrFallback(errorDetails?.details)}`,
+    `Raw Network Detail: ${valueOrFallback(errorDetails?.rawNetworkMessage)}`,
+    `Recovery: ${valueOrFallback(errorDetails?.recoveryHint)}`,
+    `Connectivity Probe: ${valueOrFallback(errorDetails?.connectivityProbe)}`,
+  ].join('\n');
 }
 
 function formatAssignmentError(error, fallbackMessage) {
@@ -191,6 +371,7 @@ function AppShell() {
   const [isBootstrapLoading, setIsBootstrapLoading] = useState(false);
   const [bootstrap, setBootstrap] = useState(null);
   const [bootstrapError, setBootstrapError] = useState(null);
+  const [bootstrapDiagnosticsCopyStatus, setBootstrapDiagnosticsCopyStatus] = useState(null);
   const [isRoleSubmitting, setIsRoleSubmitting] = useState(false);
 
   const [isAssignmentStatusLoading, setIsAssignmentStatusLoading] = useState(false);
@@ -203,6 +384,7 @@ function AppShell() {
   const [progressRoute, setProgressRoute] = useState('progress');
   const [insightsOrigin, setInsightsOrigin] = useState('progress');
   const [shellLoadingState, setShellLoadingState] = useState(null);
+  const [algorithmMemoryRefreshToken, setAlgorithmMemoryRefreshToken] = useState(0);
 
   const tabOpacity = useRef(new Animated.Value(1)).current;
   const tabTranslateY = useRef(new Animated.Value(0)).current;
@@ -221,6 +403,7 @@ function AppShell() {
     setSession(null);
     setBootstrap(null);
     setBootstrapError(null);
+    setBootstrapDiagnosticsCopyStatus(null);
     setAuthStage('welcome');
     setAuthEmail('');
     setAuthPassword('');
@@ -233,6 +416,7 @@ function AppShell() {
     setInsightsOrigin('progress');
     setChatLaunchContext(null);
     setCoachOverlayContext(null);
+    setAlgorithmMemoryRefreshToken(0);
     setAssignmentStatus(null);
     setAssignmentStatusError(null);
   }, []);
@@ -278,16 +462,18 @@ function AppShell() {
     if (!accessToken) {
       setBootstrap(null);
       setBootstrapError(null);
+      setBootstrapDiagnosticsCopyStatus(null);
       return null;
     }
     setIsBootstrapLoading(true);
     setBootstrapError(null);
+    setBootstrapDiagnosticsCopyStatus(null);
     try {
       const response = await getOnboardingBootstrap({ accessToken });
       setBootstrap(response);
       return response;
     } catch (error) {
-      setBootstrapError(error?.message || 'Unable to load onboarding bootstrap.');
+      setBootstrapError(formatBootstrapError(error, 'Unable to load onboarding bootstrap.'));
       return null;
     } finally {
       setIsBootstrapLoading(false);
@@ -437,6 +623,7 @@ function AppShell() {
     if (!session?.access_token) {
       setBootstrap(null);
       setBootstrapError(null);
+      setBootstrapDiagnosticsCopyStatus(null);
       return;
     }
     loadBootstrap({ accessToken: session.access_token });
@@ -561,6 +748,18 @@ function AppShell() {
     resetSignedOutState({ infoMessage: 'Your account has been permanently deleted.' });
   };
 
+  const handleCopyBootstrapDiagnostics = useCallback(async () => {
+    if (!bootstrapError) {
+      return;
+    }
+    try {
+      await Clipboard.setStringAsync(buildBootstrapDiagnosticsBundle(bootstrapError));
+      setBootstrapDiagnosticsCopyStatus('Copied diagnostics');
+    } catch (_error) {
+      setBootstrapDiagnosticsCopyStatus('Unable to copy diagnostics');
+    }
+  }, [bootstrapError]);
+
   const handleOpenChat = (launchContext = null) => {
     if (
       launchContext?.entrypoint === 'generated_workout'
@@ -604,6 +803,10 @@ function AppShell() {
     });
     setActiveTab('coach');
   };
+
+  const handleClientMemorySaved = useCallback(() => {
+    setAlgorithmMemoryRefreshToken((current) => current + 1);
+  }, []);
 
   const appState = useMemo(() => {
     if (!session?.access_token) {
@@ -708,12 +911,6 @@ function AppShell() {
     if (!isTrainerViewer && nextTab !== 'progress' && nextTab !== 'home') {
       setInsightsOrigin('progress');
     }
-  };
-
-  const handleOpenHomeInsights = () => {
-    setInsightsOrigin('home');
-    setActiveTab('progress');
-    setProgressRoute('insights');
   };
 
   const handleOpenProgressInsights = () => {
@@ -1076,9 +1273,12 @@ function AppShell() {
     return (
       <ShellErrorState
         title="We couldn't load your setup"
-        subtitle={bootstrapError || 'Unable to reach onboarding services right now.'}
+        subtitle={bootstrapError?.displayMessage || 'Unable to reach onboarding services right now.'}
         actionTitle="Retry"
         onPress={() => loadBootstrap({ accessToken: session.access_token })}
+        diagnostics={bootstrapError}
+        onCopyDiagnostics={handleCopyBootstrapDiagnostics}
+        copyFeedback={bootstrapDiagnosticsCopyStatus}
       />
     );
   }
@@ -1089,7 +1289,7 @@ function AppShell() {
         onSelectClient={() => handleSelectRole('client')}
         onSelectTrainer={() => handleSelectRole('trainer')}
         isSubmitting={isRoleSubmitting}
-        errorMessage={bootstrapError}
+        errorMessage={bootstrapError?.displayMessage || null}
       />
     );
   }
@@ -1120,7 +1320,6 @@ function AppShell() {
   }
 
   const navBottomInset = insets.bottom;
-  const floatingNavClearance = navBottomInset + FLOATING_NAV_BOTTOM_OFFSET + FLOATING_NAV_PILL_HEIGHT;
   const contentBottomInset = navBottomInset + 108;
   const coachChatBottomInset = navBottomInset + COACH_CHAT_DOCK_CLEARANCE;
   const shouldUseTrainerRouteFoundation = useCoachOsTrainerNav;
@@ -1171,12 +1370,10 @@ function AppShell() {
         ) : (
           <>
             {!isTrainerViewer && activeTab === 'home' ? (
-              <DailyCheckinScreen
+              <AlgorithmHomeScreen
                 accessToken={session.access_token}
                 bottomInset={contentBottomInset}
-                floatingNavClearance={floatingNavClearance}
-                onOpenChat={handleOpenChat}
-                onOpenInsights={handleOpenHomeInsights}
+                memoryRefreshToken={algorithmMemoryRefreshToken}
               />
             ) : null}
 
@@ -1209,6 +1406,8 @@ function AppShell() {
                   accessToken={session.access_token}
                   currentMode={clientCoachCurrentMode}
                   bottomInset={coachChatBottomInset}
+                  onOpenGeneratedPlanChat={handleOpenChat}
+                  onMemorySaved={handleClientMemorySaved}
                 />
               )
             ) : null}
@@ -1337,5 +1536,18 @@ const styles = StyleSheet.create({
   errorActionButton: {
     marginTop: theme.spacing[2],
     width: '100%',
+  },
+  errorSecondaryActionButton: {
+    marginTop: theme.spacing[1],
+    width: '100%',
+  },
+  diagnosticsBlock: {
+    width: '100%',
+    marginTop: theme.spacing[2],
+    gap: theme.spacing[1],
+  },
+  copyFeedback: {
+    marginTop: theme.spacing[1],
+    textAlign: 'center',
   },
 });

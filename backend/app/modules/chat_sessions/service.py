@@ -19,6 +19,7 @@ from app.modules.chat_sessions.schemas import (
 )
 from app.modules.conversation.schemas import ChatRequest
 from app.modules.conversation.service import ConversationService
+from app.modules.motivation import build_mindset_why_cue
 from app.modules.trainer_home.service import TrainerHomeService
 
 
@@ -29,6 +30,11 @@ CLIENT_SUGGESTED_ACTIONS = [
     "Log a meal",
     "Help me recover",
 ]
+CLIENT_MODE_BRIEF_ACTIONS = [
+    "Build me a training routine",
+    "Build me a nutrition plan",
+    "Talk through today's focus",
+]
 TRAINER_SUGGESTED_ACTIONS = [
     "Review flagged clients",
     "Draft check-in",
@@ -36,6 +42,42 @@ TRAINER_SUGGESTED_ACTIONS = [
     "Review missed clients",
 ]
 LEGACY_LOCAL_DAY_SEND_GRACE = timedelta(hours=12)
+CLIENT_MODE_BRIEF_SOURCE = "client_daily_mode_brief_v1"
+CLIENT_NO_CHECKIN_SOURCE = "client_daily_no_checkin_v1"
+CLIENT_MODE_BRIEF_WORD_LIMIT = 75
+LEGACY_TO_CANONICAL_MODE = {
+    "GREEN": "BEAST",
+    "YELLOW": "BUILD",
+    "BLUE": "RECOVER",
+    "RED": "REST",
+}
+
+CLIENT_MODE_BRIEF_BUNDLES = {
+    "BEAST": {
+        "tagline": "Full-send readiness.",
+        "training": ("45-60 min", "High", "Strength or HIIT"),
+        "nutrition": "Protein early, carbs around training, steady fluids.",
+        "mindset": "Attack the day. You are cleared to push.",
+    },
+    "BUILD": {
+        "tagline": "Stable readiness.",
+        "training": ("30-45 min", "Moderate", "Moderate cardio or controlled strength"),
+        "nutrition": "Protein each meal, balanced carbs, intentional snacks.",
+        "mindset": "Build momentum with disciplined reps.",
+    },
+    "RECOVER": {
+        "tagline": "Recovery-leaning day.",
+        "training": ("20-30 min", "Low", "Light movement or recovery"),
+        "nutrition": "Protein at each meal, simple whole-food meals (minimally processed, easy to prep), hydrate first.",
+        "mindset": "Recovery done well is progress.",
+    },
+    "REST": {
+        "tagline": "Restore and protect tomorrow.",
+        "training": ("10-20 min", "Very low", "Mobility, walking, or restorative movement"),
+        "nutrition": "Protein, colorful plants, and fluids for recovery.",
+        "mindset": "Rest with intent so you can return stronger.",
+    },
+}
 
 
 class ChatSessionAccessError(ValueError):
@@ -111,11 +153,11 @@ class ChatSessionService:
                 title=self._default_title(scope),
                 metadata=request.metadata,
             )
+        opening = self._ensure_opening_summary(scope=scope, session=session)
         messages = self.repository.list_messages(str(session["id"]), limit=250)
-        if not messages:
-            opening = self._ensure_opening_summary(scope=scope, session=session)
-            messages = [opening] if opening else self.repository.list_messages(str(session["id"]), limit=250)
-            session = self.repository.get_session(str(session["id"])) or session
+        if not messages and opening:
+            messages = [opening]
+        session = self.repository.get_session(str(session["id"])) or session
         suggested_actions = self._suggested_actions_from_messages(messages, scope.role)
         session = self._with_client_name(scope, session)
         return ChatSessionTodayResponse(
@@ -391,18 +433,40 @@ class ChatSessionService:
 
     def _ensure_opening_summary(self, *, scope: ChatSessionScope, session: dict[str, Any]) -> dict[str, Any] | None:
         existing = self.repository.get_opening_summary_message(str(session["id"]))
-        if existing:
-            return existing
         opening = self._build_opening_summary(scope)
+        opening_metadata = {
+            "auto_generated_opening_summary": True,
+            "suggested_action_chips": opening["suggested_actions"],
+            "summary_source": opening["source"],
+            **(opening.get("metadata") or {}),
+        }
+        if existing:
+            if self._should_refresh_opening_summary(existing, opening, opening_metadata):
+                refreshed = self.repository.update_opening_summary_message(
+                    session_id=str(session["id"]),
+                    content=opening["text"],
+                    metadata=opening_metadata,
+                )
+                metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+                self.repository.update_session(
+                    str(session["id"]),
+                    {
+                        "title": opening["title"],
+                        "summary": opening["summary"],
+                        "metadata": {
+                            **metadata,
+                            "opening_summary_generated_at": datetime.now(timezone.utc).isoformat(),
+                            "suggested_action_chips": opening["suggested_actions"],
+                        },
+                    },
+                )
+                return refreshed or existing
+            return existing
         message = self.repository.append_message(
             session_id=str(session["id"]),
             sender_type="ai",
             content=opening["text"],
-            metadata={
-                "auto_generated_opening_summary": True,
-                "suggested_action_chips": opening["suggested_actions"],
-                "summary_source": opening["source"],
-            },
+            metadata=opening_metadata,
         )
         metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
         self.repository.update_session(
@@ -419,6 +483,23 @@ class ChatSessionService:
         )
         return message
 
+    def _should_refresh_opening_summary(
+        self,
+        existing: dict[str, Any],
+        opening: dict[str, Any],
+        opening_metadata: dict[str, Any],
+    ) -> bool:
+        metadata = existing.get("metadata") if isinstance(existing.get("metadata"), dict) else {}
+        if str(existing.get("content") or "") != str(opening.get("text") or ""):
+            return True
+        if metadata.get("summary_source") != opening_metadata.get("summary_source"):
+            return True
+        if metadata.get("checkin_id") != opening_metadata.get("checkin_id"):
+            return True
+        if metadata.get("suggested_action_chips") != opening_metadata.get("suggested_action_chips"):
+            return True
+        return False
+
     def _build_opening_summary(self, scope: ChatSessionScope) -> dict[str, Any]:
         if scope.role == "trainer":
             return self._build_trainer_opening_summary(scope)
@@ -431,53 +512,105 @@ class ChatSessionService:
             client_id=scope.client_id,
         )) or {}
         today_checkin = self._safe(lambda: self.repository.get_checkin_by_date(scope.client_id, scope.session_date))
-        recent = self._safe(lambda: self.repository.list_recent_checkins(scope.client_id, end_date=scope.session_date)) or []
+        if not today_checkin:
+            first_name = self._first_name(client.get("client_name")) or "there"
+            text = (
+                f"Hey {first_name}, I do not have today's MODE yet. "
+                "Complete the daily check-in first so I can coach from your readiness instead of guessing."
+            )
+            return {
+                "text": text,
+                "title": "Today's Coach Brief",
+                "summary": self._clip_summary(text),
+                "suggested_actions": CLIENT_SUGGESTED_ACTIONS,
+                "source": CLIENT_NO_CHECKIN_SOURCE,
+                "metadata": {
+                    "checkin_date": scope.session_date.isoformat(),
+                    "has_checkin": False,
+                },
+            }
+
+        assigned_mode = self._canonical_mode(today_checkin.get("assigned_mode"))
         profile = self._safe(lambda: self.repository.get_profile(scope.client_id)) or {}
-        memory = self._safe(lambda: self.repository.list_client_memory(trainer_id=scope.trainer_id, client_id=scope.client_id)) or []
-        week_start = scope.session_date - timedelta(days=6)
-        workout_count = self._safe(lambda: self.repository.count_completed_workouts(
-            user_id=scope.trainer_context.client_user_id,
-            start_date=week_start,
-            end_date=scope.session_date,
-        )) or 0
-
-        primary_goal = str(profile.get("primary_goal") or "").strip()
-        readiness = self._client_mode_greeting(client=client, checkin=today_checkin)
-        activity = (
-            f"You have {workout_count} completed workouts in the last 7 days"
-            if workout_count
-            else "Your activity signal is still open today"
-        )
-        missing = self._client_missing_signal(today_checkin=today_checkin, workout_count=workout_count)
-        memory_hint = self._memory_hint(memory)
-        if primary_goal:
-            why_line = f"You said you want to {primary_goal}, so today is a chance to reinforce that with one clean action."
-        else:
-            why_line = "I do not have your deeper why yet, and I want to learn it so the coaching feels personal instead of generic."
-
-        question = (
-            "What is the one thing you are getting done before tonight?"
-            if primary_goal
-            else "What is the reason you want this to matter on the days motivation is not automatic?"
-        )
-        text = " ".join(
-            part for part in [
-                readiness,
-                f"{activity}.",
-                f"What is missing today: {missing}.",
-                memory_hint,
-                why_line,
-                question,
-            ]
-            if part
-        )
+        text = self._build_client_mode_brief(today_checkin, profile=profile)
         return {
             "text": text,
             "title": "Today's Coach Brief",
             "summary": self._clip_summary(text),
-            "suggested_actions": CLIENT_SUGGESTED_ACTIONS,
-            "source": "client_daily_signals_v1",
+            "suggested_actions": CLIENT_MODE_BRIEF_ACTIONS,
+            "source": CLIENT_MODE_BRIEF_SOURCE,
+            "metadata": {
+                "checkin_id": str(today_checkin.get("id") or "") or None,
+                "checkin_date": str(today_checkin.get("date") or scope.session_date.isoformat()),
+                "assigned_mode": assigned_mode,
+                "checkin_score": today_checkin.get("total_score"),
+                "has_checkin": True,
+                "has_user_why": bool(str(profile.get("user_why") or "").strip()),
+            },
         }
+
+    def _build_client_mode_brief(self, checkin: dict[str, Any], profile: dict[str, Any] | None = None) -> str:
+        mode = self._canonical_mode(checkin.get("assigned_mode")) or ""
+        bundle = CLIENT_MODE_BRIEF_BUNDLES.get(mode) or CLIENT_MODE_BRIEF_BUNDLES["RECOVER"]
+        score = checkin.get("total_score")
+        score_line = f"{score}/25. {bundle['tagline']}" if score is not None else bundle["tagline"]
+        duration, intensity, training_type = bundle["training"]
+        user_why = profile.get("user_why") if isinstance(profile, dict) else None
+        mindset = build_mindset_why_cue(bundle["mindset"], user_why, why_word_limit=18)
+        compact_mindset = build_mindset_why_cue(bundle["mindset"], user_why, why_word_limit=12)
+        candidates = [
+            {
+                "score_line": score_line,
+                "nutrition": bundle["nutrition"],
+                "mindset": mindset,
+            },
+            {
+                "score_line": score_line,
+                "nutrition": bundle["nutrition"],
+                "mindset": compact_mindset,
+            },
+            {
+                "score_line": score_line,
+                "nutrition": self._shorten_words(bundle["nutrition"], 7),
+                "mindset": compact_mindset,
+            },
+        ]
+
+        for candidate in candidates:
+            text = (
+                f"{mode or 'Set'} MODE\n"
+                f"{candidate['score_line']}\n"
+                f"Training: {duration}, {intensity}, {training_type}.\n"
+                f"Nutrition: {candidate['nutrition']}\n"
+                f"Mindset: {candidate['mindset']}\n\n"
+                "What do you want to achieve today?"
+            )
+            if self._word_count(text) <= CLIENT_MODE_BRIEF_WORD_LIMIT:
+                return text
+
+        return (
+            f"{mode or 'Set'} MODE\n"
+            f"{score_line}\n"
+            f"Training: {duration}, {intensity}, {training_type}.\n"
+            "Nutrition: fuel simply.\n"
+            f"Mindset: {compact_mindset}\n\n"
+            "What do you want to achieve today?"
+        )
+
+    def _canonical_mode(self, value: Any) -> str | None:
+        mode = str(value or "").strip().upper()
+        if not mode:
+            return None
+        return LEGACY_TO_CANONICAL_MODE.get(mode, mode)
+
+    def _shorten_words(self, value: str, limit: int) -> str:
+        words = str(value or "").split()
+        if len(words) <= limit:
+            return str(value or "")
+        return " ".join(words[:limit]).rstrip(".,;:") + "."
+
+    def _word_count(self, value: str) -> int:
+        return len([word for word in str(value or "").split() if word.strip()])
 
     def _with_client_name(self, scope: ChatSessionScope, session: dict[str, Any]) -> dict[str, Any]:
         if scope.role != "client" or not scope.client_id or session.get("client_name"):
@@ -618,7 +751,7 @@ class ChatSessionService:
                 "A quick check-in will let me coach from your recovery, strain, and readiness instead of guessing."
             )
 
-        mode = str(checkin.get("assigned_mode") or "").strip().upper()
+        mode = self._canonical_mode(checkin.get("assigned_mode")) or ""
         score = checkin.get("total_score")
         lowest = self._lowest_checkin_dimension(checkin.get("inputs"))
         score_text = f" Your readiness score is {score}/25" if score is not None else ""
@@ -633,7 +766,7 @@ class ChatSessionService:
         if not checkin:
             return "I do not have your readiness check-in yet today."
         score = checkin.get("total_score")
-        mode = str(checkin.get("assigned_mode") or "").strip().upper()
+        mode = self._canonical_mode(checkin.get("assigned_mode")) or ""
         lowest = self._lowest_checkin_dimension(checkin.get("inputs"))
         detail = f", with {lowest} as the lowest signal" if lowest else ""
         if not mode:

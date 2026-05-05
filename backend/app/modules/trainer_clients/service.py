@@ -8,6 +8,7 @@ from typing import Any
 
 from app.core.tenancy import TrainerContext
 from app.modules.checkin_signals import build_checkin_question_summaries
+from app.modules.motivation import resolve_motivation_baseline
 from app.modules.trainer_clients.repository import TrainerClientRepository
 from app.modules.trainer_clients.schemas import (
     ClientTrainerScheduleResponse,
@@ -285,9 +286,14 @@ class TrainerClientService:
             "memory_type": request.memory_type,
             "memory_key": memory_key,
             "value_json": {
+                "source": "trainer",
+                "created_by": "trainer",
+                "client_visible": False,
+                "ai_usable": request.visibility == "ai_usable",
                 "visibility": request.visibility,
                 "is_archived": False,
                 "text": text,
+                "category": request.memory_type,
                 "tags": self._normalize_tags(request.tags),
                 "structured_data": request.structured_data or {},
             },
@@ -317,6 +323,7 @@ class TrainerClientService:
 
         if request.visibility is not None:
             next_value["visibility"] = request.visibility
+            next_value["ai_usable"] = request.visibility == "ai_usable"
         if request.text is not None:
             text = request.text.strip()
             next_value["text"] = text or None
@@ -944,6 +951,10 @@ class TrainerClientService:
         summary_items: list[TrainerRuleSummaryItem],
     ) -> str:
         goal = str(profile_snapshot.get("primary_goal") or "unspecified").strip()
+        motivation_baseline = resolve_motivation_baseline(
+            profile_snapshot,
+            fallback=goal if goal and goal != "unspecified" else "general fitness",
+        )
         onboarding_status = str(profile_snapshot.get("onboarding_status") or "unknown").strip()
         top_rule_categories = ", ".join(item.category for item in summary_items[:3]) or "general_coaching"
         ai_memory_snippet = "; ".join(
@@ -958,6 +969,7 @@ class TrainerClientService:
 
         return (
             f"{client_name} context uses primary goal '{goal}' with onboarding status '{onboarding_status}'. "
+            f"Motivation baseline: {motivation_baseline}. "
             f"Applied trainer rule categories: {top_rule_categories}. "
             f"AI-usable memory highlights: {ai_memory_snippet} "
             f"(internal-only memories excluded: {internal_only_count})."

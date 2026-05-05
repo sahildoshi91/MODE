@@ -193,6 +193,7 @@ class FakeTrainerIntelligenceRepository:
         del client_id
         return {
             "primary_goal": "strength",
+            "user_why": "Never be too tired to play with my kid.",
             "experience_level": "intermediate",
             "equipment_access": "home_gym",
         }
@@ -245,6 +246,9 @@ class TrainerIntelligenceServiceTests(unittest.TestCase):
         self.assertNotIn("AI disabled content should never surface.", context.system_appendix)
         self.assertNotIn("Other client context should not leak.", context.system_appendix)
         self.assertIn("[LAYER_2_CLIENT_MEMORY_AI_USABLE_ONLY]", context.system_appendix)
+        self.assertIn("profile_user_why: Never be too tired to play with my kid.", context.system_appendix)
+        self.assertIn("profile_motivation_baseline: Never be too tired to play with my kid.", context.system_appendix)
+        self.assertIn("baseline reason for action", context.system_appendix)
         self.assertIn("Prefers early sessions before work.", context.system_appendix)
         self.assertNotIn("Internal-only note should not be injected.", context.system_appendix)
         self.assertIn("[LAYER_3_DYNAMIC_ANALYTICS]", context.system_appendix)

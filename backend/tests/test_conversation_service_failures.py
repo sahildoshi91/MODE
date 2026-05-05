@@ -102,6 +102,13 @@ class FakeTrainerPersonaRepository:
         return payload
 
 
+class FakeRoute:
+    task_type = "qa_quick"
+    response_mode = "direct_answer"
+    model = "gpt-5.4-mini"
+    flow = "default_fast"
+
+
 class ConversationServiceFailureTests(unittest.TestCase):
     def setUp(self):
         self.trainer_context = TrainerContext(
@@ -117,6 +124,32 @@ class ConversationServiceFailureTests(unittest.TestCase):
             message="What should I do today?",
             client_context={"platform": "ios"},
         )
+
+    def test_prompt_includes_user_why_as_motivation_baseline(self):
+        service = ConversationService(
+            BaseConversationRepository(),
+            WorkingProfileService(),
+            FakeTrainerReviewService(),
+            FakeTrainerPersonaRepository(),
+        )
+
+        prompt = service._build_prompt(
+            self.trainer_context,
+            {"id": "convo-123"},
+            self.request,
+            FakeRoute(),
+            {
+                "client_id": "client-123",
+                "primary_goal": "strength",
+                "user_why": "Dance until I am 100 and never tell my kids I am tired.",
+            },
+        )
+
+        self.assertIn(
+            "Client motivation baseline: Dance until I am 100 and never tell my kids I am tired.",
+            prompt.system_prompt,
+        )
+        self.assertIn("default reason behind recommendations", prompt.system_prompt)
 
     def test_handle_chat_wraps_profile_lookup_failures(self):
         repository = BaseConversationRepository()

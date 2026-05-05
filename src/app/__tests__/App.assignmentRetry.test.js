@@ -11,6 +11,7 @@ const mockAssignTrainer = jest.fn();
 const mockGetOnboardingBootstrap = jest.fn();
 const mockIngestMobileEvents = jest.fn();
 const mockSetOnboardingRole = jest.fn();
+const mockSetStringAsync = jest.fn();
 
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react');
@@ -42,6 +43,10 @@ jest.mock('../../features/onboarding/services/onboardingApi', () => ({
   getOnboardingBootstrap: (...args) => mockGetOnboardingBootstrap(...args),
   ingestMobileEvents: (...args) => mockIngestMobileEvents(...args),
   setOnboardingRole: (...args) => mockSetOnboardingRole(...args),
+}));
+
+jest.mock('expo-clipboard', () => ({
+  setStringAsync: (...args) => mockSetStringAsync(...args),
 }));
 
 jest.mock('../../config/featureFlags', () => ({
@@ -141,6 +146,60 @@ function createNetworkError() {
   };
 }
 
+function createBootstrapNetworkError() {
+  return {
+    stage: 'network',
+    message: 'Unable to reach the backend for /api/v1/onboarding/bootstrap. Tried: http://192.168.6.142:8000.',
+    request_path: '/api/v1/onboarding/bootstrap',
+    attempted_base_urls: ['http://192.168.6.142:8000', 'http://127.0.0.1:8000'],
+    resolved_api_base_url: 'http://192.168.6.142:8000',
+    raw_error_message: 'connect ECONNREFUSED',
+    recommended_api_base_url: 'http://192.168.6.144:8000',
+    connectivity_probe: {
+      endpoint_path: '/healthz',
+      first_reachable_base_url: 'http://192.168.6.144:8000',
+      candidate_api_base_urls: ['http://192.168.6.142:8000', 'http://192.168.6.144:8000'],
+      attempts: [
+        {
+          baseUrl: 'http://192.168.6.142:8000',
+          ok: false,
+          status: null,
+          timedOut: false,
+          error: 'connect ECONNREFUSED',
+        },
+      ],
+    },
+  };
+}
+
+function createBootstrapBackendDownError() {
+  return {
+    ...createBootstrapNetworkError(),
+    recommended_api_base_url: 'http://192.168.6.142:8000',
+    connectivity_probe: {
+      endpoint_path: '/healthz',
+      first_reachable_base_url: null,
+      candidate_api_base_urls: ['http://192.168.6.142:8000', 'http://127.0.0.1:8000'],
+      attempts: [
+        {
+          baseUrl: 'http://192.168.6.142:8000',
+          ok: false,
+          status: null,
+          timedOut: false,
+          error: 'Network request failed',
+        },
+        {
+          baseUrl: 'http://127.0.0.1:8000',
+          ok: false,
+          status: null,
+          timedOut: false,
+          error: 'Network request failed',
+        },
+      ],
+    },
+  };
+}
+
 function createUnassignedStatus() {
   return {
     needs_assignment: true,
@@ -191,6 +250,7 @@ describe('App assignment status retry behavior', () => {
     });
     mockIngestMobileEvents.mockResolvedValue({});
     mockSetOnboardingRole.mockResolvedValue({});
+    mockSetStringAsync.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -265,6 +325,110 @@ describe('App assignment status retry behavior', () => {
     await flushEffects();
 
     expect(mockGetTrainerAssignmentStatus).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('renders setup error when onboarding bootstrap fails and retries bootstrap', async () => {
+    mockGetOnboardingBootstrap.mockRejectedValueOnce(createBootstrapNetworkError());
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const renderedBeforeRetry = JSON.stringify(tree.toJSON());
+    expect(renderedBeforeRetry).toContain("We couldn't load your setup");
+    expect(renderedBeforeRetry).toContain('Unable to reach the backend for /api/v1/onboarding/bootstrap');
+    expect(mockGetOnboardingBootstrap).toHaveBeenCalledTimes(1);
+
+    const retryButton = tree.root.findByProps({ testID: 'app-shell-error-retry-button' });
+    await act(async () => {
+      retryButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(mockGetOnboardingBootstrap).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('renders bootstrap network diagnostics in dev/debug mode', async () => {
+    mockGetOnboardingBootstrap.mockRejectedValueOnce(createBootstrapNetworkError());
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Path:');
+    expect(rendered).toContain('/api/v1/onboarding/bootstrap');
+    expect(rendered).toContain('Tried hosts:');
+    expect(rendered).toContain('http://192.168.6.142:8000, http://127.0.0.1:8000');
+    expect(rendered).toContain('Resolved API Base:');
+    expect(rendered).toContain('http://192.168.6.142:8000');
+    expect(rendered).toContain('Recommended API Base:');
+    expect(rendered).toContain('http://192.168.6.144:8000');
+    expect(rendered).toContain('Network detail:');
+    expect(rendered).toContain('connect ECONNREFUSED');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('copies bootstrap diagnostics bundle from setup error state', async () => {
+    mockGetOnboardingBootstrap.mockRejectedValueOnce(createBootstrapNetworkError());
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const copyButton = tree.root.findByProps({ testID: 'app-bootstrap-copy-diagnostics-button' });
+    await act(async () => {
+      await copyButton.props.onPress();
+    });
+
+    expect(mockSetStringAsync).toHaveBeenCalledTimes(1);
+    expect(mockSetStringAsync.mock.calls[0][0]).toContain('MODE Onboarding Bootstrap Diagnostics');
+    expect(mockSetStringAsync.mock.calls[0][0]).toContain('/api/v1/onboarding/bootstrap');
+    expect(mockSetStringAsync.mock.calls[0][0]).toContain('Recommended API Base: http://192.168.6.144:8000');
+    expect(mockSetStringAsync.mock.calls[0][0]).toContain('Connectivity Probe');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows backend start remediation when no health probe is reachable', async () => {
+    mockGetOnboardingBootstrap.mockRejectedValueOnce(createBootstrapBackendDownError());
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Start backend: cd backend && ./venv/bin/python main.py. Then tap Retry.');
+
+    const copyButton = tree.root.findByProps({ testID: 'app-bootstrap-copy-diagnostics-button' });
+    await act(async () => {
+      await copyButton.props.onPress();
+    });
+
+    expect(mockSetStringAsync.mock.calls[0][0]).toContain(
+      'Recovery: Start backend: cd backend && ./venv/bin/python main.py. Then tap Retry.',
+    );
+
     await act(async () => {
       tree.unmount();
     });

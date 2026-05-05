@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.tenancy import TrainerContext
+from app.modules.motivation import resolve_motivation_baseline
 from app.modules.trainer_intelligence.repository import TrainerIntelligenceRepository
 from app.modules.trainer_intelligence.schemas import TrainerIntelligencePromptContext
 
@@ -354,6 +355,7 @@ class TrainerIntelligenceService:
             str(getattr(route, "flow", "") or ""),
             str(client_context.get("entrypoint") or ""),
             str((profile or {}).get("primary_goal") or ""),
+            str((profile or {}).get("user_why") or ""),
             str((profile or {}).get("experience_level") or ""),
             str((profile or {}).get("equipment_access") or ""),
         ]
@@ -493,9 +495,18 @@ class TrainerIntelligenceService:
     ) -> list[str]:
         lines: list[str] = []
         goal = str(profile_snapshot.get("primary_goal") or "unspecified").strip()
+        user_why = str(profile_snapshot.get("user_why") or "").strip()
+        motivation_baseline = resolve_motivation_baseline(profile_snapshot)
         experience = str(profile_snapshot.get("experience_level") or "unknown").strip()
         equipment = str(profile_snapshot.get("equipment_access") or "unknown").strip()
         lines.append(f"profile_goal: {goal}")
+        if user_why:
+            lines.append(f"profile_user_why: {user_why[:220]}")
+        lines.append(f"profile_motivation_baseline: {motivation_baseline[:220]}")
+        lines.append(
+            "motivation_baseline_instruction: Use profile_motivation_baseline as the client's baseline reason "
+            "for action and to frame motivation unless a newer client signal overrides it."
+        )
         lines.append(f"profile_experience_level: {experience}")
         lines.append(f"profile_equipment_access: {equipment}")
 
@@ -597,7 +608,8 @@ class TrainerIntelligenceService:
             if bool(value.get("is_archived")):
                 continue
             visibility = str(value.get("visibility") or "internal_only").strip().lower()
-            if visibility != "ai_usable":
+            ai_usable = bool(value.get("ai_usable")) if isinstance(value.get("ai_usable"), bool) else visibility == "ai_usable"
+            if not ai_usable:
                 continue
             text = str(value.get("text") or "").strip()
             if not text:

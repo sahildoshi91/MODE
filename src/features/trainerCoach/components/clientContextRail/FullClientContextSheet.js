@@ -26,6 +26,17 @@ function formatScore(value) {
   return `${Math.round(parsed)}`;
 }
 
+function resolveProfileSnapshot(summary) {
+  return summary?.detail?.profile_snapshot
+    || summary?.aiContext?.profile_snapshot
+    || {};
+}
+
+function resolveYourWhy(summary) {
+  const profile = resolveProfileSnapshot(summary);
+  return String(profile?.user_why || '').trim();
+}
+
 function renderAIContext(summary) {
   const aiContext = summary?.aiContext || {};
   const aiMemoryCount = Array.isArray(aiContext?.applied_ai_usable_memory)
@@ -33,9 +44,13 @@ function renderAIContext(summary) {
     : 0;
   const internalCount = Number(aiContext?.internal_only_memory_count || 0);
   const preview = String(aiContext?.context_preview_text || '').trim() || 'No context preview available.';
+  const yourWhy = resolveYourWhy(summary);
 
   return (
     <View style={styles.sectionBody}>
+      {yourWhy ? (
+        <ModeText variant="bodySm" tone="secondary">{`Your Why: ${yourWhy}`}</ModeText>
+      ) : null}
       <ModeText variant="caption" tone="secondary">
         {`AI-usable memory: ${aiMemoryCount} | Internal-only memory: ${internalCount}`}
       </ModeText>
@@ -48,9 +63,13 @@ function renderClientDetails(summary) {
   const detail = summary?.detail || {};
   const activity = detail?.activity_summary || {};
   const schedule = detail?.schedule_preferences || {};
+  const yourWhy = resolveYourWhy(summary);
 
   return (
     <View style={styles.sectionBody}>
+      {yourWhy ? (
+        <ModeText variant="bodySm" tone="secondary">{`Your Why: ${yourWhy}`}</ModeText>
+      ) : null}
       <ModeText variant="caption" tone="secondary">
         {`Avg score (7d): ${formatScore(activity?.avg_score_7d)}`}
       </ModeText>

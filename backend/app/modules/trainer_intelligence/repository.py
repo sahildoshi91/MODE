@@ -63,7 +63,7 @@ class TrainerIntelligenceRepository:
         response = (
             self.supabase
             .table("user_fitness_profiles")
-            .select("client_id, primary_goal, experience_level, equipment_access, onboarding_status, preferred_session_length")
+            .select("client_id, primary_goal, user_why, experience_level, equipment_access, onboarding_status, preferred_session_length")
             .eq("client_id", client_id)
             .limit(1)
             .execute()

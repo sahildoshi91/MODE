@@ -13,6 +13,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from app.core.tenancy import TrainerContext
 from app.modules.trainer_clients.schemas import (
     TrainerClientInviteCodeCreateRequest,
+    TrainerRuleSummaryItem,
     TrainerClientUpdateRequest,
 )
 from app.modules.trainer_clients.service import TrainerClientService
@@ -251,6 +252,22 @@ class TrainerClientManagementServiceTests(unittest.TestCase):
             trainer_display_name="Coach Alex",
             client_id=None,
         )
+
+    def test_context_preview_names_user_why_as_motivation_baseline(self):
+        preview = self.service._build_context_preview_text(
+            client_name="Taylor",
+            profile_snapshot={
+                "primary_goal": "strength",
+                "user_why": "Dance until I am 100 and never tell my kids I am tired.",
+                "onboarding_status": "completed",
+            },
+            ai_usable=[],
+            internal_only_count=2,
+            summary_items=[TrainerRuleSummaryItem(category="progression", rule_count=1)],
+        )
+
+        self.assertIn("Motivation baseline: Dance until I am 100", preview)
+        self.assertIn("primary goal 'strength'", preview)
 
     def test_update_and_remove_client_preserve_expected_state(self):
         updated = self.service.update_client(

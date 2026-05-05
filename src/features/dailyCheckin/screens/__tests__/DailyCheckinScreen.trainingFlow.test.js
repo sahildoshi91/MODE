@@ -175,11 +175,14 @@ jest.mock('../../services/checkinApi', () => ({
 }));
 
 import React from 'react';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, Text } from 'react-native';
 import renderer, { act } from 'react-test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import DailyCheckinScreen from '../DailyCheckinScreen';
+import DailyCheckinScreen, {
+  CheckinPlanBuilder,
+  CHECKIN_PLAN_TYPE,
+} from '../DailyCheckinScreen';
 import {
   generateCheckinPlan,
   getLastTrainingSetup,
@@ -287,27 +290,38 @@ describe('DailyCheckinScreen training routine flow', () => {
     await act(async () => {
       tree = renderer.create(
         <SafeAreaProvider>
-          <DailyCheckinScreen
+          <CheckinPlanBuilder
             accessToken="client-token"
+            initialPlanType={CHECKIN_PLAN_TYPE.TRAINING}
+            initialResult={{
+              id: 'checkin-1',
+              date: '2026-04-11',
+              score: 18,
+              mode: 'BUILD',
+              inputs: {
+                sleep: 4,
+                stress: 4,
+                soreness: 3,
+                nutrition: 4,
+                motivation: 3,
+              },
+              training: {
+                type: 'Moderate cardio or controlled strength',
+                duration: '30-45 min',
+                intensity: 'Moderate',
+              },
+              nutrition: {
+                rule: 'Anchor each meal with protein, add balanced carbs, and keep snacks intentional.',
+              },
+              mindset: {
+                cue: 'Build momentum with disciplined reps.',
+              },
+            }}
             bottomInset={0}
             floatingNavClearance={74}
           />
         </SafeAreaProvider>,
       );
-    });
-
-    await flushEffects();
-
-    expect(tree.root.findByProps({ testID: 'daily-checkin-home-overview' })).toBeTruthy();
-    expect(tree.root.findByProps({ testID: 'daily-checkin-home-readiness-ring' })).toBeTruthy();
-    expect(tree.root.findAllByProps({ testID: 'daily-checkin-home-readiness-bar' })).toHaveLength(0);
-
-    const homeRendered = JSON.stringify(tree.toJSON());
-    expect(homeRendered).toContain('Anchor each meal with protein, add balanced carbs, and keep snacks intentional.');
-    expect(homeRendered).not.toContain('Readiness');
-
-    await act(async () => {
-      tree.root.findByProps({ testID: 'build-training-routine-action' }).props.onPress();
     });
 
     await flushEffects();
@@ -377,6 +391,85 @@ describe('DailyCheckinScreen training routine flow', () => {
     });
   });
 
+  it('opens Coach after a saved daily check-in submit', async () => {
+    getTodayCheckin.mockResolvedValueOnce({
+      completed: false,
+      date: '2026-04-11',
+      current_streak: 0,
+      checkin: null,
+    });
+    submitTodayCheckin.mockResolvedValueOnce({
+      id: 'checkin-new',
+      date: '2026-04-11',
+      score: 18,
+      mode: 'BUILD',
+      inputs: {
+        sleep: 4,
+        stress: 4,
+        soreness: 3,
+        nutrition: 4,
+        motivation: 3,
+      },
+      training: {
+        type: 'Moderate cardio or controlled strength',
+        duration: '30-45 min',
+        intensity: 'Moderate',
+      },
+      nutrition: {
+        rule: 'Anchor each meal with protein, add balanced carbs, and keep snacks intentional.',
+      },
+      mindset: {
+        cue: 'Build momentum with disciplined reps.',
+      },
+    });
+    const onCheckinComplete = jest.fn();
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <DailyCheckinScreen
+            accessToken="client-token"
+            bottomInset={0}
+            floatingNavClearance={74}
+            onCheckinComplete={onCheckinComplete}
+          />
+        </SafeAreaProvider>,
+      );
+    });
+    await flushEffects();
+
+    const pressAnswer = async (label) => {
+      const textNode = tree.root.findAll((node) => (
+        node.type === Text && node.props?.children === label
+      ))[0];
+      let target = textNode;
+      while (target && typeof target.props?.onPress !== 'function') {
+        target = target.parent;
+      }
+      await act(async () => {
+        target.props.onPress();
+      });
+      await flushEffects();
+    };
+
+    await pressAnswer('Good sleep');
+    await pressAnswer('Mostly calm');
+    await pressAnswer('Some soreness');
+    await pressAnswer('Solid nutrition');
+    await pressAnswer('I can show up');
+
+    expect(onCheckinComplete).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'checkin-new',
+      mode: 'BUILD',
+      score: 18,
+    }));
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('applies the last training setup when the setup toggle is enabled', async () => {
     getLastTrainingSetup.mockResolvedValueOnce({
       setup: {
@@ -392,19 +485,38 @@ describe('DailyCheckinScreen training routine flow', () => {
     await act(async () => {
       tree = renderer.create(
         <SafeAreaProvider>
-          <DailyCheckinScreen
+          <CheckinPlanBuilder
             accessToken="client-token"
+            initialPlanType={CHECKIN_PLAN_TYPE.TRAINING}
+            initialResult={{
+              id: 'checkin-1',
+              date: '2026-04-11',
+              score: 18,
+              mode: 'BUILD',
+              inputs: {
+                sleep: 4,
+                stress: 4,
+                soreness: 3,
+                nutrition: 4,
+                motivation: 3,
+              },
+              training: {
+                type: 'Moderate cardio or controlled strength',
+                duration: '30-45 min',
+                intensity: 'Moderate',
+              },
+              nutrition: {
+                rule: 'Anchor each meal with protein, add balanced carbs, and keep snacks intentional.',
+              },
+              mindset: {
+                cue: 'Build momentum with disciplined reps.',
+              },
+            }}
             bottomInset={0}
             floatingNavClearance={74}
           />
         </SafeAreaProvider>,
       );
-    });
-
-    await flushEffects();
-
-    await act(async () => {
-      tree.root.findByProps({ testID: 'build-training-routine-action' }).props.onPress();
     });
 
     await flushEffects();
