@@ -713,14 +713,6 @@ function buildScheduleUiState(scheduleDraft) {
   };
 }
 
-function formatTemplateLocationLabel(scheduleDraft) {
-  const preferredMeetingLocation = String(scheduleDraft?.preferredMeetingLocation || '').trim();
-  if (preferredMeetingLocation) {
-    return preferredMeetingLocation;
-  }
-  return scheduleDraft?.autoUseTrainerDefaultLocation ? 'Trainer default' : 'Not set';
-}
-
 function formatOverrideSummary({
   exceptionType,
   plannerDayLabel,
@@ -1497,9 +1489,9 @@ export default function TrainerClientsScreen({
   const [commandCenterError, setCommandCenterError] = useState(null);
   const [scheduleBaseByClient, setScheduleBaseByClient] = useState({});
   const [scheduleDraftByClient, setScheduleDraftByClient] = useState({});
-  const [scheduleTouchedByClient, setScheduleTouchedByClient] = useState({});
-  const [scheduleUiByClient, setScheduleUiByClient] = useState({});
-  const [scheduleFeedbackByClient, setScheduleFeedbackByClient] = useState({});
+  const [, setScheduleTouchedByClient] = useState({});
+  const [, setScheduleUiByClient] = useState({});
+  const [, setScheduleFeedbackByClient] = useState({});
   const [savingScheduleClientId, setSavingScheduleClientId] = useState(null);
   const [commandCenterActionsClientId, setCommandCenterActionsClientId] = useState(null);
 
@@ -1511,14 +1503,14 @@ export default function TrainerClientsScreen({
   const [detailError, setDetailError] = useState(null);
   const [detailScheduleBase, setDetailScheduleBase] = useState(null);
   const [detailScheduleDraft, setDetailScheduleDraft] = useState(null);
-  const [detailScheduleUi, setDetailScheduleUi] = useState({
+  const [, setDetailScheduleUi] = useState({
     isTemplateExpanded: false,
     activeQuickRow: null,
     isActionsSheetOpen: false,
   });
   const [isSavingDetailSchedule, setIsSavingDetailSchedule] = useState(false);
-  const [detailScheduleError, setDetailScheduleError] = useState(null);
-  const [detailScheduleSuccess, setDetailScheduleSuccess] = useState(null);
+  const [, setDetailScheduleError] = useState(null);
+  const [, setDetailScheduleSuccess] = useState(null);
   const [isDetailContextExpanded, setIsDetailContextExpanded] = useState(false);
   const [setupClientId, setSetupClientId] = useState(null);
   const [setupReturnView, setSetupReturnView] = useState(VIEW_MODE.COMMAND_CENTER);
@@ -1671,27 +1663,6 @@ export default function TrainerClientsScreen({
       ? memoryRecords.find((record) => record?.id === editingMemoryId) || null
       : null
   ), [editingMemoryId, memoryRecords]);
-
-  const scheduleDirtyByClient = useMemo(() => {
-    const nextDirtyByClient = {};
-    clientItems.forEach((client) => {
-      const clientId = client?.client_id;
-      if (!clientId) {
-        return;
-      }
-      const baseDraft = scheduleBaseByClient[clientId] || buildClientScheduleDraft(client);
-      const currentDraft = scheduleDraftByClient[clientId] || baseDraft;
-      nextDirtyByClient[clientId] = !areScheduleDraftsEqual(currentDraft, baseDraft);
-    });
-    return nextDirtyByClient;
-  }, [clientItems, scheduleBaseByClient, scheduleDraftByClient]);
-
-  const detailScheduleDirty = useMemo(() => {
-    if (!detailScheduleBase || !detailScheduleDraft) {
-      return false;
-    }
-    return !areScheduleDraftsEqual(detailScheduleDraft, detailScheduleBase);
-  }, [detailScheduleBase, detailScheduleDraft]);
 
   const loadCommandCenter = useCallback(async ({
     refreshTalkingPoints = false,
@@ -2283,6 +2254,8 @@ export default function TrainerClientsScreen({
     }));
   };
 
+  // Preserved for follow-up schedule UI restoration; current rendered flow does not call it.
+  // eslint-disable-next-line no-unused-vars
   const handleToggleClientWeekday = (clientId, weekday) => {
     const current = scheduleDraftByClient[clientId] || buildClientScheduleDraft(
       clientItems.find((item) => item.client_id === clientId),
@@ -2292,6 +2265,8 @@ export default function TrainerClientsScreen({
     });
   };
 
+  // Preserved for follow-up schedule UI restoration; current rendered flow does not call it.
+  // eslint-disable-next-line no-unused-vars
   const saveClientSchedulePreferences = async (clientId) => {
     if (!accessToken || !clientId || savingScheduleClientId) {
       return;
@@ -2484,6 +2459,8 @@ export default function TrainerClientsScreen({
     setDetailScheduleSuccess(null);
   };
 
+  // Preserved for follow-up schedule UI restoration; current rendered flow does not call it.
+  // eslint-disable-next-line no-unused-vars
   const handleToggleDetailWeekday = (weekday) => {
     const currentWeekdays = Array.isArray(detailScheduleDraft?.recurringWeekdays)
       ? detailScheduleDraft.recurringWeekdays
@@ -2493,6 +2470,8 @@ export default function TrainerClientsScreen({
     });
   };
 
+  // Preserved for follow-up schedule UI restoration; current rendered flow does not call it.
+  // eslint-disable-next-line no-unused-vars
   const saveDetailScheduleTemplate = async () => {
     if (!accessToken || !selectedClientId || isSavingDetailSchedule || !detailScheduleDraft) {
       return;
@@ -2531,6 +2510,8 @@ export default function TrainerClientsScreen({
     }
   };
 
+  // Preserved for follow-up schedule UI restoration; current rendered flow does not call it.
+  // eslint-disable-next-line no-unused-vars
   const setDetailDateException = async (exceptionType) => {
     if (!accessToken || !selectedClientId || isSavingDetailSchedule || !detailScheduleDraft) {
       return;
@@ -2569,6 +2550,8 @@ export default function TrainerClientsScreen({
     }
   };
 
+  // Preserved for follow-up schedule UI restoration; current rendered flow does not call it.
+  // eslint-disable-next-line no-unused-vars
   const clearDetailDateException = async () => {
     if (!accessToken || !selectedClientId || isSavingDetailSchedule) {
       return;

@@ -515,6 +515,8 @@ function DraftReviewPanel({
   );
 }
 
+// Preserved pending product confirmation; this panel is not in SUPPORTED_MODAL_PANELS.
+// eslint-disable-next-line no-unused-vars
 function MemoryPanel({
   accessToken,
   clientId,
@@ -1267,6 +1269,8 @@ const CLIENT_CONTEXT_SECTION = {
   SETTINGS: 'settings',
 };
 
+// Preserved pending product confirmation; this panel is not in SUPPORTED_MODAL_PANELS.
+// eslint-disable-next-line no-unused-vars
 function ClientContextPanel({
   accessToken,
   initialClientId,
