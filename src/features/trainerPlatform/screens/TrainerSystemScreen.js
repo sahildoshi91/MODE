@@ -1772,6 +1772,7 @@ function ClientManagementScreen({
   onClientsMutated,
 }) {
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [clientsPayload, setClientsPayload] = useState({ items: [], count: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1792,14 +1793,26 @@ function ClientManagementScreen({
     setIsLoading(true);
     setError(null);
     try {
-      const clientsResponse = await listTrainerClients({ accessToken, query, limit: 100, offset: 0 });
+      const clientsResponse = await listTrainerClients({
+        accessToken,
+        query: debouncedQuery,
+        limit: 100,
+        offset: 0,
+      });
       setClientsPayload(normalizeListPayload(clientsResponse));
     } catch (nextError) {
       setError(nextError?.message || 'Unable to load client management data.');
     } finally {
       setIsLoading(false);
     }
-  }, [accessToken, query]);
+  }, [accessToken, debouncedQuery]);
+
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      setDebouncedQuery(query);
+    }, 250);
+    return () => clearTimeout(timeoutId);
+  }, [query]);
 
   useEffect(() => {
     loadData();

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   Keyboard,
   Modal,
   Platform,
@@ -2856,6 +2857,38 @@ export default function TrainerClientsScreen({
       : null
   ) || setupClientFromList?.client_name || 'Client';
 
+  const commandCenterClientKeyExtractor = (client) => (
+    String(client?.client_id || '')
+  );
+
+  const renderCommandCenterClient = ({ item: client }) => {
+    const clientId = client.client_id;
+    return (
+      <ClientTodayCard
+        client={client}
+        plannerDayLabel={plannerDayLabel}
+        isActionsOpen={commandCenterActionsClientId === clientId}
+        isMutatingActions={Boolean(savingScheduleClientId)}
+        onOpenActions={() => setCommandCenterActionsClientId(clientId)}
+        onCloseActions={() => setCommandCenterActionsClientId((previousClientId) => (
+          previousClientId === clientId ? null : previousClientId
+        ))}
+        onEditSessionSetup={() => handleOpenClientSetup(clientId, {
+          focusSection: 'schedule',
+          origin: VIEW_MODE.COMMAND_CENTER,
+        })}
+        onEditClientNotes={() => handleOpenClientSetup(clientId, {
+          focusSection: 'notes',
+          origin: VIEW_MODE.COMMAND_CENTER,
+        })}
+        onApplySkip={() => applyClientDateException(clientId, 'skip')}
+        onApplyAdd={() => applyClientDateException(clientId, 'add')}
+        onClearOverride={() => clearClientDateException(clientId)}
+        onOpenClientDetail={() => handleOpenClientDetail(clientId)}
+      />
+    );
+  };
+
   if (viewMode === VIEW_MODE.CLIENT_SETUP) {
     return (
       <SafeScreen
@@ -3293,12 +3326,16 @@ export default function TrainerClientsScreen({
         subtitle="Prioritized client risk scan and talking points"
       />
 
-      <ScrollView
+      <FlatList
+        data={!isLoadingCommandCenter && !commandCenterError ? visibleClientItems : []}
+        keyExtractor={commandCenterClientKeyExtractor}
+        renderItem={renderCommandCenterClient}
         contentContainerStyle={[
           styles.content,
           { paddingBottom: theme.spacing[4] + bottomInset },
         ]}
-      >
+        ListHeaderComponent={() => (
+          <>
         <Pressable
           testID={isTopSummaryCollapsed ? 'trainer-clients-summary-surface-collapsed' : 'trainer-clients-summary-surface-expanded'}
           onPress={() => {
@@ -3552,39 +3589,17 @@ export default function TrainerClientsScreen({
           </ModeCard>
         ) : null}
 
-        {!isLoadingCommandCenter && !commandCenterError && visibleClientItems.length > 0 ? (
-          <View style={styles.clientList}>
-            {visibleClientItems.map((client) => {
-              const clientId = client.client_id;
-              return (
-                <ClientTodayCard
-                  key={clientId}
-                  client={client}
-                  plannerDayLabel={plannerDayLabel}
-                  isActionsOpen={commandCenterActionsClientId === clientId}
-                  isMutatingActions={Boolean(savingScheduleClientId)}
-                  onOpenActions={() => setCommandCenterActionsClientId(clientId)}
-                  onCloseActions={() => setCommandCenterActionsClientId((previousClientId) => (
-                    previousClientId === clientId ? null : previousClientId
-                  ))}
-                  onEditSessionSetup={() => handleOpenClientSetup(clientId, {
-                    focusSection: 'schedule',
-                    origin: VIEW_MODE.COMMAND_CENTER,
-                  })}
-                  onEditClientNotes={() => handleOpenClientSetup(clientId, {
-                    focusSection: 'notes',
-                    origin: VIEW_MODE.COMMAND_CENTER,
-                  })}
-                  onApplySkip={() => applyClientDateException(clientId, 'skip')}
-                  onApplyAdd={() => applyClientDateException(clientId, 'add')}
-                  onClearOverride={() => clearClientDateException(clientId)}
-                  onOpenClientDetail={() => handleOpenClientDetail(clientId)}
-                />
-              );
-            })}
-          </View>
-        ) : null}
-      </ScrollView>
+          </>
+        )}
+        ItemSeparatorComponent={CommandCenterClientSeparator}
+        initialNumToRender={8}
+        maxToRenderPerBatch={8}
+        updateCellsBatchingPeriod={50}
+        windowSize={7}
+        removeClippedSubviews={Platform.OS !== 'web'}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      />
       {breathingTransitionsEnabled ? (
         <BreathingTransitionOverlay
           active={isLoadingCommandCenter}
@@ -3607,6 +3622,10 @@ export default function TrainerClientsScreen({
       />
     </SafeScreen>
   );
+}
+
+function CommandCenterClientSeparator() {
+  return <View style={styles.clientListSeparator} />;
 }
 
 const styles = StyleSheet.create({
@@ -3721,8 +3740,8 @@ const styles = StyleSheet.create({
   draftReviewActionButton: {
     flex: 1,
   },
-  clientList: {
-    gap: theme.spacing[2],
+  clientListSeparator: {
+    height: theme.spacing[2],
   },
   clientOperationalCard: {
     marginBottom: 0,

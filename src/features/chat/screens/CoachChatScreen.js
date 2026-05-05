@@ -1394,6 +1394,11 @@ export default function CoachChatScreen({
             keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
             showsVerticalScrollIndicator={false}
             scrollEventThrottle={16}
+            initialNumToRender={14}
+            maxToRenderPerBatch={8}
+            updateCellsBatchingPeriod={50}
+            windowSize={7}
+            removeClippedSubviews={Platform.OS !== 'web'}
             onScroll={(event) => {
               const nativeEvent = event?.nativeEvent || {};
               updateScrollMetrics({

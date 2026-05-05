@@ -1,5 +1,5 @@
 import React, { useCallback, useRef } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { FlatList, Platform, Pressable, StyleSheet, View } from 'react-native';
 
 import { ModeButton, ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
@@ -210,6 +210,11 @@ export default function ChatMessageList({
       onScroll={handleScroll}
       scrollEventThrottle={16}
       onContentSizeChange={handleContentSizeChange}
+      initialNumToRender={12}
+      maxToRenderPerBatch={8}
+      updateCellsBatchingPeriod={50}
+      windowSize={7}
+      removeClippedSubviews={Platform.OS !== 'web'}
       contentContainerStyle={[
         styles.content,
         { paddingBottom: Math.max(bottomInset, 18) + theme.spacing[3] },
