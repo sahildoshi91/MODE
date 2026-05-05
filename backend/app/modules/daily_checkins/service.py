@@ -14,11 +14,14 @@ from app.modules.daily_checkins.schemas import (
     Environment,
     GenerateCheckinPlanRequest,
     GenerateCheckinPlanResponse,
+    LastNutritionSetup,
+    LastNutritionSetupResponse,
     LastTrainingSetup,
     LastTrainingSetupResponse,
     LogGeneratedWorkoutResponse,
     MindsetRecommendation,
     NutritionRecommendation,
+    NutritionSetupDayType,
     PlanType,
     ProgressRecentCheckin,
     ScoreWindowChange,
@@ -253,6 +256,40 @@ class DailyCheckinService:
                 generated_plan_id=str(generated_plan_id),
                 environment=str(environment),
                 time_available=int(time_available),
+                created_at=created_at,
+            )
+        )
+
+    def get_last_nutrition_setup(
+        self,
+        client_id: str,
+        *,
+        exclude_checkin_id: str | None = None,
+    ) -> LastNutritionSetupResponse:
+        if not self.repository or not hasattr(self.repository, "get_latest_nutrition_setup"):
+            return LastNutritionSetupResponse()
+
+        record = self.repository.get_latest_nutrition_setup(
+            client_id,
+            exclude_checkin_id=exclude_checkin_id,
+        )
+        if not record:
+            return LastNutritionSetupResponse()
+
+        generated_plan_id = record.get("id")
+        created_at = record.get("created_at")
+        if not generated_plan_id or not created_at:
+            return LastNutritionSetupResponse()
+
+        note = record.get("nutrition_day_note")
+        normalized_note = note.strip() if isinstance(note, str) and note.strip() else None
+        day_type = NutritionSetupDayType.CUSTOM if normalized_note else NutritionSetupDayType.NORMAL
+
+        return LastNutritionSetupResponse(
+            setup=LastNutritionSetup(
+                generated_plan_id=str(generated_plan_id),
+                nutrition_day_type=day_type,
+                nutrition_day_note=normalized_note,
                 created_at=created_at,
             )
         )

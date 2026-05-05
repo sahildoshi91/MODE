@@ -13,16 +13,21 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import {
+  Apple,
   BedSingle,
   Clock3,
+  Coffee,
   Dumbbell,
   Flame,
+  GlassWater,
   Info,
   Lightbulb,
   PersonStanding,
   PlayCircle,
   Snowflake,
+  Soup,
   TreePine,
+  Utensils,
 } from 'lucide-react-native';
 
 import {
@@ -51,8 +56,8 @@ import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/load
 import { resolveTrainingItemVisual, TRAINING_ITEM_SECTIONS } from './trainingVisuals';
 import {
   generateCheckinPlan,
+  getLastNutritionSetup,
   getLastTrainingSetup,
-  getPreviousCheckin,
   getTodayCheckin,
   logGeneratedWorkout,
   probeBackendHealthz,
@@ -282,6 +287,10 @@ const LAST_TRAINING_SETUP_ENVIRONMENT_ALIASES = {
   home_gym: 'full_gym',
   limited: 'bodyweight',
 };
+const NUTRITION_DAY_TYPE = {
+  NORMAL: 'normal',
+  CUSTOM: 'custom',
+};
 const TRAINING_TEXT_EMOJI_PATTERN = /[\u200D\uFE0F\u{1F1E6}-\u{1F1FF}\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu;
 
 function getLocalDateString() {
@@ -419,6 +428,43 @@ function formatTrainingSetupMeta(setup) {
   return `${environmentLabel} • ${setup.timeAvailable}m`;
 }
 
+function normalizeLastNutritionSetupPayload(payload) {
+  const setup = payload?.setup;
+  if (!setup || typeof setup !== 'object') {
+    return null;
+  }
+
+  const rawDayType = typeof setup.nutrition_day_type === 'string'
+    ? setup.nutrition_day_type
+    : NUTRITION_DAY_TYPE.NORMAL;
+  const note = typeof setup.nutrition_day_note === 'string'
+    ? setup.nutrition_day_note.trim()
+    : '';
+  const nutritionDayType = rawDayType === NUTRITION_DAY_TYPE.CUSTOM && note
+    ? NUTRITION_DAY_TYPE.CUSTOM
+    : NUTRITION_DAY_TYPE.NORMAL;
+
+  return {
+    generatedPlanId: setup.generated_plan_id || null,
+    nutritionDayType,
+    nutritionDayNote: nutritionDayType === NUTRITION_DAY_TYPE.CUSTOM ? note : '',
+    createdAt: setup.created_at || null,
+  };
+}
+
+function formatNutritionSetupMeta(setup) {
+  if (!setup) {
+    return null;
+  }
+  if (setup.nutritionDayType === NUTRITION_DAY_TYPE.CUSTOM && setup.nutritionDayNote) {
+    const note = setup.nutritionDayNote.length > 44
+      ? `${setup.nutritionDayNote.slice(0, 41).trim()}...`
+      : setup.nutritionDayNote;
+    return `Custom day • ${note}`;
+  }
+  return 'Normal day';
+}
+
 function buildSupportBundle({ date, result, submitError }) {
   return [
     'MODE Check-in Support Bundle',
@@ -471,7 +517,7 @@ function buildPlanSupportBundle({
   timeAvailable,
   nutritionDayType,
   nutritionDayNote,
-  includeYesterdayContext,
+  useLastNutritionSetup,
   planError,
 }) {
   return [
@@ -483,7 +529,7 @@ function buildPlanSupportBundle({
     `Time available: ${withFallback(timeAvailable)}`,
     `Nutrition day type: ${withFallback(nutritionDayType)}`,
     `Nutrition day note: ${withFallback(nutritionDayNote)}`,
-    `Use yesterday context: ${withFallback(includeYesterdayContext)}`,
+    `Use last nutrition setup: ${withFallback(useLastNutritionSetup)}`,
     `Path: ${withFallback(planError?.path)}`,
     `Stage: ${withFallback(planError?.stage)}`,
     `HTTP status: ${withFallback(planError?.status)}`,
@@ -668,6 +714,33 @@ function sanitizeTrainingPlan(plan) {
         name: sanitizeTrainingText(item?.name),
         duration: sanitizeTrainingText(item?.duration),
         description: sanitizeTrainingText(item?.description),
+      }))
+      : [],
+  };
+}
+
+function sanitizeNutritionPlan(plan) {
+  if (!plan || typeof plan !== 'object') {
+    return null;
+  }
+
+  return {
+    ...plan,
+    title: sanitizeTrainingText(plan.title),
+    coachNote: sanitizeTrainingText(plan.coachNote),
+    meals: Array.isArray(plan.meals)
+      ? plan.meals.map((meal) => ({
+        ...meal,
+        name: sanitizeTrainingText(meal?.name),
+        timing: sanitizeTrainingText(meal?.timing),
+        notes: sanitizeTrainingText(meal?.notes),
+        foods: Array.isArray(meal?.foods)
+          ? meal.foods.map((food) => ({
+            ...food,
+            name: sanitizeTrainingText(food?.name),
+            amount: sanitizeTrainingText(food?.amount),
+          }))
+          : [],
       }))
       : [],
   };
@@ -1110,37 +1183,6 @@ function PlanActionCard({
   );
 }
 
-function PreviousContextToggle({ previousCheckin, isLoadingPreviousCheckin, includeYesterdayContext, onToggle }) {
-  if (isLoadingPreviousCheckin) {
-    return (
-      <View style={styles.previousCard}>
-        <ActivityIndicator size="small" color={theme.colors.accent.primary} />
-        <Text style={styles.previousLoadingText}>Looking up yesterday&apos;s check-in…</Text>
-      </View>
-    );
-  }
-
-  if (!previousCheckin) {
-    return null;
-  }
-
-  return (
-    <Pressable onPress={() => onToggle(!includeYesterdayContext)} style={styles.previousCard}>
-      <View style={styles.previousLeft}>
-        <MaterialCommunityIcons name="calendar-sync" size={18} color={theme.colors.accent.primary} />
-        <View style={styles.previousCopyWrap}>
-          <Text style={styles.previousTitle}>Use Yesterday&apos;s Data</Text>
-          <Text style={styles.previousMeta}>{previousCheckin.mode} • {previousCheckin.score}/25</Text>
-        </View>
-      </View>
-      <GlassToggle
-        value={includeYesterdayContext}
-        onValueChange={onToggle}
-      />
-    </Pressable>
-  );
-}
-
 function LastTrainingSetupToggle({ lastTrainingSetup, isLoadingLastTrainingSetup, useLastTrainingSetup, onToggle }) {
   const isDisabled = isLoadingLastTrainingSetup || !lastTrainingSetup;
   const meta = isLoadingLastTrainingSetup
@@ -1179,6 +1221,50 @@ function LastTrainingSetupToggle({ lastTrainingSetup, isLoadingLastTrainingSetup
           value={Boolean(lastTrainingSetup && useLastTrainingSetup)}
           onValueChange={onToggle}
           testID="last-training-setup-switch"
+        />
+      )}
+    </Pressable>
+  );
+}
+
+function LastNutritionSetupToggle({ lastNutritionSetup, isLoadingLastNutritionSetup, useLastNutritionSetup, onToggle }) {
+  const isDisabled = isLoadingLastNutritionSetup || !lastNutritionSetup;
+  const meta = isLoadingLastNutritionSetup
+    ? 'Looking up last nutrition setup...'
+    : formatNutritionSetupMeta(lastNutritionSetup) || 'No previous setup found';
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled: isDisabled }}
+      disabled={isDisabled}
+      onPress={() => {
+        if (!isDisabled) {
+          onToggle(!useLastNutritionSetup);
+        }
+      }}
+      style={[
+        styles.previousCard,
+        styles.lastTrainingSetupCard,
+        isDisabled && styles.previousCardDisabled,
+      ]}
+      testID="last-nutrition-setup-toggle"
+    >
+      <View style={styles.previousLeft}>
+        <MaterialCommunityIcons name="food-apple-outline" size={18} color={theme.colors.accent.primary} />
+        <View style={styles.previousCopyWrap}>
+          <Text style={styles.previousTitle}>Use Last Nutrition Setup</Text>
+          <Text style={styles.previousMeta}>{meta}</Text>
+        </View>
+      </View>
+      {isLoadingLastNutritionSetup ? (
+        <ActivityIndicator size="small" color={theme.colors.accent.primary} />
+      ) : (
+        <GlassToggle
+          disabled={isDisabled}
+          value={Boolean(lastNutritionSetup && useLastNutritionSetup)}
+          onValueChange={onToggle}
+          testID="last-nutrition-setup-switch"
         />
       )}
     </Pressable>
@@ -1437,33 +1523,81 @@ function GuidedWorkoutView({ plan, elapsedSeconds, guidedStatus, bottomPadding =
   );
 }
 
+function resolveNutritionMealIcon(meal = {}) {
+  const label = `${meal?.name || ''} ${meal?.timing || ''}`.toLowerCase();
+  if (label.includes('breakfast') || label.includes('morning')) {
+    return Coffee;
+  }
+  if (label.includes('snack') || label.includes('pre') || label.includes('post')) {
+    return Apple;
+  }
+  if (label.includes('hydration') || label.includes('water')) {
+    return GlassWater;
+  }
+  if (label.includes('soup') || label.includes('bowl')) {
+    return Soup;
+  }
+  return Utensils;
+}
+
+function NutritionIconBadge({ Icon = Utensils, size = 16, style, testID }) {
+  return (
+    <TrainingIconBadge
+      Icon={Icon}
+      size={size}
+      style={[styles.nutritionIconBadge, style]}
+      color={theme.colors.status.success}
+      backgroundColor={withAlpha(theme.colors.status.success, 0.14)}
+      borderColor={withAlpha(theme.colors.status.success, 0.24)}
+      testID={testID}
+    />
+  );
+}
+
 function NutritionPlanView({ plan }) {
   if (!plan) {
     return null;
   }
+  const displayPlan = sanitizeNutritionPlan(plan);
 
   return (
     <ScrollView contentContainerStyle={styles.planScrollContent}>
       <HeroOverlayCard
         eyebrow="Nutrition"
-        title={plan.title}
-        body={plan.coachNote}
+        title={displayPlan.title}
+        body={displayPlan.coachNote}
         style={styles.nutritionHeaderCard}
       >
         <View style={styles.metaRow}>
-          <Text style={styles.metaPill}>🔥 {plan.totalCalories} kcal</Text>
-          <Text style={styles.metaPill}>💪 {plan.totalProtein}g</Text>
+          <View style={styles.nutritionMetaPill}>
+            <NutritionIconBadge Icon={Flame} size={13} style={styles.nutritionMetaIcon} testID="nutrition-calories-icon" />
+            <Text style={styles.nutritionMetaText}>{displayPlan.totalCalories} kcal</Text>
+          </View>
+          <View style={styles.nutritionMetaPill}>
+            <NutritionIconBadge Icon={Dumbbell} size={13} style={styles.nutritionMetaIcon} testID="nutrition-protein-icon" />
+            <Text style={styles.nutritionMetaText}>{displayPlan.totalProtein}g</Text>
+          </View>
         </View>
       </HeroOverlayCard>
 
-      {(plan.meals || []).map((meal, index) => (
+      {(displayPlan.meals || []).map((meal, index) => (
         <GlassCard key={`meal-${index}`} style={styles.mealCard} state="default" padding={theme.spacing[2]}>
           <View style={styles.mealTopRow}>
-            <View>
-              <Text style={styles.mealName}>{meal.emoji} {meal.name}</Text>
-              <Text style={styles.simpleDesc}>{meal.timing}</Text>
+            <View style={styles.mealHeadingRow}>
+              <NutritionIconBadge
+                Icon={resolveNutritionMealIcon(meal)}
+                style={styles.mealIconBadge}
+                testID={`nutrition-meal-icon-${index}`}
+              />
+              <View style={styles.mealHeadingCopy}>
+                <Text style={styles.mealName}>{meal.name}</Text>
+                <Text style={styles.simpleDesc}>{meal.timing}</Text>
+              </View>
             </View>
-            <Text style={styles.simpleDesc}>{meal.totalCalories} / {meal.totalProtein}g</Text>
+            <View style={styles.mealTotalsWrap}>
+              <Text style={styles.simpleDesc}>{meal.totalCalories} kcal</Text>
+              <Text style={styles.simpleDesc}>{meal.totalProtein}g protein</Text>
+            </View>
           </View>
           {(meal.foods || []).map((food, foodIndex) => (
             <View key={`food-${foodIndex}`} style={styles.foodRow}>
@@ -1491,6 +1625,7 @@ export function CheckinPlanBuilder({
   const today = useMemo(() => date || getLocalDateString(), [date]);
   const nutritionDayNoteRef = useRef(null);
   const manualTrainingSetupRef = useRef({ environment: null, timeAvailable: 30 });
+  const manualNutritionSetupRef = useRef({ nutritionDayType: null, nutritionDayNote: '' });
   const [summaryResult, setSummaryResult] = useState(initialResult);
   const [step, setStep] = useState(initialResult ? 'environment' : 'loading');
   const [resultError, setResultError] = useState(null);
@@ -1499,12 +1634,12 @@ export function CheckinPlanBuilder({
   const [timeAvailable, setTimeAvailable] = useState(30);
   const [nutritionDayType, setNutritionDayType] = useState(null);
   const [nutritionDayNote, setNutritionDayNote] = useState('');
-  const [previousCheckin, setPreviousCheckin] = useState(null);
-  const [isLoadingPreviousCheckin, setIsLoadingPreviousCheckin] = useState(false);
-  const [includeYesterdayContext, setIncludeYesterdayContext] = useState(false);
   const [lastTrainingSetup, setLastTrainingSetup] = useState(null);
   const [isLoadingLastTrainingSetup, setIsLoadingLastTrainingSetup] = useState(false);
   const [useLastTrainingSetup, setUseLastTrainingSetup] = useState(false);
+  const [lastNutritionSetup, setLastNutritionSetup] = useState(null);
+  const [isLoadingLastNutritionSetup, setIsLoadingLastNutritionSetup] = useState(false);
+  const [useLastNutritionSetup, setUseLastNutritionSetup] = useState(false);
   const [planLoading, setPlanLoading] = useState(false);
   const [planError, setPlanError] = useState(null);
   const [planContent, setPlanContent] = useState(null);
@@ -1572,9 +1707,9 @@ export function CheckinPlanBuilder({
         setIsLoadingLastTrainingSetup(true);
         setLastTrainingSetup(null);
         setUseLastTrainingSetup(false);
-        setPreviousCheckin(null);
-        setIsLoadingPreviousCheckin(false);
-        setIncludeYesterdayContext(false);
+        setLastNutritionSetup(null);
+        setIsLoadingLastNutritionSetup(false);
+        setUseLastNutritionSetup(false);
 
         try {
           const response = await getLastTrainingSetup({
@@ -1601,34 +1736,34 @@ export function CheckinPlanBuilder({
       };
     }
 
-    const loadPreviousCheckin = async () => {
-      setIsLoadingPreviousCheckin(true);
-      setPreviousCheckin(null);
-      setIncludeYesterdayContext(false);
+    const loadLastNutritionSetup = async () => {
+      setIsLoadingLastNutritionSetup(true);
+      setLastNutritionSetup(null);
+      setUseLastNutritionSetup(false);
       setLastTrainingSetup(null);
       setIsLoadingLastTrainingSetup(false);
       setUseLastTrainingSetup(false);
 
       try {
-        const response = await getPreviousCheckin({
+        const response = await getLastNutritionSetup({
           accessToken,
-          beforeDate: today,
+          excludeCheckinId: summaryResult?.id,
         });
         if (!cancelled) {
-          setPreviousCheckin(response?.checkin || null);
+          setLastNutritionSetup(normalizeLastNutritionSetupPayload(response));
         }
       } catch (_error) {
         if (!cancelled) {
-          setPreviousCheckin(null);
+          setLastNutritionSetup(null);
         }
       } finally {
         if (!cancelled) {
-          setIsLoadingPreviousCheckin(false);
+          setIsLoadingLastNutritionSetup(false);
         }
       }
     };
 
-    loadPreviousCheckin();
+    loadLastNutritionSetup();
 
     return () => {
       cancelled = true;
@@ -1705,6 +1840,43 @@ export function CheckinPlanBuilder({
     setTimeAvailable(nextTimeAvailable);
   };
 
+  const handleToggleLastNutritionSetup = (nextValue) => {
+    if (nextValue) {
+      if (!lastNutritionSetup) {
+        return;
+      }
+      manualNutritionSetupRef.current = {
+        nutritionDayType,
+        nutritionDayNote,
+      };
+      setUseLastNutritionSetup(true);
+      setNutritionDayType(lastNutritionSetup.nutritionDayType);
+      setNutritionDayNote(lastNutritionSetup.nutritionDayNote || '');
+      return;
+    }
+
+    setUseLastNutritionSetup(false);
+    setNutritionDayType(manualNutritionSetupRef.current.nutritionDayType || null);
+    setNutritionDayNote(manualNutritionSetupRef.current.nutritionDayNote || '');
+  };
+
+  const handleSelectNutritionDayType = (nextNutritionDayType) => {
+    if (useLastNutritionSetup) {
+      setUseLastNutritionSetup(false);
+    }
+    setNutritionDayType(nextNutritionDayType);
+    if (nextNutritionDayType === NUTRITION_DAY_TYPE.NORMAL) {
+      setNutritionDayNote('');
+    }
+  };
+
+  const handleChangeNutritionDayNote = (nextNutritionDayNote) => {
+    if (useLastNutritionSetup) {
+      setUseLastNutritionSetup(false);
+    }
+    setNutritionDayNote(nextNutritionDayNote);
+  };
+
   const handleGeneratePlan = async (refreshRequestedOrEvent = false) => {
     const refreshRequested = refreshRequestedOrEvent === true;
     if (!summaryResult?.id || !planType || !canGeneratePlan || planLoading) {
@@ -1726,7 +1898,7 @@ export function CheckinPlanBuilder({
         nutritionDayNote: planType === PLAN_TYPE.NUTRITION && nutritionDayType === 'custom'
           ? nutritionDayNote.trim()
           : undefined,
-        includeYesterdayContext: planType === PLAN_TYPE.NUTRITION ? includeYesterdayContext : false,
+        includeYesterdayContext: false,
         refreshRequested,
       });
 
@@ -1765,7 +1937,7 @@ export function CheckinPlanBuilder({
         timeAvailable,
         nutritionDayType,
         nutritionDayNote: nutritionDayType === 'custom' ? nutritionDayNote.trim() : null,
-        includeYesterdayContext: planType === PLAN_TYPE.NUTRITION ? includeYesterdayContext : false,
+        useLastNutritionSetup: planType === PLAN_TYPE.NUTRITION ? useLastNutritionSetup : false,
         planError,
       });
       await Clipboard.setStringAsync(supportBundle);
@@ -1933,11 +2105,11 @@ export function CheckinPlanBuilder({
                   onToggle={handleToggleLastTrainingSetup}
                 />
               ) : (
-                <PreviousContextToggle
-                  previousCheckin={previousCheckin}
-                  isLoadingPreviousCheckin={isLoadingPreviousCheckin}
-                  includeYesterdayContext={includeYesterdayContext}
-                  onToggle={setIncludeYesterdayContext}
+                <LastNutritionSetupToggle
+                  lastNutritionSetup={lastNutritionSetup}
+                  isLoadingLastNutritionSetup={isLoadingLastNutritionSetup}
+                  useLastNutritionSetup={useLastNutritionSetup}
+                  onToggle={handleToggleLastNutritionSetup}
                 />
               )}
 
@@ -2044,12 +2216,9 @@ export function CheckinPlanBuilder({
                   />
                   <View style={styles.dayTypeList}>
                     <GlassSurface
-                      onPress={() => {
-                        setNutritionDayType('normal');
-                        setNutritionDayNote('');
-                      }}
-                      style={[styles.dayTypeCard, nutritionDayType === 'normal' && styles.dayTypeCardSelected]}
-                      state={nutritionDayType === 'normal' ? 'active' : 'default'}
+                      onPress={() => handleSelectNutritionDayType(NUTRITION_DAY_TYPE.NORMAL)}
+                      style={[styles.dayTypeCard, nutritionDayType === NUTRITION_DAY_TYPE.NORMAL && styles.dayTypeCardSelected]}
+                      state={nutritionDayType === NUTRITION_DAY_TYPE.NORMAL ? 'active' : 'default'}
                       radius="m"
                       padding={theme.spacing[2]}
                     >
@@ -2058,9 +2227,9 @@ export function CheckinPlanBuilder({
                     </GlassSurface>
 
                     <GlassSurface
-                      onPress={() => setNutritionDayType('custom')}
-                      style={[styles.dayTypeCard, nutritionDayType === 'custom' && styles.dayTypeCardSelected]}
-                      state={nutritionDayType === 'custom' ? 'active' : 'default'}
+                      onPress={() => handleSelectNutritionDayType(NUTRITION_DAY_TYPE.CUSTOM)}
+                      style={[styles.dayTypeCard, nutritionDayType === NUTRITION_DAY_TYPE.CUSTOM && styles.dayTypeCardSelected]}
+                      state={nutritionDayType === NUTRITION_DAY_TYPE.CUSTOM ? 'active' : 'default'}
                       radius="m"
                       padding={theme.spacing[2]}
                     >
@@ -2069,12 +2238,12 @@ export function CheckinPlanBuilder({
                     </GlassSurface>
                   </View>
 
-                  {nutritionDayType === 'custom' ? (
+                  {nutritionDayType === NUTRITION_DAY_TYPE.CUSTOM ? (
                     <TextInput
                       ref={nutritionDayNoteRef}
                       style={styles.nutritionNoteInput}
                       value={nutritionDayNote}
-                      onChangeText={setNutritionDayNote}
+                      onChangeText={handleChangeNutritionDayNote}
                       placeholder="I'm at a hotel in Austin, eating out for every meal"
                       placeholderTextColor={theme.colors.textDisabled}
                       multiline
@@ -2399,12 +2568,12 @@ export default function DailyCheckinScreen({
   const [timeAvailable, setTimeAvailable] = useState(30);
   const [nutritionDayType, setNutritionDayType] = useState(null);
   const [nutritionDayNote, setNutritionDayNote] = useState('');
-  const [previousCheckin, setPreviousCheckin] = useState(null);
-  const [isLoadingPreviousCheckin, setIsLoadingPreviousCheckin] = useState(false);
-  const [includeYesterdayContext, setIncludeYesterdayContext] = useState(false);
   const [lastTrainingSetup, setLastTrainingSetup] = useState(null);
   const [isLoadingLastTrainingSetup, setIsLoadingLastTrainingSetup] = useState(false);
   const [useLastTrainingSetup, setUseLastTrainingSetup] = useState(false);
+  const [lastNutritionSetup, setLastNutritionSetup] = useState(null);
+  const [isLoadingLastNutritionSetup, setIsLoadingLastNutritionSetup] = useState(false);
+  const [useLastNutritionSetup, setUseLastNutritionSetup] = useState(false);
   const [planLoading, setPlanLoading] = useState(false);
   const [planError, setPlanError] = useState(null);
   const [planContent, setPlanContent] = useState(null);
@@ -2424,6 +2593,7 @@ export default function DailyCheckinScreen({
   const [isTodayProbeRunning, setIsTodayProbeRunning] = useState(false);
   const copyFeedbackTimerRef = useRef(null);
   const manualTrainingSetupRef = useRef({ environment: null, timeAvailable: 30 });
+  const manualNutritionSetupRef = useRef({ nutritionDayType: null, nutritionDayNote: '' });
   const currentQuestion = QUESTIONS[questionIndex];
   const glowProgress = useRef(new Animated.Value(1)).current;
   const glowTargetRef = useRef(QUESTIONS[0].color);
@@ -2630,9 +2800,9 @@ export default function DailyCheckinScreen({
         setIsLoadingLastTrainingSetup(true);
         setLastTrainingSetup(null);
         setUseLastTrainingSetup(false);
-        setPreviousCheckin(null);
-        setIsLoadingPreviousCheckin(false);
-        setIncludeYesterdayContext(false);
+        setLastNutritionSetup(null);
+        setIsLoadingLastNutritionSetup(false);
+        setUseLastNutritionSetup(false);
 
         try {
           const response = await getLastTrainingSetup({
@@ -2662,36 +2832,36 @@ export default function DailyCheckinScreen({
       };
     }
 
-    const loadPreviousCheckin = async () => {
-      setIsLoadingPreviousCheckin(true);
-      setPreviousCheckin(null);
-      setIncludeYesterdayContext(false);
+    const loadLastNutritionSetup = async () => {
+      setIsLoadingLastNutritionSetup(true);
+      setLastNutritionSetup(null);
+      setUseLastNutritionSetup(false);
       setLastTrainingSetup(null);
       setIsLoadingLastTrainingSetup(false);
       setUseLastTrainingSetup(false);
 
       try {
-        const response = await getPreviousCheckin({
+        const response = await getLastNutritionSetup({
           accessToken,
-          beforeDate: today,
+          excludeCheckinId: summaryResult?.id,
         });
         if (cancelled) {
           return;
         }
-        setPreviousCheckin(response?.checkin || null);
+        setLastNutritionSetup(normalizeLastNutritionSetupPayload(response));
       } catch (_error) {
         if (cancelled) {
           return;
         }
-        setPreviousCheckin(null);
+        setLastNutritionSetup(null);
       } finally {
         if (!cancelled) {
-          setIsLoadingPreviousCheckin(false);
+          setIsLoadingLastNutritionSetup(false);
         }
       }
     };
 
-    loadPreviousCheckin();
+    loadLastNutritionSetup();
 
     return () => {
       cancelled = true;
@@ -2834,13 +3004,14 @@ export default function DailyCheckinScreen({
     setTimeAvailable(30);
     setNutritionDayType(null);
     setNutritionDayNote('');
-    setPreviousCheckin(null);
-    setIsLoadingPreviousCheckin(false);
-    setIncludeYesterdayContext(false);
     setLastTrainingSetup(null);
     setIsLoadingLastTrainingSetup(false);
     setUseLastTrainingSetup(false);
+    setLastNutritionSetup(null);
+    setIsLoadingLastNutritionSetup(false);
+    setUseLastNutritionSetup(false);
     manualTrainingSetupRef.current = { environment: null, timeAvailable: 30 };
+    manualNutritionSetupRef.current = { nutritionDayType: null, nutritionDayNote: '' };
     setPlanLoading(false);
     setPlanError(null);
     setPlanContent(null);
@@ -2953,6 +3124,43 @@ export default function DailyCheckinScreen({
     setTimeAvailable(nextTimeAvailable);
   };
 
+  const handleToggleLastNutritionSetup = (nextValue) => {
+    if (nextValue) {
+      if (!lastNutritionSetup) {
+        return;
+      }
+      manualNutritionSetupRef.current = {
+        nutritionDayType,
+        nutritionDayNote,
+      };
+      setUseLastNutritionSetup(true);
+      setNutritionDayType(lastNutritionSetup.nutritionDayType);
+      setNutritionDayNote(lastNutritionSetup.nutritionDayNote || '');
+      return;
+    }
+
+    setUseLastNutritionSetup(false);
+    setNutritionDayType(manualNutritionSetupRef.current.nutritionDayType || null);
+    setNutritionDayNote(manualNutritionSetupRef.current.nutritionDayNote || '');
+  };
+
+  const handleSelectNutritionDayType = (nextNutritionDayType) => {
+    if (useLastNutritionSetup) {
+      setUseLastNutritionSetup(false);
+    }
+    setNutritionDayType(nextNutritionDayType);
+    if (nextNutritionDayType === NUTRITION_DAY_TYPE.NORMAL) {
+      setNutritionDayNote('');
+    }
+  };
+
+  const handleChangeNutritionDayNote = (nextNutritionDayNote) => {
+    if (useLastNutritionSetup) {
+      setUseLastNutritionSetup(false);
+    }
+    setNutritionDayNote(nextNutritionDayNote);
+  };
+
   const canGeneratePlan = useMemo(() => {
     if (planType === PLAN_TYPE.TRAINING) {
       return Boolean(environment);
@@ -2990,7 +3198,7 @@ export default function DailyCheckinScreen({
         nutritionDayNote: planType === PLAN_TYPE.NUTRITION && nutritionDayType === 'custom'
           ? nutritionDayNote.trim()
           : undefined,
-        includeYesterdayContext: planType === PLAN_TYPE.NUTRITION ? includeYesterdayContext : false,
+        includeYesterdayContext: false,
         refreshRequested,
       });
 
@@ -3053,7 +3261,7 @@ export default function DailyCheckinScreen({
         timeAvailable,
         nutritionDayType,
         nutritionDayNote: nutritionDayType === 'custom' ? nutritionDayNote.trim() : null,
-        includeYesterdayContext: planType === PLAN_TYPE.NUTRITION ? includeYesterdayContext : false,
+        useLastNutritionSetup: planType === PLAN_TYPE.NUTRITION ? useLastNutritionSetup : false,
         planError,
       });
       await Clipboard.setStringAsync(supportBundle);
@@ -3291,11 +3499,11 @@ export default function DailyCheckinScreen({
                   onToggle={handleToggleLastTrainingSetup}
                 />
               ) : (
-                <PreviousContextToggle
-                  previousCheckin={previousCheckin}
-                  isLoadingPreviousCheckin={isLoadingPreviousCheckin}
-                  includeYesterdayContext={includeYesterdayContext}
-                  onToggle={setIncludeYesterdayContext}
+                <LastNutritionSetupToggle
+                  lastNutritionSetup={lastNutritionSetup}
+                  isLoadingLastNutritionSetup={isLoadingLastNutritionSetup}
+                  useLastNutritionSetup={useLastNutritionSetup}
+                  onToggle={handleToggleLastNutritionSetup}
                 />
               )}
 
@@ -3402,12 +3610,9 @@ export default function DailyCheckinScreen({
                   />
                   <View style={styles.dayTypeList}>
                     <GlassSurface
-                      onPress={() => {
-                        setNutritionDayType('normal');
-                        setNutritionDayNote('');
-                      }}
-                      style={[styles.dayTypeCard, nutritionDayType === 'normal' && styles.dayTypeCardSelected]}
-                      state={nutritionDayType === 'normal' ? 'active' : 'default'}
+                      onPress={() => handleSelectNutritionDayType(NUTRITION_DAY_TYPE.NORMAL)}
+                      style={[styles.dayTypeCard, nutritionDayType === NUTRITION_DAY_TYPE.NORMAL && styles.dayTypeCardSelected]}
+                      state={nutritionDayType === NUTRITION_DAY_TYPE.NORMAL ? 'active' : 'default'}
                       radius="m"
                       padding={theme.spacing[2]}
                     >
@@ -3416,9 +3621,9 @@ export default function DailyCheckinScreen({
                     </GlassSurface>
 
                     <GlassSurface
-                      onPress={() => setNutritionDayType('custom')}
-                      style={[styles.dayTypeCard, nutritionDayType === 'custom' && styles.dayTypeCardSelected]}
-                      state={nutritionDayType === 'custom' ? 'active' : 'default'}
+                      onPress={() => handleSelectNutritionDayType(NUTRITION_DAY_TYPE.CUSTOM)}
+                      style={[styles.dayTypeCard, nutritionDayType === NUTRITION_DAY_TYPE.CUSTOM && styles.dayTypeCardSelected]}
+                      state={nutritionDayType === NUTRITION_DAY_TYPE.CUSTOM ? 'active' : 'default'}
                       radius="m"
                       padding={theme.spacing[2]}
                     >
@@ -3427,12 +3632,12 @@ export default function DailyCheckinScreen({
                     </GlassSurface>
                   </View>
 
-                  {nutritionDayType === 'custom' ? (
+                  {nutritionDayType === NUTRITION_DAY_TYPE.CUSTOM ? (
                     <TextInput
                       ref={nutritionDayNoteRef}
                       style={styles.nutritionNoteInput}
                       value={nutritionDayNote}
-                      onChangeText={setNutritionDayNote}
+                      onChangeText={handleChangeNutritionDayNote}
                       placeholder="I'm at a hotel in Austin, eating out for every meal"
                       placeholderTextColor={theme.colors.textDisabled}
                       multiline
@@ -4625,6 +4830,28 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     textTransform: 'capitalize',
   },
+  nutritionMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: withAlpha(theme.colors.status.success, 0.16),
+    borderWidth: 1,
+    borderColor: theme.colors.glass.borderDefault,
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  nutritionMetaIcon: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+  },
+  nutritionMetaText: {
+    color: theme.colors.text.primary,
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    fontWeight: '600',
+  },
   sectionCard: {
     marginBottom: 0,
   },
@@ -4682,6 +4909,11 @@ const styles = StyleSheet.create({
     fontFamily: theme.typography.fontFamily,
     paddingTop: 3,
     paddingLeft: 10,
+  },
+  nutritionIconBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
   },
   exerciseCard: {
     borderWidth: 1,
@@ -4940,6 +5172,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     gap: 8,
+  },
+  mealHeadingRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+  },
+  mealHeadingCopy: {
+    flex: 1,
+  },
+  mealIconBadge: {
+    marginTop: 1,
+    flexShrink: 0,
+  },
+  mealTotalsWrap: {
+    alignItems: 'flex-end',
+    flexShrink: 0,
   },
   mealName: {
     color: theme.colors.text.primary,

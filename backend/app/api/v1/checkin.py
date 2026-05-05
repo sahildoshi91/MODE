@@ -17,6 +17,7 @@ from app.modules.daily_checkins.schemas import (
     DailyCheckinStatusResponse,
     GenerateCheckinPlanRequest,
     GenerateCheckinPlanResponse,
+    LastNutritionSetupResponse,
     LastTrainingSetupResponse,
     LogGeneratedWorkoutRequest,
     LogGeneratedWorkoutResponse,
@@ -210,6 +211,21 @@ async def get_last_training_setup(
     _validate_client_write_access(user, trainer_context)
     client_id = _resolve_client_id(trainer_context)
     return service.get_last_training_setup(
+        client_id,
+        exclude_checkin_id=exclude_checkin_id,
+    )
+
+
+@router.get("/last-nutrition-setup", response_model=LastNutritionSetupResponse)
+async def get_last_nutrition_setup(
+    exclude_checkin_id: str | None = None,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: DailyCheckinService = Depends(get_daily_checkin_service),
+):
+    _validate_client_write_access(user, trainer_context)
+    client_id = _resolve_client_id(trainer_context)
+    return service.get_last_nutrition_setup(
         client_id,
         exclude_checkin_id=exclude_checkin_id,
     )

@@ -161,6 +161,28 @@ export async function getLastTrainingSetup({ accessToken, excludeCheckinId } = {
   return parseJsonResponse(response, '/api/v1/checkin/last-training-setup', { baseUrl });
 }
 
+export async function getLastNutritionSetup({ accessToken, excludeCheckinId } = {}) {
+  const query = excludeCheckinId
+    ? `?exclude_checkin_id=${encodeURIComponent(excludeCheckinId)}`
+    : '';
+  let response;
+  let baseUrl;
+
+  try {
+    ({ response, baseUrl } = await fetchWithApiFallback(
+      `/api/v1/checkin/last-nutrition-setup${query}`,
+      {
+        ...buildRequestOptions(accessToken),
+        timeoutMs: 8000,
+      },
+    ));
+  } catch (error) {
+    throw buildNetworkError(error, '/api/v1/checkin/last-nutrition-setup');
+  }
+
+  return parseJsonResponse(response, '/api/v1/checkin/last-nutrition-setup', { baseUrl });
+}
+
 export async function getCheckinProgress({ accessToken, asOfDate }) {
   const queryDate = asOfDate
     ? encodeURIComponent(asOfDate)

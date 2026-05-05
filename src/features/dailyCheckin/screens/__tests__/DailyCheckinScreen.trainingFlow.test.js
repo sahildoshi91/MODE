@@ -31,20 +31,25 @@ jest.mock('lucide-react-native', () => {
 
   return {
     Activity: createIcon('Activity'),
+    Apple: createIcon('Apple'),
     ArrowDownUp: createIcon('ArrowDownUp'),
     ArrowRightLeft: createIcon('ArrowRightLeft'),
     BedSingle: createIcon('BedSingle'),
     CircleDot: createIcon('CircleDot'),
     Clock3: createIcon('Clock3'),
+    Coffee: createIcon('Coffee'),
     Dumbbell: createIcon('Dumbbell'),
     Flame: createIcon('Flame'),
+    GlassWater: createIcon('GlassWater'),
     Info: createIcon('Info'),
     Lightbulb: createIcon('Lightbulb'),
     PersonStanding: createIcon('PersonStanding'),
     PlayCircle: createIcon('PlayCircle'),
     Snowflake: createIcon('Snowflake'),
+    Soup: createIcon('Soup'),
     StretchHorizontal: createIcon('StretchHorizontal'),
     TreePine: createIcon('TreePine'),
+    Utensils: createIcon('Utensils'),
     Wind: createIcon('Wind'),
   };
 });
@@ -165,6 +170,7 @@ jest.mock('../../../../services/apiRequest', () => ({
 
 jest.mock('../../services/checkinApi', () => ({
   generateCheckinPlan: jest.fn(),
+  getLastNutritionSetup: jest.fn(),
   getLastTrainingSetup: jest.fn(),
   getPreviousCheckin: jest.fn(),
   getTodayCheckin: jest.fn(),
@@ -175,7 +181,7 @@ jest.mock('../../services/checkinApi', () => ({
 }));
 
 import React from 'react';
-import { StyleSheet, Text } from 'react-native';
+import { StyleSheet, Text, TextInput } from 'react-native';
 import renderer, { act } from 'react-test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -185,6 +191,7 @@ import DailyCheckinScreen, {
 } from '../DailyCheckinScreen';
 import {
   generateCheckinPlan,
+  getLastNutritionSetup,
   getLastTrainingSetup,
   getPreviousCheckin,
   getTodayCheckin,
@@ -200,6 +207,34 @@ async function flushEffects() {
     await Promise.resolve();
     await Promise.resolve();
   });
+}
+
+function buildInitialResult(overrides = {}) {
+  return {
+    id: 'checkin-1',
+    date: '2026-04-11',
+    score: 18,
+    mode: 'BUILD',
+    inputs: {
+      sleep: 4,
+      stress: 4,
+      soreness: 3,
+      nutrition: 4,
+      motivation: 3,
+    },
+    training: {
+      type: 'Moderate cardio or controlled strength',
+      duration: '30-45 min',
+      intensity: 'Moderate',
+    },
+    nutrition: {
+      rule: 'Anchor each meal with protein, add balanced carbs, and keep snacks intentional.',
+    },
+    mindset: {
+      cue: 'Build momentum with disciplined reps.',
+    },
+    ...overrides,
+  };
 }
 
 describe('DailyCheckinScreen training routine flow', () => {
@@ -236,6 +271,7 @@ describe('DailyCheckinScreen training routine flow', () => {
     });
     getPreviousCheckin.mockResolvedValue({ checkin: null });
     getLastTrainingSetup.mockResolvedValue({ setup: null });
+    getLastNutritionSetup.mockResolvedValue({ setup: null });
     generateCheckinPlan.mockResolvedValue({
       plan_id: 'generated-plan-1',
       content: '{"title":"Builder Blast"}',
@@ -547,6 +583,244 @@ describe('DailyCheckinScreen training routine flow', () => {
     expect(generateCheckinPlan).toHaveBeenCalledWith(expect.objectContaining({
       environment: 'full_gym',
       timeAvailable: 45,
+      includeYesterdayContext: false,
+    }));
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows a disabled last nutrition setup toggle when no setup exists', async () => {
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <CheckinPlanBuilder
+            accessToken="client-token"
+            initialPlanType={CHECKIN_PLAN_TYPE.NUTRITION}
+            initialResult={buildInitialResult()}
+            bottomInset={0}
+            floatingNavClearance={74}
+          />
+        </SafeAreaProvider>,
+      );
+    });
+
+    await flushEffects();
+
+    expect(getLastNutritionSetup).toHaveBeenCalledWith({
+      accessToken: 'client-token',
+      excludeCheckinId: 'checkin-1',
+    });
+    expect(getPreviousCheckin).not.toHaveBeenCalled();
+
+    const setupRendered = JSON.stringify(tree.toJSON());
+    expect(setupRendered).toContain('Use Last Nutrition Setup');
+    expect(setupRendered).toContain('No previous setup found');
+    expect(tree.root.findByProps({ testID: 'last-nutrition-setup-toggle' }).props.disabled).toBe(true);
+    expect(tree.root.findByProps({ testID: 'last-nutrition-setup-switch' }).props.disabled).toBe(true);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('applies the last custom nutrition setup and renders nutrition icons without raw emoji', async () => {
+    getLastNutritionSetup.mockResolvedValueOnce({
+      setup: {
+        generated_plan_id: 'generated-nutrition-prior',
+        nutrition_day_type: 'custom',
+        nutrition_day_note: 'Hotel breakfast, restaurant dinner.',
+        created_at: '2026-04-10T17:00:00+00:00',
+      },
+    });
+    generateCheckinPlan.mockResolvedValueOnce({
+      plan_id: 'generated-nutrition-1',
+      content: '{"title":"🥗 Travel Fuel"}',
+      structured: {
+        title: '🥗 Travel Fuel',
+        totalCalories: 2100,
+        totalProtein: 155,
+        coachNote: '💧 Keep protein and hydration steady.',
+        meals: [
+          {
+            name: '🍳 Breakfast',
+            timing: 'Morning',
+            emoji: '🍳',
+            foods: [
+              {
+                name: '🥣 Greek yogurt bowl',
+                amount: '1 bowl',
+                calories: 420,
+                protein: 35,
+              },
+            ],
+            totalCalories: 420,
+            totalProtein: 35,
+            notes: '🥤 Add water before coffee.',
+          },
+        ],
+      },
+    });
+
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <CheckinPlanBuilder
+            accessToken="client-token"
+            initialPlanType={CHECKIN_PLAN_TYPE.NUTRITION}
+            initialResult={buildInitialResult()}
+            bottomInset={0}
+            floatingNavClearance={74}
+          />
+        </SafeAreaProvider>,
+      );
+    });
+
+    await flushEffects();
+
+    expect(JSON.stringify(tree.toJSON())).toContain('Custom day • Hotel breakfast, restaurant dinner.');
+    expect(tree.root.findByProps({ testID: 'last-nutrition-setup-toggle' }).props.disabled).toBe(false);
+    expect(tree.root.findByProps({ testID: 'last-nutrition-setup-switch' }).props.disabled).toBe(false);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'last-nutrition-setup-toggle' }).props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'mode-button-generate-my-nutrition-plan' }).props.onPress();
+    });
+    await flushEffects();
+
+    expect(generateCheckinPlan).toHaveBeenCalledWith(expect.objectContaining({
+      planType: CHECKIN_PLAN_TYPE.NUTRITION,
+      nutritionDayNote: 'Hotel breakfast, restaurant dinner.',
+      includeYesterdayContext: false,
+    }));
+    expect(tree.root.findByProps({ testID: 'nutrition-calories-icon' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'nutrition-protein-icon' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'nutrition-meal-icon-0' })).toBeTruthy();
+
+    const planRendered = JSON.stringify(tree.toJSON());
+    expect(planRendered).toContain('Travel Fuel');
+    expect(planRendered).toContain('Breakfast');
+    expect(planRendered).not.toContain('🥗');
+    expect(planRendered).not.toContain('💧');
+    expect(planRendered).not.toContain('🍳');
+    expect(planRendered).not.toContain('🥣');
+    expect(planRendered).not.toContain('🥤');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('applies a normal last nutrition setup without a note', async () => {
+    getLastNutritionSetup.mockResolvedValueOnce({
+      setup: {
+        generated_plan_id: 'generated-nutrition-prior',
+        nutrition_day_type: 'normal',
+        nutrition_day_note: null,
+        created_at: '2026-04-10T17:00:00+00:00',
+      },
+    });
+
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <CheckinPlanBuilder
+            accessToken="client-token"
+            initialPlanType={CHECKIN_PLAN_TYPE.NUTRITION}
+            initialResult={buildInitialResult()}
+            bottomInset={0}
+            floatingNavClearance={74}
+          />
+        </SafeAreaProvider>,
+      );
+    });
+
+    await flushEffects();
+
+    expect(JSON.stringify(tree.toJSON())).toContain('Normal day');
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'last-nutrition-setup-toggle' }).props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'mode-button-generate-my-nutrition-plan' }).props.onPress();
+    });
+    await flushEffects();
+
+    expect(generateCheckinPlan).toHaveBeenCalledWith(expect.objectContaining({
+      planType: CHECKIN_PLAN_TYPE.NUTRITION,
+      nutritionDayNote: undefined,
+      includeYesterdayContext: false,
+    }));
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('turns off the last nutrition setup when the user edits the note', async () => {
+    getLastNutritionSetup.mockResolvedValueOnce({
+      setup: {
+        generated_plan_id: 'generated-nutrition-prior',
+        nutrition_day_type: 'custom',
+        nutrition_day_note: 'Hotel breakfast, restaurant dinner.',
+        created_at: '2026-04-10T17:00:00+00:00',
+      },
+    });
+
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <CheckinPlanBuilder
+            accessToken="client-token"
+            initialPlanType={CHECKIN_PLAN_TYPE.NUTRITION}
+            initialResult={buildInitialResult()}
+            bottomInset={0}
+            floatingNavClearance={74}
+          />
+        </SafeAreaProvider>,
+      );
+    });
+
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'last-nutrition-setup-toggle' }).props.onPress();
+    });
+    await flushEffects();
+
+    expect(tree.root.findByProps({ testID: 'last-nutrition-setup-switch' }).findByType(Text).props.children).toBe('on');
+
+    const noteInput = tree.root.findByType(TextInput);
+    await act(async () => {
+      noteInput.props.onChangeText('Office lunch, late dinner.');
+    });
+    await flushEffects();
+
+    expect(tree.root.findByProps({ testID: 'last-nutrition-setup-switch' }).findByType(Text).props.children).toBe('off');
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'mode-button-generate-my-nutrition-plan' }).props.onPress();
+    });
+    await flushEffects();
+
+    expect(generateCheckinPlan).toHaveBeenCalledWith(expect.objectContaining({
+      nutritionDayNote: 'Office lunch, late dinner.',
       includeYesterdayContext: false,
     }));
 

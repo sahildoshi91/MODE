@@ -253,6 +253,29 @@ class DailyCheckinRepository:
         )
         return response.data[0] if response.data else None
 
+    def get_latest_nutrition_setup(
+        self,
+        client_id: str,
+        *,
+        exclude_checkin_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        query = (
+            self.supabase
+            .table("generated_checkin_plans")
+            .select("id, nutrition_day_note, created_at, checkin_id")
+            .eq("client_id", client_id)
+            .eq("plan_type", "nutrition")
+        )
+        if exclude_checkin_id:
+            query = query.neq("checkin_id", exclude_checkin_id)
+        response = (
+            query
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
     def list_client_coach_memory(
         self,
         trainer_id: str,

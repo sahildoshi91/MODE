@@ -37,6 +37,7 @@ class FakeDailyCheckinService:
         self.last_log = None
         self.last_progress = None
         self.last_training_setup = None
+        self.last_nutrition_setup = None
 
     def get_status(self, client_id: str, checkin_date: date) -> DailyCheckinStatusResponse:
         if client_id == "client-complete":
@@ -127,6 +128,22 @@ class FakeDailyCheckinService:
                     "generated_plan_id": "generated-plan-last",
                     "environment": "full_gym",
                     "time_available": 45,
+                    "created_at": "2026-04-10T17:00:00+00:00",
+                }
+            }
+        return {"setup": None}
+
+    def get_last_nutrition_setup(self, client_id: str, *, exclude_checkin_id: str | None = None):
+        self.last_nutrition_setup = {
+            "client_id": client_id,
+            "exclude_checkin_id": exclude_checkin_id,
+        }
+        if client_id == "client-generate":
+            return {
+                "setup": {
+                    "generated_plan_id": "generated-nutrition-plan-last",
+                    "nutrition_day_type": "custom",
+                    "nutrition_day_note": "Travel day with hotel breakfast.",
                     "created_at": "2026-04-10T17:00:00+00:00",
                 }
             }
@@ -675,6 +692,60 @@ class DailyCheckinServiceTests(unittest.TestCase):
         service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
 
         result = service.get_last_training_setup("client-1")
+
+        self.assertIsNone(result.setup)
+
+    def test_get_last_nutrition_setup_returns_latest_custom_setup(self):
+        class FakeRepository:
+            def __init__(self):
+                self.last_args = None
+
+            def get_latest_nutrition_setup(self, client_id, *, exclude_checkin_id=None):
+                self.last_args = {
+                    "client_id": client_id,
+                    "exclude_checkin_id": exclude_checkin_id,
+                }
+                return {
+                    "id": "generated-nutrition-last",
+                    "nutrition_day_note": "Travel day with hotel breakfast.",
+                    "created_at": "2026-04-10T17:00:00+00:00",
+                }
+
+        repository = FakeRepository()
+        service = DailyCheckinService(repository=repository, profile_service=None)
+
+        result = service.get_last_nutrition_setup("client-1", exclude_checkin_id="checkin-current")
+
+        self.assertEqual(repository.last_args["client_id"], "client-1")
+        self.assertEqual(repository.last_args["exclude_checkin_id"], "checkin-current")
+        self.assertEqual(result.setup.generated_plan_id, "generated-nutrition-last")
+        self.assertEqual(result.setup.nutrition_day_type, "custom")
+        self.assertEqual(result.setup.nutrition_day_note, "Travel day with hotel breakfast.")
+
+    def test_get_last_nutrition_setup_returns_normal_for_missing_note(self):
+        class FakeRepository:
+            def get_latest_nutrition_setup(self, _client_id, *, exclude_checkin_id=None):
+                return {
+                    "id": "generated-nutrition-last",
+                    "nutrition_day_note": None,
+                    "created_at": "2026-04-10T17:00:00+00:00",
+                }
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+
+        result = service.get_last_nutrition_setup("client-1")
+
+        self.assertEqual(result.setup.nutrition_day_type, "normal")
+        self.assertIsNone(result.setup.nutrition_day_note)
+
+    def test_get_last_nutrition_setup_returns_null_when_missing(self):
+        class FakeRepository:
+            def get_latest_nutrition_setup(self, _client_id, *, exclude_checkin_id=None):
+                return None
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+
+        result = service.get_last_nutrition_setup("client-1")
 
         self.assertIsNone(result.setup)
 
@@ -2225,6 +2296,29 @@ class DailyCheckinApiTests(unittest.TestCase):
         self.assertEqual(payload["setup"]["time_available"], 45)
         self.assertEqual(self.fake_service.last_training_setup["client_id"], "client-generate")
         self.assertEqual(self.fake_service.last_training_setup["exclude_checkin_id"], "checkin-1")
+
+    def test_last_nutrition_setup_returns_client_scoped_setup_and_excludes_current_checkin(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id="client-generate",
+            client_user_id="user-123",
+        )
+
+        response = self.client.get(
+            "/api/v1/checkin/last-nutrition-setup?exclude_checkin_id=checkin-1",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["setup"]["generated_plan_id"], "generated-nutrition-plan-last")
+        self.assertEqual(payload["setup"]["nutrition_day_type"], "custom")
+        self.assertEqual(payload["setup"]["nutrition_day_note"], "Travel day with hotel breakfast.")
+        self.assertEqual(self.fake_service.last_nutrition_setup["client_id"], "client-generate")
+        self.assertEqual(self.fake_service.last_nutrition_setup["exclude_checkin_id"], "checkin-1")
 
     def test_progress_rejects_missing_client_context(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
