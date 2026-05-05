@@ -81,6 +81,7 @@ export async function streamChatSessionMessage({
   clientMessageId = null,
   idempotencyKey = null,
   requestId = null,
+  signal = null,
   onEvent,
 }) {
   const path = `${CHAT_SESSIONS_BASE_PATH}/${encodeURIComponent(sessionId)}/messages/stream`;
@@ -103,6 +104,7 @@ export async function streamChatSessionMessage({
         requestId,
       })),
       timeoutMs: CHAT_STREAM_TIMEOUT_MS,
+      ...(signal ? { signal } : {}),
     }));
   } catch (error) {
     throw buildApiNetworkError(error, path, {

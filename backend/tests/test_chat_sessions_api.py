@@ -15,6 +15,15 @@ from app.core.auth import AuthenticatedUser, require_user
 from app.core.dependencies import get_chat_session_service, get_trainer_context
 from app.core.tenancy import TrainerContext
 from app.main import app
+from app.modules.conversation.schemas import TokenUsage
+
+
+def _sse_event_types(text: str) -> list[str]:
+    return [
+        line.replace("event: ", "", 1)
+        for line in text.splitlines()
+        if line.startswith("event: ")
+    ]
 
 
 def _session_payload():
@@ -38,6 +47,9 @@ def _session_payload():
 
 
 class FakeChatSessionApiService:
+    def __init__(self):
+        self.persisted_ai_messages = []
+
     def list_history(self, **kwargs):
         del kwargs
         return {"sessions": [_session_payload()]}
@@ -59,6 +71,42 @@ class FakeChatSessionApiService:
             ],
             "suggested_actions": ["Finish a workout"],
             "read_only": False,
+        }
+
+    def prepare_stream(self, **kwargs):
+        del kwargs
+
+        def chunks():
+            yield "Good "
+            yield "next move."
+
+        return (
+            _session_payload(),
+            {
+                "id": "user-message-1",
+                "session_id": "session-1",
+                "sender_type": "user",
+                "content": "Reach step goal",
+                "created_at": "2026-05-04T12:01:00+00:00",
+                "message_index": 1,
+                "metadata": {},
+            },
+            "conversation-1",
+            chunks(),
+            None,
+            type("StreamState", (), {"token_usage": TokenUsage(), "conversation_usage": None})(),
+        )
+
+    def persist_streamed_ai_message(self, **kwargs):
+        self.persisted_ai_messages.append(kwargs)
+        return {
+            "id": "ai-message-1",
+            "session_id": "session-1",
+            "sender_type": "ai",
+            "content": kwargs.get("content"),
+            "created_at": "2026-05-04T12:02:00+00:00",
+            "message_index": 2,
+            "metadata": kwargs.get("metadata") or {},
         }
 
 
@@ -125,6 +173,27 @@ class ChatSessionsApiTests(unittest.TestCase):
             response.json()["detail"]["message"],
             "Chat session storage is not migrated on this backend yet.",
         )
+
+    def test_message_stream_uses_new_event_contract_and_persists_ai_once(self):
+        fake_service = FakeChatSessionApiService()
+        app.dependency_overrides[get_chat_session_service] = lambda: fake_service
+
+        response = self.client.post(
+            "/api/v1/chat/sessions/session-1/messages/stream",
+            json={"message": "Reach step goal"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        event_types = _sse_event_types(response.text)
+        self.assertEqual(event_types[0], "status")
+        self.assertTrue(set(event_types).issubset({"status", "message_delta", "done", "error"}))
+        self.assertIn("message_delta", event_types)
+        self.assertIn("done", event_types)
+        self.assertIn('"assistant_message": "Good next move."', response.text)
+        self.assertIn('"ai_message"', response.text)
+        self.assertEqual(len(fake_service.persisted_ai_messages), 1)
+        self.assertEqual(fake_service.persisted_ai_messages[0]["content"], "Good next move.")
 
 
 if __name__ == "__main__":

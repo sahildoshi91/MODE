@@ -5,6 +5,13 @@ import {
   streamChatSessionMessage,
 } from '../services/chatMessageService';
 import { normalizeChatMessage } from './useChatSession';
+import {
+  CHAT_STREAM_EVENT_TYPES,
+  CHAT_STREAM_FRIENDLY_ERROR_MESSAGE,
+  CHAT_STREAM_STATUS_STAGES,
+  getChatStreamStatusMessage,
+  normalizeChatStreamEvent,
+} from './useChatStreaming';
 
 function createLocalId(prefix) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -27,6 +34,17 @@ function buildSendFailureMessage(error) {
   return error?.message || 'I could not finish that response. Try again in a moment.';
 }
 
+function isAbortError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return (
+    error?.name === 'AbortError'
+    || message.includes('aborted')
+    || message.includes('abort')
+    || message.includes('canceled')
+    || message.includes('cancelled')
+  );
+}
+
 export function useChatMessages({
   accessToken,
   session,
@@ -41,6 +59,7 @@ export function useChatMessages({
   const sessionId = session?.id || null;
   const sessionDate = session?.session_date || null;
   const lastHydratedSessionIdRef = useRef(null);
+  const activeAbortControllerRef = useRef(null);
 
   useEffect(() => {
     if (lastHydratedSessionIdRef.current === sessionId) {
@@ -72,22 +91,26 @@ export function useChatMessages({
     const localAiMessage = normalizeChatMessage({
       id: aiLocalId,
       role: 'assistant',
-      text: '',
-      content: '',
+      text: getChatStreamStatusMessage(CHAT_STREAM_STATUS_STAGES.READING_USER_MESSAGE),
+      content: getChatStreamStatusMessage(CHAT_STREAM_STATUS_STAGES.READING_USER_MESSAGE),
       metadata: {
         pending: true,
+        stream_status_stage: CHAT_STREAM_STATUS_STAGES.READING_USER_MESSAGE,
       },
     }, {
-      animate: true,
-      isStreaming: true,
+      animate: false,
+      isStreaming: false,
     });
 
     let receivedStreamText = false;
-    let receivedStart = false;
+    let receivedBackendSignal = false;
     let receivedCompleted = false;
+    let canceledWithPartial = false;
+    const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
 
     setSending(true);
     setError(null);
+    activeAbortControllerRef.current = abortController;
     setMessages((currentMessages) => [
       ...currentMessages,
       localUserMessage,
@@ -135,38 +158,59 @@ export function useChatMessages({
         clientMessageId: userLocalId,
         idempotencyKey: options.idempotencyKey || userLocalId,
         requestId: options.requestId || null,
-        onEvent: (payload, meta = {}) => {
-          const eventType = payload?.type || meta?.event;
-          if (eventType === 'start') {
-            receivedStart = true;
-            applyBackendUserMessage(payload?.user_message);
+        signal: abortController?.signal,
+        onEvent: (rawPayload, meta = {}) => {
+          const payload = normalizeChatStreamEvent(rawPayload, meta);
+          const eventType = payload?.type;
+          if (payload?.user_message) {
+            receivedBackendSignal = true;
+            applyBackendUserMessage(payload.user_message);
+          }
+          if (eventType === CHAT_STREAM_EVENT_TYPES.STATUS) {
+            receivedBackendSignal = true;
+            setMessages((currentMessages) => replaceMessageById(currentMessages, aiLocalId, (message) => ({
+              ...message,
+              text: payload.message,
+              content: payload.message,
+              metadata: {
+                ...(message.metadata || {}),
+                stream_status_stage: payload.stage,
+              },
+              animate: false,
+              isStreaming: false,
+            })));
             return;
           }
-          if (eventType === 'delta') {
-            const delta = payload?.delta ?? payload?.text ?? payload?.content ?? '';
+          if (eventType === CHAT_STREAM_EVENT_TYPES.MESSAGE_DELTA) {
+            const delta = payload?.delta ?? '';
             if (!delta) {
               return;
             }
             receivedStreamText = true;
             setMessages((currentMessages) => replaceMessageById(currentMessages, aiLocalId, (message) => {
-              const nextText = appendDelta(message.text, delta);
+              const currentText = message.metadata?.stream_status_stage ? '' : message.text;
+              const nextText = appendDelta(currentText, delta);
               return {
                 ...message,
                 text: nextText,
                 content: nextText,
+                metadata: {
+                  ...(message.metadata || {}),
+                  stream_status_stage: null,
+                },
                 animate: true,
                 isStreaming: true,
               };
             }));
             return;
           }
-          if (eventType === 'completed') {
+          if (eventType === CHAT_STREAM_EVENT_TYPES.DONE) {
             receivedCompleted = true;
             applyBackendAiMessage(payload?.ai_message, payload?.assistant_message);
             return;
           }
-          if (eventType === 'error') {
-            throw new Error(payload?.detail || payload?.message || 'Streaming failed');
+          if (eventType === CHAT_STREAM_EVENT_TYPES.ERROR) {
+            throw new Error(payload?.message || payload?.detail || CHAT_STREAM_FRIENDLY_ERROR_MESSAGE);
           }
         },
       });
@@ -180,7 +224,16 @@ export function useChatMessages({
       setSending(false);
       return true;
     } catch (streamError) {
-      if (!receivedStreamText && !receivedStart) {
+      const streamWasAborted = isAbortError(streamError);
+      if (streamWasAborted) {
+        if (!receivedStreamText) {
+          setError(streamError);
+          setMessages((currentMessages) => currentMessages.filter((message) => message.id !== aiLocalId));
+          setSending(false);
+          return false;
+        }
+        canceledWithPartial = true;
+      } else if (!receivedStreamText && !receivedBackendSignal) {
         try {
           const fallbackPayload = await sendChatSessionMessage({
             accessToken,
@@ -197,7 +250,9 @@ export function useChatMessages({
           setSending(false);
           return true;
         } catch (fallbackError) {
-          const failureMessage = buildSendFailureMessage(fallbackError);
+          const failureMessage = streamError?.message === CHAT_STREAM_FRIENDLY_ERROR_MESSAGE
+            ? CHAT_STREAM_FRIENDLY_ERROR_MESSAGE
+            : buildSendFailureMessage(fallbackError);
           setError(fallbackError);
           setMessages((currentMessages) => replaceMessageById(currentMessages, aiLocalId, (message) => ({
             ...message,
@@ -210,22 +265,56 @@ export function useChatMessages({
           setSending(false);
           return false;
         }
+      } else {
+        setError(streamError);
+        const failureMessage = buildSendFailureMessage(streamError);
+        setMessages((currentMessages) => replaceMessageById(currentMessages, aiLocalId, (message) => ({
+          ...message,
+          isStreaming: false,
+          isError: !message.text || Boolean(message.metadata?.stream_status_stage),
+          text: message.metadata?.stream_status_stage ? failureMessage : (message.text || failureMessage),
+          content: message.metadata?.stream_status_stage
+            ? failureMessage
+            : (message.content || message.text || failureMessage),
+          metadata: {
+            ...(message.metadata || {}),
+            stream_status_stage: null,
+          },
+          animate: Boolean(message.text && !message.metadata?.stream_status_stage),
+        })));
+        setSending(false);
+        return false;
       }
-
-      setError(streamError);
-      const failureMessage = buildSendFailureMessage(streamError);
+    } finally {
+      if (activeAbortControllerRef.current === abortController) {
+        activeAbortControllerRef.current = null;
+      }
+    }
+    if (canceledWithPartial) {
+      setError(new Error('Response canceled.'));
       setMessages((currentMessages) => replaceMessageById(currentMessages, aiLocalId, (message) => ({
         ...message,
         isStreaming: false,
-        isError: !message.text,
-        text: message.text || failureMessage,
-        content: message.content || message.text || failureMessage,
         animate: Boolean(message.text),
       })));
       setSending(false);
       return false;
     }
   }, [accessToken, readOnly, sessionDate, sessionId]);
+
+  const cancelActiveResponse = useCallback(() => {
+    const activeController = activeAbortControllerRef.current;
+    if (!activeController || typeof activeController.abort !== 'function') {
+      return false;
+    }
+    activeController.abort(new Error('Response canceled.'));
+    return true;
+  }, []);
+
+  useEffect(() => () => {
+    activeAbortControllerRef.current?.abort?.();
+    activeAbortControllerRef.current = null;
+  }, []);
 
   return useMemo(() => ({
     messages,
@@ -234,5 +323,6 @@ export function useChatMessages({
     error,
     canSend,
     sendMessage,
-  }), [canSend, error, messages, sendMessage, sending]);
+    cancelActiveResponse,
+  }), [canSend, cancelActiveResponse, error, messages, sendMessage, sending]);
 }

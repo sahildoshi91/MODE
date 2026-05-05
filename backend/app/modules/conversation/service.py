@@ -39,6 +39,18 @@ from app.modules.conversation.schemas import (
     RouteDebug,
     TokenUsage,
 )
+from app.modules.conversation.streaming import (
+    STATUS_CHECKING_RECENT_SIGNALS,
+    STATUS_GENERATING_RECOMMENDATION,
+    STATUS_LOADING_CLIENT_PROFILE,
+    STATUS_READING_USER_MESSAGE,
+    STATUS_RETRIEVING_TRAINER_KNOWLEDGE,
+    STATUS_WRITING_FINAL_COACH_RESPONSE,
+    done_event,
+    error_event,
+    message_delta_event,
+    status_event,
+)
 from app.modules.motivation import resolve_motivation_baseline
 from app.modules.profile.service import ProfileService
 from app.modules.trainer_intelligence.service import TrainerIntelligenceService
@@ -1487,6 +1499,113 @@ class ConversationService:
             items=items,
             next_cursor=next_cursor,
         )
+
+    def stream_chat_events(
+        self,
+        user_id: str,
+        trainer_context: TrainerContext,
+        request: ChatRequest,
+    ) -> Iterator[dict[str, Any]]:
+        yield status_event(STATUS_READING_USER_MESSAGE, request=request)
+        try:
+            if not trainer_context.trainer_id:
+                if request.conversation_id:
+                    raise ValueError("Conversation not found")
+                raise ValueError("User is not assigned to an active trainer context")
+
+            if self._should_run_trainer_onboarding(trainer_context, request):
+                yield status_event(STATUS_GENERATING_RECOMMENDATION, request=request)
+                response = self._handle_trainer_onboarding(trainer_context, request)
+                assistant_message = (response.assistant_message or "").strip()
+                if not assistant_message:
+                    assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
+                yield status_event(
+                    STATUS_WRITING_FINAL_COACH_RESPONSE,
+                    request=request,
+                    conversation_id=response.conversation_id,
+                )
+                yield message_delta_event(
+                    assistant_message,
+                    conversation_id=response.conversation_id,
+                )
+                yield done_event(
+                    conversation_id=response.conversation_id,
+                    assistant_message=assistant_message,
+                    quick_replies=response.quick_replies,
+                    fallback_triggered=response.fallback_triggered,
+                    profile_patch=response.profile_patch,
+                    trainer_context=response.trainer_context,
+                    token_usage=response.token_usage.model_dump(),
+                    conversation_usage=(
+                        response.conversation_usage.model_dump()
+                        if response.conversation_usage else None
+                    ),
+                    memory_suggestions=[item.model_dump() for item in response.memory_suggestions],
+                )
+                return
+
+            yield status_event(STATUS_LOADING_CLIENT_PROFILE, request=request)
+            if (
+                settings.trainer_intelligence_orchestration_enabled
+                and self.trainer_intelligence_service
+                and trainer_context.trainer_id
+                and trainer_context.client_id
+            ):
+                yield status_event(STATUS_RETRIEVING_TRAINER_KNOWLEDGE, request=request)
+                yield status_event(STATUS_CHECKING_RECENT_SIGNALS, request=request)
+            yield status_event(STATUS_GENERATING_RECOMMENDATION, request=request)
+
+            conversation_id, chunks, route_debug, result_state = self.stream_chat(
+                user_id,
+                trainer_context,
+                request,
+            )
+            yield status_event(
+                STATUS_WRITING_FINAL_COACH_RESPONSE,
+                request=request,
+                conversation_id=conversation_id,
+            )
+
+            assistant_chunks: list[str] = []
+            for chunk in chunks:
+                text_chunk = str(chunk or "")
+                if not text_chunk:
+                    continue
+                assistant_chunks.append(text_chunk)
+                yield message_delta_event(
+                    text_chunk,
+                    conversation_id=conversation_id,
+                )
+
+            assistant_message = "".join(assistant_chunks).strip()
+            if not assistant_message:
+                assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
+            done_payload: dict[str, Any] = {
+                "conversation_id": conversation_id,
+                "assistant_message": assistant_message,
+                "token_usage": result_state.token_usage.model_dump(),
+                "conversation_usage": (
+                    result_state.conversation_usage.model_dump()
+                    if result_state.conversation_usage else None
+                ),
+                "memory_suggestions": getattr(result_state, "memory_suggestions", []) or [],
+            }
+            if settings.expose_route_debug and route_debug is not None:
+                done_payload["route_debug"] = route_debug.model_dump()
+            yield done_event(**done_payload)
+        except ValueError:
+            raise
+        except ConversationProcessingError as exc:
+            yield error_event(str(exc) or "Chat response could not be completed")
+        except Exception as exc:
+            logger.exception(
+                "Unexpected chat event stream failure trainer_id=%s client_id=%s conversation_id=%s",
+                trainer_context.trainer_id,
+                trainer_context.client_id,
+                request.conversation_id,
+                exc_info=exc,
+            )
+            yield error_event("Chat response could not be completed")
 
     def stream_chat(
         self,

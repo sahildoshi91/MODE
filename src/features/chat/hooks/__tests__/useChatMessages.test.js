@@ -180,4 +180,84 @@ describe('useChatMessages', () => {
       && message.text === 'Streaming ended before Coach returned a response.'
     ))).toBe(true);
   });
+
+  it('replaces status copy with message deltas in order', async () => {
+    mockStreamChatSessionMessage.mockImplementationOnce(async ({ onEvent }) => {
+      onEvent?.({
+        type: 'status',
+        stage: 'checking_recent_signals',
+        message: 'Checking your recovery signals...',
+      });
+      onEvent?.({
+        type: 'message_delta',
+        delta: 'Good ',
+      });
+      onEvent?.({
+        type: 'message_delta',
+        delta: 'next move.',
+      });
+      onEvent?.({
+        type: 'done',
+        assistant_message: 'Good next move.',
+      });
+    });
+    let latestState = null;
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          session={{ id: 'session-1', session_date: '2026-05-03' }}
+          onState={(state) => {
+            latestState = state;
+          }}
+        />,
+      );
+    });
+
+    await act(async () => {
+      await latestState.sendMessage('Reach step goal');
+    });
+
+    const finalAssistantMessage = latestState.messages[latestState.messages.length - 1];
+    expect(finalAssistantMessage.role).toBe('assistant');
+    expect(finalAssistantMessage.text).toBe('Good next move.');
+    expect(finalAssistantMessage.metadata?.stream_status_stage).toBeFalsy();
+  });
+
+  it('aborts an active stream and removes status-only assistant row', async () => {
+    mockStreamChatSessionMessage.mockImplementationOnce(async ({ signal }) => {
+      await new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          reject(signal.reason || new Error('aborted'));
+        });
+      });
+    });
+    let latestState = null;
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          session={{ id: 'session-1', session_date: '2026-05-03' }}
+          onState={(state) => {
+            latestState = state;
+          }}
+        />,
+      );
+    });
+
+    let sendPromise;
+    await act(async () => {
+      sendPromise = latestState.sendMessage('Reach step goal');
+      await Promise.resolve();
+    });
+    expect(latestState.messages.some((message) => message.metadata?.stream_status_stage)).toBe(true);
+
+    await act(async () => {
+      latestState.cancelActiveResponse();
+      await sendPromise;
+    });
+
+    expect(latestState.messages.some((message) => message.metadata?.stream_status_stage)).toBe(false);
+    expect(latestState.messages.filter((message) => message.role === 'assistant')).toHaveLength(0);
+  });
 });

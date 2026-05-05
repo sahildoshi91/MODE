@@ -1,4 +1,3 @@
-import json
 import logging
 from uuid import uuid4
 
@@ -18,17 +17,21 @@ from app.modules.conversation.schemas import (
     ChatResponse,
 )
 from app.modules.conversation.service import ConversationProcessingError, ConversationService
+from app.modules.conversation.streaming import (
+    STATUS_READING_USER_MESSAGE,
+    STATUS_WRITING_FINAL_COACH_RESPONSE,
+    STREAMING_RESPONSE_HEADERS,
+    ChatStreamSseEncoder,
+    done_event,
+    error_event,
+    message_delta_event,
+    status_event,
+)
 
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 CONTROLLED_CHAT_ERROR_DETAIL = "Chat response could not be completed"
-
-
-def _public_route_debug(route_debug: object | None) -> dict | None:
-    if not settings.expose_route_debug or route_debug is None:
-        return None
-    return route_debug.model_dump()
 
 
 def _public_chat_response(response: ChatResponse) -> ChatResponse:
@@ -64,6 +67,38 @@ def _raise_controlled_chat_error(
         exc_info=exc,
     )
     raise HTTPException(status_code=502, detail=CONTROLLED_CHAT_ERROR_DETAIL)
+
+
+def _legacy_stream_chat_events(
+    service: ConversationService,
+    user_id: str,
+    trainer_context: TrainerContext,
+    request: ChatRequest,
+):
+    yield status_event(STATUS_READING_USER_MESSAGE, request=request)
+    conversation_id, chunks, route_debug, result_state = service.stream_chat(user_id, trainer_context, request)
+    yield status_event(
+        STATUS_WRITING_FINAL_COACH_RESPONSE,
+        request=request,
+        conversation_id=conversation_id,
+    )
+    assistant_chunks: list[str] = []
+    for chunk in chunks:
+        text_chunk = str(chunk or "")
+        if not text_chunk:
+            continue
+        assistant_chunks.append(text_chunk)
+        yield message_delta_event(text_chunk, conversation_id=conversation_id)
+    done_payload = {
+        "conversation_id": conversation_id,
+        "assistant_message": "".join(assistant_chunks).strip(),
+        "token_usage": result_state.token_usage.model_dump(),
+        "conversation_usage": result_state.conversation_usage.model_dump() if result_state.conversation_usage else None,
+        "memory_suggestions": getattr(result_state, "memory_suggestions", []) or [],
+    }
+    if settings.expose_route_debug and route_debug is not None:
+        done_payload["route_debug"] = route_debug.model_dump()
+    yield done_event(**done_payload)
 
 
 @router.post("", response_model=ChatResponse)
@@ -238,231 +273,106 @@ async def chat_stream(
         },
     )
     request_id = str(request.request_id) if request.request_id else str(uuid4())
-    try:
-        conversation_id, chunks, route_debug, result_state = service.stream_chat(user.id, trainer_context, request)
-    except ValueError as exc:
-        _raise_chat_value_error(exc)
-    except ConversationProcessingError as exc:
-        logger.warning(
-            "Conversation processing error endpoint=/api/v1/chat/stream user_id=%s trainer_id=%s client_id=%s",
-            user.id,
-            trainer_context.trainer_id,
-            trainer_context.client_id,
-            exc_info=exc,
-        )
-        raise HTTPException(status_code=502, detail=CONTROLLED_CHAT_ERROR_DETAIL)
-    except Exception as exc:
-        _raise_controlled_chat_error(
-            endpoint="/api/v1/chat/stream",
-            exc=exc,
-            user=user,
-            trainer_context=trainer_context,
-            request=request,
-        )
-
     create_ai_request_record = getattr(service, "create_ai_request_record", None)
     append_ai_request_event = getattr(service, "append_ai_request_event", None)
     update_ai_request_status = getattr(service, "update_ai_request_status", None)
-    ai_request_row = (
-        create_ai_request_record(
-            conversation_id=conversation_id,
-            trainer_context=trainer_context,
-            request=request,
-            metadata={
-                "endpoint": "/api/v1/chat/stream",
-            },
-        )
-        if callable(create_ai_request_record)
-        else None
-    )
-    if isinstance(ai_request_row, dict):
-        request_id = str(ai_request_row.get("id") or request_id)
 
-    def event_stream():
-        seq = 0
-        stream_started = False
-        assistant_chunks: list[str] = []
+    async def event_stream():
+        nonlocal request_id
+        encoder = ChatStreamSseEncoder(request_id=request_id)
+        request_record_created = False
 
-        def emit_event(
-            payload: dict[str, object],
-            *,
-            event_type: str | None = None,
-            stage: str | None = None,
-            persist: bool = True,
-            status: str | None = None,
-            error_detail: str | None = None,
-        ) -> str:
-            nonlocal seq
-            seq += 1
-            payload_with_meta = {
-                **payload,
-                "request_id": request_id,
-                "seq": seq,
-            }
-            if persist and callable(append_ai_request_event):
-                append_ai_request_event(
-                    request_id=request_id,
-                    seq=seq,
-                    event_type=event_type or str(payload.get("type") or "progress"),
-                    stage=stage,
-                    payload=payload,
-                )
-            if status and callable(update_ai_request_status):
-                update_ai_request_status(
-                    request_id=request_id,
-                    status=status,
-                    latest_event_seq=seq,
-                    error_detail=error_detail,
-                )
-            return f"data: {json.dumps(payload_with_meta)}\n\n"
-
-        start_payload = {
-            "type": "start",
-            "conversation_id": conversation_id,
-        }
-        route_debug_payload = _public_route_debug(route_debug)
-        if route_debug_payload is not None:
-            start_payload["route_debug"] = route_debug_payload
-        yield emit_event(start_payload, persist=False)
-        yield emit_event(
-            {
-                "type": "ack",
-                "conversation_id": conversation_id,
-                "stage": "reviewing_message",
-            },
-            event_type="ack",
-            stage="reviewing_message",
-            status="working",
-        )
-        yield emit_event(
-            {
-                "type": "progress",
-                "conversation_id": conversation_id,
-                "stage": "checking_context",
-            },
-            event_type="progress",
-            stage="checking_context",
-            status="working",
-        )
-        try:
-            for chunk in chunks:
-                if not stream_started:
-                    stream_started = True
-                    yield emit_event(
-                        {
-                            "type": "progress",
-                            "conversation_id": conversation_id,
-                            "stage": "preparing_response",
-                        },
-                        event_type="progress",
-                        stage="preparing_response",
-                        status="streaming",
-                    )
-                text_chunk = str(chunk or "")
-                if not text_chunk:
-                    continue
-                assistant_chunks.append(text_chunk)
-                yield emit_event(
-                    {
-                        "type": "delta",
-                        "conversation_id": conversation_id,
-                        "text": text_chunk,
+        def maybe_attach_request_record(payload: dict[str, object]) -> None:
+            nonlocal request_id, request_record_created
+            conversation_id = str(payload.get("conversation_id") or "").strip()
+            if request_record_created or not conversation_id or not callable(create_ai_request_record):
+                return
+            request_record_created = True
+            try:
+                ai_request_row = create_ai_request_record(
+                    conversation_id=conversation_id,
+                    trainer_context=trainer_context,
+                    request=request,
+                    metadata={
+                        "endpoint": "/api/v1/chat/stream",
                     },
-                    event_type="delta",
-                    status="streaming",
-                    persist=False,
                 )
-            yield emit_event(
-                {
-                    "type": "progress",
-                    "conversation_id": conversation_id,
-                    "stage": "finalizing_response",
-                },
-                event_type="progress",
-                stage="finalizing_response",
-                status="streaming",
-            )
-            assistant_message = "".join(assistant_chunks).strip()
-            completed_payload = {
-                "type": "completed",
-                "conversation_id": conversation_id,
-                "assistant_message": assistant_message,
-                "token_usage": result_state.token_usage.model_dump(),
-                "conversation_usage": (
-                    result_state.conversation_usage.model_dump()
-                    if result_state.conversation_usage else None
-                ),
-                "memory_suggestions": getattr(result_state, "memory_suggestions", []) or [],
-            }
-            if route_debug_payload is not None:
-                completed_payload["route_debug"] = route_debug_payload
-            yield emit_event(
-                completed_payload,
-                event_type="completed",
-                stage="finalizing_response",
-                status="completed",
-            )
-            done_payload = {
-                "type": "done",
-                "conversation_id": conversation_id,
-                "token_usage": result_state.token_usage.model_dump(),
-                "conversation_usage": result_state.conversation_usage.model_dump() if result_state.conversation_usage else None,
-            }
-            if route_debug_payload is not None:
-                done_payload["route_debug"] = route_debug_payload
-            yield emit_event(done_payload, persist=False)
-            if callable(update_ai_request_status):
-                update_ai_request_status(
-                    request_id=request_id,
-                    status="completed",
-                    latest_event_seq=seq,
-                    completed_message_id=result_state.assistant_message_id,
+                if isinstance(ai_request_row, dict):
+                    request_id = str(ai_request_row.get("id") or request_id)
+                    encoder.request_id = request_id
+                if callable(append_ai_request_event):
+                    encoder.append_event = append_ai_request_event
+                if callable(update_ai_request_status):
+                    encoder.update_status = update_ai_request_status
+            except Exception:
+                logger.exception(
+                    "Failed to create chat stream request record trainer_id=%s client_id=%s",
+                    trainer_context.trainer_id,
+                    trainer_context.client_id,
                 )
+
+        def request_status_for(payload: dict[str, object]) -> str | None:
+            payload_type = str(payload.get("type") or "")
+            if payload_type == "status":
+                return "working"
+            if payload_type == "message_delta":
+                return "streaming"
+            if payload_type == "done":
+                return "completed"
+            if payload_type == "error":
+                return "failed"
+            return None
+
+        try:
+            stream_events = getattr(service, "stream_chat_events", None)
+            event_iterator = (
+                stream_events(user.id, trainer_context, request)
+                if callable(stream_events)
+                else _legacy_stream_chat_events(service, user.id, trainer_context, request)
+            )
+            for payload in event_iterator:
+                if await http_request.is_disconnected():
+                    break
+                maybe_attach_request_record(payload)
+                payload_type = str(payload.get("type") or "")
+                yield encoder.encode(
+                    payload,
+                    persist=payload_type != "message_delta",
+                    request_status=request_status_for(payload),
+                    error_detail=str(payload.get("detail") or "") if payload_type == "error" else None,
+                )
+        except ValueError as exc:
+            payload = error_event(str(exc) or CONTROLLED_CHAT_ERROR_DETAIL)
+            yield encoder.encode(
+                payload,
+                request_status="failed",
+                error_detail=str(payload.get("detail") or CONTROLLED_CHAT_ERROR_DETAIL),
+            )
         except ConversationProcessingError as exc:
-            detail = str(exc)
-            yield emit_event(
-                {
-                    "type": "failed",
-                    "detail": detail,
-                    "conversation_id": conversation_id,
-                },
-                event_type="failed",
-                status="failed",
+            detail = str(exc) or CONTROLLED_CHAT_ERROR_DETAIL
+            payload = error_event(detail)
+            yield encoder.encode(
+                payload,
+                request_status="failed",
                 error_detail=detail,
-            )
-            yield emit_event(
-                {
-                    "type": "error",
-                    "detail": detail,
-                    "conversation_id": conversation_id,
-                },
-                persist=False,
             )
         except Exception as exc:
             logger.exception(
-                "Unexpected stream generator failure conversation_id=%s trainer_id=%s client_id=%s",
-                conversation_id,
+                "Unexpected chat stream failure user_id=%s trainer_id=%s client_id=%s",
+                user.id,
                 trainer_context.trainer_id,
                 trainer_context.client_id,
                 exc_info=exc,
             )
-            yield emit_event(
-                {
-                    "type": "failed",
-                    "detail": CONTROLLED_CHAT_ERROR_DETAIL,
-                    "conversation_id": conversation_id,
-                },
-                event_type="failed",
-                status="failed",
+            payload = error_event(CONTROLLED_CHAT_ERROR_DETAIL)
+            yield encoder.encode(
+                payload,
+                request_status="failed",
                 error_detail=CONTROLLED_CHAT_ERROR_DETAIL,
             )
-            yield emit_event(
-                {
-                    "type": "error",
-                    "detail": CONTROLLED_CHAT_ERROR_DETAIL,
-                    "conversation_id": conversation_id,
-                },
-                persist=False,
-            )
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers=STREAMING_RESPONSE_HEADERS,
+    )

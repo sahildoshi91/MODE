@@ -404,7 +404,9 @@ function ChatConversationView({
       <ChatInputDock
         readOnly={isReadOnly}
         disabled={messageState.sending || sessionState.loading}
+        isSending={messageState.sending}
         onSend={handleSendMessage}
+        onCancel={messageState.cancelActiveResponse}
         bottomInset={bottomInset}
         placeholder={role === 'trainer' ? 'Ask Coach AI what needs attention...' : 'Tell your coach what you need...'}
       />

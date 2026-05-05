@@ -131,6 +131,7 @@ export async function streamChatMessage({
   idempotencyKey = null,
   requestId = null,
   sinceSeq = null,
+  signal = null,
   onEvent,
 }) {
   let response;
@@ -153,6 +154,7 @@ export async function streamChatMessage({
         sinceSeq,
       })),
       timeoutMs: CHAT_STREAM_TIMEOUT_MS,
+      ...(signal ? { signal } : {}),
     }));
   } catch (error) {
     throw buildApiNetworkError(error, CHAT_STREAM_PATH, {

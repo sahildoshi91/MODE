@@ -5,11 +5,15 @@ import {
   buildClientMessageId,
   buildIdempotencyKey,
   buildRequestId,
-  createAIProgressController,
-  getAIProgressLabel,
-  AI_PROGRESS_STAGES,
 } from '../../messaging';
 import { getChatHistory, sendChatMessage, streamChatMessage } from '../services/chatApi';
+import {
+  CHAT_STREAM_EVENT_TYPES,
+  CHAT_STREAM_FRIENDLY_ERROR_MESSAGE,
+  CHAT_STREAM_STATUS_STAGES,
+  getChatStreamStatusMessage,
+  normalizeChatStreamEvent,
+} from './useChatStreaming';
 import { sanitizeAssistantDisplayText } from '../utils/aiResponseParser';
 
 const DEFAULT_WELCOME_MESSAGE = 'I am here to help you make steady progress that fits your day. Share what you need and we will choose the next smart step together.';
@@ -64,6 +68,17 @@ const STALE_CHAT_HISTORY_ROUTE_MESSAGE = (
 const MEMORY_SUGGESTION_MIN_CONFIDENCE = 0.78;
 const MEMORY_SUGGESTION_CATEGORIES = new Set(['preference', 'injury', 'goal', 'constraint']);
 const MEMORY_SUGGESTION_VISIBILITIES = new Set(['ai_usable', 'internal_only']);
+
+function isAbortError(error) {
+  const message = String(error?.message || '').toLowerCase();
+  return (
+    error?.name === 'AbortError'
+    || message.includes('aborted')
+    || message.includes('abort')
+    || message.includes('canceled')
+    || message.includes('cancelled')
+  );
+}
 
 function normalizeOnboardingAction(value) {
   if (typeof value !== 'string') {
@@ -412,6 +427,7 @@ export function useChatConversation(accessToken, launchContext = null) {
   const conversationIdRef = useRef(conversationId);
   const launchContextRef = useRef(launchContextPayload);
   const isBootstrappingRef = useRef(isBootstrapping);
+  const activeAbortControllerRef = useRef(null);
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -434,6 +450,8 @@ export function useChatConversation(accessToken, launchContext = null) {
     bootstrapStartedRef.current = false;
     queueRef.current = [];
     processingRef.current = false;
+    activeAbortControllerRef.current?.abort?.();
+    activeAbortControllerRef.current = null;
     setConversationId(null);
     conversationIdRef.current = null;
     setMessages(initialMessages);
@@ -450,6 +468,11 @@ export function useChatConversation(accessToken, launchContext = null) {
     setIsLoadingMoreHistory(false);
     setHistoryPaginationError(null);
   }, [launchContextPayload, shouldBootstrapTrainerOnboarding]);
+
+  useEffect(() => () => {
+    activeAbortControllerRef.current?.abort?.();
+    activeAbortControllerRef.current = null;
+  }, []);
 
   const hydrateHistory = useCallback(async ({ isActive = () => true } = {}) => {
     try {
@@ -687,58 +710,60 @@ export function useChatConversation(accessToken, launchContext = null) {
     const requestId = buildRequestId('chat-request');
     const progressMessageId = `assistant-progress-${requestId}`;
     const streamMessageId = `assistant-stream-${requestId}`;
-    let allowProgressUpdates = true;
-    const stageController = createAIProgressController({
-      onStageChange: (stage) => {
-        if (!allowProgressUpdates) {
-          return;
+    let allowStatusUpdates = true;
+    let canceledWithPartial = false;
+    const abortController = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    activeAbortControllerRef.current = abortController;
+
+    const upsertStatusRow = (stage, text) => {
+      if (!allowStatusUpdates) {
+        return;
+      }
+      const nextLabel = text || getChatStreamStatusMessage(stage);
+      setMessages((current) => {
+        const withoutStream = current.filter((item) => item?.id !== streamMessageId);
+        const nextProgressRow = {
+          id: progressMessageId,
+          role: 'assistant',
+          kind: 'assistant_progress',
+          requestId,
+          stage,
+          text: nextLabel,
+          status: 'working',
+        };
+        const existingIndex = withoutStream.findIndex((item) => item?.id === progressMessageId);
+        if (existingIndex >= 0) {
+          const clone = [...withoutStream];
+          clone[existingIndex] = { ...clone[existingIndex], ...nextProgressRow };
+          return clone;
         }
-        const nextLabel = getAIProgressLabel(stage);
-        setMessages((current) => {
-          const withoutStream = current.filter((item) => item?.id !== streamMessageId);
-          const nextProgressRow = {
-            id: progressMessageId,
-            role: 'assistant',
-            kind: 'assistant_progress',
-            requestId,
-            stage,
-            text: nextLabel,
-            status: 'working',
-          };
-          const existingIndex = withoutStream.findIndex((item) => item?.id === progressMessageId);
-          if (existingIndex >= 0) {
-            const clone = [...withoutStream];
-            clone[existingIndex] = { ...clone[existingIndex], ...nextProgressRow };
-            return clone;
-          }
-          return [...withoutStream, nextProgressRow];
-        });
-      },
-    });
-    stageController.setStage(AI_PROGRESS_STAGES.REVIEWING_MESSAGE, { force: true });
+        return [...withoutStream, nextProgressRow];
+      });
+    };
+    upsertStatusRow(
+      CHAT_STREAM_STATUS_STAGES.READING_USER_MESSAGE,
+      getChatStreamStatusMessage(CHAT_STREAM_STATUS_STAGES.READING_USER_MESSAGE),
+    );
 
     let collectedAssistantText = '';
     let streamFailure = null;
     let responsePayload = null;
     let responseConversationId = conversationIdRef.current;
 
-    const consumeStreamPayload = (eventPayload) => {
-      const payloadType = String(eventPayload?.type || '').toLowerCase();
+    const consumeStreamPayload = (rawPayload, meta = {}) => {
+      const eventPayload = normalizeChatStreamEvent(rawPayload, meta);
+      const payloadType = eventPayload.type;
       if (eventPayload?.conversation_id) {
         responseConversationId = eventPayload.conversation_id;
       }
-      if (payloadType === 'ack') {
-        stageController.setStage(eventPayload?.stage || AI_PROGRESS_STAGES.REVIEWING_MESSAGE);
+      if (payloadType === CHAT_STREAM_EVENT_TYPES.STATUS) {
+        upsertStatusRow(eventPayload?.stage, eventPayload?.message);
         return;
       }
-      if (payloadType === 'progress') {
-        stageController.setStage(eventPayload?.stage || AI_PROGRESS_STAGES.CHECKING_CONTEXT);
-        return;
-      }
-      if (payloadType === 'delta') {
-        allowProgressUpdates = false;
-        if (typeof eventPayload?.text === 'string') {
-          collectedAssistantText += eventPayload.text;
+      if (payloadType === CHAT_STREAM_EVENT_TYPES.MESSAGE_DELTA) {
+        allowStatusUpdates = false;
+        if (typeof eventPayload?.delta === 'string') {
+          collectedAssistantText += eventPayload.delta;
         }
         setMessages((current) => {
           const withoutProgress = current.filter((item) => item?.id !== progressMessageId);
@@ -760,24 +785,18 @@ export function useChatConversation(accessToken, launchContext = null) {
         });
         return;
       }
-      if (payloadType === 'completed') {
-        allowProgressUpdates = false;
+      if (payloadType === CHAT_STREAM_EVENT_TYPES.DONE) {
+        allowStatusUpdates = false;
         responsePayload = eventPayload;
         if (typeof eventPayload?.assistant_message === 'string' && eventPayload.assistant_message.trim().length > 0) {
           collectedAssistantText = eventPayload.assistant_message.trim();
         }
         return;
       }
-      if (payloadType === 'done') {
-        allowProgressUpdates = false;
-        if (!responsePayload) {
-          responsePayload = eventPayload;
-        }
-        return;
-      }
-      if (payloadType === 'failed' || payloadType === 'error') {
-        allowProgressUpdates = false;
-        streamFailure = new Error(eventPayload?.detail || 'Unable to reach coach right now.');
+      if (payloadType === CHAT_STREAM_EVENT_TYPES.ERROR) {
+        allowStatusUpdates = false;
+        streamFailure = new Error(eventPayload?.message || eventPayload?.detail || CHAT_STREAM_FRIENDLY_ERROR_MESSAGE);
+        streamFailure.detail = eventPayload?.detail || null;
       }
     };
 
@@ -793,6 +812,7 @@ export function useChatConversation(accessToken, launchContext = null) {
         clientMessageId: messageEntry.clientMessageId,
         idempotencyKey: messageEntry.idempotencyKey,
         requestId,
+        signal: abortController?.signal,
         onEvent: consumeStreamPayload,
       });
 
@@ -800,7 +820,28 @@ export function useChatConversation(accessToken, launchContext = null) {
         throw streamFailure;
       }
     } catch (streamError) {
-      if (!collectedAssistantText.trim()) {
+      const streamWasAborted = isAbortError(streamError);
+      if (streamWasAborted) {
+        allowStatusUpdates = false;
+        if (!collectedAssistantText.trim()) {
+          removeTransientAssistantRows(requestId, streamMessageId);
+          updateMessageById(messageEntry.id, { status: 'failed' });
+          setError('Response canceled.');
+          setErrorDetails(streamError && typeof streamError === 'object' ? streamError : null);
+          setFailedRequest({
+            type: 'message',
+            messageId: messageEntry.id,
+            message: messageEntry.text,
+          });
+          return false;
+        }
+        canceledWithPartial = true;
+        responsePayload = {
+          assistant_message: collectedAssistantText,
+          conversation_id: responseConversationId,
+          quick_replies: [],
+        };
+      } else if (!collectedAssistantText.trim()) {
         try {
           responsePayload = await sendChatMessage({
             accessToken,
@@ -822,7 +863,19 @@ export function useChatConversation(accessToken, launchContext = null) {
           }
         } catch (fallbackError) {
           removeTransientAssistantRows(requestId, streamMessageId);
-          const message = fallbackError?.message || streamError?.message || 'Unable to reach coach right now.';
+          const message = streamError?.message === CHAT_STREAM_FRIENDLY_ERROR_MESSAGE
+            ? CHAT_STREAM_FRIENDLY_ERROR_MESSAGE
+            : (fallbackError?.message || streamError?.message || 'Unable to reach coach right now.');
+          setMessages((current) => [
+            ...current,
+            {
+              id: `assistant-error-${requestId}`,
+              role: 'assistant',
+              text: message,
+              isError: true,
+              requestId,
+            },
+          ]);
           updateMessageById(messageEntry.id, { status: 'failed' });
           setError(message);
           setErrorDetails(
@@ -841,6 +894,9 @@ export function useChatConversation(accessToken, launchContext = null) {
         removeTransientAssistantRows(requestId, null);
       }
     } finally {
+      if (activeAbortControllerRef.current === abortController) {
+        activeAbortControllerRef.current = null;
+      }
       setActiveAssistantRequests((value) => Math.max(0, value - 1));
     }
 
@@ -868,9 +924,19 @@ export function useChatConversation(accessToken, launchContext = null) {
         },
       ];
     });
-    updateMessageById(messageEntry.id, { status: 'sent' });
+    updateMessageById(messageEntry.id, { status: canceledWithPartial ? 'failed' : 'sent' });
     setConversationId(responsePayload?.conversation_id || responseConversationId || null);
     setQuickReplies(Array.isArray(responsePayload?.quick_replies) ? responsePayload.quick_replies : []);
+    if (canceledWithPartial) {
+      setError('Response canceled.');
+      setErrorDetails(null);
+      setFailedRequest({
+        type: 'message',
+        messageId: messageEntry.id,
+        message: messageEntry.text,
+      });
+      return false;
+    }
     setError(null);
     setErrorDetails(null);
     setFailedRequest((current) => (
@@ -975,6 +1041,15 @@ export function useChatConversation(accessToken, launchContext = null) {
     return false;
   };
 
+  const cancelActiveResponse = useCallback(() => {
+    const activeController = activeAbortControllerRef.current;
+    if (!activeController || typeof activeController.abort !== 'function') {
+      return false;
+    }
+    activeController.abort(new Error('Response canceled.'));
+    return true;
+  }, []);
+
   const lastFailedMessage = useMemo(() => {
     if (failedRequest?.type === 'message' && typeof failedRequest.message === 'string') {
       return failedRequest.message;
@@ -1000,6 +1075,7 @@ export function useChatConversation(accessToken, launchContext = null) {
     historyPaginationError,
     loadMoreHistory,
     sendMessage,
+    cancelActiveResponse,
     retryFailedRequest,
     retryLastFailedMessage: retryFailedRequest,
   };

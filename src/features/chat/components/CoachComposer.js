@@ -7,6 +7,8 @@ export default function CoachComposer({
   value,
   onChangeText,
   onSend,
+  onCancel,
+  isSending = false,
   disabled = false,
   onFocus,
 }) {
@@ -16,6 +18,8 @@ export default function CoachComposer({
       onChangeText={onChangeText}
       onFocus={onFocus}
       onSend={onSend}
+      onCancel={onCancel}
+      isSending={isSending}
       disabled={disabled}
       style={styles.container}
     />

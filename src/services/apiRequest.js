@@ -38,11 +38,12 @@ function selectRepresentativeCause(attemptErrors, fallbackError) {
   return fallbackError || null;
 }
 
-function createTimeoutController(timeoutMs) {
+function createTimeoutController(timeoutMs, externalSignal = null) {
   if (typeof AbortController === 'undefined') {
     return {
       controller: null,
       timeoutId: null,
+      cleanup: () => {},
     };
   }
 
@@ -50,8 +51,25 @@ function createTimeoutController(timeoutMs) {
   const timeoutId = setTimeout(() => {
     controller.abort(new Error(`Request timed out after ${timeoutMs}ms`));
   }, timeoutMs);
+  const handleExternalAbort = () => {
+    const reason = externalSignal?.reason || new Error('Request aborted');
+    controller.abort(reason);
+  };
+  if (externalSignal?.aborted) {
+    handleExternalAbort();
+  } else if (externalSignal && typeof externalSignal.addEventListener === 'function') {
+    externalSignal.addEventListener('abort', handleExternalAbort, { once: true });
+  }
 
-  return { controller, timeoutId };
+  return {
+    controller,
+    timeoutId,
+    cleanup: () => {
+      if (externalSignal && typeof externalSignal.removeEventListener === 'function') {
+        externalSignal.removeEventListener('abort', handleExternalAbort);
+      }
+    },
+  };
 }
 
 export async function fetchWithApiFallback(path, options) {
@@ -68,12 +86,13 @@ export async function fetchWithApiFallback(path, options) {
 
   for (const [attemptIndex, baseUrl] of candidateBaseUrls.entries()) {
     attemptedBaseUrls.push(baseUrl);
-    const { controller, timeoutId } = createTimeoutController(timeoutMs);
+    const { controller, timeoutId, cleanup } = createTimeoutController(timeoutMs, options?.signal);
 
     try {
       const {
         timeoutMs: _timeoutMs,
         shouldRetryOnResponse: _shouldRetryOnResponse,
+        signal: _signal,
         ...fetchOptions
       } = options || {};
       const response = await fetch(`${baseUrl}${path}`, {
@@ -117,6 +136,7 @@ export async function fetchWithApiFallback(path, options) {
       if (timeoutId) {
         clearTimeout(timeoutId);
       }
+      cleanup();
     }
   }
 

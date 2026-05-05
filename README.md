@@ -156,6 +156,15 @@ cd backend
 
 Expected result: `Runtime route surface preflight: PASSED`.
 
+### Codex Prompt-Close Check
+After any Codex change that touches app/backend behavior, run the guard before calling the work done:
+
+```bash
+npm run codex:check
+```
+
+This runs focused backend route tests, finds the first reachable backend from `.env`, LAN, localhost, and `127.0.0.1`, then runs the runtime route preflight against that backend. If it reports no reachable backend, start one with `npm run backend:dev`, rerun the check, and tap `Retry` in the app.
+
 ### Trainer Connectivity Triage (Physical Device)
 If trainer assistant/coach surfaces show `Unable to reach backend...`, run this quick triage:
 

@@ -64,7 +64,7 @@ function buildAssistantProgressLabel(stage, assistantDisplayName) {
   if (normalizedStage === 'finalizing_response') {
     return `${resolvedAssistantName} is finalizing...`;
   }
-  return `${resolvedAssistantName} is reviewing...`;
+  return 'Coach is checking their notes';
 }
 
 function buildStreamEventFromSystemRecord(event) {

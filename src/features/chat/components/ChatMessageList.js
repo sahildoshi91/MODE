@@ -7,6 +7,7 @@ import { useOpeningSummary } from '../hooks/useOpeningSummary';
 import ChatMessageBubble from './ChatMessageBubble';
 import StreamingAIMessage from './StreamingAIMessage';
 import SuggestedActionChips from './SuggestedActionChips';
+import TypingIndicator from './TypingIndicator';
 
 function resolveMemorySaveStatus(message, memorySaveStatuses) {
   if (!message || message.role !== 'user' || !memorySaveStatuses) {
@@ -113,10 +114,18 @@ export default function ChatMessageList({
     const previousMessage = messages[index - 1];
     const showSpeakerLabel = !previousMessage || previousMessage.role !== item.role;
     const memorySaveStatus = resolveMemorySaveStatus(item, memorySaveStatuses);
+    const isAssistantStatus = Boolean(
+      isAssistant
+      && item?.metadata?.stream_status_stage
+      && !item?.isError
+      && !item?.isStreaming
+    );
 
     return (
       <View style={styles.messageWrap}>
-        {isAssistant ? (
+        {isAssistantStatus ? (
+          <TypingIndicator text={item.text || item.content} />
+        ) : isAssistant ? (
           <StreamingAIMessage
             message={item}
             showSpeakerLabel={showSpeakerLabel}

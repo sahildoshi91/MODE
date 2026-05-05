@@ -465,6 +465,7 @@ export default function CoachChatScreen({
     historyPaginationError,
     loadMoreHistory,
     sendMessage,
+    cancelActiveResponse,
     retryFailedRequest,
   } = useChatConversation(accessToken, launchContext);
   const breathingTransitionsEnabled = Boolean(BREATHING_TRANSITIONS_ENABLED);
@@ -1514,6 +1515,8 @@ export default function CoachChatScreen({
                 value={draft}
                 onChangeText={setDraft}
                 onSend={handleSend}
+                onCancel={cancelActiveResponse}
+                isSending={isSending}
                 onFocus={handleComposerFocus}
                 disabled={shouldDisableComposer}
               />

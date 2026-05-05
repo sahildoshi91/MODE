@@ -7,8 +7,10 @@ import { theme } from '../../../../lib/theme';
 
 export default function ChatInputDock({
   disabled = false,
+  isSending = false,
   readOnly = false,
   onSend,
+  onCancel,
   bottomInset = 0,
   placeholder = 'Tell your coach what you need...',
   testID = 'chat-input-dock',
@@ -65,6 +67,8 @@ export default function ChatInputDock({
         value={value}
         onChangeText={setValue}
         onSend={handleSend}
+        onCancel={onCancel}
+        isSending={isSending}
         disabled={disabled}
         placeholder={placeholder}
       />

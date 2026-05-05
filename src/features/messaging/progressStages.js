@@ -13,7 +13,7 @@ export const AI_PROGRESS_STAGE_ORDER = Object.freeze([
 ]);
 
 export const AI_PROGRESS_COPY = Object.freeze({
-  [AI_PROGRESS_STAGES.REVIEWING_MESSAGE]: 'Reviewing your message',
+  [AI_PROGRESS_STAGES.REVIEWING_MESSAGE]: 'Coach is checking their notes',
   [AI_PROGRESS_STAGES.CHECKING_CONTEXT]: 'Checking your context',
   [AI_PROGRESS_STAGES.PREPARING_RESPONSE]: 'Preparing your plan',
   [AI_PROGRESS_STAGES.FINALIZING_RESPONSE]: 'Finalizing response',

@@ -47,6 +47,12 @@ class TrainerRouteSurfaceContractTests(unittest.TestCase):
             "/api/v1/trainer-coach/queue/{output_id}/edit",
             "/api/v1/trainer-coach/queue/{output_id}/reject",
             "/api/v1/chat/history",
+            "/api/v1/chat/sessions",
+            "/api/v1/chat/sessions/today",
+            "/api/v1/chat/sessions/{session_id}",
+            "/api/v1/chat/sessions/{session_id}/continue",
+            "/api/v1/chat/sessions/{session_id}/messages",
+            "/api/v1/chat/sessions/{session_id}/messages/stream",
         }
 
         missing_paths = sorted(required_paths.difference(paths.keys()))
@@ -95,6 +101,12 @@ class TrainerRouteSurfaceContractTests(unittest.TestCase):
         self.assertIn("post", paths["/api/v1/trainer-coach/queue/{output_id}/edit"])
         self.assertIn("post", paths["/api/v1/trainer-coach/queue/{output_id}/reject"])
         self.assertIn("get", paths["/api/v1/chat/history"])
+        self.assertIn("get", paths["/api/v1/chat/sessions"])
+        self.assertIn("post", paths["/api/v1/chat/sessions/today"])
+        self.assertIn("get", paths["/api/v1/chat/sessions/{session_id}"])
+        self.assertIn("post", paths["/api/v1/chat/sessions/{session_id}/continue"])
+        self.assertIn("post", paths["/api/v1/chat/sessions/{session_id}/messages"])
+        self.assertIn("post", paths["/api/v1/chat/sessions/{session_id}/messages/stream"])
 
 
 if __name__ == "__main__":

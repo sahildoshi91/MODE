@@ -9,6 +9,7 @@
     "web": "expo start --web",
     "backend:dev": "cd backend && ./venv/bin/python main.py",
     "backend:check": "node scripts/backend_health_check.js",
+    "codex:check": "node scripts/codex_prompt_check.js",
     "lint": "eslint src lib App.js",
     "test": "jest --runInBand",
     "test:watch": "jest --watch",

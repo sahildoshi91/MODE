@@ -22,6 +22,14 @@ from app.modules.conversation.schemas import ChatResponse, ConversationState, Co
 from app.modules.conversation.service import ConversationProcessingError
 
 
+def _sse_event_types(text: str) -> list[str]:
+    return [
+        line.replace("event: ", "", 1)
+        for line in text.splitlines()
+        if line.startswith("event: ")
+    ]
+
+
 class FakeConversationService:
     def handle_chat(self, user_id, trainer_context, request):
         del user_id, trainer_context, request
@@ -204,9 +212,29 @@ class ChatApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn('"type": "start"', response.text)
+        self.assertEqual(_sse_event_types(response.text)[0], "status")
         self.assertNotIn('"route_debug"', response.text)
         self.assertIn('"type": "error"', response.text)
+        self.assertIn("I couldn't finish that response", response.text)
+
+    def test_stream_emits_status_delta_done_contract(self):
+        app.dependency_overrides[get_conversation_service] = lambda: FakeConversationService()
+
+        response = self.client.post(
+            "/api/v1/chat/stream",
+            json={"message": "Hello"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        event_types = _sse_event_types(response.text)
+        self.assertEqual(event_types[0], "status")
+        self.assertIn("message_delta", event_types)
+        self.assertIn("done", event_types)
+        self.assertTrue(set(event_types).issubset({"status", "message_delta", "done", "error"}))
+        self.assertLess(event_types.index("status"), event_types.index("message_delta"))
+        self.assertIn('"delta": "hello"', response.text)
+        self.assertIn('"assistant_message": "hello"', response.text)
 
     def test_chat_maps_unexpected_failure_to_controlled_502(self):
         app.dependency_overrides[get_conversation_service] = lambda: UnexpectedExplodingConversationService()
@@ -241,7 +269,7 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(second.json()["detail"]["group"], "chat")
         self.assertGreaterEqual(second.json()["detail"]["retry_after_seconds"], 1)
 
-    def test_stream_maps_unexpected_failure_to_controlled_502(self):
+    def test_stream_maps_unexpected_failure_to_error_event(self):
         app.dependency_overrides[get_conversation_service] = lambda: UnexpectedExplodingConversationService()
 
         response = self.client.post(
@@ -250,8 +278,10 @@ class ChatApiTests(unittest.TestCase):
             headers={"Authorization": "Bearer ignored-by-override"},
         )
 
-        self.assertEqual(response.status_code, 502)
-        self.assertEqual(response.json()["detail"], "Chat response could not be completed")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(_sse_event_types(response.text)[0], "status")
+        self.assertIn('"type": "error"', response.text)
+        self.assertIn('"detail": "Chat response could not be completed"', response.text)
 
 
 if __name__ == "__main__":

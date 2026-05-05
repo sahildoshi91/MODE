@@ -52,11 +52,11 @@ function parseDotEnvValue(filePath, key) {
   return null;
 }
 
-function configuredBaseUrl(args) {
+function configuredBaseUrl(args = {}, cwd = process.cwd()) {
   return normalizeBaseUrl(
     args.baseUrl
     || process.env.EXPO_PUBLIC_API_BASE_URL
-    || parseDotEnvValue(path.join(process.cwd(), '.env'), 'EXPO_PUBLIC_API_BASE_URL'),
+    || parseDotEnvValue(path.join(cwd, '.env'), 'EXPO_PUBLIC_API_BASE_URL'),
   );
 }
 
@@ -85,8 +85,8 @@ function lanBaseUrls(port) {
   return urls;
 }
 
-function candidateBaseUrls(args) {
-  const configured = configuredBaseUrl(args);
+function candidateBaseUrls(args = {}, cwd = process.cwd()) {
+  const configured = configuredBaseUrl(args, cwd);
   const port = portFromBaseUrl(configured || `http://127.0.0.1:${DEFAULT_PORT}`);
   const candidates = [
     configured,
@@ -168,7 +168,23 @@ async function main() {
   process.exit(1);
 }
 
-main().catch((error) => {
-  console.error(error?.stack || error?.message || String(error));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error?.stack || error?.message || String(error));
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  DEFAULT_PORT,
+  HEALTH_PATH,
+  START_COMMAND,
+  candidateBaseUrls,
+  configuredBaseUrl,
+  lanBaseUrls,
+  normalizeBaseUrl,
+  parseArgs,
+  parseDotEnvValue,
+  portFromBaseUrl,
+  requestHealth,
+};

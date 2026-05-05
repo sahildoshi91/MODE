@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from uuid import uuid4
 
@@ -10,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from app.api.v1.chat import CONTROLLED_CHAT_ERROR_DETAIL
 from app.api.v1.trainer_auth import require_client_or_trainer_actor
 from app.core.auth import AuthenticatedUser, CurrentUser
+from app.core.config import settings
 from app.core.dependencies import get_chat_session_service, get_trainer_context
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
@@ -24,6 +24,20 @@ from app.modules.chat_sessions.schemas import (
 )
 from app.modules.chat_sessions.service import ChatSessionAccessError, ChatSessionService
 from app.modules.conversation.service import ConversationProcessingError
+from app.modules.conversation.streaming import (
+    STATUS_CHECKING_RECENT_SIGNALS,
+    STATUS_GENERATING_RECOMMENDATION,
+    STATUS_LOADING_CLIENT_PROFILE,
+    STATUS_READING_USER_MESSAGE,
+    STATUS_RETRIEVING_TRAINER_KNOWLEDGE,
+    STATUS_WRITING_FINAL_COACH_RESPONSE,
+    STREAMING_RESPONSE_HEADERS,
+    ChatStreamSseEncoder,
+    done_event,
+    error_event,
+    message_delta_event,
+    status_event,
+)
 
 
 router = APIRouter()
@@ -261,57 +275,77 @@ async def stream_chat_session_message(
     require_client_or_trainer_actor(user, trainer_context)
     _rate_limit_chat(http_request, user, trainer_context)
     request_id = str(request.request_id) if request.request_id else str(uuid4())
-    try:
-        session, user_message, conversation_id, chunks, route_debug, result_state = service.prepare_stream(
-            user_id=user.id,
-            trainer_context=trainer_context,
-            session_id=session_id,
-            request=request,
-        )
-    except ValueError as exc:
-        _raise_session_value_error(exc)
-    except ConversationProcessingError:
-        logger.warning("Chat session stream processing failed session_id=%s", session_id, exc_info=True)
-        raise HTTPException(status_code=502, detail=CONTROLLED_CHAT_ERROR_DETAIL)
-    except Exception as exc:
-        _raise_unexpected_chat_session_error(
-            exc,
-            log_message="Unexpected chat session stream start failure session_id=%s",
-            session_id=session_id,
-        )
 
-    def event_stream():
-        seq = 0
+    async def event_stream():
+        encoder = ChatStreamSseEncoder(request_id=request_id)
         assistant_chunks: list[str] = []
 
-        def emit(payload: dict[str, object]) -> str:
-            nonlocal seq
-            seq += 1
-            payload_with_meta = {
-                **payload,
-                "request_id": request_id,
-                "seq": seq,
-            }
-            return f"data: {json.dumps(payload_with_meta)}\n\n"
-
-        yield emit({
-            "type": "start",
-            "session_id": session_id,
-            "conversation_id": conversation_id,
-            "user_message": user_message,
-        })
+        yield encoder.encode(
+            status_event(STATUS_READING_USER_MESSAGE, request=request, session_id=session_id),
+            persist=False,
+            request_status="working",
+        )
         try:
+            yield encoder.encode(
+                status_event(STATUS_LOADING_CLIENT_PROFILE, request=request, session_id=session_id),
+                persist=False,
+                request_status="working",
+            )
+            if (
+                settings.trainer_intelligence_orchestration_enabled
+                and getattr(service.conversation_service, "trainer_intelligence_service", None)
+                and trainer_context.trainer_id
+                and trainer_context.client_id
+            ):
+                yield encoder.encode(
+                    status_event(STATUS_RETRIEVING_TRAINER_KNOWLEDGE, request=request, session_id=session_id),
+                    persist=False,
+                    request_status="working",
+                )
+                yield encoder.encode(
+                    status_event(STATUS_CHECKING_RECENT_SIGNALS, request=request, session_id=session_id),
+                    persist=False,
+                    request_status="working",
+                )
+            yield encoder.encode(
+                status_event(STATUS_GENERATING_RECOMMENDATION, request=request, session_id=session_id),
+                persist=False,
+                request_status="working",
+            )
+            session, user_message, conversation_id, chunks, route_debug, result_state = service.prepare_stream(
+                user_id=user.id,
+                trainer_context=trainer_context,
+                session_id=session_id,
+                request=request,
+            )
+            del session, route_debug
+            yield encoder.encode(
+                status_event(
+                    STATUS_WRITING_FINAL_COACH_RESPONSE,
+                    request=request,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    user_message=user_message,
+                ),
+                persist=False,
+                request_status="streaming",
+            )
             for chunk in chunks:
+                if await http_request.is_disconnected():
+                    return
                 text_chunk = str(chunk or "")
                 if not text_chunk:
                     continue
                 assistant_chunks.append(text_chunk)
-                yield emit({
-                    "type": "delta",
-                    "session_id": session_id,
-                    "conversation_id": conversation_id,
-                    "text": text_chunk,
-                })
+                yield encoder.encode(
+                    message_delta_event(
+                        text_chunk,
+                        session_id=session_id,
+                        conversation_id=conversation_id,
+                    ),
+                    persist=False,
+                    request_status="streaming",
+                )
             assistant_message = "".join(assistant_chunks).strip()
             if not assistant_message:
                 assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
@@ -328,37 +362,48 @@ async def stream_chat_session_message(
                     "conversation_usage": conversation_usage.model_dump() if conversation_usage else None,
                 },
             )
-            yield emit({
-                "type": "completed",
-                "session_id": session_id,
-                "conversation_id": conversation_id,
-                "assistant_message": assistant_message,
-                "ai_message": saved_ai_message,
-            })
-            yield emit({
-                "type": "done",
-                "session_id": session_id,
-                "conversation_id": conversation_id,
-            })
+            yield encoder.encode(
+                done_event(
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                    assistant_message=assistant_message,
+                    user_message=user_message,
+                    ai_message=saved_ai_message,
+                    token_usage=token_usage.model_dump() if token_usage else None,
+                    conversation_usage=conversation_usage.model_dump() if conversation_usage else None,
+                ),
+                persist=False,
+                request_status="completed",
+            )
+        except ValueError as exc:
+            yield encoder.encode(
+                error_event(str(exc) or CONTROLLED_CHAT_ERROR_DETAIL, session_id=session_id),
+                persist=False,
+                request_status="failed",
+                error_detail=str(exc) or CONTROLLED_CHAT_ERROR_DETAIL,
+            )
         except ConversationProcessingError as exc:
             detail = str(exc) or CONTROLLED_CHAT_ERROR_DETAIL
-            yield emit({
-                "type": "error",
-                "detail": detail,
-                "session_id": session_id,
-                "conversation_id": conversation_id,
-            })
+            yield encoder.encode(
+                error_event(detail, session_id=session_id),
+                persist=False,
+                request_status="failed",
+                error_detail=detail,
+            )
         except Exception:
             logger.exception("Unexpected chat session stream generator failure session_id=%s", session_id)
-            yield emit({
-                "type": "error",
-                "detail": CONTROLLED_CHAT_ERROR_DETAIL,
-                "session_id": session_id,
-                "conversation_id": conversation_id,
-            })
+            yield encoder.encode(
+                error_event(CONTROLLED_CHAT_ERROR_DETAIL, session_id=session_id),
+                persist=False,
+                request_status="failed",
+                error_detail=CONTROLLED_CHAT_ERROR_DETAIL,
+            )
 
-    del session, route_debug
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers=STREAMING_RESPONSE_HEADERS,
+    )
 
 
 @router.get("/{session_id}", response_model=ChatSessionDetailResponse)
