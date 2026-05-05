@@ -104,17 +104,17 @@ class FakeChatSessionRepository:
                     "archived_at": "2026-05-04T00:00:00+00:00",
                 }
 
-    def list_sessions(self, *, user_id, trainer_id, role, session_type=None, limit=80):
+    def list_sessions(self, *, user_id, trainer_id, role, session_type=None, limit=80, offset=0):
         rows = [
             row for row in self.sessions
             if row["user_id"] == user_id and row["trainer_id"] == trainer_id and row["role"] == role
         ]
         if session_type:
             rows = [row for row in rows if row["session_type"] == session_type]
-        return rows[:limit]
+        return rows[offset:offset + limit]
 
-    def list_messages(self, session_id, limit=200):
-        return list(self.messages.get(session_id, []))[:limit]
+    def list_messages(self, session_id, limit=200, offset=0):
+        return list(self.messages.get(session_id, []))[offset:offset + limit]
 
     def get_opening_summary_message(self, session_id):
         return next(

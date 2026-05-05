@@ -175,6 +175,7 @@ class ChatSessionService:
         role: str,
         session_type: str | None = None,
         limit: int = 80,
+        offset: int = 0,
     ) -> ChatSessionListResponse:
         role = self._normalize_role(role)
         if session_type is not None:
@@ -194,6 +195,7 @@ class ChatSessionService:
             role=role,
             session_type=session_type,
             limit=limit,
+            offset=offset,
         )
         if role == "client":
             rows = [row for row in rows if row.get("client_id") == scope.client_id]
@@ -208,13 +210,19 @@ class ChatSessionService:
         trainer_context: TrainerContext,
         session_id: str,
         current_date: date | None = None,
+        message_limit: int = 500,
+        message_offset: int = 0,
     ) -> ChatSessionDetailResponse:
         session = self.repository.get_session(session_id)
         if not session:
             raise ChatSessionNotFoundError("Chat session not found")
         self._authorize_session(user_id=user_id, trainer_context=trainer_context, session=session)
         resolved_current_date = current_date or self._today()
-        messages = self.repository.list_messages(str(session["id"]), limit=500)
+        messages = self.repository.list_messages(
+            str(session["id"]),
+            limit=message_limit,
+            offset=message_offset,
+        )
         read_only = self._is_read_only(session, resolved_current_date)
         return ChatSessionDetailResponse(
             session=self._to_session_record(session, current_date=resolved_current_date),

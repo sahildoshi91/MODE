@@ -108,27 +108,47 @@ class TrainerHomeRepository:
         response = query.execute()
         return response.data or []
 
-    def list_checkins_between(self, start_date: date, end_date: date) -> list[dict[str, Any]]:
-        response = (
+    def list_checkins_between(
+        self,
+        start_date: date,
+        end_date: date,
+        *,
+        client_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        if client_ids is not None and not client_ids:
+            return []
+        query = (
             self.supabase
             .table("daily_checkins")
             .select("client_id, date, inputs, total_score, assigned_mode")
             .gte("date", start_date.isoformat())
             .lte("date", end_date.isoformat())
-            .execute()
         )
+        if client_ids:
+            query = query.in_("client_id", client_ids)
+        response = query.execute()
         return response.data or []
 
-    def list_completed_workouts_between(self, start_time: datetime, end_time: datetime) -> list[dict[str, Any]]:
-        response = (
+    def list_completed_workouts_between(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        *,
+        user_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        if user_ids is not None and not user_ids:
+            return []
+        query = (
             self.supabase
             .table("workouts")
             .select("id, user_id, completed, created_at")
             .eq("completed", True)
             .gte("created_at", start_time.isoformat())
             .lte("created_at", end_time.isoformat())
-            .execute()
         )
+        if user_ids:
+            query = query.in_("user_id", user_ids)
+        response = query.execute()
         return response.data or []
 
     def get_talking_points_cache(self, trainer_id: str, client_id: str) -> dict[str, Any] | None:

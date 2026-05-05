@@ -94,9 +94,10 @@ class FakeCommandCenterRepository:
             }
         ]
 
-    def list_checkins_between(self, start_date, end_date):
+    def list_checkins_between(self, start_date, end_date, *, client_ids=None):
         del start_date, end_date
-        return [
+        allowed_client_ids = set(client_ids or [])
+        rows = [
             {
                 "client_id": "client-1",
                 "date": "2026-04-11",
@@ -119,13 +120,20 @@ class FakeCommandCenterRepository:
                 "assigned_mode": "RECOVER",
             },
         ]
+        if client_ids is None:
+            return rows
+        return [row for row in rows if row.get("client_id") in allowed_client_ids]
 
-    def list_completed_workouts_between(self, start_time, end_time):
+    def list_completed_workouts_between(self, start_time, end_time, *, user_ids=None):
         del start_time, end_time
-        return [
+        allowed_user_ids = set(user_ids or [])
+        rows = [
             {"id": "w-1", "user_id": "client-user-1", "completed": True, "created_at": "2026-04-10T12:00:00+00:00"},
             {"id": "w-2", "user_id": "client-user-1", "completed": True, "created_at": "2026-04-09T12:00:00+00:00"},
         ]
+        if user_ids is None:
+            return rows
+        return [row for row in rows if row.get("user_id") in allowed_user_ids]
 
     def list_coach_memory_for_trainer(self, trainer_id):
         del trainer_id

@@ -68,7 +68,11 @@ class TrainerHomeService:
         }
 
         week_start = target_date - timedelta(days=6)
-        checkin_rows = self.repository.list_checkins_between(week_start, target_date)
+        checkin_rows = self.repository.list_checkins_between(
+            week_start,
+            target_date,
+            client_ids=list(scheduled_client_ids),
+        )
         checkins_by_client: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in checkin_rows:
             client_id = row.get("client_id")
@@ -82,7 +86,11 @@ class TrainerHomeService:
         }
         start_time = datetime.combine(week_start, time.min, tzinfo=timezone.utc)
         end_time = datetime.combine(target_date, time.max, tzinfo=timezone.utc)
-        workout_rows = self.repository.list_completed_workouts_between(start_time, end_time)
+        workout_rows = self.repository.list_completed_workouts_between(
+            start_time,
+            end_time,
+            user_ids=list(user_ids),
+        )
         workouts_by_user: dict[str, int] = defaultdict(int)
         for row in workout_rows:
             user_id = row.get("user_id")
@@ -223,7 +231,11 @@ class TrainerHomeService:
                 schedule_history_by_client[client_id].append(row)
 
         week_start = target_date - timedelta(days=6)
-        checkin_rows = self.repository.list_checkins_between(week_start, target_date)
+        checkin_rows = self.repository.list_checkins_between(
+            week_start,
+            target_date,
+            client_ids=client_ids,
+        )
         checkins_by_client: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in checkin_rows:
             client_id = row.get("client_id")
@@ -237,7 +249,11 @@ class TrainerHomeService:
         }
         start_time = datetime.combine(week_start, time.min, tzinfo=timezone.utc)
         end_time = datetime.combine(target_date, time.max, tzinfo=timezone.utc)
-        workout_rows = self.repository.list_completed_workouts_between(start_time, end_time)
+        workout_rows = self.repository.list_completed_workouts_between(
+            start_time,
+            end_time,
+            user_ids=list(user_ids),
+        )
         workouts_by_user: dict[str, int] = defaultdict(int)
         for row in workout_rows:
             user_id = row.get("user_id")

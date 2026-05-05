@@ -160,6 +160,7 @@ async def list_chat_sessions(
     role: str = Query(...),
     session_type: str | None = Query(default=None),
     limit: int = Query(default=80, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: ChatSessionService = Depends(get_chat_session_service),
@@ -173,6 +174,7 @@ async def list_chat_sessions(
             role=role,
             session_type=session_type,
             limit=limit,
+            offset=offset,
         )
     except ValueError as exc:
         _raise_session_value_error(exc)
@@ -363,6 +365,8 @@ async def stream_chat_session_message(
 async def get_chat_session(
     session_id: str,
     http_request: Request,
+    message_limit: int = Query(default=500, ge=1, le=500),
+    message_offset: int = Query(default=0, ge=0),
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: ChatSessionService = Depends(get_chat_session_service),
@@ -374,6 +378,8 @@ async def get_chat_session(
             user_id=user.id,
             trainer_context=trainer_context,
             session_id=session_id,
+            message_limit=message_limit,
+            message_offset=message_offset,
         )
     except ValueError as exc:
         _raise_session_value_error(exc)

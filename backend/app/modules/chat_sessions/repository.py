@@ -155,7 +155,10 @@ class ChatSessionRepository:
         role: str,
         session_type: str | None = None,
         limit: int = 80,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
+        normalized_limit = max(1, min(int(limit), 200))
+        normalized_offset = max(0, int(offset))
         query = (
             self.supabase
             .table(self._SESSIONS_TABLE)
@@ -171,7 +174,7 @@ class ChatSessionRepository:
             .order("session_date", desc=True)
             .order("last_message_at", desc=True, nullsfirst=False)
             .order("created_at", desc=True)
-            .limit(max(1, min(limit, 200)))
+            .range(normalized_offset, normalized_offset + normalized_limit - 1)
             .execute()
         )
         rows = response.data or []
@@ -187,7 +190,9 @@ class ChatSessionRepository:
             for row in rows
         ]
 
-    def list_messages(self, session_id: str, limit: int = 200) -> list[dict[str, Any]]:
+    def list_messages(self, session_id: str, limit: int = 200, offset: int = 0) -> list[dict[str, Any]]:
+        normalized_limit = max(1, min(int(limit), 500))
+        normalized_offset = max(0, int(offset))
         response = (
             self.supabase
             .table(self._MESSAGES_TABLE)
@@ -195,7 +200,7 @@ class ChatSessionRepository:
             .eq("session_id", session_id)
             .order("message_index", desc=False)
             .order("created_at", desc=False)
-            .limit(max(1, min(limit, 500)))
+            .range(normalized_offset, normalized_offset + normalized_limit - 1)
             .execute()
         )
         return response.data or []
