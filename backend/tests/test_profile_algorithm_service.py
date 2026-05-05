@@ -16,6 +16,7 @@ from app.modules.profile.schemas import (  # noqa: E402
 from app.modules.profile.service import (  # noqa: E402
     ALGORITHM_LEARNING_FALLBACK,
     PROFILE_ALGORITHM_STORAGE_UNAVAILABLE_DETAIL,
+    PROFILE_MEMORY_DELETE_VERIFICATION_FAILED_DETAIL,
     PROFILE_MEMORY_VERIFICATION_FAILED_DETAIL,
     SUMMARY_WORD_LIMIT,
     ProfilePersistenceVerificationError,
@@ -89,6 +90,17 @@ class FakeProfileRepository:
         memory["updated_at"] = "2026-05-04T13:00:00+00:00"
         return memory
 
+    def delete_algorithm_memory(self, *, trainer_id, client_id, memory_id):
+        memory = self.get_algorithm_memory(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            memory_id=memory_id,
+        )
+        if not memory:
+            return {}
+        self.memories.remove(memory)
+        return memory
+
     def list_recent_checkins(self, client_id, *, limit=5):
         del client_id, limit
         return list(self.checkins)
@@ -100,6 +112,36 @@ class MissingAlgorithmFieldProfileRepository(FakeProfileRepository):
         raise Exception(
             "{'message': \"Could not find the 'algorithm_summary' column of "
             "'user_fitness_profiles' in the schema cache\"}"
+        )
+
+
+class StaleDeleteMemoryRepository(FakeProfileRepository):
+    def delete_algorithm_memory(self, *, trainer_id, client_id, memory_id):
+        return self.get_algorithm_memory(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            memory_id=memory_id,
+        ) or {}
+
+
+class RecordingDeleteMemoryRepository(FakeProfileRepository):
+    def __init__(self, shared_memories):
+        super().__init__()
+        self.memories = shared_memories
+        self.delete_calls = []
+
+    def delete_algorithm_memory(self, *, trainer_id, client_id, memory_id):
+        self.delete_calls.append(
+            {
+                "trainer_id": trainer_id,
+                "client_id": client_id,
+                "memory_id": memory_id,
+            }
+        )
+        return super().delete_algorithm_memory(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            memory_id=memory_id,
         )
 
 
@@ -279,9 +321,10 @@ class ProfileAlgorithmServiceTests(unittest.TestCase):
         self.assertFalse(by_id["trainer-visible"].can_edit)
         self.assertTrue(by_id["trainer-visible"].ai_usable)
 
-    def test_client_memory_create_update_and_archive_uses_coach_memory_metadata(self):
+    def test_client_memory_create_update_and_delete_uses_coach_memory_metadata(self):
         repository = FakeProfileRepository()
-        service = ProfileService(repository)
+        delete_repository = RecordingDeleteMemoryRepository(repository.memories)
+        service = ProfileService(repository, delete_repository=delete_repository)
 
         created_result = service.create_algorithm_memory(
             client_id="client-1",
@@ -312,13 +355,37 @@ class ProfileAlgorithmServiceTests(unittest.TestCase):
         self.assertTrue(created["value_json"]["ai_usable"])
         self.assertEqual(created["value_json"]["visibility"], "ai_usable")
 
-        result = service.archive_algorithm_memory(
+        result = service.delete_algorithm_memory(
             client_id="client-1",
             trainer_id="trainer-1",
             memory_id=created["id"],
         )
-        self.assertTrue(created["value_json"]["is_archived"])
+        self.assertEqual(
+            delete_repository.delete_calls,
+            [
+                {
+                    "trainer_id": "trainer-1",
+                    "client_id": "client-1",
+                    "memory_id": created["id"],
+                }
+            ],
+        )
+        self.assertEqual(repository.memories, [])
         self.assertEqual(result.memories, [])
+
+    def test_client_memory_delete_verifies_row_is_removed(self):
+        repository = StaleDeleteMemoryRepository()
+        repository.memories = [memory_row("user-visible", text="Motivated by family.")]
+        service = ProfileService(repository)
+
+        with self.assertRaisesRegex(ProfilePersistenceVerificationError, "Memory could not be verified") as context:
+            service.delete_algorithm_memory(
+                client_id="client-1",
+                trainer_id="trainer-1",
+                memory_id="user-visible",
+            )
+
+        self.assertEqual(str(context.exception), PROFILE_MEMORY_DELETE_VERIFICATION_FAILED_DETAIL)
 
     def test_client_cannot_edit_trainer_owned_memory(self):
         repository = FakeProfileRepository()

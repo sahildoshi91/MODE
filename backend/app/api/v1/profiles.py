@@ -131,7 +131,7 @@ async def patch_my_memory(
 
 
 @router.delete("/me/memories/{memory_id}", response_model=AlgorithmHomeResponse)
-async def archive_my_memory(
+async def delete_my_memory(
     memory_id: str,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
@@ -139,11 +139,13 @@ async def archive_my_memory(
 ):
     require_client_actor(user, trainer_context)
     try:
-        return service.archive_algorithm_memory(
+        return service.delete_algorithm_memory(
             client_id=trainer_context.client_id,
             trainer_id=trainer_context.trainer_id,
             memory_id=memory_id,
         )
+    except ProfilePersistenceVerificationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     except ValueError as exc:
         _handle_profile_value_error(exc)
 

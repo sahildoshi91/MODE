@@ -126,6 +126,10 @@ def get_profile_repository(
     return ProfileRepository(supabase)
 
 
+def get_profile_admin_repository() -> ProfileRepository:
+    return ProfileRepository(get_supabase_admin_client())
+
+
 def get_onboarding_repository() -> OnboardingRepository:
     return OnboardingRepository(get_supabase_admin_client())
 
@@ -148,8 +152,9 @@ def get_mobile_analytics_service(
 
 def get_profile_service(
     repository: ProfileRepository = Depends(get_profile_repository),
+    delete_repository: ProfileRepository = Depends(get_profile_admin_repository),
 ) -> ProfileService:
-    return ProfileService(repository)
+    return ProfileService(repository, delete_repository=delete_repository)
 
 
 def get_daily_checkin_repository(

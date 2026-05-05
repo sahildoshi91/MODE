@@ -21,8 +21,8 @@ import {
 import { theme } from '../../../../lib/theme';
 import AlgorithmSummaryCard from '../components/AlgorithmSummaryCard';
 import {
-  archiveMyMemory,
   createMyMemory,
+  deleteMyMemory,
   getMyAlgorithm,
   patchMyWhy,
   updateMyMemory,
@@ -75,7 +75,7 @@ function buildSummaryText(payload) {
   return payload?.summary_text || EMPTY_SUMMARY;
 }
 
-function MemoryPill({ memory, onPress, onArchive }) {
+function MemoryPill({ memory, onPress }) {
   const sourceLabel = SOURCE_LABELS[memory?.source] || 'Coach';
   const canEdit = Boolean(memory?.can_edit);
   const statusLabel = memory?.ai_usable ? 'AI usable' : 'Private';
@@ -87,7 +87,6 @@ function MemoryPill({ memory, onPress, onArchive }) {
       radius="l"
       padding={0}
       onPress={canEdit ? onPress : undefined}
-      onLongPress={canEdit ? onArchive : undefined}
       style={styles.memoryPill}
       contentStyle={styles.memoryPillContent}
       borderColor={memory?.ai_usable ? theme.colors.glass.borderActive : theme.colors.glass.borderSoft}
@@ -161,8 +160,11 @@ export default function AlgorithmHomeScreen({
     tagsText: '',
     aiUsable: true,
     saving: false,
+    deleting: false,
     error: null,
   });
+
+  const isMemoryMutating = memoryEditor.saving || memoryEditor.deleting;
 
   const showFeedback = useCallback((message) => {
     setFeedback(message);
@@ -252,6 +254,7 @@ export default function AlgorithmHomeScreen({
       tagsText: '',
       aiUsable: true,
       saving: false,
+      deleting: false,
       error: null,
     });
   }, []);
@@ -266,12 +269,13 @@ export default function AlgorithmHomeScreen({
       tagsText: Array.isArray(memory?.tags) ? memory.tags.join(', ') : '',
       aiUsable: Boolean(memory?.ai_usable),
       saving: false,
+      deleting: false,
       error: null,
     });
   }, []);
 
   const closeMemoryEditor = useCallback(() => {
-    if (memoryEditor.saving) {
+    if (isMemoryMutating) {
       return;
     }
     setMemoryEditor((current) => ({
@@ -279,7 +283,7 @@ export default function AlgorithmHomeScreen({
       visible: false,
       error: null,
     }));
-  }, [memoryEditor.saving]);
+  }, [isMemoryMutating]);
 
   const handleSaveMemory = useCallback(async () => {
     const text = memoryEditor.text.trim();
@@ -298,7 +302,12 @@ export default function AlgorithmHomeScreen({
       can_edit: true,
       tags: normalizeTagsText(memoryEditor.tagsText),
     };
-    setMemoryEditor((current) => ({ ...current, saving: true, error: null }));
+    setMemoryEditor((current) => ({
+      ...current,
+      saving: true,
+      deleting: false,
+      error: null,
+    }));
     setPayload((current) => {
       if (memoryEditor.mode === 'edit') {
         return {
@@ -331,37 +340,56 @@ export default function AlgorithmHomeScreen({
           tags: normalizeTagsText(memoryEditor.tagsText),
         });
       setPayload(normalizePayload(nextPayload));
-      setMemoryEditor((current) => ({ ...current, visible: false, saving: false }));
+      setMemoryEditor((current) => ({
+        ...current,
+        visible: false,
+        saving: false,
+        deleting: false,
+      }));
       showFeedback(memoryEditor.mode === 'edit' ? 'Memory updated.' : 'Memory added.');
     } catch (saveError) {
       setPayload(previous);
       setMemoryEditor((current) => ({
         ...current,
         saving: false,
+        deleting: false,
         error: saveError?.message || 'Unable to save memory.',
       }));
     }
   }, [accessToken, memoryEditor, payload, showFeedback]);
 
-  const handleArchiveMemory = useCallback(async (memory) => {
+  const handleDeleteMemory = useCallback(async (memory) => {
     if (!memory?.id || !memory?.can_edit) {
       return;
     }
     const previous = payload;
+    setMemoryEditor((current) => ({
+      ...current,
+      saving: false,
+      deleting: true,
+      error: null,
+    }));
     setPayload((current) => ({
       ...current,
       memories: current.memories.filter((item) => item.id !== memory.id),
     }));
     try {
-      const nextPayload = await archiveMyMemory({ accessToken, memoryId: memory.id });
+      const nextPayload = await deleteMyMemory({ accessToken, memoryId: memory.id });
       setPayload(normalizePayload(nextPayload));
-      showFeedback('Memory archived.');
-      setMemoryEditor((current) => ({ ...current, visible: false, saving: false }));
-    } catch (archiveError) {
+      showFeedback('Memory deleted.');
+      setMemoryEditor((current) => ({
+        ...current,
+        visible: false,
+        saving: false,
+        deleting: false,
+      }));
+    } catch (deleteError) {
       setPayload(previous);
       setMemoryEditor((current) => ({
         ...current,
-        error: archiveError?.message || 'Unable to archive memory.',
+        saving: false,
+        deleting: false,
+        error: deleteError?.message || 'Unable to delete memory.',
       }));
     }
   }, [accessToken, payload, showFeedback]);
@@ -492,7 +520,6 @@ export default function AlgorithmHomeScreen({
                   key={memory.id}
                   memory={memory}
                   onPress={() => openEditMemory(memory)}
-                  onArchive={() => handleArchiveMemory(memory)}
                 />
               ))}
               <GlassSurface
@@ -531,7 +558,7 @@ export default function AlgorithmHomeScreen({
         testID="algorithm-memory-sheet"
       >
         <View style={styles.sheetTitleRow}>
-          <View>
+          <View style={styles.sheetTitleCopy}>
             <ModeText variant="label" tone="tertiary" style={styles.sheetLabel}>
               {memoryEditor.mode === 'edit' ? 'Edit memory' : 'Add memory'}
             </ModeText>
@@ -541,7 +568,14 @@ export default function AlgorithmHomeScreen({
               </ModeText>
             ) : null}
           </View>
-          {memoryEditor.saving ? <ActivityIndicator size="small" color={theme.colors.accent.primary} /> : null}
+          <ModeButton
+            testID="algorithm-memory-save"
+            title={memoryEditor.saving ? 'Saving...' : 'Save'}
+            size="sm"
+            disabled={isMemoryMutating}
+            onPress={handleSaveMemory}
+            style={styles.sheetHeaderSaveButton}
+          />
         </View>
         <ModeInput
           testID="algorithm-memory-input"
@@ -550,6 +584,7 @@ export default function AlgorithmHomeScreen({
           placeholder="What should your coach remember?"
           multiline
           autoFocus
+          editable={!isMemoryMutating}
           style={styles.sheetInput}
         />
         <ModeInput
@@ -557,12 +592,14 @@ export default function AlgorithmHomeScreen({
           value={memoryEditor.category}
           onChangeText={(category) => setMemoryEditor((current) => ({ ...current, category }))}
           placeholder="Category (optional)"
+          editable={!isMemoryMutating}
         />
         <ModeInput
           testID="algorithm-memory-tags-input"
           value={memoryEditor.tagsText}
           onChangeText={(tagsText) => setMemoryEditor((current) => ({ ...current, tagsText }))}
           placeholder="Tags, comma separated"
+          editable={!isMemoryMutating}
         />
         <View style={styles.toggleRow}>
           <View style={styles.toggleCopy}>
@@ -572,39 +609,23 @@ export default function AlgorithmHomeScreen({
             testID="algorithm-memory-ai-toggle"
             value={memoryEditor.aiUsable}
             onValueChange={(aiUsable) => setMemoryEditor((current) => ({ ...current, aiUsable }))}
-            disabled={memoryEditor.saving}
+            disabled={isMemoryMutating}
           />
         </View>
         {memoryEditor.error ? <ModeText variant="caption" tone="error">{memoryEditor.error}</ModeText> : null}
-        <View style={styles.sheetActions}>
-          {memoryEditor.mode === 'edit' && memoryEditor.record?.can_edit ? (
+        {memoryEditor.mode === 'edit' && memoryEditor.record?.can_edit ? (
+          <View style={styles.sheetActions}>
             <ModeButton
-              testID="algorithm-memory-archive"
-              title="Archive"
-              variant="ghost"
+              testID="algorithm-memory-delete"
+              title={memoryEditor.deleting ? 'Deleting...' : 'Delete'}
+              variant="destructive"
               size="sm"
-              disabled={memoryEditor.saving}
-              onPress={() => handleArchiveMemory(memoryEditor.record)}
-              style={styles.sheetButton}
+              disabled={isMemoryMutating}
+              onPress={() => handleDeleteMemory(memoryEditor.record)}
+              style={styles.sheetDeleteButton}
             />
-          ) : null}
-          <ModeButton
-            title="Cancel"
-            variant="ghost"
-            size="sm"
-            disabled={memoryEditor.saving}
-            onPress={closeMemoryEditor}
-            style={styles.sheetButton}
-          />
-          <ModeButton
-            testID="algorithm-memory-save"
-            title={memoryEditor.saving ? 'Saving...' : 'Save'}
-            size="sm"
-            disabled={memoryEditor.saving}
-            onPress={handleSaveMemory}
-            style={styles.sheetButton}
-          />
-        </View>
+          </View>
+        ) : null}
       </SystemActionSheet>
     </SafeScreen>
   );
@@ -773,14 +794,21 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: theme.spacing[2],
   },
+  sheetTitleCopy: {
+    flex: 1,
+  },
+  sheetHeaderSaveButton: {
+    width: 92,
+    flexShrink: 0,
+  },
   sheetActions: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
     gap: theme.spacing[1],
     marginTop: theme.spacing[1],
   },
-  sheetButton: {
-    flex: 1,
+  sheetDeleteButton: {
+    width: 116,
   },
   toggleRow: {
     flexDirection: 'row',

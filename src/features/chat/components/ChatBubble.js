@@ -47,7 +47,12 @@ function parseOpeningSummary(text) {
 
 function OpeningSummaryContent({ text }) {
   const summary = parseOpeningSummary(text);
-  if (!summary.title) {
+  const hasStructuredSummary = Boolean(
+    summary.subtitle
+      || summary.question
+      || summary.sections.length > 0,
+  );
+  if (!summary.title || !hasStructuredSummary) {
     return (
       <Text style={styles.openingBodyText}>
         {text}

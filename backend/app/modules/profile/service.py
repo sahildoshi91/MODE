@@ -21,6 +21,7 @@ PROFILE_ALGORITHM_STORAGE_UNAVAILABLE_DETAIL = (
 )
 PROFILE_WHY_VERIFICATION_FAILED_DETAIL = "Your Why could not be verified after saving. Please retry."
 PROFILE_MEMORY_VERIFICATION_FAILED_DETAIL = "Memory could not be verified after saving. Please retry."
+PROFILE_MEMORY_DELETE_VERIFICATION_FAILED_DETAIL = "Memory could not be verified after deleting. Please retry."
 SUMMARY_WORD_LIMIT = 30
 
 
@@ -33,8 +34,9 @@ class ProfilePersistenceVerificationError(RuntimeError):
 
 
 class ProfileService:
-    def __init__(self, repository: ProfileRepository):
+    def __init__(self, repository: ProfileRepository, delete_repository: ProfileRepository | None = None):
         self.repository = repository
+        self.delete_repository = delete_repository or repository
 
     def get_or_create_profile(self, client_id: str) -> dict:
         profile = self.repository.get_by_client_id(client_id)
@@ -183,7 +185,7 @@ class ProfileService:
         )
         return self.get_algorithm_home(client_id, trainer_id)
 
-    def archive_algorithm_memory(
+    def delete_algorithm_memory(
         self,
         *,
         client_id: str,
@@ -202,19 +204,17 @@ class ProfileService:
         value = self._memory_value(existing)
         if not self._is_client_owned_memory(value):
             raise ValueError("Memory not found")
-        next_value = {
-            **value,
-            "source": "user",
-            "created_by": "user",
-            "client_visible": True,
-            "is_archived": True,
-        }
-        self.repository.update_algorithm_memory(
+        self.delete_repository.delete_algorithm_memory(
             trainer_id=trainer_id,
             client_id=client_id,
             memory_id=memory_id,
-            payload={"value_json": next_value},
         )
+        if self.delete_repository.get_algorithm_memory(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            memory_id=memory_id,
+        ):
+            raise ProfilePersistenceVerificationError(PROFILE_MEMORY_DELETE_VERIFICATION_FAILED_DETAIL)
         return self.get_algorithm_home(client_id, trainer_id)
 
     def _persist_summary_if_needed(self, client_id: str, profile: dict, summary: str) -> dict:

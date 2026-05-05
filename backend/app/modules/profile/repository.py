@@ -96,6 +96,24 @@ class ProfileRepository:
         )
         return (response.data or [None])[0] or {}
 
+    def delete_algorithm_memory(
+        self,
+        *,
+        trainer_id: str,
+        client_id: str,
+        memory_id: str,
+    ) -> dict[str, Any]:
+        response = (
+            self.supabase
+            .table("coach_memory")
+            .delete()
+            .eq("trainer_id", trainer_id)
+            .eq("client_id", client_id)
+            .eq("id", memory_id)
+            .execute()
+        )
+        return (response.data or [None])[0] or {}
+
     def list_recent_checkins(self, client_id: str, *, limit: int = 5) -> list[dict[str, Any]]:
         response = (
             self.supabase

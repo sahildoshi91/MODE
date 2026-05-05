@@ -108,6 +108,47 @@ describe('ChatMessageBubble', () => {
     });
   });
 
+  it('renders unstructured trainer opening summaries as body text', () => {
+    const trainerOpeningText = (
+      'You have 1 clients on the board today, with 0 missed check-ins and 0 showing low recovery patterns. '
+      + 'Best move: review flagged clients before pushing new programming. '
+      + 'Start with the highest priority client first. Want to start with the highest priority?'
+    );
+    let tree;
+
+    act(() => {
+      tree = renderer.create(
+        <ChatMessageBubble
+          message={{
+            id: 'trainer-opening-1',
+            role: 'assistant',
+            text: trainerOpeningText,
+            metadata: {
+              auto_generated_opening_summary: true,
+            },
+          }}
+        />,
+      );
+    });
+
+    expect(mockAIResponseRenderer).not.toHaveBeenCalled();
+    const trainerTextNode = tree.root.find((node) => (
+      node.type === Text
+      && node.props?.children === trainerOpeningText
+    ));
+    expect(trainerTextNode.props?.style?.fontWeight).toBeUndefined();
+    expect(trainerTextNode.props?.style?.fontSize).toBe(16);
+    expect(tree.root.findAll((node) => (
+      node.type === Text
+      && node.props?.children === trainerOpeningText
+      && node.props?.style?.fontWeight === '800'
+    ))).toHaveLength(0);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
   it('keeps structured rendering available for ordinary assistant messages', () => {
     let tree;
 

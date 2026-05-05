@@ -8,8 +8,8 @@ jest.mock('../../../../services/apiNetworkError', () => ({
 
 import { fetchWithApiFallback } from '../../../../services/apiRequest';
 import {
-  archiveMyMemory,
   createMyMemory,
+  deleteMyMemory,
   getMyAlgorithm,
   patchMyWhy,
   updateMyMemory,
@@ -77,7 +77,7 @@ describe('algorithmApi', () => {
     expect(JSON.parse(options.body)).toEqual({ user_why: 'Keep up with my kid.' });
   });
 
-  it('creates, updates, and archives client-owned memories', async () => {
+  it('creates, updates, and deletes client-owned memories', async () => {
     fetchWithApiFallback
       .mockResolvedValueOnce({ response: mockJsonResponse({ memories: [] }), baseUrl: 'https://api.example' })
       .mockResolvedValueOnce({ response: mockJsonResponse({ memories: [] }), baseUrl: 'https://api.example' })
@@ -96,7 +96,7 @@ describe('algorithmApi', () => {
       text: 'Prefers early workouts',
       aiUsable: true,
     });
-    await archiveMyMemory({ accessToken: 'token-123', memoryId: 'memory 1' });
+    await deleteMyMemory({ accessToken: 'token-123', memoryId: 'memory 1' });
 
     expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
       1,
@@ -129,7 +129,7 @@ describe('algorithmApi', () => {
       baseUrl: 'https://api.example',
     });
 
-    await expect(archiveMyMemory({ accessToken: 'token-123', memoryId: 'missing' }))
+    await expect(deleteMyMemory({ accessToken: 'token-123', memoryId: 'missing' }))
       .rejects
       .toMatchObject({
         message: 'Memory not found',

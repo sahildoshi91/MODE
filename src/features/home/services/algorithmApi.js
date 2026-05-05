@@ -192,7 +192,7 @@ export async function updateMyMemory({
   });
 }
 
-export async function archiveMyMemory({ accessToken, memoryId }) {
+export async function deleteMyMemory({ accessToken, memoryId }) {
   return requestAlgorithmApi(`/api/v1/profiles/me/memories/${encodeURIComponent(memoryId)}`, {
     accessToken,
     method: 'DELETE',
