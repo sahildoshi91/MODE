@@ -10,9 +10,14 @@
     "trainer_coach_approve_output"
   ],
   "dangerous_grant_findings": [],
-  "functions_discovered_count": 14,
+  "functions_discovered_count": 15,
   "ok": true,
   "rows": [
+    {
+      "category": "revoked_all_non_owner",
+      "function_name": "append_chat_message",
+      "grants_to": []
+    },
     {
       "category": "privileged_service_only",
       "function_name": "assign_client_to_trainer",

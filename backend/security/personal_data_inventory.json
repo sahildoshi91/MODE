@@ -56,6 +56,26 @@
     },
     {
       "schema": "public",
+      "table": "chat_messages",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "fk_cascade",
+        "execution_order": 960,
+        "description": "Chat messages contain conversational personal data and are deleted by cascading cleanup from parent chat sessions."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "chat_sessions",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "fk_cascade",
+        "execution_order": 955,
+        "description": "Chat session headers are trainer/client scoped and are deleted by cascading cleanup from parent trainer/client rows."
+      }
+    },
+    {
+      "schema": "public",
       "table": "trainer_knowledge_usage_logs",
       "classification": "derived",
       "deletion_policy": {
