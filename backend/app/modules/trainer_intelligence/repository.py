@@ -95,8 +95,14 @@ class TrainerIntelligenceRepository:
         )
         return response.data or []
 
-    def list_active_knowledge_entries(self, trainer_id: str, *, limit: int) -> list[dict[str, Any]]:
-        response = (
+    def list_active_knowledge_entries(
+        self,
+        trainer_id: str,
+        *,
+        limit: int,
+        client_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        query = (
             self.supabase
             .table("trainer_knowledge_entries")
             .select(
@@ -107,8 +113,13 @@ class TrainerIntelligenceRepository:
             .eq("trainer_id", trainer_id)
             .eq("status", "active")
             .eq("ai_enabled", True)
+        )
+        if client_id:
+            query = query.or_(f"client_id.is.null,client_id.eq.{client_id}")
+        response = (
+            query
             .order("updated_at", desc=True)
-            .limit(max(1, min(limit, 500)))
+            .limit(max(1, min(limit, 200)))
             .execute()
         )
         return response.data or []

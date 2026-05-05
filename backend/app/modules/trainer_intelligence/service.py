@@ -85,7 +85,7 @@ KNOWLEDGE_TYPE_DISPLAY = {
 class TrainerIntelligenceService:
     RULE_LIMIT = 10
     DOC_LIMIT = 3
-    KNOWLEDGE_ENTRY_CANDIDATE_LIMIT = 160
+    KNOWLEDGE_ENTRY_CANDIDATE_LIMIT = 80
     KNOWLEDGE_CONTEXT_MAX = 5
     MEMORY_LIMIT = 8
     CHECKIN_LIMIT = 7
@@ -119,6 +119,7 @@ class TrainerIntelligenceService:
         knowledge_entries = self.repository.list_active_knowledge_entries(
             trainer_id,
             limit=self.KNOWLEDGE_ENTRY_CANDIDATE_LIMIT,
+            client_id=client_id,
         )
         memory_rows = self.repository.list_client_memory(trainer_id, client_id, limit=self.MEMORY_LIMIT * 2)
         ai_usable_memory = self._filter_ai_usable_memory(memory_rows)[: self.MEMORY_LIMIT]
@@ -187,6 +188,7 @@ class TrainerIntelligenceService:
                 "knowledge_retrieval": {
                     "formula_weights": RETRIEVAL_WEIGHTS,
                     "max_entries": self.KNOWLEDGE_CONTEXT_MAX,
+                    "source": "bounded_client_or_global_recent_entries",
                     **knowledge_retrieval,
                 },
                 "caps": {
@@ -306,7 +308,7 @@ class TrainerIntelligenceService:
 
         created_at_iso = datetime.now(timezone.utc).isoformat()
         logs: list[dict[str, Any]] = []
-        for item in candidates[:24]:
+        for item in candidates[:12]:
             entry_id = str(item.get("knowledge_entry_id") or item.get("id") or "").strip()
             if not entry_id:
                 continue

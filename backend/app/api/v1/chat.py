@@ -370,6 +370,7 @@ async def chat_stream(
                     },
                     event_type="delta",
                     status="streaming",
+                    persist=False,
                 )
             yield emit_event(
                 {

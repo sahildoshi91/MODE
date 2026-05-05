@@ -45,9 +45,9 @@ class FakeTrainerIntelligenceRepository:
             {"title": "Programming Notes", "raw_text": "Use movement substitutions for constrained schedules."},
         ]
 
-    def list_active_knowledge_entries(self, trainer_id, limit):
+    def list_active_knowledge_entries(self, trainer_id, limit, client_id=None):
         del trainer_id, limit
-        return [
+        rows = [
             {
                 "id": "entry-client-1",
                 "trainer_id": "trainer-1",
@@ -148,6 +148,12 @@ class FakeTrainerIntelligenceRepository:
                 "updated_at": "2026-04-11T10:00:00+00:00",
                 "created_at": "2026-04-10T10:00:00+00:00",
             },
+        ]
+        if not client_id:
+            return rows
+        return [
+            row for row in rows
+            if row.get("client_id") in {None, client_id}
         ]
 
     def create_knowledge_usage_logs(self, rows):
