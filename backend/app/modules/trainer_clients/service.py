@@ -60,14 +60,31 @@ class TrainerClientService:
     ) -> TrainerClientListResponse:
         trainer_id, tenant_id = self._require_trainer_context(trainer_context)
         normalized_search = self._normalize_search_term(search)
-        rows = self.repository.list_clients_for_trainer(trainer_id)
-        filtered_rows = [
-            row
-            for row in rows
-            if self._client_belongs_to_tenant(row, tenant_id)
-            and self._client_matches_search(row, normalized_search)
-        ]
-        paginated_rows = filtered_rows[offset:offset + limit]
+        paged_loader = getattr(self.repository, "list_clients_for_trainer_page", None)
+        if callable(paged_loader):
+            page = paged_loader(
+                trainer_id,
+                tenant_id,
+                search=normalized_search,
+                limit=limit,
+                offset=offset,
+            )
+            paginated_rows = [
+                row
+                for row in (page.get("items") if isinstance(page, dict) else []) or []
+                if self._client_belongs_to_tenant(row, tenant_id)
+            ]
+            filtered_count = int(page.get("count") or 0) if isinstance(page, dict) else len(paginated_rows)
+        else:
+            rows = self.repository.list_clients_for_trainer(trainer_id)
+            filtered_rows = [
+                row
+                for row in rows
+                if self._client_belongs_to_tenant(row, tenant_id)
+                and self._client_matches_search(row, normalized_search)
+            ]
+            paginated_rows = filtered_rows[offset:offset + limit]
+            filtered_count = len(filtered_rows)
         client_ids = [
             str(row.get("id") or "").strip()
             for row in paginated_rows
@@ -84,7 +101,7 @@ class TrainerClientService:
                 )
                 for row in paginated_rows
             ],
-            count=len(filtered_rows),
+            count=filtered_count,
             limit=limit,
             offset=offset,
             search=normalized_search,

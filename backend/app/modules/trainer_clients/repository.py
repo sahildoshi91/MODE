@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import re
 from typing import Any
 
 from supabase import Client
+
+
+UUID_PATTERN = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 class TrainerClientRepository:
@@ -20,6 +26,42 @@ class TrainerClientRepository:
             .execute()
         )
         return response.data or []
+
+    def list_clients_for_trainer_page(
+        self,
+        trainer_id: str,
+        tenant_id: str,
+        *,
+        search: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        normalized_limit = max(1, min(int(limit), 200))
+        normalized_offset = max(0, int(offset))
+        normalized_search = str(search or "").strip()
+        query = (
+            self.supabase
+            .table("clients")
+            .select("id, tenant_id, user_id, client_name, assigned_trainer_id, created_at", count="exact")
+            .eq("assigned_trainer_id", trainer_id)
+            .eq("tenant_id", tenant_id)
+        )
+        if normalized_search:
+            if UUID_PATTERN.match(normalized_search):
+                query = query.or_(
+                    f"client_name.ilike.%{normalized_search}%,id.eq.{normalized_search},user_id.eq.{normalized_search}"
+                )
+            else:
+                query = query.ilike("client_name", f"%{normalized_search}%")
+        response = (
+            query
+            .order("created_at", desc=True)
+            .range(normalized_offset, normalized_offset + normalized_limit - 1)
+            .execute()
+        )
+        rows = response.data or []
+        count = response.count if response.count is not None else len(rows)
+        return {"items": rows, "count": int(count)}
 
     def get_client_for_trainer(self, trainer_id: str, client_id: str) -> dict[str, Any] | None:
         response = (
