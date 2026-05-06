@@ -39,6 +39,7 @@ import {
   rejectTrainerCoachQueueItem,
 } from '../../trainerCoach/services/trainerCoachApi';
 import {
+  approveTrainerConnectionRequest,
   archiveTrainerClientMemory,
   createTrainerClientScheduleException,
   createTrainerClientMemory,
@@ -47,8 +48,10 @@ import {
   getTrainerClientAIContext,
   getTrainerClientDetail,
   getTrainerCommandCenter,
+  listTrainerConnectionRequests,
   listTrainerClientMemory,
   patchTrainerClientSchedulePreferences,
+  rejectTrainerConnectionRequest,
   updateTrainerClientMemory,
 } from '../services/trainerHomeApi';
 import {
@@ -1546,6 +1549,12 @@ export default function TrainerClientsScreen({
   const [draftReviewMutationError, setDraftReviewMutationError] = useState(null);
   const [draftReviewMutationSuccess, setDraftReviewMutationSuccess] = useState(null);
 
+  const [connectionRequests, setConnectionRequests] = useState([]);
+  const [isLoadingConnectionRequests, setIsLoadingConnectionRequests] = useState(true);
+  const [connectionRequestsError, setConnectionRequestsError] = useState(null);
+  const [mutatingConnectionRequestId, setMutatingConnectionRequestId] = useState(null);
+  const [connectionRequestFeedback, setConnectionRequestFeedback] = useState(null);
+
   const [draftReviewTracker, setDraftReviewTracker] = useState({
     date_key: null,
     daily_count: 0,
@@ -1627,7 +1636,14 @@ export default function TrainerClientsScreen({
   }, [activeDraft?.output_id, draftQueueItems]);
 
   const draftQueueCount = Array.isArray(draftQueueItems) ? draftQueueItems.length : 0;
+  const connectionRequestCount = Array.isArray(connectionRequests) ? connectionRequests.length : 0;
   const shouldShowDraftReviewCard = draftQueueCount > 0 || Boolean(draftQueueError);
+  const shouldShowConnectionRequestsCard = (
+    connectionRequestCount > 0
+    || Boolean(connectionRequestsError)
+    || isLoadingConnectionRequests
+    || Boolean(connectionRequestFeedback)
+  );
   const draftReviewDailyCount = Number(draftReviewTracker?.daily_count) || 0;
   const draftReviewLifetimeCount = Number(draftReviewTracker?.lifetime_count) || 0;
   const draftReviewGoalDenominator = draftQueueCount > 0
@@ -1741,6 +1757,35 @@ export default function TrainerClientsScreen({
     }
   }, [accessToken, plannerDate]);
 
+  const loadConnectionRequests = useCallback(async ({ silent = false } = {}) => {
+    if (!accessToken) {
+      setConnectionRequests([]);
+      setConnectionRequestsError(null);
+      setIsLoadingConnectionRequests(false);
+      return [];
+    }
+    if (!silent) {
+      setIsLoadingConnectionRequests(true);
+    }
+    setConnectionRequestsError(null);
+    try {
+      const payload = await listTrainerConnectionRequests({
+        accessToken,
+        status: 'pending',
+      });
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      setConnectionRequests(items);
+      return items;
+    } catch (error) {
+      setConnectionRequestsError(buildTrainerRouteError(error, 'Unable to load connection requests.'));
+      return [];
+    } finally {
+      if (!silent) {
+        setIsLoadingConnectionRequests(false);
+      }
+    }
+  }, [accessToken]);
+
   const loadDraftReviewTrackerState = useCallback(async () => {
     if (!accessToken) {
       setDraftReviewTracker({
@@ -1801,6 +1846,10 @@ export default function TrainerClientsScreen({
   useEffect(() => {
     loadDraftQueue();
   }, [loadDraftQueue]);
+
+  useEffect(() => {
+    loadConnectionRequests();
+  }, [loadConnectionRequests]);
 
   useEffect(() => {
     loadDraftReviewTrackerState();
@@ -2713,6 +2762,7 @@ export default function TrainerClientsScreen({
     await Promise.all([
       loadCommandCenter({ refreshTalkingPoints }),
       loadDraftQueue({ silent: refreshTalkingPoints }),
+      loadConnectionRequests({ silent: refreshTalkingPoints }),
     ]);
   };
 
@@ -2833,6 +2883,49 @@ export default function TrainerClientsScreen({
       return;
     }
     setActiveDraftOutputId(draftQueueItems[0].output_id);
+  };
+
+  const runConnectionRequestMutation = async (actionType, requestId) => {
+    if (!accessToken || !requestId || mutatingConnectionRequestId) {
+      return;
+    }
+    setMutatingConnectionRequestId(requestId);
+    setConnectionRequestsError(null);
+    setConnectionRequestFeedback(null);
+    try {
+      if (actionType === 'approve') {
+        await approveTrainerConnectionRequest({
+          accessToken,
+          requestId,
+          trainerResponseNote: 'Approved from Clients tab.',
+        });
+      } else {
+        await rejectTrainerConnectionRequest({
+          accessToken,
+          requestId,
+          trainerResponseNote: 'Rejected from Clients tab.',
+        });
+      }
+      setConnectionRequests((previous) => previous.filter((item) => item?.id !== requestId));
+      setConnectionRequestFeedback(
+        actionType === 'approve'
+          ? 'Connection approved.'
+          : 'Connection rejected.',
+      );
+      await Promise.all([
+        loadConnectionRequests({ silent: true }),
+        actionType === 'approve' ? loadCommandCenter({ silent: true }) : Promise.resolve(),
+      ]);
+    } catch (error) {
+      setConnectionRequestsError(buildTrainerRouteError(
+        error,
+        actionType === 'approve'
+          ? 'Unable to approve connection request.'
+          : 'Unable to reject connection request.',
+      ));
+    } finally {
+      setMutatingConnectionRequestId(null);
+    }
   };
 
   const totals = commandCenterPayload?.totals || {
@@ -3393,6 +3486,99 @@ export default function TrainerClientsScreen({
           </ModeCard>
         </Pressable>
 
+        {shouldShowConnectionRequestsCard ? (
+          <ModeCard
+            variant="surface"
+            testID="trainer-clients-connection-requests-card"
+            style={[styles.connectionRequestsCard, styles.actionsTierCard]}
+          >
+            <View style={styles.connectionRequestsHeader}>
+              <View>
+                <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Connection Requests</ModeText>
+                <ModeText variant="bodySm">{connectionRequestCount} pending</ModeText>
+              </View>
+              <ModeButton
+                testID="trainer-clients-connection-requests-refresh"
+                title="Refresh"
+                size="sm"
+                variant="ghost"
+                disabled={isLoadingConnectionRequests}
+                onPress={() => loadConnectionRequests()}
+              />
+            </View>
+
+            {isLoadingConnectionRequests ? (
+              <View style={styles.draftReviewLoadingRow}>
+                <ActivityIndicator size="small" color={theme.colors.accent.primary} />
+                <ModeText variant="caption" tone="secondary">Loading connection requests...</ModeText>
+              </View>
+            ) : null}
+
+            {!isLoadingConnectionRequests && connectionRequestsError ? (
+              <View style={styles.draftReviewMessageBlock}>
+                <ModeText variant="bodySm" tone="error">{connectionRequestsError.message}</ModeText>
+                <ModeButton
+                  title="Retry Requests"
+                  size="sm"
+                  variant="secondary"
+                  onPress={() => loadConnectionRequests()}
+                />
+              </View>
+            ) : null}
+
+            {!isLoadingConnectionRequests && !connectionRequestsError && connectionRequestCount > 0 ? (
+              <View style={styles.connectionRequestList}>
+                {connectionRequests.map((request) => {
+                  const requestId = String(request?.id || '');
+                  const isMutating = mutatingConnectionRequestId === requestId;
+                  return (
+                    <View
+                      key={requestId}
+                      testID={`trainer-clients-connection-request-${requestId}`}
+                      style={styles.connectionRequestRow}
+                    >
+                      <View style={styles.connectionRequestCopy}>
+                        <ModeText variant="bodySm" style={styles.connectionRequestClientName}>
+                          {request?.client_name || 'Client'}
+                        </ModeText>
+                        <ModeText variant="caption" tone="secondary">
+                          Asked Atlas to connect with you
+                        </ModeText>
+                        <ModeText variant="caption" tone="tertiary" numberOfLines={2}>
+                          {request?.request_text || 'No request text captured.'}
+                        </ModeText>
+                      </View>
+                      <View style={styles.connectionRequestActions}>
+                        <ModeButton
+                          testID={`trainer-clients-connection-request-reject-${requestId}`}
+                          title={isMutating ? 'Working...' : 'Reject'}
+                          size="sm"
+                          variant="destructive"
+                          disabled={Boolean(mutatingConnectionRequestId)}
+                          onPress={() => runConnectionRequestMutation('reject', requestId)}
+                          style={styles.connectionRequestActionButton}
+                        />
+                        <ModeButton
+                          testID={`trainer-clients-connection-request-approve-${requestId}`}
+                          title={isMutating ? 'Working...' : 'Approve'}
+                          size="sm"
+                          disabled={Boolean(mutatingConnectionRequestId)}
+                          onPress={() => runConnectionRequestMutation('approve', requestId)}
+                          style={styles.connectionRequestActionButton}
+                        />
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
+
+            {!isLoadingConnectionRequests && !connectionRequestsError && connectionRequestFeedback ? (
+              <ModeText variant="caption" tone="secondary">{connectionRequestFeedback}</ModeText>
+            ) : null}
+          </ModeCard>
+        ) : null}
+
         {shouldShowDraftReviewCard ? (
           <ModeCard
             variant="surface"
@@ -3694,6 +3880,37 @@ const styles = StyleSheet.create({
   },
   actionsTierCard: {
     paddingTop: theme.spacing[1],
+  },
+  connectionRequestsCard: {
+    gap: theme.spacing[2],
+  },
+  connectionRequestsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: theme.spacing[2],
+  },
+  connectionRequestList: {
+    gap: theme.spacing[2],
+  },
+  connectionRequestRow: {
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.glass.borderSoft,
+    paddingTop: theme.spacing[2],
+    gap: theme.spacing[2],
+  },
+  connectionRequestCopy: {
+    gap: 2,
+  },
+  connectionRequestClientName: {
+    fontWeight: '700',
+  },
+  connectionRequestActions: {
+    flexDirection: 'row',
+    gap: theme.spacing[1],
+  },
+  connectionRequestActionButton: {
+    flex: 1,
   },
   draftReviewCard: {
     gap: theme.spacing[2],

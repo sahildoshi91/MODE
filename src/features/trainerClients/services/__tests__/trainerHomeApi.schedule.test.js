@@ -8,6 +8,7 @@ jest.mock('../../../../services/apiNetworkError', () => ({
 
 import { fetchWithApiFallback } from '../../../../services/apiRequest';
 import {
+  approveTrainerConnectionRequest,
   createTrainerInviteCode,
   createTrainerClientScheduleException,
   deactivateTrainerInviteCode,
@@ -15,10 +16,12 @@ import {
   getMyTrainerSchedule,
   getTrainerClientSchedulePreferences,
   getTrainerSettingsMe,
+  listTrainerConnectionRequests,
   listTrainerClients,
   listTrainerInviteCodes,
   patchTrainerClientSchedulePreferences,
   patchTrainerSettingsMe,
+  rejectTrainerConnectionRequest,
   removeTrainerClient,
   updateTrainerClient,
 } from '../trainerHomeApi';
@@ -225,6 +228,49 @@ describe('trainerHomeApi schedule endpoints', () => {
       '/api/v1/trainer-clients/invite-codes/invite-1',
       expect.objectContaining({
         method: 'DELETE',
+      }),
+    );
+  });
+
+  it('calls trainer connection request endpoints', async () => {
+    await listTrainerConnectionRequests({
+      accessToken: 'trainer-token',
+      status: 'pending',
+    });
+    await approveTrainerConnectionRequest({
+      accessToken: 'trainer-token',
+      requestId: 'request-1',
+      trainerResponseNote: 'Approved',
+    });
+    await rejectTrainerConnectionRequest({
+      accessToken: 'trainer-token',
+      requestId: 'request-2',
+      trainerResponseNote: 'Rejected',
+    });
+
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/trainer-clients/connection-requests?status=pending',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/trainer-clients/connection-requests/request-1/approve',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          trainer_response_note: 'Approved',
+        }),
+      }),
+    );
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/trainer-clients/connection-requests/request-2/reject',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          trainer_response_note: 'Rejected',
+        }),
       }),
     );
   });

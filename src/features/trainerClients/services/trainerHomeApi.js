@@ -124,6 +124,48 @@ export async function listTrainerClients({
   return requestTrainerApi(`/api/v1/trainer-clients${suffix}`, { accessToken });
 }
 
+export async function listTrainerConnectionRequests({
+  accessToken,
+  status = 'pending',
+} = {}) {
+  const suffix = status ? `?status=${encodeURIComponent(status)}` : '';
+  return requestTrainerApi(`/api/v1/trainer-clients/connection-requests${suffix}`, { accessToken });
+}
+
+export async function approveTrainerConnectionRequest({
+  accessToken,
+  requestId,
+  trainerResponseNote = null,
+} = {}) {
+  return requestTrainerApi(
+    `/api/v1/trainer-clients/connection-requests/${encodeURIComponent(requestId)}/approve`,
+    {
+      accessToken,
+      method: 'POST',
+      body: {
+        trainer_response_note: trainerResponseNote,
+      },
+    },
+  );
+}
+
+export async function rejectTrainerConnectionRequest({
+  accessToken,
+  requestId,
+  trainerResponseNote = null,
+} = {}) {
+  return requestTrainerApi(
+    `/api/v1/trainer-clients/connection-requests/${encodeURIComponent(requestId)}/reject`,
+    {
+      accessToken,
+      method: 'POST',
+      body: {
+        trainer_response_note: trainerResponseNote,
+      },
+    },
+  );
+}
+
 export async function updateTrainerClient({
   accessToken,
   clientId,

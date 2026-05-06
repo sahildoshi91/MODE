@@ -11,6 +11,8 @@ const mockAssignTrainer = jest.fn();
 const mockGetOnboardingBootstrap = jest.fn();
 const mockIngestMobileEvents = jest.fn();
 const mockSetOnboardingRole = jest.fn();
+const mockGetLocalDateString = jest.fn();
+const mockGetTodayCheckin = jest.fn();
 const mockSetStringAsync = jest.fn();
 
 jest.mock('react-native-safe-area-context', () => {
@@ -45,6 +47,11 @@ jest.mock('../../features/onboarding/services/onboardingApi', () => ({
   setOnboardingRole: (...args) => mockSetOnboardingRole(...args),
 }));
 
+jest.mock('../../features/dailyCheckin/services/checkinApi', () => ({
+  getLocalDateString: (...args) => mockGetLocalDateString(...args),
+  getTodayCheckin: (...args) => mockGetTodayCheckin(...args),
+}));
+
 jest.mock('expo-clipboard', () => ({
   setStringAsync: (...args) => mockSetStringAsync(...args),
 }));
@@ -52,6 +59,8 @@ jest.mock('expo-clipboard', () => ({
 jest.mock('../../config/featureFlags', () => ({
   AUTH_PASSWORD_ENABLED: false,
   AUTH_SOCIAL_ENABLED: false,
+  BREATHING_TRANSITION_DEMO_ENABLED: false,
+  BREATHING_TRANSITIONS_ENABLED: false,
   TRAINER_ROUTE_FOUNDATION_ENABLED: false,
 }));
 
@@ -77,6 +86,12 @@ jest.mock('../../features/chat/screens/CoachChatScreen', () => {
   const React = require('react');
   return function MockCoachChatScreen(props) {
     return React.createElement('MockCoachChatScreen', props);
+  };
+});
+jest.mock('../../features/chat/components', () => {
+  const React = require('react');
+  return {
+    ChatShell: (props) => React.createElement('MockChatShell', props),
   };
 });
 jest.mock('../../features/dailyCheckin/screens/DailyCheckinScreen', () => {
@@ -209,6 +224,15 @@ function createUnassignedStatus() {
   };
 }
 
+function createAssignedClientStatus() {
+  return {
+    needs_assignment: false,
+    viewer_role: 'client',
+    assigned_trainer_id: 'trainer-1',
+    trainer_display_name: 'Coach Test',
+  };
+}
+
 async function flushEffects() {
   await act(async () => {
     await Promise.resolve();
@@ -250,6 +274,16 @@ describe('App assignment status retry behavior', () => {
     });
     mockIngestMobileEvents.mockResolvedValue({});
     mockSetOnboardingRole.mockResolvedValue({});
+    mockGetLocalDateString.mockReturnValue('2026-05-05');
+    mockGetTodayCheckin.mockResolvedValue({
+      completed: true,
+      date: '2026-05-05',
+      checkin: {
+        id: 'checkin-1',
+        date: '2026-05-05',
+        assigned_mode: 'BUILD',
+      },
+    });
     mockSetStringAsync.mockResolvedValue(undefined);
   });
 
@@ -325,6 +359,91 @@ describe('App assignment status retry behavior', () => {
     await flushEffects();
 
     expect(mockGetTrainerAssignmentStatus).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('lands active clients on Coach and opens Atlas chat when unassigned', async () => {
+    mockGetTrainerAssignmentStatus.mockResolvedValue(createUnassignedStatus());
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const nav = tree.root.findByType('MockLiquidBottomNav');
+    expect(nav.props.activeTab).toBe('coach');
+
+    const chat = tree.root.findByType('MockChatShell');
+    expect(chat.props.role).toBe('client');
+    expect(chat.props.sessionType).toBe('atlas_client_chat');
+    expect(chat.props.trainerId).toBeNull();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('blocks Coach on incomplete daily check-in and opens Coach after completion', async () => {
+    mockGetTrainerAssignmentStatus.mockResolvedValue(createUnassignedStatus());
+    mockGetTodayCheckin.mockResolvedValueOnce({
+      completed: false,
+      date: '2026-05-05',
+      checkin: null,
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const checkinScreen = tree.root.findByType('MockDailyCheckinScreen');
+    expect(checkinScreen.props.accessToken).toBe('session-token');
+    expect(tree.root.findAllByType('MockChatShell')).toHaveLength(0);
+    expect(tree.root.findAllByType('MockLiquidBottomNav')).toHaveLength(0);
+
+    await act(async () => {
+      await checkinScreen.props.onCheckinComplete({
+        id: 'checkin-2',
+        date: '2026-05-05',
+        assigned_mode: 'BUILD',
+      });
+    });
+    await flushEffects();
+
+    const chat = tree.root.findByType('MockChatShell');
+    expect(chat.props.sessionType).toBe('atlas_client_chat');
+    expect(tree.root.findByType('MockLiquidBottomNav').props.activeTab).toBe('coach');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('opens assigned clients on trainer-backed client chat after daily check-in status is complete', async () => {
+    mockGetTrainerAssignmentStatus.mockResolvedValue(createAssignedClientStatus());
+    mockGetOnboardingBootstrap.mockResolvedValue({
+      role: 'client',
+      onboarding_complete: true,
+      onboarding_status: 'completed',
+      is_legacy_trainer: false,
+      assigned_trainer_id: 'trainer-1',
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const chat = tree.root.findByType('MockChatShell');
+    expect(chat.props.role).toBe('client');
+    expect(chat.props.sessionType).toBe('client_chat');
+    expect(chat.props.trainerId).toBe('trainer-1');
+
     await act(async () => {
       tree.unmount();
     });

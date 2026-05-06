@@ -12,9 +12,13 @@ from app.modules.motivation import resolve_motivation_baseline
 from app.modules.trainer_clients.repository import TrainerClientRepository
 from app.modules.trainer_clients.schemas import (
     ClientTrainerScheduleResponse,
+    ConnectionRequestStatus,
     TrainerAIContextMemoryItem,
     TrainerAIContextResponse,
     TrainerClientActivitySummary,
+    TrainerClientConnectionRequestDecisionRequest,
+    TrainerClientConnectionRequestListResponse,
+    TrainerClientConnectionRequestRecord,
     TrainerClientDetailResponse,
     TrainerClientIdentity,
     TrainerClientInviteCodeCreateRequest,
@@ -106,6 +110,98 @@ class TrainerClientService:
             offset=offset,
             search=normalized_search,
         )
+
+    def list_connection_requests(
+        self,
+        trainer_context: TrainerContext,
+        *,
+        status: ConnectionRequestStatus | None = "pending",
+    ) -> TrainerClientConnectionRequestListResponse:
+        trainer_id, tenant_id = self._require_trainer_context(trainer_context)
+        rows = self.repository.list_connection_requests_for_trainer(
+            trainer_id=trainer_id,
+            status=status,
+        )
+        records: list[TrainerClientConnectionRequestRecord] = []
+        for row in rows:
+            client_row = self.repository.get_client_by_id(str(row.get("client_id") or ""))
+            if not client_row or not self._client_belongs_to_tenant(client_row, tenant_id):
+                continue
+            records.append(self._to_connection_request_record(row, client_row=client_row))
+        return TrainerClientConnectionRequestListResponse(
+            items=records,
+            count=len(records),
+            status=status,
+        )
+
+    def approve_connection_request(
+        self,
+        trainer_context: TrainerContext,
+        request_id: str,
+        request: TrainerClientConnectionRequestDecisionRequest,
+    ) -> TrainerClientConnectionRequestRecord:
+        trainer_id, tenant_id = self._require_trainer_context(trainer_context)
+        row = self._require_connection_request(trainer_id, request_id)
+        if not self._connection_request_belongs_to_tenant(row, tenant_id):
+            raise ValueError("Connection request not found")
+        if row.get("status") != "pending":
+            raise ValueError("Connection request is already resolved")
+        client = self.repository.get_client_by_id(str(row.get("client_id") or ""))
+        if not client or not self._client_belongs_to_tenant(client, tenant_id):
+            raise ValueError("Connection request client not found")
+        existing_trainer = client.get("assigned_trainer_id")
+        if existing_trainer and existing_trainer != trainer_id:
+            raise ValueError("Client is already assigned to another trainer")
+
+        updated_client = self.repository.update_client_assignment(
+            client_id=str(client["id"]),
+            tenant_id=tenant_id,
+            trainer_id=trainer_id,
+        )
+        if not updated_client:
+            raise ValueError("Connection request approval failed")
+        if not existing_trainer:
+            self.repository.insert_assignment_history(
+                client_id=str(client["id"]),
+                trainer_id=trainer_id,
+            )
+        updated = self.repository.update_connection_request(
+            request_id=request_id,
+            trainer_id=trainer_id,
+            fields={
+                "status": "approved",
+                "trainer_response_note": request.trainer_response_note,
+                "resolved_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        if not updated:
+            raise ValueError("Connection request approval failed")
+        return self._to_connection_request_record(updated, client_row=updated_client)
+
+    def reject_connection_request(
+        self,
+        trainer_context: TrainerContext,
+        request_id: str,
+        request: TrainerClientConnectionRequestDecisionRequest,
+    ) -> TrainerClientConnectionRequestRecord:
+        trainer_id, tenant_id = self._require_trainer_context(trainer_context)
+        row = self._require_connection_request(trainer_id, request_id)
+        if not self._connection_request_belongs_to_tenant(row, tenant_id):
+            raise ValueError("Connection request not found")
+        if row.get("status") != "pending":
+            raise ValueError("Connection request is already resolved")
+        updated = self.repository.update_connection_request(
+            request_id=request_id,
+            trainer_id=trainer_id,
+            fields={
+                "status": "rejected",
+                "trainer_response_note": request.trainer_response_note,
+                "resolved_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        if not updated:
+            raise ValueError("Connection request reject failed")
+        return self._to_connection_request_record(updated)
 
     def update_client(
         self,
@@ -628,6 +724,22 @@ class TrainerClientService:
             raise ValueError("Client not found for trainer")
         return client_row
 
+    def _require_connection_request(self, trainer_id: str, request_id: str) -> dict[str, Any]:
+        row = self.repository.get_connection_request_for_trainer(
+            trainer_id=trainer_id,
+            request_id=request_id,
+        )
+        if not row:
+            raise ValueError("Connection request not found")
+        return row
+
+    def _connection_request_belongs_to_tenant(self, row: dict[str, Any], tenant_id: str) -> bool:
+        client_id = str(row.get("client_id") or "").strip()
+        if not client_id:
+            return False
+        client_row = self.repository.get_client_by_id(client_id)
+        return bool(client_row and self._client_belongs_to_tenant(client_row, tenant_id))
+
     def _client_matches_search(
         self,
         client_row: dict[str, Any],
@@ -918,6 +1030,31 @@ class TrainerClientService:
             created_at=self._coerce_datetime(row.get("created_at")),
             is_assigned_to_trainer=bool(row.get("assigned_trainer_id")),
             is_pending_user=bool(is_pending_user),
+        )
+
+    def _to_connection_request_record(
+        self,
+        row: dict[str, Any],
+        *,
+        client_row: dict[str, Any] | None = None,
+    ) -> TrainerClientConnectionRequestRecord:
+        resolved_client = client_row
+        if resolved_client is None:
+            resolved_client = self.repository.get_client_by_id(str(row.get("client_id") or ""))
+        metadata = row.get("metadata")
+        return TrainerClientConnectionRequestRecord(
+            id=str(row.get("id") or ""),
+            client_id=str(row.get("client_id") or ""),
+            client_name=self._client_name(resolved_client) if resolved_client else None,
+            trainer_id=str(row.get("trainer_id") or ""),
+            requested_by_user_id=str(row.get("requested_by_user_id") or ""),
+            request_text=str(row.get("request_text") or ""),
+            status=row.get("status") or "pending",  # type: ignore[arg-type]
+            trainer_response_note=row.get("trainer_response_note"),
+            metadata=metadata if isinstance(metadata, dict) else {},
+            created_at=self._coerce_datetime(row.get("created_at")),
+            updated_at=self._coerce_datetime(row.get("updated_at")),
+            resolved_at=self._coerce_datetime(row.get("resolved_at")),
         )
 
     def _to_invite_code_record(self, row: dict[str, Any]) -> TrainerClientInviteCodeRecord:

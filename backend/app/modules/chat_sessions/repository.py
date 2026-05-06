@@ -29,7 +29,7 @@ class ChatSessionRepository:
         self,
         *,
         user_id: str,
-        trainer_id: str,
+        trainer_id: str | None,
         client_id: str | None,
         role: str,
         session_type: str,
@@ -40,11 +40,14 @@ class ChatSessionRepository:
             .table(self._SESSIONS_TABLE)
             .select("*")
             .eq("user_id", user_id)
-            .eq("trainer_id", trainer_id)
             .eq("role", role)
             .eq("session_type", session_type)
             .eq("session_date", session_date.isoformat())
         )
+        if trainer_id:
+            query = query.eq("trainer_id", trainer_id)
+        else:
+            query = query.is_("trainer_id", "null")
         if client_id:
             query = query.eq("client_id", client_id)
         else:
@@ -56,7 +59,7 @@ class ChatSessionRepository:
         self,
         *,
         user_id: str,
-        trainer_id: str,
+        trainer_id: str | None,
         client_id: str | None,
         role: str,
         session_type: str,
@@ -110,7 +113,7 @@ class ChatSessionRepository:
         self,
         *,
         user_id: str,
-        trainer_id: str,
+        trainer_id: str | None,
         client_id: str | None,
         role: str,
         session_type: str,
@@ -121,11 +124,14 @@ class ChatSessionRepository:
             .table(self._SESSIONS_TABLE)
             .select("id, metadata")
             .eq("user_id", user_id)
-            .eq("trainer_id", trainer_id)
             .eq("role", role)
             .eq("session_type", session_type)
             .lt("session_date", before_date.isoformat())
         )
+        if trainer_id:
+            query = query.eq("trainer_id", trainer_id)
+        else:
+            query = query.is_("trainer_id", "null")
         if client_id:
             query = query.eq("client_id", client_id)
         else:
@@ -151,7 +157,7 @@ class ChatSessionRepository:
         self,
         *,
         user_id: str,
-        trainer_id: str,
+        trainer_id: str | None,
         role: str,
         session_type: str | None = None,
         limit: int = 80,
@@ -164,9 +170,12 @@ class ChatSessionRepository:
             .table(self._SESSIONS_TABLE)
             .select("*")
             .eq("user_id", user_id)
-            .eq("trainer_id", trainer_id)
             .eq("role", role)
         )
+        if trainer_id:
+            query = query.eq("trainer_id", trainer_id)
+        else:
+            query = query.is_("trainer_id", "null")
         if session_type:
             query = query.eq("session_type", session_type)
         response = (
@@ -306,17 +315,87 @@ class ChatSessionRepository:
         )
         return response.data[0] if response.data else None
 
-    def get_client_names(self, *, trainer_id: str, client_ids: list[str]) -> dict[str, str]:
+    def get_client_by_id(self, client_id: str) -> dict[str, Any] | None:
+        client = self.admin_supabase or self.supabase
+        response = (
+            client
+            .table("clients")
+            .select("id, tenant_id, user_id, client_name, assigned_trainer_id, created_at")
+            .eq("id", client_id)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def list_active_trainers_for_tenant(self, tenant_id: str) -> list[dict[str, Any]]:
+        client = self.admin_supabase or self.supabase
+        trainers = (
+            client
+            .table("trainers")
+            .select("id, tenant_id, user_id, display_name, is_active")
+            .eq("tenant_id", tenant_id)
+            .eq("is_active", True)
+            .execute()
+        ).data or []
+        user_ids = [
+            str(row.get("user_id") or "").strip()
+            for row in trainers
+            if str(row.get("user_id") or "").strip()
+        ]
+        email_by_user_id: dict[str, str] = {}
+        if user_ids:
+            account_rows = (
+                client
+                .table("user_accounts")
+                .select("auth_user_id, email")
+                .in_("auth_user_id", user_ids)
+                .execute()
+            ).data or []
+            email_by_user_id = {
+                str(row.get("auth_user_id")): str(row.get("email") or "")
+                for row in account_rows
+                if row.get("auth_user_id")
+            }
+        return [
+            {
+                **row,
+                "email": email_by_user_id.get(str(row.get("user_id") or ""), ""),
+            }
+            for row in trainers
+        ]
+
+    def find_pending_connection_request(self, *, client_id: str, trainer_id: str) -> dict[str, Any] | None:
+        client = self.admin_supabase or self.supabase
+        response = (
+            client
+            .table("client_trainer_connection_requests")
+            .select("*")
+            .eq("client_id", client_id)
+            .eq("trainer_id", trainer_id)
+            .eq("status", "pending")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def create_connection_request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        client = self.admin_supabase or self.supabase
+        response = client.table("client_trainer_connection_requests").insert(payload).execute()
+        return response.data[0]
+
+    def get_client_names(self, *, trainer_id: str | None, client_ids: list[str]) -> dict[str, str]:
         if not client_ids:
             return {}
-        response = (
+        query = (
             self.supabase
             .table("clients")
             .select("id, client_name")
-            .eq("assigned_trainer_id", trainer_id)
             .in_("id", client_ids)
-            .execute()
         )
+        if trainer_id:
+            query = query.eq("assigned_trainer_id", trainer_id)
+        response = query.execute()
         return {
             str(row.get("id")): str(row.get("client_name") or "").strip()
             for row in response.data or []

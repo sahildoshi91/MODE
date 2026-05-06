@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 TrainerMemoryType = Literal["note", "preference", "constraint"]
 TrainerMemoryVisibility = Literal["internal_only", "ai_usable"]
 TrainerScheduleExceptionType = Literal["skip", "add"]
+ConnectionRequestStatus = Literal["pending", "approved", "rejected", "cancelled"]
 
 
 class TrainerClientIdentity(BaseModel):
@@ -27,6 +28,31 @@ class TrainerClientListResponse(BaseModel):
     limit: int = 50
     offset: int = 0
     search: str | None = None
+
+
+class TrainerClientConnectionRequestRecord(BaseModel):
+    id: str
+    client_id: str
+    client_name: str | None = None
+    trainer_id: str
+    requested_by_user_id: str
+    request_text: str
+    status: ConnectionRequestStatus = "pending"
+    trainer_response_note: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    resolved_at: datetime | None = None
+
+
+class TrainerClientConnectionRequestListResponse(BaseModel):
+    items: list[TrainerClientConnectionRequestRecord] = Field(default_factory=list)
+    count: int = 0
+    status: ConnectionRequestStatus | None = "pending"
+
+
+class TrainerClientConnectionRequestDecisionRequest(BaseModel):
+    trainer_response_note: str | None = None
 
 
 class TrainerClientUpdateRequest(BaseModel):

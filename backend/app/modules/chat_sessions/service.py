@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+import re
 from typing import Any
 
 from app.core.tenancy import TrainerContext
@@ -91,7 +92,7 @@ class ChatSessionNotFoundError(ValueError):
 @dataclass(frozen=True)
 class ChatSessionScope:
     user_id: str
-    trainer_id: str
+    trainer_id: str | None
     client_id: str | None
     role: str
     session_type: str
@@ -293,6 +294,25 @@ class ChatSessionService:
                 "idempotency_key": request.idempotency_key,
             },
         )
+        if self._is_atlas_client_session(session):
+            response_text, response_metadata = self._build_atlas_response(
+                user_id=user_id,
+                session=session,
+                request=request,
+            )
+            ai_message = self.repository.append_message(
+                session_id=session_id,
+                sender_type="ai",
+                content=response_text,
+                metadata=response_metadata,
+            )
+            updated_session = self.repository.get_session(session_id) or session
+            return ChatSessionSendResponse(
+                session=self._to_session_record(updated_session, current_date=current_date),
+                user_message=self._to_message(user_message),
+                ai_message=self._to_message(ai_message),
+                suggested_actions=[],
+            )
         if not self.conversation_service:
             raise ValueError("Chat response service unavailable")
         response = self.conversation_service.handle_chat(
@@ -343,6 +363,20 @@ class ChatSessionService:
                 "idempotency_key": request.idempotency_key,
             },
         )
+        if self._is_atlas_client_session(session):
+            response_text, response_metadata = self._build_atlas_response(
+                user_id=user_id,
+                session=session,
+                request=request,
+            )
+            return (
+                session,
+                user_message,
+                f"atlas:{session_id}",
+                [response_text],
+                {"assistant_message_metadata": response_metadata},
+                None,
+            )
         if not self.conversation_service:
             raise ValueError("Chat response service unavailable")
         conversation_id, chunks, route_debug, result_state = self.conversation_service.stream_chat(
@@ -379,8 +413,6 @@ class ChatSessionService:
     ) -> ChatSessionScope:
         role = self._normalize_role(role)
         self._validate_session_type_for_role(role, session_type)
-        if not trainer_context.trainer_id:
-            raise ChatSessionAccessError("User is not assigned to an active trainer context")
 
         if role == "client":
             resolved_client_id = client_id or trainer_context.client_id
@@ -390,9 +422,11 @@ class ChatSessionService:
                 raise ChatSessionAccessError("Client chat scope does not match this account")
             if trainer_context.client_user_id and trainer_context.client_user_id != user_id:
                 raise ChatSessionAccessError("Client chat scope does not match this account")
+            if session_type == "client_chat" and not trainer_context.trainer_id:
+                raise ChatSessionAccessError("User is not assigned to an active trainer context")
             return ChatSessionScope(
                 user_id=user_id,
-                trainer_id=trainer_context.trainer_id,
+                trainer_id=trainer_context.trainer_id if session_type != "atlas_client_chat" else None,
                 client_id=resolved_client_id,
                 role=role,
                 session_type=session_type,
@@ -400,6 +434,8 @@ class ChatSessionService:
                 trainer_context=trainer_context,
             )
 
+        if not trainer_context.trainer_id:
+            raise ChatSessionAccessError("User is not assigned to an active trainer context")
         if trainer_context.trainer_user_id and trainer_context.trainer_user_id != user_id:
             raise ChatSessionAccessError("Trainer chat scope does not match this account")
         resolved_client_id = str(client_id).strip() if client_id else None
@@ -434,7 +470,8 @@ class ChatSessionService:
             session_date=session_date,
             allow_default_client=True,
         )
-        if str(session.get("user_id")) != scope.user_id or str(session.get("trainer_id")) != scope.trainer_id:
+        session_trainer_id = str(session.get("trainer_id")) if session.get("trainer_id") else None
+        if str(session.get("user_id")) != scope.user_id or session_trainer_id != scope.trainer_id:
             raise ChatSessionAccessError("Chat session is not available for this account")
         if (session.get("client_id") or None) != scope.client_id:
             raise ChatSessionAccessError("Chat session is not available for this account")
@@ -515,10 +552,13 @@ class ChatSessionService:
 
     def _build_client_opening_summary(self, scope: ChatSessionScope) -> dict[str, Any]:
         assert scope.client_id is not None
-        client = self._safe(lambda: self.repository.get_client_for_trainer(
-            trainer_id=scope.trainer_id,
-            client_id=scope.client_id,
-        )) or {}
+        if scope.session_type == "atlas_client_chat":
+            client = self._safe(lambda: self.repository.get_client_by_id(scope.client_id)) or {}
+        else:
+            client = self._safe(lambda: self.repository.get_client_for_trainer(
+                trainer_id=scope.trainer_id or "",
+                client_id=scope.client_id,
+            )) or {}
         today_checkin = self._safe(lambda: self.repository.get_checkin_by_date(scope.client_id, scope.session_date))
         if not today_checkin:
             first_name = self._first_name(client.get("client_name")) or "there"
@@ -535,6 +575,34 @@ class ChatSessionService:
                 "metadata": {
                     "checkin_date": scope.session_date.isoformat(),
                     "has_checkin": False,
+                },
+            }
+
+        if scope.session_type == "atlas_client_chat":
+            assigned_mode = self._canonical_mode(today_checkin.get("assigned_mode"))
+            score = today_checkin.get("total_score")
+            score_text = f"{score}/25" if score is not None else "today's readiness"
+            text = (
+                f"Atlas is ready. Today's MODE is {assigned_mode or 'set'} at {score_text}. "
+                "I can help you work from this check-in or request a trainer connection for approval."
+            )
+            return {
+                "text": text,
+                "title": "Atlas Coach",
+                "summary": self._clip_summary(text),
+                "suggested_actions": [
+                    "Connect me to a trainer",
+                    "Build me a training routine",
+                    "Talk through today's focus",
+                ],
+                "source": "atlas_client_mode_brief_v1",
+                "metadata": {
+                    "checkin_id": str(today_checkin.get("id") or "") or None,
+                    "checkin_date": str(today_checkin.get("date") or scope.session_date.isoformat()),
+                    "assigned_mode": assigned_mode,
+                    "checkin_score": score,
+                    "has_checkin": True,
+                    "atlas_client_chat": True,
                 },
             }
 
@@ -623,10 +691,13 @@ class ChatSessionService:
     def _with_client_name(self, scope: ChatSessionScope, session: dict[str, Any]) -> dict[str, Any]:
         if scope.role != "client" or not scope.client_id or session.get("client_name"):
             return session
-        client = self._safe(lambda: self.repository.get_client_for_trainer(
-            trainer_id=scope.trainer_id,
-            client_id=scope.client_id or "",
-        )) or {}
+        if scope.session_type == "atlas_client_chat":
+            client = self._safe(lambda: self.repository.get_client_by_id(scope.client_id or "")) or {}
+        else:
+            client = self._safe(lambda: self.repository.get_client_for_trainer(
+                trainer_id=scope.trainer_id or "",
+                client_id=scope.client_id or "",
+            )) or {}
         client_name = str(client.get("client_name") or "").strip()
         if not client_name:
             return session
@@ -634,6 +705,152 @@ class ChatSessionService:
             **session,
             "client_name": client_name,
         }
+
+    def _is_atlas_client_session(self, session: dict[str, Any]) -> bool:
+        return str(session.get("session_type") or "").strip().lower() == "atlas_client_chat"
+
+    def _build_atlas_response(
+        self,
+        *,
+        user_id: str,
+        session: dict[str, Any],
+        request: ChatSessionSendRequest,
+    ) -> tuple[str, dict[str, Any]]:
+        client_id = str(session.get("client_id") or "").strip()
+        if not client_id:
+            return (
+                "I could not find your client profile for this Atlas chat. Try signing out and back in.",
+                {"atlas_client_chat": True, "atlas_assignment_status": "client_missing"},
+            )
+        client = self.repository.get_client_by_id(client_id)
+        if not client:
+            return (
+                "I could not find your client profile for this Atlas chat. Try signing out and back in.",
+                {"atlas_client_chat": True, "atlas_assignment_status": "client_missing"},
+            )
+        if client.get("assigned_trainer_id"):
+            return (
+                "You are already connected to a trainer. I will route you back through your assigned Coach chat.",
+                {"atlas_client_chat": True, "atlas_assignment_status": "already_assigned"},
+            )
+
+        requested_name = self._extract_trainer_connection_query(request.message)
+        if not requested_name:
+            return (
+                "I can help with today's plan from your MODE check-in. If you want a trainer, say something like "
+                "\"connect me to Coach Maya\" and I will create an approval request for that trainer.",
+                {"atlas_client_chat": True, "atlas_assignment_status": "no_assignment_intent"},
+            )
+
+        tenant_id = str(client.get("tenant_id") or "").strip()
+        matches = self._match_trainers_for_request(tenant_id=tenant_id, requested_name=requested_name)
+        if not matches:
+            return (
+                f"I could not find an active trainer matching \"{requested_name}\" in your workspace. "
+                "Try their exact display name or ask them for an invite code.",
+                {
+                    "atlas_client_chat": True,
+                    "atlas_assignment_status": "trainer_not_found",
+                    "requested_trainer": requested_name,
+                },
+            )
+        if len(matches) > 1:
+            names = ", ".join(str(item.get("display_name") or "Unnamed trainer") for item in matches[:3])
+            return (
+                f"I found more than one trainer matching \"{requested_name}\": {names}. "
+                "Send the exact trainer name you want and I will create the approval request.",
+                {
+                    "atlas_client_chat": True,
+                    "atlas_assignment_status": "trainer_ambiguous",
+                    "requested_trainer": requested_name,
+                    "matched_trainer_ids": [str(item.get("id")) for item in matches if item.get("id")],
+                },
+            )
+
+        trainer = matches[0]
+        trainer_id = str(trainer.get("id") or "")
+        existing = self.repository.find_pending_connection_request(
+            client_id=client_id,
+            trainer_id=trainer_id,
+        )
+        if existing:
+            request_row = existing
+            status = "pending_existing"
+        else:
+            request_row = self.repository.create_connection_request({
+                "client_id": client_id,
+                "trainer_id": trainer_id,
+                "requested_by_user_id": user_id,
+                "request_text": request.message,
+                "status": "pending",
+                "metadata": {
+                    "source": "atlas_client_chat",
+                    "chat_session_id": str(session.get("id") or ""),
+                    "requested_trainer": requested_name,
+                },
+            })
+            status = "pending_created"
+        trainer_name = str(trainer.get("display_name") or "that trainer").strip() or "that trainer"
+        return (
+            f"I sent {trainer_name} a connection request for approval. "
+            "Once they approve it, your Coach tab will switch from Atlas to their trainer-backed chat.",
+            {
+                "atlas_client_chat": True,
+                "atlas_assignment_status": status,
+                "connection_request_id": str(request_row.get("id") or ""),
+                "trainer_id": trainer_id,
+                "trainer_display_name": trainer_name,
+            },
+        )
+
+    def _extract_trainer_connection_query(self, message: str) -> str | None:
+        text = " ".join(str(message or "").strip().split())
+        if not text:
+            return None
+        lower = text.lower()
+        if not re.search(r"\b(assign|connect|attach)\b", lower):
+            return None
+        match = re.search(
+            r"\b(?:assign|connect|attach)\b(?:\s+me)?(?:\s+(?:with|to))?\s+(.+)$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            return None
+        candidate = match.group(1).strip().strip(".!?")
+        candidate = re.sub(r"^(?:coach|trainer)\s+", "", candidate, flags=re.IGNORECASE).strip()
+        return candidate[:120] or None
+
+    def _trainer_match_keys(self, trainer: dict[str, Any]) -> set[str]:
+        display_name = str(trainer.get("display_name") or "")
+        email = str(trainer.get("email") or "")
+        local_part = email.partition("@")[0]
+        values = {
+            display_name,
+            local_part,
+            display_name.replace(".", " "),
+            display_name.replace("_", " "),
+            local_part.replace(".", " "),
+            local_part.replace("_", " "),
+        }
+        return {self._normalize_match_text(value) for value in values if self._normalize_match_text(value)}
+
+    def _match_trainers_for_request(self, *, tenant_id: str, requested_name: str) -> list[dict[str, Any]]:
+        if not tenant_id:
+            return []
+        requested_key = self._normalize_match_text(requested_name)
+        if not requested_key:
+            return []
+        trainers = self.repository.list_active_trainers_for_tenant(tenant_id)
+        matches = []
+        for trainer in trainers:
+            keys = self._trainer_match_keys(trainer)
+            if requested_key in keys:
+                matches.append(trainer)
+        return matches
+
+    def _normalize_match_text(self, value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
     def _build_trainer_opening_summary(self, scope: ChatSessionScope) -> dict[str, Any]:
         command_center = None
@@ -716,7 +933,7 @@ class ChatSessionService:
         return ChatSessionRecord(
             id=str(row.get("id")),
             user_id=str(row.get("user_id")),
-            trainer_id=str(row.get("trainer_id")),
+            trainer_id=str(row.get("trainer_id")) if row.get("trainer_id") else None,
             client_id=str(row.get("client_id")) if row.get("client_id") else None,
             client_name=row.get("client_name"),
             role=str(row.get("role") or "client"),  # type: ignore[arg-type]
@@ -823,6 +1040,8 @@ class ChatSessionService:
         return f"I am also keeping this context in mind: {text[:140]}."
 
     def _default_title(self, scope: ChatSessionScope) -> str:
+        if scope.session_type == "atlas_client_chat":
+            return "Atlas Coach"
         return "Daily Operating Brief" if scope.role == "trainer" else "Today's Coach Brief"
 
     def _is_read_only(self, session: dict[str, Any], current_date: date) -> bool:
@@ -845,7 +1064,7 @@ class ChatSessionService:
 
     def _validate_session_type_for_role(self, role: str, session_type: str) -> None:
         normalized = str(session_type or "").strip().lower()
-        if role == "client" and normalized != "client_chat":
+        if role == "client" and normalized not in {"client_chat", "atlas_client_chat"}:
             raise ValueError("Invalid chat session type")
         if role == "trainer" and normalized not in {"trainer_chat", "coach_ai"}:
             raise ValueError("Invalid chat session type")

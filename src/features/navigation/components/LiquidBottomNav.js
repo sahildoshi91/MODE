@@ -8,8 +8,8 @@ import {
 } from '../../../../lib/components';
 
 const CLIENT_TABS = [
-  { key: 'home', label: 'Home', Icon: Home },
   { key: 'coach', label: 'Coach', Icon: Dumbbell },
+  { key: 'home', label: 'Home', Icon: Home },
   { key: 'progress', label: 'Progress', Icon: BarChart3 },
   { key: 'profile', label: 'Settings', Icon: User },
 ];
@@ -50,4 +50,3 @@ export default function LiquidBottomNav({
     />
   );
 }
-

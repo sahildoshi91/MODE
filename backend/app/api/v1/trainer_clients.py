@@ -8,7 +8,11 @@ from app.core.dependencies import get_trainer_client_service, get_trainer_contex
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
 from app.modules.trainer_clients.schemas import (
+    ConnectionRequestStatus,
     TrainerAIContextResponse,
+    TrainerClientConnectionRequestDecisionRequest,
+    TrainerClientConnectionRequestListResponse,
+    TrainerClientConnectionRequestRecord,
     TrainerClientDetailResponse,
     TrainerClientIdentity,
     TrainerClientInviteCodeCreateRequest,
@@ -40,6 +44,8 @@ def _handle_service_value_error(exc: ValueError) -> None:
         "client not found for trainer",
         "memory not found",
         "invite code not found",
+        "connection request not found",
+        "connection request client not found",
         "no scheduled session found for client on requested date",
         "schedule exception not found",
     }:
@@ -103,6 +109,56 @@ async def deactivate_trainer_client_invite_code(
     require_trainer_actor(user, trainer_context)
     del invite_id, service
     raise HTTPException(status_code=403, detail=INVITE_CODES_SERVICE_ONLY_DETAIL)
+
+
+@router.get("/connection-requests", response_model=TrainerClientConnectionRequestListResponse)
+async def list_trainer_client_connection_requests(
+    status: ConnectionRequestStatus | None = Query(default="pending"),
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.list_connection_requests(trainer_context, status=status)
+    except ValueError as exc:
+        _handle_service_value_error(exc)
+
+
+@router.post(
+    "/connection-requests/{request_id}/approve",
+    response_model=TrainerClientConnectionRequestRecord,
+)
+async def approve_trainer_client_connection_request(
+    request_id: str,
+    request: TrainerClientConnectionRequestDecisionRequest,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.approve_connection_request(trainer_context, request_id, request)
+    except ValueError as exc:
+        _handle_service_value_error(exc)
+
+
+@router.post(
+    "/connection-requests/{request_id}/reject",
+    response_model=TrainerClientConnectionRequestRecord,
+)
+async def reject_trainer_client_connection_request(
+    request_id: str,
+    request: TrainerClientConnectionRequestDecisionRequest,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    service: TrainerClientService = Depends(get_trainer_client_service),
+):
+    require_trainer_actor(user, trainer_context)
+    try:
+        return service.reject_connection_request(trainer_context, request_id, request)
+    except ValueError as exc:
+        _handle_service_value_error(exc)
 
 
 @router.patch("/{client_id}", response_model=TrainerClientIdentity)

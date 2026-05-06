@@ -91,6 +91,101 @@ class TrainerClientRepository:
         )
         return response.data[0] if response.data else None
 
+    def get_client_by_id(self, client_id: str) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("clients")
+            .select("id, tenant_id, user_id, client_name, assigned_trainer_id, created_at")
+            .eq("id", client_id)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def update_client_assignment(
+        self,
+        *,
+        client_id: str,
+        tenant_id: str,
+        trainer_id: str,
+    ) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("clients")
+            .update({"assigned_trainer_id": trainer_id})
+            .eq("id", client_id)
+            .eq("tenant_id", tenant_id)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def insert_assignment_history(self, *, client_id: str, trainer_id: str) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("client_trainer_assignments")
+            .insert({
+                "client_id": client_id,
+                "trainer_id": trainer_id,
+            })
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def list_connection_requests_for_trainer(
+        self,
+        *,
+        trainer_id: str,
+        status: str | None = "pending",
+    ) -> list[dict[str, Any]]:
+        query = (
+            self.supabase
+            .table("client_trainer_connection_requests")
+            .select("*")
+            .eq("trainer_id", trainer_id)
+        )
+        if status:
+            query = query.eq("status", status)
+        response = query.order("created_at", desc=True).execute()
+        return response.data or []
+
+    def get_connection_request_for_trainer(
+        self,
+        *,
+        trainer_id: str,
+        request_id: str,
+    ) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("client_trainer_connection_requests")
+            .select("*")
+            .eq("trainer_id", trainer_id)
+            .eq("id", request_id)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def update_connection_request(
+        self,
+        *,
+        request_id: str,
+        trainer_id: str,
+        fields: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        payload = {
+            **fields,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        response = (
+            self.supabase
+            .table("client_trainer_connection_requests")
+            .update(payload)
+            .eq("id", request_id)
+            .eq("trainer_id", trainer_id)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
     def get_latest_active_assignment(
         self,
         trainer_id: str,

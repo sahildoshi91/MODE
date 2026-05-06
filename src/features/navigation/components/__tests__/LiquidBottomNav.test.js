@@ -59,5 +59,33 @@ describe('LiquidBottomNav premium contract', () => {
 
     act(() => tree.unmount());
   });
-});
 
+  it('orders client navigation with Coach first and Home second', () => {
+    let tree;
+    act(() => {
+      tree = renderer.create(
+        <LiquidBottomNav
+          activeTab="coach"
+          onTabChange={() => {}}
+          role="client"
+          bottomInset={0}
+        />,
+      );
+    });
+
+    const tabButtons = tree.root.findAll((node) => (
+      node.props?.accessibilityRole === 'button'
+      && node.props?.accessibilityState
+      && typeof node.props?.style === 'function'
+    ));
+    const labels = tabButtons.map((button) => {
+      const labelNode = button.findAll((node) => (
+        ['Coach', 'Home', 'Progress', 'Settings'].includes(node.props?.children)
+      ))[0];
+      return labelNode?.props?.children;
+    });
+    expect(labels).toEqual(['Coach', 'Home', 'Progress', 'Settings']);
+
+    act(() => tree.unmount());
+  });
+});

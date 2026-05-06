@@ -318,6 +318,13 @@ async def stream_chat_session_message(
                 session_id=session_id,
                 request=request,
             )
+            assistant_message_metadata = (
+                route_debug.get("assistant_message_metadata")
+                if isinstance(route_debug, dict)
+                else None
+            )
+            if not isinstance(assistant_message_metadata, dict):
+                assistant_message_metadata = {}
             del session, route_debug
             yield encoder.encode(
                 status_event(
@@ -355,6 +362,7 @@ async def stream_chat_session_message(
                 session_id=session_id,
                 content=assistant_message,
                 metadata={
+                    **assistant_message_metadata,
                     "request_id": request_id,
                     "conversation_id": conversation_id,
                     "legacy_assistant_message_id": getattr(result_state, "assistant_message_id", None),

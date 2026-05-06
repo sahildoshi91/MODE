@@ -133,17 +133,23 @@ backend/sql/20260414b_seed_trainer_invite_codes_template.sql
 
 ## Local Development
 
-### Frontend
+### Daily Launcher
 ```bash
 npm install
-npx expo start --port 8081
+npm run dev
 ```
 
-### Backend
+`npm run dev` refreshes `EXPO_PUBLIC_API_BASE_URL` in root `.env`, starts the FastAPI backend when `/healthz` is not reachable, waits for backend health, then starts Expo with a cleared cache. If the app was already open on a backend error screen, tap `Retry` after the launcher is ready.
+
+### Manual Fallback
 ```bash
+# Terminal 1
 cd backend
 pip install -r requirements.txt
 ./venv/bin/python main.py
+
+# Terminal 2
+npx expo start -c --port 8081
 ```
 
 ### Runtime Route Preflight (Required Before Trainer QA)

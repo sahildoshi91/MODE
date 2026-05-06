@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 ChatSessionRole = Literal["client", "trainer"]
-ChatSessionType = Literal["client_chat", "trainer_chat", "coach_ai"]
+ChatSessionType = Literal["client_chat", "atlas_client_chat", "trainer_chat", "coach_ai"]
 ChatSenderType = Literal["user", "ai", "system"]
 
 
@@ -21,8 +21,8 @@ class ChatSessionTodayRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_role_session_type(self):
-        if self.role == "client" and self.session_type != "client_chat":
-            raise ValueError("client role only supports client_chat sessions")
+        if self.role == "client" and self.session_type not in {"client_chat", "atlas_client_chat"}:
+            raise ValueError("client role only supports client chat sessions")
         if self.role == "trainer" and self.session_type not in {"trainer_chat", "coach_ai"}:
             raise ValueError("trainer role only supports trainer_chat or coach_ai sessions")
         return self
@@ -68,7 +68,7 @@ class ChatSessionSendRequest(BaseModel):
 class ChatSessionRecord(BaseModel):
     id: str
     user_id: str
-    trainer_id: str
+    trainer_id: str | None = None
     client_id: str | None = None
     client_name: str | None = None
     role: ChatSessionRole

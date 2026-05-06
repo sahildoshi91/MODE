@@ -80,6 +80,22 @@ class FakeTrainerClientService:
                 "updated_at": "2026-04-11T10:00:00+00:00",
             }
         ]
+        self.connection_request_rows = [
+            {
+                "id": "request-1",
+                "client_id": "client-3",
+                "client_name": "New Client",
+                "trainer_id": "trainer-123",
+                "requested_by_user_id": "client-user-3",
+                "request_text": "assign me to test.trainer",
+                "status": "pending",
+                "trainer_response_note": None,
+                "metadata": {"source": "atlas_client_chat"},
+                "created_at": "2026-04-12T09:00:00+00:00",
+                "updated_at": "2026-04-12T09:00:00+00:00",
+                "resolved_at": None,
+            }
+        ]
 
     def _get_client_row(self, client_id):
         for row in self.client_rows:
@@ -121,6 +137,37 @@ class FakeTrainerClientService:
         row = self._get_client_row(client_id)
         row["is_assigned_to_trainer"] = False
         return row
+
+    def list_connection_requests(self, trainer_context, status="pending"):
+        del trainer_context
+        rows = self.connection_request_rows
+        if status:
+            rows = [row for row in rows if row["status"] == status]
+        return {
+            "items": rows,
+            "count": len(rows),
+            "status": status,
+        }
+
+    def approve_connection_request(self, trainer_context, request_id, request):
+        del trainer_context
+        for row in self.connection_request_rows:
+            if row["id"] == request_id:
+                row["status"] = "approved"
+                row["trainer_response_note"] = request.trainer_response_note
+                row["resolved_at"] = "2026-04-12T10:00:00+00:00"
+                return row
+        raise ValueError("Connection request not found")
+
+    def reject_connection_request(self, trainer_context, request_id, request):
+        del trainer_context
+        for row in self.connection_request_rows:
+            if row["id"] == request_id:
+                row["status"] = "rejected"
+                row["trainer_response_note"] = request.trainer_response_note
+                row["resolved_at"] = "2026-04-12T10:00:00+00:00"
+                return row
+        raise ValueError("Connection request not found")
 
     def list_invite_codes(self, trainer_context, limit=50, offset=0):
         del trainer_context
@@ -612,6 +659,47 @@ class TrainerClientsApiTests(unittest.TestCase):
         )
         self.assertEqual(invite_delete_response.status_code, 403)
         self.assertIn("service-controlled", invite_delete_response.json()["detail"])
+
+    def test_connection_request_routes_list_approve_and_reject(self):
+        list_response = self.client.get(
+            "/api/v1/trainer-clients/connection-requests",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.json()["count"], 1)
+        self.assertEqual(list_response.json()["items"][0]["id"], "request-1")
+
+        approve_response = self.client.post(
+            "/api/v1/trainer-clients/connection-requests/request-1/approve",
+            json={"trainer_response_note": "Approved"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(approve_response.status_code, 200)
+        self.assertEqual(approve_response.json()["status"], "approved")
+        self.assertEqual(approve_response.json()["trainer_response_note"], "Approved")
+
+        self.fake_service.connection_request_rows.append({
+            "id": "request-2",
+            "client_id": "client-4",
+            "client_name": "Other Client",
+            "trainer_id": "trainer-123",
+            "requested_by_user_id": "client-user-4",
+            "request_text": "connect me to test.trainer",
+            "status": "pending",
+            "trainer_response_note": None,
+            "metadata": {"source": "atlas_client_chat"},
+            "created_at": "2026-04-12T09:05:00+00:00",
+            "updated_at": "2026-04-12T09:05:00+00:00",
+            "resolved_at": None,
+        })
+        reject_response = self.client.post(
+            "/api/v1/trainer-clients/connection-requests/request-2/reject",
+            json={"trainer_response_note": "Rejected"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        self.assertEqual(reject_response.status_code, 200)
+        self.assertEqual(reject_response.json()["status"], "rejected")
+        self.assertEqual(reject_response.json()["trainer_response_note"], "Rejected")
 
     def test_trainer_endpoints_reject_non_trainer_actor(self):
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(

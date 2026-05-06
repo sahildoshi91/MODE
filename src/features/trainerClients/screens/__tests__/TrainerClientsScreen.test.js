@@ -11,6 +11,7 @@ jest.mock('react-native-safe-area-context', () => {
 });
 
 jest.mock('../../services/trainerHomeApi', () => ({
+  approveTrainerConnectionRequest: jest.fn(),
   archiveTrainerClientMemory: jest.fn(),
   createTrainerClientScheduleException: jest.fn(),
   createTrainerClientMemory: jest.fn(),
@@ -19,8 +20,10 @@ jest.mock('../../services/trainerHomeApi', () => ({
   getTrainerClientSchedulePreferences: jest.fn(),
   getTrainerClientDetail: jest.fn(),
   getTrainerCommandCenter: jest.fn(),
+  listTrainerConnectionRequests: jest.fn(),
   listTrainerClientMemory: jest.fn(),
   patchTrainerClientSchedulePreferences: jest.fn(),
+  rejectTrainerConnectionRequest: jest.fn(),
   updateTrainerClientMemory: jest.fn(),
 }));
 
@@ -42,6 +45,7 @@ jest.mock('../../storage/trainerClientsSummaryVisibilityStorage', () => ({
 }));
 
 import {
+  approveTrainerConnectionRequest,
   archiveTrainerClientMemory,
   createTrainerClientScheduleException,
   createTrainerClientMemory,
@@ -50,8 +54,10 @@ import {
   getTrainerClientDetail,
   getTrainerClientSchedulePreferences,
   getTrainerCommandCenter,
+  listTrainerConnectionRequests,
   listTrainerClientMemory,
   patchTrainerClientSchedulePreferences,
+  rejectTrainerConnectionRequest,
   updateTrainerClientMemory,
 } from '../../services/trainerHomeApi';
 import {
@@ -317,6 +323,12 @@ async function flushEffects() {
   });
 }
 
+beforeEach(() => {
+  listTrainerConnectionRequests.mockResolvedValue({ count: 0, items: [] });
+  approveTrainerConnectionRequest.mockResolvedValue({ id: 'connection-request-1', status: 'approved' });
+  rejectTrainerConnectionRequest.mockResolvedValue({ id: 'connection-request-1', status: 'rejected' });
+});
+
 describe('TrainerClientsScreen draft review queue', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -376,6 +388,106 @@ describe('TrainerClientsScreen draft review queue', () => {
 
     const lifetimeCount = tree.root.findByProps({ testID: 'trainer-clients-draft-review-lifetime-count' });
     expect(readNodeText(lifetimeCount)).toContain('9 total');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('renders Atlas connection requests and approves them from Clients', async () => {
+    getTrainerCoachQueue.mockResolvedValueOnce({ count: 0, items: [] });
+    listTrainerConnectionRequests.mockResolvedValueOnce({
+      count: 1,
+      items: [
+        {
+          id: 'request-1',
+          client_id: 'client-7',
+          client_name: 'New Client',
+          trainer_id: 'trainer-1',
+          requested_by_user_id: 'client-user-7',
+          request_text: 'assign me to test.trainer',
+          status: 'pending',
+          created_at: '2026-04-19T12:00:00.000Z',
+        },
+      ],
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expect(() => tree.root.findByProps({ testID: 'trainer-clients-connection-requests-card' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-clients-connection-request-request-1' })).not.toThrow();
+
+    const approveButton = tree.root.findByProps({
+      testID: 'trainer-clients-connection-request-approve-request-1',
+    });
+    await act(async () => {
+      await approveButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(approveTrainerConnectionRequest).toHaveBeenCalledWith({
+      accessToken: 'trainer-token',
+      requestId: 'request-1',
+      trainerResponseNote: 'Approved from Clients tab.',
+    });
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('rejects Atlas connection requests without approving assignment', async () => {
+    getTrainerCoachQueue.mockResolvedValueOnce({ count: 0, items: [] });
+    listTrainerConnectionRequests.mockResolvedValueOnce({
+      count: 1,
+      items: [
+        {
+          id: 'request-2',
+          client_id: 'client-8',
+          client_name: 'Other Client',
+          trainer_id: 'trainer-1',
+          requested_by_user_id: 'client-user-8',
+          request_text: 'connect me to test.trainer',
+          status: 'pending',
+          created_at: '2026-04-19T12:00:00.000Z',
+        },
+      ],
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    const rejectButton = tree.root.findByProps({
+      testID: 'trainer-clients-connection-request-reject-request-2',
+    });
+    await act(async () => {
+      await rejectButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(rejectTrainerConnectionRequest).toHaveBeenCalledWith({
+      accessToken: 'trainer-token',
+      requestId: 'request-2',
+      trainerResponseNote: 'Rejected from Clients tab.',
+    });
+    expect(approveTrainerConnectionRequest).not.toHaveBeenCalled();
 
     await act(async () => {
       tree.unmount();

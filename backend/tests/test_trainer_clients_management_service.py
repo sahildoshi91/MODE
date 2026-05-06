@@ -12,6 +12,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from app.core.tenancy import TrainerContext
 from app.modules.trainer_clients.schemas import (
+    TrainerClientConnectionRequestDecisionRequest,
     TrainerClientInviteCodeCreateRequest,
     TrainerRuleSummaryItem,
     TrainerClientUpdateRequest,
@@ -45,6 +46,14 @@ class FakeTrainerClientRepository:
                 "client_name": "Morgan",
                 "assigned_trainer_id": "trainer-123",
                 "created_at": "2026-04-08T10:00:00+00:00",
+            },
+            {
+                "id": "client-4",
+                "tenant_id": "tenant-1",
+                "user_id": "client-user-4",
+                "client_name": "New Client",
+                "assigned_trainer_id": None,
+                "created_at": "2026-04-07T10:00:00+00:00",
             },
         ]
         self.profile_status_by_client_id = {
@@ -80,6 +89,34 @@ class FakeTrainerClientRepository:
                 "created_at": "2026-04-11T09:00:00+00:00",
                 "updated_at": "2026-04-11T09:00:00+00:00",
             }
+        ]
+        self.connection_requests = [
+            {
+                "id": "request-1",
+                "client_id": "client-4",
+                "trainer_id": "trainer-123",
+                "requested_by_user_id": "client-user-4",
+                "request_text": "assign me to test.trainer",
+                "status": "pending",
+                "trainer_response_note": None,
+                "metadata": {"source": "atlas_client_chat"},
+                "created_at": "2026-04-12T09:00:00+00:00",
+                "updated_at": "2026-04-12T09:00:00+00:00",
+                "resolved_at": None,
+            },
+            {
+                "id": "request-2",
+                "client_id": "client-4",
+                "trainer_id": "trainer-123",
+                "requested_by_user_id": "client-user-4",
+                "request_text": "connect me to test.trainer",
+                "status": "pending",
+                "trainer_response_note": None,
+                "metadata": {"source": "atlas_client_chat"},
+                "created_at": "2026-04-12T09:05:00+00:00",
+                "updated_at": "2026-04-12T09:05:00+00:00",
+                "resolved_at": None,
+            },
         ]
         self.checkins = [
             {
@@ -118,6 +155,54 @@ class FakeTrainerClientRepository:
         for row in self.clients:
             if row["id"] == client_id and row.get("assigned_trainer_id") == trainer_id:
                 row.update(fields)
+                return dict(row)
+        return None
+
+    def get_client_by_id(self, client_id: str):
+        for row in self.clients:
+            if row["id"] == client_id:
+                return dict(row)
+        return None
+
+    def update_client_assignment(self, *, client_id: str, tenant_id: str, trainer_id: str):
+        for row in self.clients:
+            if row["id"] == client_id and row["tenant_id"] == tenant_id:
+                row["assigned_trainer_id"] = trainer_id
+                return dict(row)
+        return None
+
+    def insert_assignment_history(self, *, client_id: str, trainer_id: str):
+        row = {
+            "id": f"assign-{len(self.assignments) + 1}",
+            "client_id": client_id,
+            "trainer_id": trainer_id,
+            "assigned_at": "2026-04-12T10:00:00+00:00",
+            "unassigned_at": None,
+        }
+        self.assignments.append(row)
+        return dict(row)
+
+    def list_connection_requests_for_trainer(self, *, trainer_id: str, status: str | None = "pending"):
+        rows = [
+            dict(row)
+            for row in self.connection_requests
+            if row["trainer_id"] == trainer_id
+        ]
+        if status:
+            rows = [row for row in rows if row["status"] == status]
+        return rows
+
+    def get_connection_request_for_trainer(self, *, trainer_id: str, request_id: str):
+        for row in self.connection_requests:
+            if row["id"] == request_id and row["trainer_id"] == trainer_id:
+                return dict(row)
+        return None
+
+    def update_connection_request(self, *, request_id: str, trainer_id: str, fields: dict):
+        for row in self.connection_requests:
+            if row["id"] == request_id and row["trainer_id"] == trainer_id:
+                row.update(fields)
+                row["updated_at"] = "2026-04-12T10:00:00+00:00"
                 return dict(row)
         return None
 
@@ -319,6 +404,40 @@ class TrainerClientManagementServiceTests(unittest.TestCase):
         self.assertFalse(by_client_id["client-1"].is_pending_user)
         self.assertTrue(by_client_id["client-2"].is_pending_user)
         self.assertTrue(by_client_id["client-3"].is_pending_user)
+
+    def test_connection_request_approval_assigns_client_and_records_history(self):
+        listing = self.service.list_connection_requests(self.trainer_context)
+        self.assertEqual(listing.count, 2)
+        self.assertEqual(listing.items[0].client_name, "New Client")
+
+        approved = self.service.approve_connection_request(
+            self.trainer_context,
+            "request-1",
+            TrainerClientConnectionRequestDecisionRequest(trainer_response_note="Welcome aboard."),
+        )
+
+        client = self.repository.get_client_by_id("client-4")
+        self.assertEqual(client["assigned_trainer_id"], "trainer-123")
+        self.assertEqual(approved.status, "approved")
+        self.assertEqual(approved.trainer_response_note, "Welcome aboard.")
+        self.assertTrue(any(
+            row["client_id"] == "client-4"
+            and row["trainer_id"] == "trainer-123"
+            and row.get("unassigned_at") is None
+            for row in self.repository.assignments
+        ))
+
+    def test_connection_request_reject_leaves_client_unassigned(self):
+        rejected = self.service.reject_connection_request(
+            self.trainer_context,
+            "request-2",
+            TrainerClientConnectionRequestDecisionRequest(trainer_response_note="Not a fit right now."),
+        )
+
+        client = self.repository.get_client_by_id("client-4")
+        self.assertIsNone(client["assigned_trainer_id"])
+        self.assertEqual(rejected.status, "rejected")
+        self.assertEqual(rejected.trainer_response_note, "Not a fit right now.")
 
     def test_client_detail_includes_question_summaries_with_missing_days(self):
         detail = self.service.get_client_detail(

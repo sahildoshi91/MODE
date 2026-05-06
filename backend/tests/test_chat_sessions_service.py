@@ -38,11 +38,23 @@ class FakeChatSessionRepository:
         self.clients = {
             CLIENT_ID: {
                 "id": CLIENT_ID,
+                "tenant_id": "tenant-1",
                 "user_id": CLIENT_USER_ID,
                 "client_name": "Taylor",
                 "assigned_trainer_id": TRAINER_ID,
             },
         }
+        self.active_trainers = [
+            {
+                "id": "trainer-test",
+                "tenant_id": "tenant-1",
+                "user_id": "trainer-user-test",
+                "display_name": "Test Trainer",
+                "status": "active",
+                "email": "test.trainer@example.com",
+            },
+        ]
+        self.connection_requests = []
         self.profile = {
             "primary_goal": "lean out and feel more in control",
             "user_why": None,
@@ -156,9 +168,41 @@ class FakeChatSessionRepository:
             return row
         return None
 
+    def get_client_by_id(self, client_id):
+        row = self.clients.get(client_id)
+        return dict(row) if row else None
+
     def get_client_names(self, *, trainer_id, client_ids):
         del trainer_id
         return {client_id: self.clients[client_id]["client_name"] for client_id in client_ids if client_id in self.clients}
+
+    def list_active_trainers_for_tenant(self, tenant_id):
+        return [
+            dict(row)
+            for row in self.active_trainers
+            if row.get("tenant_id") == tenant_id and row.get("status") == "active"
+        ]
+
+    def find_pending_connection_request(self, *, client_id, trainer_id):
+        return next(
+            (
+                dict(row) for row in self.connection_requests
+                if row["client_id"] == client_id
+                and row["trainer_id"] == trainer_id
+                and row["status"] == "pending"
+            ),
+            None,
+        )
+
+    def create_connection_request(self, payload):
+        row = {
+            "id": f"connection-request-{len(self.connection_requests) + 1}",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            **payload,
+        }
+        self.connection_requests.append(row)
+        return dict(row)
 
     def get_profile(self, client_id):
         del client_id
@@ -198,6 +242,17 @@ def client_context(user_id=USER_ID):
         trainer_id=TRAINER_ID,
         trainer_user_id="trainer-user-1",
         trainer_display_name="Coach",
+        client_id=CLIENT_ID,
+        client_user_id=user_id,
+    )
+
+
+def unassigned_client_context(user_id=USER_ID):
+    return TrainerContext(
+        tenant_id="tenant-1",
+        trainer_id=None,
+        trainer_user_id=None,
+        trainer_display_name=None,
         client_id=CLIENT_ID,
         client_user_id=user_id,
     )
@@ -505,6 +560,134 @@ class ChatSessionServiceTests(unittest.TestCase):
                     session_date=TODAY,
                 ),
             )
+
+    def test_atlas_assignment_intent_creates_pending_request_without_assigning_client(self):
+        self.repository.clients[CLIENT_ID]["assigned_trainer_id"] = None
+        today = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=unassigned_client_context(),
+            request=ChatSessionTodayRequest(role="client", session_type="atlas_client_chat", session_date=TODAY),
+        )
+
+        response = self.service.send_message(
+            user_id=USER_ID,
+            trainer_context=unassigned_client_context(),
+            session_id=today.session.id,
+            request=ChatSessionSendRequest(message="assign me to test.trainer"),
+        )
+
+        self.assertEqual(len(self.repository.connection_requests), 1)
+        request_row = self.repository.connection_requests[0]
+        self.assertEqual(request_row["client_id"], CLIENT_ID)
+        self.assertEqual(request_row["trainer_id"], "trainer-test")
+        self.assertEqual(request_row["requested_by_user_id"], USER_ID)
+        self.assertEqual(request_row["status"], "pending")
+        self.assertIsNone(self.repository.clients[CLIENT_ID]["assigned_trainer_id"])
+        self.assertIn("approval", response.ai_message.content)
+        self.assertEqual(response.ai_message.metadata["atlas_assignment_status"], "pending_created")
+
+    def test_atlas_reuses_duplicate_pending_request(self):
+        self.repository.clients[CLIENT_ID]["assigned_trainer_id"] = None
+        today = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=unassigned_client_context(),
+            request=ChatSessionTodayRequest(role="client", session_type="atlas_client_chat", session_date=TODAY),
+        )
+
+        self.service.send_message(
+            user_id=USER_ID,
+            trainer_context=unassigned_client_context(),
+            session_id=today.session.id,
+            request=ChatSessionSendRequest(message="connect me to test.trainer"),
+        )
+        second = self.service.send_message(
+            user_id=USER_ID,
+            trainer_context=unassigned_client_context(),
+            session_id=today.session.id,
+            request=ChatSessionSendRequest(message="attach me to test.trainer"),
+        )
+
+        self.assertEqual(len(self.repository.connection_requests), 1)
+        self.assertEqual(second.ai_message.metadata["atlas_assignment_status"], "pending_existing")
+
+    def test_atlas_ambiguous_trainer_match_does_not_create_request(self):
+        self.repository.clients[CLIENT_ID]["assigned_trainer_id"] = None
+        self.repository.active_trainers.append({
+            "id": "trainer-test-2",
+            "tenant_id": "tenant-1",
+            "user_id": "trainer-user-test-2",
+            "display_name": "Test.Trainer",
+            "status": "active",
+            "email": "test_trainer@example.com",
+        })
+        today = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=unassigned_client_context(),
+            request=ChatSessionTodayRequest(role="client", session_type="atlas_client_chat", session_date=TODAY),
+        )
+
+        response = self.service.send_message(
+            user_id=USER_ID,
+            trainer_context=unassigned_client_context(),
+            session_id=today.session.id,
+            request=ChatSessionSendRequest(message="connect me to test.trainer"),
+        )
+
+        self.assertEqual(len(self.repository.connection_requests), 0)
+        self.assertEqual(response.ai_message.metadata["atlas_assignment_status"], "trainer_ambiguous")
+
+    def test_atlas_ignores_cross_tenant_and_inactive_trainers(self):
+        self.repository.clients[CLIENT_ID]["assigned_trainer_id"] = None
+        self.repository.active_trainers = [
+            {
+                "id": "trainer-cross",
+                "tenant_id": "tenant-2",
+                "user_id": "trainer-user-cross",
+                "display_name": "Test Trainer",
+                "status": "active",
+                "email": "test.trainer@example.com",
+            },
+            {
+                "id": "trainer-inactive",
+                "tenant_id": "tenant-1",
+                "user_id": "trainer-user-inactive",
+                "display_name": "Test Trainer",
+                "status": "inactive",
+                "email": "test.trainer@example.com",
+            },
+        ]
+        today = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=unassigned_client_context(),
+            request=ChatSessionTodayRequest(role="client", session_type="atlas_client_chat", session_date=TODAY),
+        )
+
+        response = self.service.send_message(
+            user_id=USER_ID,
+            trainer_context=unassigned_client_context(),
+            session_id=today.session.id,
+            request=ChatSessionSendRequest(message="attach me to test.trainer"),
+        )
+
+        self.assertEqual(len(self.repository.connection_requests), 0)
+        self.assertEqual(response.ai_message.metadata["atlas_assignment_status"], "trainer_not_found")
+
+    def test_atlas_already_assigned_client_does_not_create_request(self):
+        today = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=unassigned_client_context(),
+            request=ChatSessionTodayRequest(role="client", session_type="atlas_client_chat", session_date=TODAY),
+        )
+
+        response = self.service.send_message(
+            user_id=USER_ID,
+            trainer_context=unassigned_client_context(),
+            session_id=today.session.id,
+            request=ChatSessionSendRequest(message="assign me to test.trainer"),
+        )
+
+        self.assertEqual(len(self.repository.connection_requests), 0)
+        self.assertEqual(response.ai_message.metadata["atlas_assignment_status"], "already_assigned")
 
     def test_cross_user_session_detail_is_rejected(self):
         today = self.service.get_or_create_today_session(

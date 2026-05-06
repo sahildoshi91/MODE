@@ -13,13 +13,17 @@ import { theme } from '../../lib/theme';
 import OnboardingLandingScreen from '../features/auth/screens/OnboardingLandingScreen';
 import { ChatShell } from '../features/chat/components';
 import CoachChatScreen from '../features/chat/screens/CoachChatScreen';
+import DailyCheckinScreen from '../features/dailyCheckin/screens/DailyCheckinScreen';
+import {
+  getLocalDateString as getCheckinLocalDateString,
+  getTodayCheckin,
+} from '../features/dailyCheckin/services/checkinApi';
 import AlgorithmHomeScreen from '../features/home/screens/AlgorithmHomeScreen';
 import CoachInsightsScreen from '../features/insights/screens/CoachInsightsScreen';
 import LiquidBottomNav, {
   NAV_BOTTOM_OFFSET,
   NAV_PILL_HEIGHT,
 } from '../features/navigation/components/LiquidBottomNav';
-import CoachTabGuardScreen from '../features/onboarding/screens/CoachTabGuardScreen';
 import ClientOnboardingFlowScreen from '../features/onboarding/screens/ClientOnboardingFlowScreen';
 import ProductPreviewScreen from '../features/onboarding/screens/ProductPreviewScreen';
 import RoleSelectionScreen from '../features/onboarding/screens/RoleSelectionScreen';
@@ -356,6 +360,12 @@ function formatAssignmentError(error, fallbackMessage) {
   };
 }
 
+function getMillisecondsUntilNextLocalDay(now = new Date()) {
+  const next = new Date(now);
+  next.setHours(24, 0, 0, 0);
+  return Math.max(1000, next.getTime() - now.getTime() + 1000);
+}
+
 function AppShell() {
   const insets = useSafeAreaInsets();
   const [session, setSession] = useState(null);
@@ -378,13 +388,20 @@ function AppShell() {
   const [assignmentStatus, setAssignmentStatus] = useState(null);
   const [assignmentStatusError, setAssignmentStatusError] = useState(null);
 
-  const [activeTab, setActiveTab] = useState('home');
+  const [activeTab, setActiveTab] = useState('coach');
   const [chatLaunchContext, setChatLaunchContext] = useState(null);
   const [coachOverlayContext, setCoachOverlayContext] = useState(null);
   const [progressRoute, setProgressRoute] = useState('progress');
   const [insightsOrigin, setInsightsOrigin] = useState('progress');
   const [shellLoadingState, setShellLoadingState] = useState(null);
   const [algorithmMemoryRefreshToken, setAlgorithmMemoryRefreshToken] = useState(0);
+  const [clientLocalDate, setClientLocalDate] = useState(() => getCheckinLocalDateString());
+  const [coachCheckinGate, setCoachCheckinGate] = useState({
+    status: 'idle',
+    date: null,
+    error: null,
+  });
+  const [coachGateRetryNonce, setCoachGateRetryNonce] = useState(0);
 
   const tabOpacity = useRef(new Animated.Value(1)).current;
   const tabTranslateY = useRef(new Animated.Value(0)).current;
@@ -411,7 +428,7 @@ function AppShell() {
     setAuthUiInfo(infoMessage);
     setIsAuthUiSubmitting(false);
     setIsSignInMode(true);
-    setActiveTab('home');
+    setActiveTab('coach');
     setProgressRoute('progress');
     setInsightsOrigin('progress');
     setChatLaunchContext(null);
@@ -419,6 +436,13 @@ function AppShell() {
     setAlgorithmMemoryRefreshToken(0);
     setAssignmentStatus(null);
     setAssignmentStatusError(null);
+    setClientLocalDate(getCheckinLocalDateString());
+    setCoachCheckinGate({
+      status: 'idle',
+      date: null,
+      error: null,
+    });
+    setCoachGateRetryNonce(0);
   }, []);
 
   const flushAnalyticsQueue = useCallback(async (accessToken) => {
@@ -533,7 +557,7 @@ function AppShell() {
         return;
       }
       setSession(nextSession || null);
-      setActiveTab('home');
+      setActiveTab('coach');
       setProgressRoute('progress');
       setInsightsOrigin('progress');
       setChatLaunchContext(null);
@@ -574,6 +598,35 @@ function AppShell() {
       supabase.auth.stopAutoRefresh?.();
     };
   }, [session?.refresh_token]);
+
+  useEffect(() => {
+    const syncLocalDate = () => {
+      const nextDate = getCheckinLocalDateString();
+      setClientLocalDate((currentDate) => (
+        currentDate === nextDate ? currentDate : nextDate
+      ));
+    };
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (nextAppState === 'active') {
+        syncLocalDate();
+      }
+    });
+    syncLocalDate();
+    return () => {
+      if (typeof subscription?.remove === 'function') {
+        subscription.remove();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setClientLocalDate(getCheckinLocalDateString());
+    }, getMillisecondsUntilNextLocalDay());
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [clientLocalDate]);
 
   useEffect(() => {
     const handleUrlAuthCallback = async (url) => {
@@ -858,6 +911,69 @@ function AppShell() {
       entrypoint: 'trainer_agent_training',
       onboarding_action: trainerOnboardingInProgress ? 'resume' : 'continue',
     };
+  const shouldUseClientCoachEntryGate = Boolean(
+    session?.access_token
+    && appState === APP_STATE.CLIENT_ACTIVE
+    && !isTrainerViewer
+    && activeTab === 'coach'
+  );
+
+  useEffect(() => {
+    if (!shouldUseClientCoachEntryGate) {
+      setCoachCheckinGate((current) => {
+        if (current.status === 'idle' && current.date === clientLocalDate && current.error === null) {
+          return current;
+        }
+        return {
+          status: 'idle',
+          date: clientLocalDate,
+          error: null,
+        };
+      });
+      return undefined;
+    }
+
+    let isActive = true;
+    setCoachCheckinGate({
+      status: 'loading',
+      date: clientLocalDate,
+      error: null,
+    });
+
+    getTodayCheckin({
+      accessToken: session.access_token,
+      date: clientLocalDate,
+    })
+      .then((status) => {
+        if (!isActive) {
+          return;
+        }
+        setCoachCheckinGate({
+          status: status?.completed ? 'complete' : 'required',
+          date: clientLocalDate,
+          error: null,
+        });
+      })
+      .catch((error) => {
+        if (!isActive) {
+          return;
+        }
+        setCoachCheckinGate({
+          status: 'error',
+          date: clientLocalDate,
+          error,
+        });
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [
+    clientLocalDate,
+    coachGateRetryNonce,
+    session?.access_token,
+    shouldUseClientCoachEntryGate,
+  ]);
 
   useEffect(() => {
     if (!session?.access_token || !isTrainerViewer) {
@@ -878,7 +994,7 @@ function AppShell() {
       return;
     }
     if (!isTrainerViewer && (activeTab === 'clients' || activeTab === 'system')) {
-      setActiveTab('home');
+      setActiveTab('coach');
     }
   }, [activeTab, isTrainerViewer, useCoachOsTrainerNav]);
 
@@ -1100,7 +1216,7 @@ function AppShell() {
         role,
       });
       setBootstrap(updated);
-      setActiveTab('home');
+      setActiveTab('coach');
     } catch (error) {
       setBootstrapError(error?.message || 'Unable to save your role right now.');
     } finally {
@@ -1108,15 +1224,24 @@ function AppShell() {
     }
   };
 
-  const handleRefreshBootstrapAndStatus = useCallback(async () => {
-    if (!session?.access_token) {
-      return;
+  const handleCoachGateCheckinComplete = useCallback(async (result) => {
+    setCoachCheckinGate({
+      status: 'complete',
+      date: clientLocalDate,
+      error: null,
+    });
+    setChatLaunchContext({
+      entrypoint: 'post_checkin',
+      checkin_context: result,
+    });
+    if (session?.access_token) {
+      await loadAssignmentStatus({ accessTokenOverride: session.access_token });
     }
-    await Promise.all([
-      loadBootstrap({ accessToken: session.access_token }),
-      loadAssignmentStatus({ accessTokenOverride: session.access_token }),
-    ]);
-  }, [loadAssignmentStatus, loadBootstrap, session?.access_token]);
+  }, [clientLocalDate, loadAssignmentStatus, session?.access_token]);
+
+  const handleRetryCoachCheckinGate = useCallback(() => {
+    setCoachGateRetryNonce((current) => current + 1);
+  }, []);
 
   useEffect(() => {
     if (authStage === 'welcome' && !hasTrackedWelcomeViewRef.current) {
@@ -1301,7 +1426,7 @@ function AppShell() {
         bootstrap={bootstrap}
         onBootstrapUpdate={setBootstrap}
         onFinished={() => {
-          setActiveTab('home');
+          setActiveTab('coach');
         }}
         onTrackEvent={trackEvent}
       />
@@ -1333,6 +1458,17 @@ function AppShell() {
       legacyCoachLaunchEntrypoint
       && legacyCoachLaunchEntrypoint !== 'post_checkin'
     ),
+  );
+  const shouldBlockCoachForCheckin = Boolean(
+    shouldUseClientCoachEntryGate
+    && (
+      coachCheckinGate.date !== clientLocalDate
+      || coachCheckinGate.status !== 'complete'
+    )
+  );
+  const shouldHideBottomNavForCoachCheckin = Boolean(
+    activeTab === 'coach'
+    && shouldBlockCoachForCheckin
   );
 
   if (!BREATHING_TRANSITIONS_ENABLED && isBlockingAssignmentLoad) {
@@ -1391,7 +1527,32 @@ function AppShell() {
               />
             ) : null}
 
-            {activeTab === 'coach' && hasAssignedTrainer ? (
+            {activeTab === 'coach' && shouldBlockCoachForCheckin ? (
+              coachCheckinGate.status === 'required' ? (
+                <DailyCheckinScreen
+                  accessToken={session.access_token}
+                  bottomInset={0}
+                  floatingNavClearance={0}
+                  onOpenChat={handleOpenChat}
+                  onOpenInsights={handleOpenProgressInsights}
+                  onCheckinComplete={handleCoachGateCheckinComplete}
+                />
+              ) : coachCheckinGate.status === 'error' ? (
+                <ShellErrorState
+                  title="Daily check-in unavailable"
+                  subtitle={coachCheckinGate.error?.message || 'Unable to load today\'s check-in status.'}
+                  actionTitle="Retry"
+                  onPress={handleRetryCoachCheckinGate}
+                />
+              ) : (
+                <ShellLoadingState
+                  title="Checking Today's MODE"
+                  subtitle="Loading your daily check-in before Coach opens."
+                />
+              )
+            ) : null}
+
+            {activeTab === 'coach' && !shouldBlockCoachForCheckin && hasAssignedTrainer ? (
               shouldUseLegacyCoachChat ? (
                 <CoachChatScreen
                   accessToken={session.access_token}
@@ -1412,12 +1573,16 @@ function AppShell() {
               )
             ) : null}
 
-            {activeTab === 'coach' && !hasAssignedTrainer && !isTrainerViewer ? (
-              <CoachTabGuardScreen
+            {activeTab === 'coach' && !shouldBlockCoachForCheckin && !hasAssignedTrainer && !isTrainerViewer ? (
+              <ChatShell
+                role="client"
+                sessionType="atlas_client_chat"
+                trainerId={null}
                 accessToken={session.access_token}
-                bottomInset={contentBottomInset}
-                onAttached={handleRefreshBootstrapAndStatus}
-                onBackHome={() => setActiveTab('home')}
+                currentMode={clientCoachCurrentMode}
+                bottomInset={coachChatBottomInset}
+                onOpenGeneratedPlanChat={handleOpenChat}
+                onMemorySaved={handleClientMemorySaved}
               />
             ) : null}
 
@@ -1471,7 +1636,7 @@ function AppShell() {
         </View>
       ) : null}
 
-      {!coachOverlayContext ? (
+      {!coachOverlayContext && !shouldHideBottomNavForCoachCheckin ? (
         <LiquidBottomNav
           activeTab={activeTab}
           onTabChange={handleTabChange}
