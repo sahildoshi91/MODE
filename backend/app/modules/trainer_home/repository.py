@@ -28,7 +28,7 @@ class TrainerHomeRepository:
         response = (
             self.supabase
             .table("clients")
-            .select("id, tenant_id, user_id, client_name, assigned_trainer_id")
+            .select("id, tenant_id, user_id, client_name, assigned_trainer_id, created_at")
             .eq("assigned_trainer_id", trainer_id)
             .execute()
         )

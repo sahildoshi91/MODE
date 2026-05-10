@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 
 import { resolveAssistantDisplayName } from '../../messaging';
+import { getLocalDateString } from '../../chat/services/chatSessionService';
 import {
   executeTrainerAssistantAction,
   executeTrainerAssistantActionStream,
@@ -477,7 +478,10 @@ export function useTrainerCoachWorkspace({
     }
     dispatch({ type: 'SET_ERROR', payload: null });
     try {
-      const payload = await getTrainerCoachWorkspace({ accessToken });
+      const payload = await getTrainerCoachWorkspace({
+        accessToken,
+        date: getLocalDateString(),
+      });
       dispatch({ type: 'WORKSPACE_LOADED', payload });
       return payload;
     } catch (error) {

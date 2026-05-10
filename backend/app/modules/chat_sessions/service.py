@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+import hashlib
+import json
 import re
 from typing import Any
 
@@ -42,6 +44,11 @@ TRAINER_SUGGESTED_ACTIONS = [
     "Show priorities",
     "Review missed clients",
 ]
+TRAINER_FLAG_REVIEW_SOURCE = "trainer_command_center_flag_review_v3"
+TRAINER_FLAG_REVIEW_ACTION = "review_flagged_clients"
+TRAINER_FLAG_REVIEW_CLIENT_LIMIT = 5
+TRAINER_FLAG_REVIEW_CLIENT_WORD_LIMIT = 75
+TRAINER_FLAG_REVIEW_LLM_MODEL = "gpt-5.4"
 LEGACY_LOCAL_DAY_SEND_GRACE = timedelta(hours=12)
 CLIENT_MODE_BRIEF_SOURCE = "client_daily_mode_brief_v1"
 CLIENT_NO_CHECKIN_SOURCE = "client_daily_no_checkin_v1"
@@ -313,6 +320,27 @@ class ChatSessionService:
                 ai_message=self._to_message(ai_message),
                 suggested_actions=[],
             )
+        trainer_action_response = self._build_trainer_action_response(
+            trainer_context=trainer_context,
+            session=session,
+            request=request,
+            current_date=current_date,
+        )
+        if trainer_action_response:
+            response_text, response_metadata = trainer_action_response
+            ai_message = self.repository.append_message(
+                session_id=session_id,
+                sender_type="ai",
+                content=response_text,
+                metadata=response_metadata,
+            )
+            updated_session = self.repository.get_session(session_id) or session
+            return ChatSessionSendResponse(
+                session=self._to_session_record(updated_session, current_date=current_date),
+                user_message=self._to_message(user_message),
+                ai_message=self._to_message(ai_message),
+                suggested_actions=[],
+            )
         if not self.conversation_service:
             raise ValueError("Chat response service unavailable")
         response = self.conversation_service.handle_chat(
@@ -373,6 +401,22 @@ class ChatSessionService:
                 session,
                 user_message,
                 f"atlas:{session_id}",
+                [response_text],
+                {"assistant_message_metadata": response_metadata},
+                None,
+            )
+        trainer_action_response = self._build_trainer_action_response(
+            trainer_context=trainer_context,
+            session=session,
+            request=request,
+            current_date=current_date,
+        )
+        if trainer_action_response:
+            response_text, response_metadata = trainer_action_response
+            return (
+                session,
+                user_message,
+                f"{TRAINER_FLAG_REVIEW_ACTION}:{session_id}",
                 [response_text],
                 {"assistant_message_metadata": response_metadata},
                 None,
@@ -538,6 +582,8 @@ class ChatSessionService:
         if str(existing.get("content") or "") != str(opening.get("text") or ""):
             return True
         if metadata.get("summary_source") != opening_metadata.get("summary_source"):
+            return True
+        if metadata.get("analytics_fingerprint") != opening_metadata.get("analytics_fingerprint"):
             return True
         if metadata.get("checkin_id") != opening_metadata.get("checkin_id"):
             return True
@@ -852,6 +898,785 @@ class ChatSessionService:
     def _normalize_match_text(self, value: str) -> str:
         return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
 
+    def _build_trainer_action_response(
+        self,
+        *,
+        trainer_context: TrainerContext,
+        session: dict[str, Any],
+        request: ChatSessionSendRequest,
+        current_date: date,
+    ) -> tuple[str, dict[str, Any]] | None:
+        if str(session.get("role") or "") != "trainer":
+            return None
+        if str(session.get("session_type") or "") != "coach_ai":
+            return None
+        if not self._is_trainer_flag_review_intent(request.message):
+            return None
+
+        base_metadata = {
+            "response_source": TRAINER_FLAG_REVIEW_SOURCE,
+            "action_type": TRAINER_FLAG_REVIEW_ACTION,
+            "command_center_date": current_date.isoformat(),
+        }
+        if not self.trainer_home_service:
+            return (
+                "I could not load Command Center data for client flags right now. "
+                "Try the Clients tab, then retry this review once the backend has the trainer home service available.",
+                {
+                    **base_metadata,
+                    "fallback_reason": "trainer_home_service_unavailable",
+                    "included_client_count": 0,
+                    "client_ids": [],
+                },
+            )
+
+        command_center = self._safe(lambda: self.trainer_home_service.build_command_center(
+            trainer_context,
+            current_date,
+        ))
+        if command_center is None:
+            return (
+                "I could not load Command Center data for client flags right now. "
+                "I can review flags once the priority board and daily score summaries are available.",
+                {
+                    **base_metadata,
+                    "fallback_reason": "command_center_unavailable",
+                    "included_client_count": 0,
+                    "client_ids": [],
+                },
+            )
+
+        return self._build_trainer_flag_review(command_center, current_date, base_metadata)
+
+    def _is_trainer_flag_review_intent(self, message: str) -> bool:
+        normalized = " ".join(str(message or "").strip().lower().split())
+        if not normalized:
+            return False
+        patterns = [
+            r"\breview\b.*\bflagged\b.*\bclients?\b",
+            r"\bclient\b.*\bflags?\b",
+            r"\bflags?\b.*\bclients?\b",
+            r"\bshow\b.*\bpriorit(?:y|ies)\b",
+            r"\bhighest\b.*\bpriorit(?:y|ies)\b",
+            r"\bhigh(?:est)?[-\s]?priority\b.*\bclients?\b",
+            r"\breview\b.*\bmissed\b.*\bclients?\b",
+            r"\bmissed\b.*\bcheck[-\s]?ins?\b",
+            r"\bnot doing (?:so )?well\b",
+            r"\bdoing poorly\b",
+            r"\bstruggling\b",
+            r"\blow\b.*\b(?:scores?|readiness|recovery)\b",
+            r"\bweak\b.*\b(?:scores?|readiness|recovery)\b",
+            r"\bdaily\b.*\b(?:scores?|readiness)\b",
+        ]
+        return any(re.search(pattern, normalized) for pattern in patterns)
+
+    def _build_trainer_flag_review(
+        self,
+        command_center: Any,
+        current_date: date,
+        base_metadata: dict[str, Any],
+    ) -> tuple[str, dict[str, Any]]:
+        clients = list(self._item_get(command_center, "clients", []) or [])
+        totals = self._item_get(command_center, "totals", None)
+        assigned_count = int(self._item_get(totals, "assigned_clients", len(clients)) or 0)
+        flagged_clients = self._flagged_command_center_clients(clients)
+        review_clients = flagged_clients[:TRAINER_FLAG_REVIEW_CLIENT_LIMIT]
+        client_ids = [
+            str(self._item_get(client, "client_id", "") or "")
+            for client in review_clients
+            if self._item_get(client, "client_id", None)
+        ]
+        metadata = {
+            **base_metadata,
+            "assigned_clients": assigned_count,
+            "total_flagged_client_count": len(flagged_clients),
+            "included_client_count": len(review_clients),
+            "client_ids": client_ids,
+        }
+
+        if not review_clients:
+            text = (
+                f"Your client flag board is clear for {current_date.isoformat()}. "
+                f"I found {assigned_count} assigned client{'s' if assigned_count != 1 else ''}, "
+                "but none are currently high priority or carrying Command Center risk flags. "
+                "Best move: keep programming steady and use the Clients tab if you want to scan the full roster."
+            )
+            return text, metadata
+
+        lines = []
+        cards = []
+        summarizer_sources: set[str] = set()
+        for client in review_clients:
+            client_card, summarizer_source = self._build_flag_review_client_card(client)
+            cards.append(client_card)
+            lines.append(self._render_flag_review_card(client_card))
+            summarizer_sources.add(summarizer_source)
+        if len(flagged_clients) > len(review_clients):
+            remaining = len(flagged_clients) - len(review_clients)
+            lines.append(
+                f"{remaining} more flagged client{'s' if remaining != 1 else ''} "
+                f"remain after these top {len(review_clients)}."
+            )
+        metadata["summarizer"] = (
+            "llm_with_deterministic_fallback"
+            if "llm" in summarizer_sources
+            else "deterministic_structured"
+        )
+        metadata["flagged_client_review_v3"] = {
+            "version": 3,
+            "cards": cards,
+        }
+        return "\n\n".join(lines), metadata
+
+    def _flagged_command_center_clients(self, clients: list[Any]) -> list[Any]:
+        indexed_clients = list(enumerate(clients))
+        flagged = [
+            (index, client)
+            for index, client in indexed_clients
+            if self._client_has_command_center_flag(client)
+        ]
+        return [
+            client
+            for _, client in sorted(
+                flagged,
+                key=lambda item: self._command_center_client_sort_key(item[1], item[0]),
+            )
+        ]
+
+    def _client_has_command_center_flag(self, client: Any) -> bool:
+        priority_tier = str(self._item_get(client, "priority_tier", "low") or "low").lower()
+        risk_flags = list(self._item_get(client, "risk_flags", []) or [])
+        missed_dates = list(self._item_get(client, "missed_checkin_dates_7d", []) or [])
+        low_dates = list(self._item_get(client, "recent_low_readiness_dates", []) or [])
+        week_summary = self._item_get(client, "week_summary", None)
+        avg_score = self._float_or_none(self._item_get(week_summary, "avg_score_7d", None))
+        return (
+            priority_tier in {"high", "critical"}
+            or bool(risk_flags)
+            or bool(missed_dates)
+            or bool(low_dates)
+            or (avg_score is not None and avg_score < 18)
+        )
+
+    def _command_center_client_sort_key(self, client: Any, index: int) -> tuple[Any, ...]:
+        priority_rank = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        tier = str(self._item_get(client, "priority_tier", "low") or "low").lower()
+        priority_score = self._float_or_none(self._item_get(client, "priority_score", None))
+        risk_count = len(list(self._item_get(client, "risk_flags", []) or []))
+        return (
+            priority_rank.get(tier, 4),
+            -(priority_score or 0),
+            -risk_count,
+            index,
+        )
+
+    def _build_flag_review_client_card(self, client: Any) -> tuple[dict[str, Any], str]:
+        raw_metrics = self._collect_flag_review_raw_metrics(client)
+        interpretation = self._interpret_flag_review_behavior(raw_metrics)
+        fallback_card = self._build_flag_review_executive_summary(raw_metrics, interpretation)
+        llm_card = self._try_llm_flag_review_summary(raw_metrics, interpretation, fallback_card)
+        if llm_card:
+            rendered = self._render_flag_review_card(llm_card)
+            if self._flag_review_brief_is_valid(rendered, llm_card):
+                return llm_card, "llm"
+
+        return fallback_card, "deterministic"
+
+    def _collect_flag_review_raw_metrics(self, client: Any) -> dict[str, Any]:
+        week_summary = self._item_get(client, "week_summary", None)
+        risk_flags = list(self._item_get(client, "risk_flags", []) or [])
+        question_summaries = list(self._item_get(week_summary, "question_summaries", []) or [])
+        weak_summaries = self._weak_question_summaries(question_summaries)
+        missed_dates = list(
+            self._item_get(client, "missed_checkin_dates_7d", None)
+            or self._item_get(week_summary, "missed_checkin_dates_7d", [])
+            or []
+        )
+        low_readiness_dates = list(
+            self._item_get(client, "recent_low_readiness_dates", None)
+            or self._item_get(week_summary, "recent_low_readiness_dates", [])
+            or []
+        )
+        flag_codes = {
+            str(self._item_get(flag, "code", "") or "").lower()
+            for flag in risk_flags
+        }
+        flag_labels = [
+            str(self._item_get(flag, "label", "") or self._item_get(flag, "code", "") or "").strip()
+            for flag in risk_flags
+        ]
+        weak_keys = {
+            str(self._item_get(summary, "key", "") or "").lower()
+            for summary in weak_summaries
+        }
+        workouts_completed = int(self._item_get(week_summary, "workouts_completed_7d", 0) or 0)
+        checkins_completed = int(self._item_get(week_summary, "checkins_completed_7d", 0) or 0)
+        avg_score = self._float_or_none(self._item_get(week_summary, "avg_score_7d", None))
+        return {
+            "client_id": str(self._item_get(client, "client_id", "") or ""),
+            "client_name": str(self._item_get(client, "client_name", "Client") or "Client"),
+            "priority": self._flag_review_priority_label(client, risk_flags, week_summary),
+            "priority_tier": str(self._item_get(client, "priority_tier", "low") or "low").lower(),
+            "flag_codes": flag_codes,
+            "flag_labels": [label for label in flag_labels if label],
+            "avg_score_7d": avg_score,
+            "checkins_completed_7d": checkins_completed,
+            "workouts_completed_7d": workouts_completed,
+            "missed_checkin_count": len(missed_dates),
+            "recent_low_readiness_count": len(low_readiness_dates),
+            "soreness_area": self._flag_review_soreness_area(client, risk_flags),
+            "weak_summaries": weak_summaries,
+            "weak_keys": weak_keys,
+            "low_workouts": "low_workout_completion" in flag_codes or workouts_completed <= 1,
+            "consistent_checkins": checkins_completed >= 5 and len(missed_dates) == 0,
+            "low_motivation": "motivation" in weak_keys or any("motivation" in code for code in flag_codes),
+            "low_nutrition": "nutrition" in weak_keys or any("nutrition" in code for code in flag_codes),
+            "high_soreness": "soreness" in weak_keys or any("soreness" in code for code in flag_codes),
+            "low_sleep": "sleep" in weak_keys,
+            "high_stress": "stress" in weak_keys,
+            "low_readiness": (
+                "low_7d_readiness" in flag_codes
+                or len(low_readiness_dates) > 0
+                or (avg_score is not None and avg_score < 18)
+            ),
+        }
+
+    def _flag_review_priority_label(self, client: Any, risk_flags: list[Any], week_summary: Any) -> str:
+        tier = str(self._item_get(client, "priority_tier", "low") or "low").lower()
+        if tier in {"critical", "high"}:
+            return "High"
+        if tier == "medium":
+            return "Medium"
+
+        avg_score = self._float_or_none(self._item_get(week_summary, "avg_score_7d", None))
+        has_high_severity_flag = any(
+            str(self._item_get(flag, "severity", "") or "").lower() in {"critical", "high"}
+            for flag in risk_flags
+        )
+        if has_high_severity_flag or (avg_score is not None and avg_score < 18):
+            return "Medium"
+        return "Low"
+
+    def _interpret_flag_review_behavior(self, raw_metrics: dict[str, Any]) -> dict[str, Any]:
+        issue_type = self._flag_review_issue_type(raw_metrics)
+        profile = self._flag_review_issue_profile(issue_type)
+        action_signal = self._flag_review_action_signal(issue_type, raw_metrics["priority"])
+        metrics_breakdown = self._flag_review_metrics_breakdown(raw_metrics, issue_type)
+        metrics_summary = self._flag_review_metrics_summary(metrics_breakdown)
+        discussion_prompt = profile.get("discussion_prompt") or profile["client_message"]
+        return {
+            "primary_issue_type": issue_type,
+            "priority": raw_metrics["priority"],
+            "action_signal": action_signal,
+            "main_issue": profile["main_issue"],
+            "why_it_matters": profile["why_it_matters"],
+            "next_action": profile["next_action"],
+            "discussion_prompt": discussion_prompt,
+            "client_message": discussion_prompt,
+            "metrics_breakdown": metrics_breakdown,
+            "metrics_summary": metrics_summary[:3],
+        }
+
+    def _build_flag_review_executive_summary(
+        self,
+        raw_metrics: dict[str, Any],
+        interpretation: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "client_id": raw_metrics["client_id"],
+            "client_name": raw_metrics["client_name"],
+            "priority": interpretation["priority"],
+            "primary_issue_type": interpretation["primary_issue_type"],
+            "action_signal": interpretation["action_signal"],
+            "main_issue": interpretation["main_issue"],
+            "why_it_matters": interpretation["why_it_matters"],
+            "next_action": interpretation["next_action"],
+            "discussion_prompt": interpretation["discussion_prompt"],
+            "client_message": interpretation["client_message"],
+            "metrics_breakdown": interpretation["metrics_breakdown"],
+            "metrics_summary": interpretation["metrics_summary"],
+        }
+
+    def _flag_review_issue_type(self, metrics: dict[str, Any]) -> str:
+        flag_codes: set[str] = metrics["flag_codes"]
+        weak_keys: set[str] = metrics["weak_keys"]
+        missed_count = metrics["missed_checkin_count"]
+
+        if metrics["low_workouts"] and metrics["low_motivation"]:
+            return "adherence_collapse"
+        if metrics["low_readiness"] and (metrics["high_soreness"] or metrics["low_sleep"] or metrics["high_stress"]):
+            return "recovery_overload"
+        if metrics["low_nutrition"] and metrics["workouts_completed_7d"] >= 2:
+            return "fueling_issue"
+        if missed_count > 0 and metrics["low_motivation"]:
+            return "disengagement_risk"
+        if metrics["consistent_checkins"] and metrics["low_workouts"]:
+            return "accountability_gap"
+        if metrics["low_readiness"]:
+            return "readiness_recovery"
+        if metrics["low_nutrition"]:
+            return "fueling_issue"
+        if metrics["low_motivation"]:
+            return "disengagement_risk"
+        if metrics["high_soreness"]:
+            return "recovery_overload"
+        if "sleep" in weak_keys or "stress" in weak_keys:
+            return "recovery_overload"
+        if (
+            flag_codes.intersection({"missing_today_checkin", "recent_no_show", "recent_cancelled_session"})
+            or missed_count > 0
+        ):
+            return "checkin_adherence"
+        return "general"
+
+    def _flag_review_issue_profile(self, issue_type: str) -> dict[str, str]:
+        profiles = {
+            "adherence_collapse": {
+                "main_issue": "Adherence is breaking down, not just training volume.",
+                "why_it_matters": "Low motivation plus missed training usually becomes disengagement if the next step feels too big.",
+                "next_action": "Remove friction and assign one easy training win today.",
+                "client_message": "What is blocking workouts right now? Let's make today's win small and doable.",
+            },
+            "recovery_overload": {
+                "main_issue": "Recovery is overloaded and training quality is at risk.",
+                "why_it_matters": "Pushing harder now may deepen fatigue instead of building momentum.",
+                "next_action": "Scale intensity and shift today's plan toward recovery.",
+                "client_message": "Recovery looks taxed today, so let's adjust and keep the session productive.",
+            },
+            "fueling_issue": {
+                "main_issue": "Fueling consistency is likely limiting recovery and follow-through.",
+                "why_it_matters": "Training can stay active, but poor nutrition will keep energy and readiness unstable.",
+                "next_action": "Choose one simple nutrition anchor for the next meal.",
+                "client_message": "Let's keep nutrition simple today: protein at your next meal and steady water.",
+            },
+            "disengagement_risk": {
+                "main_issue": "Disengagement risk is rising.",
+                "why_it_matters": "Missed check-ins and low drive mean the plan may be losing relevance.",
+                "next_action": "Ask what feels blocked and reconnect one task to their goal.",
+                "client_message": "What feels hardest about showing up today? Let's reset around one small step.",
+            },
+            "accountability_gap": {
+                "main_issue": "Accountability is present, but action is not following.",
+                "why_it_matters": "They are checking in, so the leverage point is a smaller commitment, not more data.",
+                "next_action": "Set a tiny training target they can complete today.",
+                "client_message": "You are staying connected. Let's turn that into one easy training win today.",
+            },
+            "readiness_recovery": {
+                "main_issue": "Readiness is low enough to adjust the plan.",
+                "why_it_matters": "Forcing intensity today could turn a low-readiness patch into a setback.",
+                "next_action": "Swap to controlled intensity or recovery work today.",
+                "client_message": "Readiness looks low, so let's adjust today and keep momentum protected.",
+            },
+            "checkin_adherence": {
+                "main_issue": "The biggest risk is limited signal.",
+                "why_it_matters": "Without a recent check-in, programming may miss what they need today.",
+                "next_action": "Get a quick readiness check-in before changing the plan.",
+                "client_message": "Can you send a quick check-in so I can tune today's plan correctly?",
+            },
+            "general": {
+                "main_issue": "Risk is rising enough to need a quick coaching touch.",
+                "why_it_matters": "A small intervention now can prevent drift from becoming a pattern.",
+                "next_action": "Confirm the top blocker and adjust only the next step.",
+                "client_message": "Quick check: what would make today's plan easier to complete?",
+            },
+        }
+        return profiles.get(issue_type, profiles["general"])
+
+    def _flag_review_action_signal(self, issue_type: str, priority: str) -> dict[str, str]:
+        labels = {
+            "adherence_collapse": "Reduce Friction",
+            "recovery_overload": "Scale Load",
+            "fueling_issue": "Fuel First",
+            "disengagement_risk": "Re-engage",
+            "accountability_gap": "Set Tiny Target",
+            "readiness_recovery": "Adjust Plan",
+            "checkin_adherence": "Get Signal",
+            "general": "Adjust Plan",
+        }
+        tone = str(priority or "Low").strip().lower()
+        if tone not in {"low", "medium", "high"}:
+            tone = "low"
+        return {
+            "label": labels.get(issue_type, labels["general"]),
+            "tone": tone,
+        }
+
+    def _flag_review_metrics_summary(self, metrics_breakdown: list[dict[str, str]]) -> list[str]:
+        signals: list[str] = []
+        for item in metrics_breakdown:
+            signal = str(item.get("signal", "") or "").strip().rstrip(".")
+            signal = signal[:1].lower() + signal[1:] if signal else signal
+            if signal and signal not in signals:
+                signals.append(signal)
+        return signals[:3]
+
+    def _flag_review_metrics_breakdown(
+        self,
+        metrics: dict[str, Any],
+        issue_type: str,
+    ) -> list[dict[str, str]]:
+        breakdown: list[dict[str, str]] = []
+        domains: set[str] = set()
+
+        def add(domain: str, signal: str, coaching_meaning: str, detail: str) -> None:
+            if not domain or domain in domains:
+                return
+            domains.add(domain)
+            breakdown.append({
+                "domain": domain,
+                "signal": signal,
+                "coaching_meaning": coaching_meaning,
+                "detail": detail,
+            })
+
+        if metrics["low_workouts"]:
+            add(
+                "Workouts",
+                "Training follow-through is low.",
+                "The plan likely needs less friction before more volume.",
+                "Set one small session target the client can complete today.",
+            )
+        if metrics["low_nutrition"]:
+            add(
+                "Nutrition",
+                "Nutrition consistency is slipping.",
+                "Fueling may be limiting recovery, energy, and follow-through.",
+                "Anchor the next meal with protein and water.",
+            )
+        if metrics["low_motivation"]:
+            add(
+                "Motivation",
+                "Motivation is low.",
+                "The current plan may feel too hard, irrelevant, or blocked.",
+                "Ask for the blocker before changing the program.",
+            )
+        if metrics["high_soreness"]:
+            soreness_area = str(metrics.get("soreness_area") or "").strip()
+            add(
+                "Soreness",
+                "Soreness may limit quality work.",
+                "Loading may need to drop so movement stays productive.",
+                f"Reported sore area: {soreness_area}." if soreness_area else "No specific sore area was captured.",
+            )
+        if (
+            issue_type in {"recovery_overload", "readiness_recovery"}
+            or metrics["low_readiness"]
+            or metrics["low_sleep"]
+            or metrics["high_stress"]
+        ):
+            add(
+                "Recovery",
+                "Recovery pressure is elevated.",
+                "Readiness, sleep, stress, or soreness may be limiting training quality.",
+                "Scale intensity before adding hard work.",
+            )
+        if metrics["missed_checkin_count"] > 0 or issue_type == "checkin_adherence":
+            add(
+                "Check-ins",
+                "Check-in signal is incomplete.",
+                "There is not enough current context to adjust confidently.",
+                "Get a quick readiness update before the session.",
+            )
+        if not breakdown:
+            add(
+                "Priority",
+                "Risk is elevated.",
+                "A quick trainer touch can keep drift from becoming a pattern.",
+                "Confirm the top blocker and adjust the next step.",
+            )
+        return breakdown
+
+    def _flag_review_soreness_area(self, client: Any, risk_flags: list[Any]) -> str | None:
+        direct_fields = (
+            "soreness_area",
+            "soreness_location",
+            "sore_area",
+            "sore_location",
+            "pain_area",
+            "pain_location",
+            "body_area",
+            "body_part",
+            "injury_notes",
+        )
+        sources: list[Any] = [client, self._item_get(client, "metadata", {})]
+        for source in sources:
+            for field in direct_fields:
+                extracted = self._extract_flag_review_body_area(self._item_get(source, field, None))
+                if extracted:
+                    return extracted
+
+        candidates: list[str] = []
+        for flag in risk_flags:
+            flag_text = " ".join(
+                str(self._item_get(flag, field, "") or "")
+                for field in ("code", "label", "detail")
+            )
+            if re.search(r"\b(sore|soreness|pain|ache|injur|hurt)\b", flag_text, flags=re.IGNORECASE):
+                candidates.append(flag_text)
+
+        talking_points = self._item_get(client, "talking_points", None)
+        points = self._item_get(talking_points, "points", None)
+        if points is None and isinstance(talking_points, list):
+            points = talking_points
+        for point in list(points or [])[:6]:
+            point_text = str(point or "")
+            if re.search(r"\b(sore|soreness|pain|ache|injur|hurt)\b", point_text, flags=re.IGNORECASE):
+                candidates.append(point_text)
+
+        return self._extract_flag_review_body_area(" ".join(candidates))
+
+    def _extract_flag_review_body_area(self, value: Any) -> str | None:
+        text = str(value or "").strip().lower()
+        if not text or text in {"none", "n/a", "na", "unknown"}:
+            return None
+        body_parts = (
+            "lower back",
+            "upper back",
+            "low back",
+            "back",
+            "neck",
+            "shoulder",
+            "elbow",
+            "wrist",
+            "hip",
+            "glute",
+            "hamstring",
+            "quad",
+            "knee",
+            "calf",
+            "achilles",
+            "ankle",
+            "foot",
+            "feet",
+            "chest",
+        )
+        for part in body_parts:
+            pattern = rf"\b(?:(left|right)\s+)?{re.escape(part)}\b"
+            match = re.search(pattern, text)
+            if match:
+                return " ".join(match.group(0).split())
+        return None
+
+    def _try_llm_flag_review_summary(
+        self,
+        raw_metrics: dict[str, Any],
+        interpretation: dict[str, Any],
+        fallback_card: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        openai_client = getattr(self.conversation_service, "openai_client", None)
+        if openai_client is None:
+            return None
+
+        try:
+            completion = openai_client.create_chat_completion_with_usage(
+                model=TRAINER_FLAG_REVIEW_LLM_MODEL,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You write executive mobile briefs for trainers reviewing flagged fitness clients. "
+                            "Return JSON only with keys: priority, primary_issue_type, main_issue, why_it_matters, "
+                            "next_action, discussion_prompt, client_message, metrics_summary. "
+                            "Use the provided primary_issue_type. "
+                            "Identify one issue only. Use plain English, no date lists, no averages, no score strings, "
+                            "no raw dumps, no repeated client name, and keep the rendered brief under 75 words."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            self._flag_review_llm_payload(raw_metrics, interpretation, fallback_card),
+                            sort_keys=True,
+                            default=str,
+                        ),
+                    },
+                ],
+            )
+            payload = json.loads(completion.text)
+        except Exception:
+            return None
+
+        card = self._normalize_flag_review_card(payload, fallback_card)
+        if card is None:
+            return None
+        rendered = self._render_flag_review_card(card)
+        if not self._flag_review_brief_is_valid(rendered, card):
+            return None
+        return card
+
+    def _flag_review_llm_payload(
+        self,
+        metrics: dict[str, Any],
+        interpretation: dict[str, Any],
+        fallback_card: dict[str, Any],
+    ) -> dict[str, Any]:
+        weak_scores = []
+        for summary in metrics["weak_summaries"][:4]:
+            weak_scores.append({
+                "key": str(self._item_get(summary, "key", "") or ""),
+                "label": str(self._item_get(summary, "label", "") or ""),
+                "status": str(self._item_get(summary, "status", "") or ""),
+                "average_7d": self._float_or_none(self._item_get(summary, "average_7d", None)),
+                "low_days_7d": int(self._item_get(summary, "low_days_7d", 0) or 0),
+            })
+        return {
+            "client_name": metrics["client_name"],
+            "priority": metrics["priority"],
+            "primary_issue_type": interpretation["primary_issue_type"],
+            "risk_flags": metrics["flag_labels"][:4],
+            "metrics": {
+                "checkins_completed_7d": metrics["checkins_completed_7d"],
+                "workouts_completed_7d": metrics["workouts_completed_7d"],
+                "missed_checkin_days_7d": metrics["missed_checkin_count"],
+                "recent_low_readiness_days": metrics["recent_low_readiness_count"],
+                "readiness_average_7d": metrics["avg_score_7d"],
+                "weak_scores": weak_scores,
+            },
+            "deterministic_recommendation": fallback_card,
+        }
+
+    def _normalize_flag_review_card(self, payload: Any, fallback_card: dict[str, Any]) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+
+        metrics_value = payload.get("metrics_summary", [])
+        if isinstance(metrics_value, str):
+            metrics_summary = [part.strip(" .") for part in re.split(r";|\n", metrics_value) if part.strip(" .")]
+        elif isinstance(metrics_value, list):
+            metrics_summary = [str(item).strip(" .") for item in metrics_value if str(item).strip(" .")]
+        else:
+            metrics_summary = []
+
+        card = {
+            "client_id": fallback_card["client_id"],
+            "client_name": fallback_card["client_name"],
+            "priority": str(payload.get("priority") or fallback_card["priority"]).strip().capitalize(),
+            "primary_issue_type": str(
+                payload.get("primary_issue_type") or fallback_card["primary_issue_type"]
+            ).strip(),
+            "action_signal": fallback_card["action_signal"],
+            "main_issue": str(payload.get("main_issue") or "").strip(),
+            "why_it_matters": str(payload.get("why_it_matters") or "").strip(),
+            "next_action": str(payload.get("next_action") or "").strip(),
+            "discussion_prompt": str(
+                payload.get("discussion_prompt")
+                or payload.get("client_message")
+                or payload.get("client_facing_message")
+                or ""
+            ).strip(),
+            "metrics_breakdown": fallback_card["metrics_breakdown"],
+            "metrics_summary": metrics_summary[:3] or fallback_card["metrics_summary"],
+        }
+        card["client_message"] = str(
+            card["discussion_prompt"]
+            or payload.get("client_message")
+            or payload.get("client_facing_message")
+            or fallback_card["client_message"]
+        ).strip()
+        if not card["discussion_prompt"]:
+            card["discussion_prompt"] = card["client_message"]
+        if not card["client_message"]:
+            card["client_message"] = str(
+                payload.get("client_message")
+                or payload.get("client_facing_message")
+                or fallback_card["client_message"]
+            ).strip()
+        if card["priority"] not in {"Low", "Medium", "High"}:
+            card["priority"] = fallback_card["priority"]
+        if card["primary_issue_type"] != fallback_card["primary_issue_type"]:
+            card["primary_issue_type"] = fallback_card["primary_issue_type"]
+        required_text = [
+            card["main_issue"],
+            card["why_it_matters"],
+            card["next_action"],
+            card["discussion_prompt"],
+            card["client_message"],
+            *card["metrics_summary"],
+        ]
+        if not card["metrics_summary"] or not card["metrics_breakdown"] or not all(required_text):
+            return None
+        return card
+
+    def _render_flag_review_card(self, card: dict[str, Any]) -> str:
+        return (
+            f"{card['client_name']} \u2014 {card['priority']}\n\n"
+            "Main issue:\n"
+            f"{card['main_issue'].rstrip('.')}.\n\n"
+            "Why it matters:\n"
+            f"{card['why_it_matters'].rstrip('.')}.\n\n"
+            "Next action:\n"
+            f"{card['next_action'].rstrip('.')}.\n\n"
+            "Message to client:\n"
+            f"{card['client_message'].rstrip('.')}."
+        )
+
+    def _flag_review_brief_is_valid(
+        self,
+        text: str,
+        card: dict[str, Any],
+    ) -> bool:
+        if self._word_count(text) > TRAINER_FLAG_REVIEW_CLIENT_WORD_LIMIT:
+            return False
+        body_text = " ".join(
+            str(card.get(key, ""))
+            for key in ("main_issue", "why_it_matters", "next_action", "discussion_prompt", "client_message")
+        )
+        body_text += " " + " ".join(str(item) for item in card.get("metrics_summary", []))
+        for item in card.get("metrics_breakdown", []):
+            if isinstance(item, dict):
+                body_text += " " + " ".join(str(item.get(key, "")) for key in ("domain", "signal", "coaching_meaning", "detail"))
+        noise_text = f"{text} {body_text}"
+        if re.search(r"\b\d{4}-\d{2}-\d{2}\b", noise_text):
+            return False
+        if re.search(r"\bavg\b|/\d{1,2}\b|\baverage\b", noise_text, flags=re.IGNORECASE):
+            return False
+        normalized_name = str(card.get("client_name") or "").strip().lower()
+        if normalized_name and normalized_name not in {"client", "user"} and normalized_name in body_text.lower():
+            return False
+        return all(
+            label in text
+            for label in (
+                "Main issue:",
+                "Why it matters:",
+                "Next action:",
+                "Message to client:",
+            )
+        )
+
+    def _word_count(self, text: str) -> int:
+        return len(re.findall(r"[A-Za-z0-9]+(?:[-'][A-Za-z0-9]+)?", text))
+
+    def _weak_question_summaries(self, question_summaries: list[Any]) -> list[Any]:
+        actionable = []
+        for summary in question_summaries:
+            average = self._float_or_none(self._item_get(summary, "average_7d", None))
+            status = str(self._item_get(summary, "status", "") or "").lower()
+            low_days = int(self._item_get(summary, "low_days_7d", 0) or 0)
+            if average is None:
+                continue
+            if status in {"low", "watch"} or average <= 3.4 or low_days > 0:
+                actionable.append(summary)
+        status_rank = {"low": 0, "watch": 1, "steady": 2, "no_data": 3}
+        return sorted(
+            actionable,
+            key=lambda summary: (
+                status_rank.get(str(self._item_get(summary, "status", "") or "").lower(), 9),
+                self._float_or_none(self._item_get(summary, "average_7d", None)) or 99,
+                -int(self._item_get(summary, "low_days_7d", 0) or 0),
+            ),
+        )
+
+    def _float_or_none(self, value: Any) -> float | None:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _item_get(self, item: Any, key: str, default: Any = None) -> Any:
+        if isinstance(item, dict):
+            return item.get(key, default)
+        return getattr(item, key, default)
+
     def _build_trainer_opening_summary(self, scope: ChatSessionScope) -> dict[str, Any]:
         command_center = None
         if self.trainer_home_service:
@@ -862,19 +1687,25 @@ class ChatSessionService:
         clients = list(getattr(command_center, "clients", []) or [])
         totals = getattr(command_center, "totals", None)
         assigned_count = int(getattr(totals, "assigned_clients", len(clients)) or 0)
-        missed = [
-            client for client in clients
-            if not bool(getattr(getattr(client, "week_summary", None), "checkins_completed_today", False))
-        ]
-        low_recovery = [
-            client for client in clients
-            if any(getattr(flag, "code", "") == "low_7d_readiness" for flag in getattr(client, "risk_flags", []) or [])
-        ]
+        today_missing_checkins = int(getattr(totals, "today_missing_checkins", 0) or 0)
+        recent_missed_checkin_days = int(getattr(totals, "recent_missed_checkin_days", 0) or 0)
+        clients_with_recent_missed_checkins = int(getattr(totals, "clients_with_recent_missed_checkins", 0) or 0)
+        clients_with_low_7d_readiness = int(getattr(totals, "clients_with_low_7d_readiness", 0) or 0)
+        clients_with_recent_low_readiness = int(getattr(totals, "clients_with_recent_low_readiness", 0) or 0)
         priority_clients = [
             client for client in clients
             if getattr(client, "priority_tier", "low") in {"high", "critical"}
         ]
         top_client_name = getattr(priority_clients[0], "client_name", None) if priority_clients else None
+        analytics_metadata = self._trainer_opening_analytics_metadata(
+            assigned_count=assigned_count,
+            today_missing_checkins=today_missing_checkins,
+            recent_missed_checkin_days=recent_missed_checkin_days,
+            clients_with_recent_missed_checkins=clients_with_recent_missed_checkins,
+            clients_with_low_7d_readiness=clients_with_low_7d_readiness,
+            clients_with_recent_low_readiness=clients_with_recent_low_readiness,
+            clients=clients,
+        )
 
         if assigned_count <= 0:
             text = (
@@ -882,23 +1713,91 @@ class ChatSessionService:
                 "review client notes, or prepare the next check-in rhythm. Want to start by setting priorities?"
             )
         else:
+            client_label = "client" if assigned_count == 1 else "clients"
+            recent_missed_client_label = "client" if clients_with_recent_missed_checkins == 1 else "clients"
+            low_avg_client_label = "client" if clients_with_low_7d_readiness == 1 else "clients"
+            low_avg_verb = "has" if clients_with_low_7d_readiness == 1 else "have"
+            recent_low_client_label = "client" if clients_with_recent_low_readiness == 1 else "clients"
+            recent_low_verb = "has" if clients_with_recent_low_readiness == 1 else "have"
             priority_line = (
                 f" Start with {top_client_name} first."
                 if top_client_name
                 else " Start with the highest priority client first."
             )
             text = (
-                f"You have {assigned_count} clients on the board today, with {len(missed)} missed check-ins "
-                f"and {len(low_recovery)} showing low recovery patterns. Best move: review flagged clients "
-                f"before pushing new programming.{priority_line} Want to start with the highest priority?"
+                f"You have {assigned_count} {client_label} on the board. Recent adherence: "
+                f"{clients_with_recent_missed_checkins} {recent_missed_client_label} missed "
+                f"{recent_missed_checkin_days} check-in days "
+                f"across the previous 7 days; {today_missing_checkins} missing today. Recovery: "
+                f"{clients_with_low_7d_readiness} {low_avg_client_label} {low_avg_verb} "
+                f"low 7-day readiness averages and {clients_with_recent_low_readiness} "
+                f"{recent_low_client_label} {recent_low_verb} recent low-readiness days. Best move: review flagged "
+                f"clients before pushing new programming.{priority_line} Want to start with the highest priority?"
             )
         return {
             "text": text,
             "title": "Daily Operating Brief",
             "summary": self._clip_summary(text),
             "suggested_actions": TRAINER_SUGGESTED_ACTIONS,
-            "source": "trainer_command_center_v1",
+            "source": "trainer_command_center_v2",
+            "metadata": analytics_metadata,
         }
+
+    def _trainer_opening_analytics_metadata(
+        self,
+        *,
+        assigned_count: int,
+        today_missing_checkins: int,
+        recent_missed_checkin_days: int,
+        clients_with_recent_missed_checkins: int,
+        clients_with_low_7d_readiness: int,
+        clients_with_recent_low_readiness: int,
+        clients: list[Any],
+    ) -> dict[str, Any]:
+        counts = {
+            "assigned_clients": assigned_count,
+            "today_missing_checkins": today_missing_checkins,
+            "recent_missed_checkin_days": recent_missed_checkin_days,
+            "clients_with_recent_missed_checkins": clients_with_recent_missed_checkins,
+            "clients_with_low_7d_readiness": clients_with_low_7d_readiness,
+            "clients_with_recent_low_readiness": clients_with_recent_low_readiness,
+        }
+        client_rollups = []
+        for client in clients:
+            missed_dates = [
+                self._json_date(value)
+                for value in (getattr(client, "missed_checkin_dates_7d", []) or [])
+            ]
+            low_dates = [
+                self._json_date(value)
+                for value in (getattr(client, "recent_low_readiness_dates", []) or [])
+            ]
+            client_rollups.append({
+                "client_id": str(getattr(client, "client_id", "") or ""),
+                "priority_tier": str(getattr(client, "priority_tier", "") or ""),
+                "missed_checkin_dates_7d": sorted(filter(None, missed_dates)),
+                "recent_low_readiness_dates": sorted(filter(None, low_dates)),
+            })
+        payload = {
+            "counts": counts,
+            "clients": sorted(client_rollups, key=lambda item: item["client_id"]),
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:16]
+        return {
+            **counts,
+            "analytics_fingerprint": fingerprint,
+        }
+
+    def _json_date(self, value: Any) -> str | None:
+        if isinstance(value, datetime):
+            return value.date().isoformat()
+        if isinstance(value, date):
+            return value.isoformat()
+        if value is None:
+            return None
+        return str(value)
 
     def _to_legacy_chat_request(self, request: ChatSessionSendRequest, session: dict[str, Any]) -> ChatRequest:
         context = {

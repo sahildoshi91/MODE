@@ -389,6 +389,14 @@ class ConversationService:
             if not self._is_trainer_only_context(trainer_context)
             else ""
         )
+        trainer_admin_instruction = (
+            "Trainer admin capabilities: you may review assigned clients, command-center risk flags, "
+            "daily check-in scores, client priorities, adherence, and programming next steps when that context "
+            "is provided. If command-center data is unavailable, say that the command-center data could not be loaded; "
+            "do not say client flag review is outside your capabilities.\n"
+            if self._is_trainer_only_context(trainer_context)
+            else ""
+        )
 
         system_prompt = (
             "You are an expert fitness coach in the MODE app.\n"
@@ -403,6 +411,7 @@ class ConversationService:
             "Never disclose or infer data belonging to a different trainer, client, or tenant.\n"
             "Differentiate between what is known from context and what you are inferring.\n"
             f"{motivation_instruction}"
+            f"{trainer_admin_instruction}"
             f"{workout_prompt['system']}"
             f"{route_instructions}"
             f"{orchestration_system_block}"

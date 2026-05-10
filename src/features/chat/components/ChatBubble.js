@@ -94,6 +94,8 @@ export default function ChatBubble({
   onLongPress = null,
   copyFeedback = null,
   copyFeedbackTone = 'secondary',
+  assistantContent = null,
+  assistantWide = false,
 }) {
   const isUser = role === 'user';
   const resolvedSpeakerLabel = speakerLabel || (isUser ? 'You' : 'Coach');
@@ -105,6 +107,7 @@ export default function ChatBubble({
     AI_RESPONSE_RENDERING_V1_ENABLED
     && !isUser
     && !isError
+    && !assistantContent
     && messageKind !== 'assistant_stream'
     && messageKind !== 'assistant_progress'
     && messageKind !== 'assistant_opening_summary'
@@ -116,6 +119,9 @@ export default function ChatBubble({
     return parseAIResponseText(safeAssistantText);
   }, [safeAssistantText, shouldRenderStructuredAssistant]);
   const assistantRenderContent = useMemo(() => {
+    if (assistantContent) {
+      return assistantContent;
+    }
     if (messageKind === 'assistant_opening_summary') {
       return <OpeningSummaryContent text={safeAssistantText} />;
     }
@@ -128,7 +134,7 @@ export default function ChatBubble({
         testIDPrefix="chat-ai-response"
       />
     );
-  }, [messageKind, safeAssistantText, structuredModel]);
+  }, [assistantContent, messageKind, safeAssistantText, structuredModel]);
 
   return (
     <View style={[styles.row, isUser ? styles.userRow : styles.assistantRow]}>
@@ -139,6 +145,7 @@ export default function ChatBubble({
           showSpeakerLabel={showSpeakerLabel}
           speakerLabel={resolvedSpeakerLabel}
           groupPosition={groupPosition}
+          onLongPress={onLongPress}
         />
       ) : (
         <ChatBubbleAI
@@ -149,6 +156,7 @@ export default function ChatBubble({
           groupPosition={groupPosition}
           renderContent={assistantRenderContent}
           onLongPress={onLongPress}
+          wide={assistantWide}
         />
       )}
 

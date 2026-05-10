@@ -231,8 +231,9 @@ class TrainerHomeService:
                 schedule_history_by_client[client_id].append(row)
 
         week_start = target_date - timedelta(days=6)
+        recent_missed_start = target_date - timedelta(days=7)
         checkin_rows = self.repository.list_checkins_between(
-            week_start,
+            recent_missed_start,
             target_date,
             client_ids=client_ids,
         )
@@ -267,6 +268,7 @@ class TrainerHomeService:
         for client_id in client_ids:
             client_row = client_map.get(client_id) or {}
             client_checkins = checkins_by_client.get(client_id, [])
+            client_week_checkins = self._checkins_between(client_checkins, week_start, target_date)
             client_schedule_today = schedule_today_by_client.get(client_id)
             client_schedule_preferences = schedule_preference_by_client.get(client_id) or {}
             client_selected_exception = schedule_exception_by_client.get(client_id) or {}
@@ -294,10 +296,21 @@ class TrainerHomeService:
             )
 
             workouts_completed_7d = workouts_by_user.get(client_row.get("user_id"), 0)
-            week_summary = self._build_week_summary(
+            missed_checkin_dates_7d = self._missed_checkin_dates_7d(
+                client_row=client_row,
                 client_checkins=client_checkins,
                 target_date=target_date,
+            )
+            recent_low_readiness_dates = self._recent_low_readiness_dates(
+                client_week_checkins,
+                target_date=target_date,
+            )
+            week_summary = self._build_week_summary(
+                client_checkins=client_week_checkins,
+                target_date=target_date,
                 workouts_completed_7d=workouts_completed_7d,
+                missed_checkin_dates_7d=missed_checkin_dates_7d,
+                recent_low_readiness_dates=recent_low_readiness_dates,
             )
             last_checkin_date = self._latest_checkin_date(client_checkins)
             days_since_last_checkin = self._days_since(target_date, last_checkin_date)
@@ -348,6 +361,8 @@ class TrainerHomeService:
                     talking_points=talking_points,
                     last_checkin_date=last_checkin_date,
                     days_since_last_checkin=days_since_last_checkin,
+                    missed_checkin_dates_7d=missed_checkin_dates_7d,
+                    recent_low_readiness_dates=recent_low_readiness_dates,
                 )
             )
 
@@ -356,6 +371,15 @@ class TrainerHomeService:
             assigned_clients=len(client_ids),
             scheduled_today=sum(1 for item in client_items if item.scheduled_today),
             checkins_completed_today=sum(1 for item in client_items if item.week_summary.checkins_completed_today),
+            today_missing_checkins=sum(1 for item in client_items if not item.week_summary.checkins_completed_today),
+            recent_missed_checkin_days=sum(len(item.missed_checkin_dates_7d) for item in client_items),
+            clients_with_recent_missed_checkins=sum(1 for item in client_items if item.missed_checkin_dates_7d),
+            clients_with_low_7d_readiness=sum(
+                1
+                for item in client_items
+                if item.week_summary.avg_score_7d is not None and item.week_summary.avg_score_7d < 15
+            ),
+            clients_with_recent_low_readiness=sum(1 for item in client_items if item.recent_low_readiness_dates),
             high_priority_clients=sum(1 for item in client_items if item.priority_tier in {"high", "critical"}),
             critical_priority_clients=sum(1 for item in client_items if item.priority_tier == "critical"),
         )
@@ -372,6 +396,8 @@ class TrainerHomeService:
         client_checkins: list[dict[str, Any]],
         target_date: date,
         workouts_completed_7d: int,
+        missed_checkin_dates_7d: list[date] | None = None,
+        recent_low_readiness_dates: list[date] | None = None,
     ) -> TrainerHomeWeekSummary:
         scores = []
         modes: list[str] = []
@@ -395,8 +421,73 @@ class TrainerHomeService:
             avg_score_7d=avg_score,
             avg_mode_7d=avg_mode,
             workouts_completed_7d=workouts_completed_7d,
+            missed_checkin_dates_7d=missed_checkin_dates_7d or [],
+            recent_low_readiness_dates=recent_low_readiness_dates or [],
             question_summaries=question_summaries,
         )
+
+    def _checkins_between(
+        self,
+        rows: list[dict[str, Any]],
+        start_date: date,
+        end_date: date,
+    ) -> list[dict[str, Any]]:
+        windowed = []
+        for row in rows:
+            row_date = self._coerce_date(row.get("date"), None)
+            if row_date and start_date <= row_date <= end_date:
+                windowed.append(row)
+        return windowed
+
+    def _missed_checkin_dates_7d(
+        self,
+        *,
+        client_row: dict[str, Any],
+        client_checkins: list[dict[str, Any]],
+        target_date: date,
+    ) -> list[date]:
+        completed_dates = {
+            row_date
+            for row in client_checkins
+            if (row_date := self._coerce_date(row.get("date"), None)) is not None
+        }
+        created_date = self._coerce_date(client_row.get("created_at"), None)
+        dates = [
+            target_date - timedelta(days=offset)
+            for offset in range(1, 8)
+        ]
+        return [
+            checkin_date
+            for checkin_date in dates
+            if (created_date is None or checkin_date >= created_date)
+            and checkin_date not in completed_dates
+        ]
+
+    def _recent_low_readiness_dates(
+        self,
+        client_checkins: list[dict[str, Any]],
+        *,
+        target_date: date,
+    ) -> list[date]:
+        low_dates: set[date] = set()
+        start_date = target_date - timedelta(days=6)
+        for row in client_checkins:
+            row_date = self._coerce_date(row.get("date"), None)
+            if row_date is None or row_date < start_date or row_date > target_date:
+                continue
+            if self._is_low_readiness_checkin(row):
+                low_dates.add(row_date)
+        return sorted(low_dates, reverse=True)
+
+    def _is_low_readiness_checkin(self, row: dict[str, Any]) -> bool:
+        score = row.get("total_score")
+        try:
+            if score is not None and float(score) <= 15:
+                return True
+        except (TypeError, ValueError):
+            pass
+        mode = self._normalize_mode(row.get("assigned_mode"))
+        return mode in {"RECOVER", "REST"}
 
     def _build_risk_flags(
         self,
@@ -1222,10 +1313,14 @@ class TrainerHomeService:
         if isinstance(value, date):
             return value
         if isinstance(value, str):
+            text = value.strip()
             try:
-                return date.fromisoformat(value)
+                return date.fromisoformat(text)
             except ValueError:
-                return fallback
+                try:
+                    return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+                except ValueError:
+                    return fallback
         return fallback
 
     def _coerce_datetime(self, value: Any) -> datetime | None:

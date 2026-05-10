@@ -40,6 +40,7 @@ import {
   saveTrainerCoachWorkspaceCache,
 } from '../../storage/trainerCoachStorage';
 import { createTrainerKnowledgeEntry } from '../../../trainerHome/services/trainerKnowledgeApi';
+import { getLocalDateString } from '../../../chat/services/chatSessionService';
 import { useTrainerCoachWorkspace } from '../useTrainerCoachWorkspace';
 
 function buildWorkspacePayload() {
@@ -142,6 +143,26 @@ describe('useTrainerCoachWorkspace', () => {
       payload: { source: 'test' },
       created_at: '2026-04-18T12:01:00.000Z',
       updated_at: '2026-04-18T12:01:00.000Z',
+    });
+  });
+
+  it('loads the workspace for the same local date used by chat sessions', async () => {
+    const onSnapshot = jest.fn();
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          accessToken="trainer-token"
+          trainerId="trainer-1"
+          onSnapshot={onSnapshot}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expect(getTrainerCoachWorkspace).toHaveBeenCalledWith({
+      accessToken: 'trainer-token',
+      date: getLocalDateString(),
     });
   });
 

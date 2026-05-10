@@ -25,6 +25,24 @@ jest.mock('expo-linear-gradient', () => ({
   },
 }));
 
+jest.mock('lucide-react-native', () => ({
+  ChevronDown: (props) => {
+    const React = require('react');
+    const { Text } = require('react-native');
+    return React.createElement(Text, props, 'chevron-down');
+  },
+  ChevronUp: (props) => {
+    const React = require('react');
+    const { Text } = require('react-native');
+    return React.createElement(Text, props, 'chevron-up');
+  },
+  Copy: (props) => {
+    const React = require('react');
+    const { Text } = require('react-native');
+    return React.createElement(Text, props, 'copy');
+  },
+}));
+
 jest.mock('../AIResponseRenderer', () => {
   return function MockAIResponseRenderer(props) {
     const React = require('react');
@@ -47,6 +65,13 @@ function collectRenderedText(root) {
       return typeof children === 'string' ? [children] : [];
     })
     .join(' ');
+}
+
+function findLongPressTargetByText(root, text) {
+  return root.findAll((node) => (
+    typeof node.props?.onLongPress === 'function'
+    && collectRenderedText(node).includes(text)
+  )).sort((left, right) => collectRenderedText(left).length - collectRenderedText(right).length)[0];
 }
 
 describe('ChatMessageBubble', () => {
@@ -174,6 +199,116 @@ describe('ChatMessageBubble', () => {
     });
   });
 
+  it('renders flagged-client review metadata as compact cards', async () => {
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <ChatMessageBubble
+          message={{
+            id: 'flagged-review-1',
+            role: 'assistant',
+            text: 'Taylor — High\n\nMain issue:\nAdherence is breaking down.',
+            metadata: {
+              flagged_client_review_v3: {
+                version: 3,
+                cards: [{
+                  client_id: 'client-1',
+                  client_name: 'Taylor',
+                  priority: 'High',
+                  primary_issue_type: 'adherence_collapse',
+                  action_signal: {
+                    label: 'Reduce Friction',
+                    tone: 'high',
+                  },
+                  main_issue: 'Adherence is breaking down, not just training volume.',
+                  why_it_matters: 'Low motivation plus missed training can become disengagement.',
+                  next_action: 'Remove friction and assign one easy training win today.',
+                  discussion_prompt: "What is blocking workouts right now? Let's make today's win small.",
+                  client_message: "What is blocking workouts right now? Let's make today's win small.",
+                  metrics_breakdown: [
+                    {
+                      domain: 'Workouts',
+                      signal: 'Training follow-through is low.',
+                      coaching_meaning: 'The plan likely needs less friction before more volume.',
+                      detail: 'Set one small session target today.',
+                    },
+                    {
+                      domain: 'Motivation',
+                      signal: 'Motivation is low.',
+                      coaching_meaning: 'The current plan may feel too hard, irrelevant, or blocked.',
+                      detail: 'Ask for the blocker before changing the program.',
+                    },
+                  ],
+                  metrics_summary: [
+                    'low training follow-through',
+                    'motivation is low',
+                  ],
+                }],
+              },
+            },
+          }}
+        />,
+      );
+    });
+
+    expect(mockAIResponseRenderer).not.toHaveBeenCalled();
+    expect(tree.root.findByProps({ testID: 'flagged-client-review-root' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'flagged-client-review-card-0' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'flagged-client-review-action-signal-0' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'flagged-client-review-next-action-0' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'flagged-client-review-discussion-cue-0' })).toBeTruthy();
+    expect(() => tree.root.findByProps({ testID: 'flagged-client-review-metrics-panel-0' })).toThrow();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'flagged-client-review-metrics-toggle-0' }).props.onPress();
+    });
+
+    expect(tree.root.findByProps({ testID: 'flagged-client-review-metrics-panel-0' })).toBeTruthy();
+    const renderedText = collectRenderedText(tree.root);
+    expect(renderedText).toContain('Reduce Friction');
+    expect(renderedText).not.toContain('Copy message');
+    expect(renderedText).toContain('Next action');
+    expect(renderedText).toContain('Remove friction and assign one easy training win today.');
+    expect(renderedText).toContain('Discussion cue');
+    expect(renderedText).toContain('Workouts');
+    expect(renderedText).toContain('The plan likely needs less friction before more volume.');
+
+    await act(async () => {
+      await findLongPressTargetByText(
+        tree.root,
+        'Remove friction and assign one easy training win today.',
+      ).props.onLongPress();
+    });
+
+    expect(mockSetStringAsync).toHaveBeenCalledWith('Remove friction and assign one easy training win today.');
+
+    await act(async () => {
+      await findLongPressTargetByText(
+        tree.root,
+        "What is blocking workouts right now? Let's make today's win small.",
+      ).props.onLongPress();
+    });
+
+    expect(mockSetStringAsync).toHaveBeenCalledWith("What is blocking workouts right now? Let's make today's win small.");
+
+    await act(async () => {
+      await findLongPressTargetByText(
+        tree.root,
+        'The plan likely needs less friction before more volume.',
+      ).props.onLongPress();
+    });
+
+    expect(mockSetStringAsync).toHaveBeenCalledWith(
+      'Workouts: Training follow-through is low. The plan likely needs less friction before more volume. Set one small session target today.',
+    );
+    expect(collectRenderedText(tree.root)).toContain('Copied');
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
   it('keeps optimistic opening copy as plain streaming text', () => {
     let tree;
 
@@ -230,6 +365,34 @@ describe('ChatMessageBubble', () => {
     });
 
     expect(mockSetStringAsync).toHaveBeenCalledWith('Coach copy text');
+    expect(collectRenderedText(tree.root)).toContain('Copied');
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('copies user messages on long press', async () => {
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <ChatMessageBubble
+          message={{
+            id: 'user-copy',
+            role: 'user',
+            text: 'Can you review flagged clients?',
+          }}
+        />,
+      );
+    });
+
+    const longPressTarget = tree.root.findAll((node) => typeof node.props?.onLongPress === 'function')[0];
+    await act(async () => {
+      await longPressTarget.props.onLongPress();
+    });
+
+    expect(mockSetStringAsync).toHaveBeenCalledWith('Can you review flagged clients?');
     expect(collectRenderedText(tree.root)).toContain('Copied');
 
     act(() => {

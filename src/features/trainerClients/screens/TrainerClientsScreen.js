@@ -1550,10 +1550,7 @@ export default function TrainerClientsScreen({
   const [draftReviewMutationSuccess, setDraftReviewMutationSuccess] = useState(null);
 
   const [connectionRequests, setConnectionRequests] = useState([]);
-  const [isLoadingConnectionRequests, setIsLoadingConnectionRequests] = useState(true);
-  const [connectionRequestsError, setConnectionRequestsError] = useState(null);
   const [mutatingConnectionRequestId, setMutatingConnectionRequestId] = useState(null);
-  const [connectionRequestFeedback, setConnectionRequestFeedback] = useState(null);
 
   const [draftReviewTracker, setDraftReviewTracker] = useState({
     date_key: null,
@@ -1638,12 +1635,7 @@ export default function TrainerClientsScreen({
   const draftQueueCount = Array.isArray(draftQueueItems) ? draftQueueItems.length : 0;
   const connectionRequestCount = Array.isArray(connectionRequests) ? connectionRequests.length : 0;
   const shouldShowDraftReviewCard = draftQueueCount > 0 || Boolean(draftQueueError);
-  const shouldShowConnectionRequestsCard = (
-    connectionRequestCount > 0
-    || Boolean(connectionRequestsError)
-    || isLoadingConnectionRequests
-    || Boolean(connectionRequestFeedback)
-  );
+  const shouldShowConnectionRequestsCard = connectionRequestCount > 0;
   const draftReviewDailyCount = Number(draftReviewTracker?.daily_count) || 0;
   const draftReviewLifetimeCount = Number(draftReviewTracker?.lifetime_count) || 0;
   const draftReviewGoalDenominator = draftQueueCount > 0
@@ -1757,17 +1749,11 @@ export default function TrainerClientsScreen({
     }
   }, [accessToken, plannerDate]);
 
-  const loadConnectionRequests = useCallback(async ({ silent = false } = {}) => {
+  const loadConnectionRequests = useCallback(async () => {
     if (!accessToken) {
       setConnectionRequests([]);
-      setConnectionRequestsError(null);
-      setIsLoadingConnectionRequests(false);
       return [];
     }
-    if (!silent) {
-      setIsLoadingConnectionRequests(true);
-    }
-    setConnectionRequestsError(null);
     try {
       const payload = await listTrainerConnectionRequests({
         accessToken,
@@ -1776,13 +1762,8 @@ export default function TrainerClientsScreen({
       const items = Array.isArray(payload?.items) ? payload.items : [];
       setConnectionRequests(items);
       return items;
-    } catch (error) {
-      setConnectionRequestsError(buildTrainerRouteError(error, 'Unable to load connection requests.'));
+    } catch {
       return [];
-    } finally {
-      if (!silent) {
-        setIsLoadingConnectionRequests(false);
-      }
     }
   }, [accessToken]);
 
@@ -2762,7 +2743,7 @@ export default function TrainerClientsScreen({
     await Promise.all([
       loadCommandCenter({ refreshTalkingPoints }),
       loadDraftQueue({ silent: refreshTalkingPoints }),
-      loadConnectionRequests({ silent: refreshTalkingPoints }),
+      loadConnectionRequests(),
     ]);
   };
 
@@ -2890,8 +2871,6 @@ export default function TrainerClientsScreen({
       return;
     }
     setMutatingConnectionRequestId(requestId);
-    setConnectionRequestsError(null);
-    setConnectionRequestFeedback(null);
     try {
       if (actionType === 'approve') {
         await approveTrainerConnectionRequest({
@@ -2907,22 +2886,12 @@ export default function TrainerClientsScreen({
         });
       }
       setConnectionRequests((previous) => previous.filter((item) => item?.id !== requestId));
-      setConnectionRequestFeedback(
-        actionType === 'approve'
-          ? 'Connection approved.'
-          : 'Connection rejected.',
-      );
       await Promise.all([
-        loadConnectionRequests({ silent: true }),
+        loadConnectionRequests(),
         actionType === 'approve' ? loadCommandCenter({ silent: true }) : Promise.resolve(),
       ]);
-    } catch (error) {
-      setConnectionRequestsError(buildTrainerRouteError(
-        error,
-        actionType === 'approve'
-          ? 'Unable to approve connection request.'
-          : 'Unable to reject connection request.',
-      ));
+    } catch {
+      // Keep the row visible so the trainer can try again when the request recovers.
     } finally {
       setMutatingConnectionRequestId(null);
     }
@@ -3493,89 +3462,86 @@ export default function TrainerClientsScreen({
             style={[styles.connectionRequestsCard, styles.actionsTierCard]}
           >
             <View style={styles.connectionRequestsHeader}>
-              <View>
+              <View style={styles.connectionRequestsTitleGroup}>
                 <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Connection Requests</ModeText>
                 <ModeText variant="bodySm">{connectionRequestCount} pending</ModeText>
               </View>
-              <ModeButton
-                testID="trainer-clients-connection-requests-refresh"
-                title="Refresh"
-                size="sm"
-                variant="ghost"
-                disabled={isLoadingConnectionRequests}
-                onPress={() => loadConnectionRequests()}
-              />
             </View>
 
-            {isLoadingConnectionRequests ? (
-              <View style={styles.draftReviewLoadingRow}>
-                <ActivityIndicator size="small" color={theme.colors.accent.primary} />
-                <ModeText variant="caption" tone="secondary">Loading connection requests...</ModeText>
-              </View>
-            ) : null}
-
-            {!isLoadingConnectionRequests && connectionRequestsError ? (
-              <View style={styles.draftReviewMessageBlock}>
-                <ModeText variant="bodySm" tone="error">{connectionRequestsError.message}</ModeText>
-                <ModeButton
-                  title="Retry Requests"
-                  size="sm"
-                  variant="secondary"
-                  onPress={() => loadConnectionRequests()}
-                />
-              </View>
-            ) : null}
-
-            {!isLoadingConnectionRequests && !connectionRequestsError && connectionRequestCount > 0 ? (
-              <View style={styles.connectionRequestList}>
-                {connectionRequests.map((request) => {
-                  const requestId = String(request?.id || '');
-                  const isMutating = mutatingConnectionRequestId === requestId;
-                  return (
-                    <View
-                      key={requestId}
-                      testID={`trainer-clients-connection-request-${requestId}`}
-                      style={styles.connectionRequestRow}
-                    >
-                      <View style={styles.connectionRequestCopy}>
-                        <ModeText variant="bodySm" style={styles.connectionRequestClientName}>
-                          {request?.client_name || 'Client'}
-                        </ModeText>
-                        <ModeText variant="caption" tone="secondary">
-                          Asked Atlas to connect with you
-                        </ModeText>
+            <View style={styles.connectionRequestList}>
+              {connectionRequests.map((request) => {
+                const requestId = String(request?.id || '');
+                const clientName = String(request?.client_name || 'Client');
+                const requestText = typeof request?.request_text === 'string'
+                  ? request.request_text.trim()
+                  : '';
+                const isMutating = mutatingConnectionRequestId === requestId;
+                const hasMutationInFlight = Boolean(mutatingConnectionRequestId);
+                return (
+                  <View
+                    key={requestId}
+                    testID={`trainer-clients-connection-request-${requestId}`}
+                    style={styles.connectionRequestRow}
+                  >
+                    <View style={styles.connectionRequestCopy}>
+                      <ModeText variant="bodySm" style={styles.connectionRequestClientName} numberOfLines={1}>
+                        {clientName}
+                      </ModeText>
+                      <ModeText variant="caption" tone="secondary" numberOfLines={1}>
+                        Asked Atlas to connect with you
+                      </ModeText>
+                      {requestText ? (
                         <ModeText variant="caption" tone="tertiary" numberOfLines={2}>
-                          {request?.request_text || 'No request text captured.'}
+                          {requestText}
                         </ModeText>
-                      </View>
-                      <View style={styles.connectionRequestActions}>
-                        <ModeButton
-                          testID={`trainer-clients-connection-request-reject-${requestId}`}
-                          title={isMutating ? 'Working...' : 'Reject'}
-                          size="sm"
-                          variant="destructive"
-                          disabled={Boolean(mutatingConnectionRequestId)}
-                          onPress={() => runConnectionRequestMutation('reject', requestId)}
-                          style={styles.connectionRequestActionButton}
-                        />
-                        <ModeButton
-                          testID={`trainer-clients-connection-request-approve-${requestId}`}
-                          title={isMutating ? 'Working...' : 'Approve'}
-                          size="sm"
-                          disabled={Boolean(mutatingConnectionRequestId)}
-                          onPress={() => runConnectionRequestMutation('approve', requestId)}
-                          style={styles.connectionRequestActionButton}
-                        />
-                      </View>
+                      ) : null}
                     </View>
-                  );
-                })}
-              </View>
-            ) : null}
-
-            {!isLoadingConnectionRequests && !connectionRequestsError && connectionRequestFeedback ? (
-              <ModeText variant="caption" tone="secondary">{connectionRequestFeedback}</ModeText>
-            ) : null}
+                    <View style={styles.connectionRequestActions}>
+                      <Pressable
+                        testID={`trainer-clients-connection-request-reject-${requestId}`}
+                        disabled={hasMutationInFlight}
+                        onPress={() => runConnectionRequestMutation('reject', requestId)}
+                        style={({ pressed }) => [
+                          styles.connectionRequestIconButton,
+                          styles.connectionRequestRejectButton,
+                          hasMutationInFlight && styles.connectionRequestIconButtonDisabled,
+                          pressed && !hasMutationInFlight && styles.connectionRequestIconButtonPressed,
+                        ]}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Reject connection request from ${clientName}`}
+                        hitSlop={8}
+                      >
+                        <Feather
+                          name="x"
+                          size={16}
+                          color={isMutating ? theme.colors.text.disabled : theme.colors.status.error}
+                        />
+                      </Pressable>
+                      <Pressable
+                        testID={`trainer-clients-connection-request-approve-${requestId}`}
+                        disabled={hasMutationInFlight}
+                        onPress={() => runConnectionRequestMutation('approve', requestId)}
+                        style={({ pressed }) => [
+                          styles.connectionRequestIconButton,
+                          styles.connectionRequestApproveButton,
+                          hasMutationInFlight && styles.connectionRequestIconButtonDisabled,
+                          pressed && !hasMutationInFlight && styles.connectionRequestIconButtonPressed,
+                        ]}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Approve connection request from ${clientName}`}
+                        hitSlop={8}
+                      >
+                        <Feather
+                          name="check"
+                          size={16}
+                          color={isMutating ? theme.colors.text.disabled : theme.colors.status.success}
+                        />
+                      </Pressable>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
           </ModeCard>
         ) : null}
 
@@ -3768,11 +3734,11 @@ export default function TrainerClientsScreen({
         ) : null}
 
         {!isLoadingCommandCenter && hasLoadedCommandCenter && !commandCenterError && visibleClientItems.length === 0 ? (
-          <ModeCard variant="surface">
-            <ModeText variant="bodySm" tone="secondary">
+          <View testID="trainer-clients-empty-filter-state" style={styles.emptyFilterState}>
+            <ModeText variant="bodySm" tone="secondary" style={styles.emptyFilterText}>
               No clients match the selected filter.
             </ModeText>
-          </ModeCard>
+          </View>
         ) : null}
 
           </>
@@ -3822,6 +3788,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing[3],
     paddingTop: theme.spacing[3],
     gap: theme.spacing[2],
+  },
+  emptyFilterState: {
+    marginTop: theme.spacing[3],
+    marginBottom: theme.spacing[4],
+    paddingHorizontal: theme.spacing[1],
+  },
+  emptyFilterText: {
+    lineHeight: theme.typography.body2.lineHeight + 2,
   },
   sectionLabel: {
     textTransform: 'uppercase',
@@ -3890,16 +3864,24 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     gap: theme.spacing[2],
   },
+  connectionRequestsTitleGroup: {
+    gap: 2,
+  },
   connectionRequestList: {
     gap: theme.spacing[2],
   },
   connectionRequestRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     borderTopWidth: 1,
     borderTopColor: theme.colors.glass.borderSoft,
     paddingTop: theme.spacing[2],
     gap: theme.spacing[2],
   },
   connectionRequestCopy: {
+    flex: 1,
+    minWidth: 0,
     gap: 2,
   },
   connectionRequestClientName: {
@@ -3907,10 +3889,33 @@ const styles = StyleSheet.create({
   },
   connectionRequestActions: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: theme.spacing[1],
   },
-  connectionRequestActionButton: {
-    flex: 1,
+  connectionRequestIconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: theme.colors.glass.borderSoft,
+    backgroundColor: theme.colors.glass.base,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  connectionRequestRejectButton: {
+    borderColor: theme.colors.feedback.errorBorder,
+    backgroundColor: theme.colors.feedback.errorBg,
+  },
+  connectionRequestApproveButton: {
+    borderColor: theme.colors.feedback.successBorder,
+    backgroundColor: theme.colors.feedback.successBg,
+  },
+  connectionRequestIconButtonDisabled: {
+    opacity: 0.5,
+  },
+  connectionRequestIconButtonPressed: {
+    opacity: theme.interaction.pressedOpacity,
+    transform: [{ scale: theme.interaction.pressedScale }],
   },
   draftReviewCard: {
     gap: theme.spacing[2],

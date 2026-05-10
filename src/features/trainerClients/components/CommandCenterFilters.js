@@ -206,6 +206,7 @@ export function FilterBottomSheet({
 const styles = StyleSheet.create({
   filterBarWrap: {
     marginTop: theme.spacing[1] - 2,
+    marginBottom: theme.spacing[1],
   },
   filterBarContent: {
     gap: theme.spacing[1],

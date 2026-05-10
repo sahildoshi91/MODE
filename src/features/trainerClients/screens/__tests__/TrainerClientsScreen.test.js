@@ -394,6 +394,53 @@ describe('TrainerClientsScreen draft review queue', () => {
     });
   });
 
+  it('hides connection requests when there are no pending requests', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expect(tree.root.findAllByProps({ testID: 'trainer-clients-connection-requests-card' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'trainer-clients-connection-requests-refresh' })).toHaveLength(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('keeps failed connection request loads out of the command center', async () => {
+    listTrainerConnectionRequests.mockRejectedValueOnce(new Error('Request failed'));
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expect(tree.root.findAllByProps({ testID: 'trainer-clients-connection-requests-card' })).toHaveLength(0);
+    expect(
+      tree.root.findAll((node) => node.type === 'Text' && readNodeText(node).includes('Request failed')),
+    ).toHaveLength(0);
+    expect(
+      tree.root.findAll((node) => node.type === 'Text' && readNodeText(node).includes('Retry Requests')),
+    ).toHaveLength(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('renders Atlas connection requests and approves them from Clients', async () => {
     getTrainerCoachQueue.mockResolvedValueOnce({ count: 0, items: [] });
     listTrainerConnectionRequests.mockResolvedValueOnce({
@@ -424,11 +471,24 @@ describe('TrainerClientsScreen draft review queue', () => {
     await flushEffects();
 
     expect(() => tree.root.findByProps({ testID: 'trainer-clients-connection-requests-card' })).not.toThrow();
+    expect(tree.root.findAllByProps({ testID: 'trainer-clients-connection-requests-refresh' })).toHaveLength(0);
     expect(() => tree.root.findByProps({ testID: 'trainer-clients-connection-request-request-1' })).not.toThrow();
+    expect(
+      tree.root.findAll((node) => node.type === 'Text' && readNodeText(node) === 'New Client'),
+    ).toHaveLength(1);
+
+    const rejectButton = tree.root.findByProps({
+      testID: 'trainer-clients-connection-request-reject-request-1',
+    });
+    expect(rejectButton.props.title).toBeUndefined();
+    expect(rejectButton.props.accessibilityLabel).toBe('Reject connection request from New Client');
 
     const approveButton = tree.root.findByProps({
       testID: 'trainer-clients-connection-request-approve-request-1',
     });
+    expect(approveButton.props.title).toBeUndefined();
+    expect(approveButton.props.accessibilityLabel).toBe('Approve connection request from New Client');
+
     await act(async () => {
       await approveButton.props.onPress();
     });
@@ -477,6 +537,15 @@ describe('TrainerClientsScreen draft review queue', () => {
     const rejectButton = tree.root.findByProps({
       testID: 'trainer-clients-connection-request-reject-request-2',
     });
+    expect(rejectButton.props.title).toBeUndefined();
+    expect(rejectButton.props.accessibilityLabel).toBe('Reject connection request from Other Client');
+
+    const approveButton = tree.root.findByProps({
+      testID: 'trainer-clients-connection-request-approve-request-2',
+    });
+    expect(approveButton.props.title).toBeUndefined();
+    expect(approveButton.props.accessibilityLabel).toBe('Approve connection request from Other Client');
+
     await act(async () => {
       await rejectButton.props.onPress();
     });
@@ -1100,6 +1169,33 @@ describe('TrainerClientsScreen command center filters', () => {
     const resetDayValue = tree.root.findByProps({ testID: 'trainer-clients-filter-pill-day-value' });
     expect(readNodeText(resetDayValue)).toContain('Today');
     expect(tree.root.findAllByProps({ testID: 'trainer-clients-filter-sheet' })).toHaveLength(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('renders empty filtered results as plain text below the filter bar', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerClientsScreen
+          accessToken="trainer-token"
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    expect(findHostNodesByTestID(tree.root, 'trainer-clients-filter-bar')).toHaveLength(1);
+    const emptyStateNodes = findHostNodesByTestID(tree.root, 'trainer-clients-empty-filter-state');
+    expect(emptyStateNodes).toHaveLength(1);
+    expect(emptyStateNodes[0].type).toBe('View');
+    expect(
+      emptyStateNodes[0].findAll(
+        (node) => node.type === 'Text' && readNodeText(node).includes('No clients match the selected filter.'),
+      ),
+    ).toHaveLength(1);
 
     await act(async () => {
       tree.unmount();

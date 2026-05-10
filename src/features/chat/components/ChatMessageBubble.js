@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
 
 import ChatBubble from './ChatBubble';
+import FlaggedClientReviewCardList from './FlaggedClientReviewCardList';
 
 const LEGACY_MODE_LABELS = {
   GREEN: 'BEAST',
@@ -126,25 +127,36 @@ export default function ChatMessageBubble({
     ? message.metadata
     : {};
   const isOpeningSummary = Boolean(metadata.auto_generated_opening_summary);
+  const flaggedClientReview = metadata.flagged_client_review_v3
+    && typeof metadata.flagged_client_review_v3 === 'object'
+    ? metadata.flagged_client_review_v3
+    : null;
   const messageKind = isOpeningSummary
     ? 'assistant_opening_summary'
-    : (message.isStreaming ? 'assistant_stream' : null);
+    : (flaggedClientReview ? 'assistant_flagged_client_review' : (message.isStreaming ? 'assistant_stream' : null));
   const text = isOpeningSummary
     ? normalizeOpeningSummaryText(message.text ?? message.content ?? '')
     : (message.text ?? message.content ?? '');
   const copyableText = String(text || '').trim();
-  const canCopyMessage = role === 'assistant' && copyableText.length > 0;
-  const handleCopyMessage = async () => {
-    if (!canCopyMessage) {
+  const canCopyMessage = copyableText.length > 0;
+  const handleCopyText = async (value = copyableText) => {
+    const normalizedText = String(value || '').trim();
+    if (!normalizedText) {
       return;
     }
     try {
-      await Clipboard.setStringAsync(copyableText);
+      await Clipboard.setStringAsync(normalizedText);
       showCopyFeedback('Copied');
     } catch (_error) {
       showCopyFeedback('Unable to copy');
     }
   };
+  const flaggedClientReviewContent = flaggedClientReview ? (
+    <FlaggedClientReviewCardList
+      review={flaggedClientReview}
+      onCopyField={handleCopyText}
+    />
+  ) : null;
 
   return (
     <ChatBubble
@@ -154,9 +166,11 @@ export default function ChatMessageBubble({
       showSpeakerLabel={showSpeakerLabel}
       speakerLabel={speakerLabel}
       messageKind={messageKind}
-      onLongPress={canCopyMessage ? handleCopyMessage : null}
+      onLongPress={canCopyMessage ? () => handleCopyText() : null}
       copyFeedback={copyFeedback}
       copyFeedbackTone={copyFeedback === 'Unable to copy' ? 'error' : 'secondary'}
+      assistantContent={flaggedClientReviewContent}
+      assistantWide={Boolean(flaggedClientReviewContent)}
     />
   );
 }
