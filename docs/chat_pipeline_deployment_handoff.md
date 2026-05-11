@@ -39,6 +39,7 @@ Set names only; values must come from the approved secret manager.
 - `CHAT_CACHE_TIMEOUT_MS`
 - `CHAT_ROUTER_TIMEOUT_MS`
 - `CHAT_STREAM_LEGACY_ALIAS_ENABLED`
+- `CHAT_STAGING_OPENAI_ONLY` (staging only)
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 - `ANTHROPIC_API_KEY`
@@ -52,6 +53,7 @@ Recommended first rollout values:
 - `CHAT_CACHE_TIMEOUT_MS=25`.
 - `CHAT_ROUTER_TIMEOUT_MS=200`.
 - `CHAT_STREAM_LEGACY_ALIAS_ENABLED=true` until every deployed client handles canonical `token/content` events.
+- `CHAT_STAGING_OPENAI_ONLY=true` on Render free-tier staging to keep the 512 MB instance on one provider SDK stack during trace baselines. Leave this unset/false outside staging unless intentionally load-testing a single-provider path.
 - Leave `TRAINER_INTELLIGENCE_ORCHESTRATION_ENABLED` at the current environment value; this deployment does not require changing that flag.
 
 ## Staging Apply Order
@@ -108,6 +110,16 @@ Promotion criteria:
 - No broken SSE streams; failures emit structured `error` events.
 - Fast-path mocked/local tests remain under 500ms first token.
 - Staging external-provider p50/p99 gaps, if any, are documented in `docs/chat_slow_response_runbook.md` or the rollout ticket.
+
+Latest Render free-tier staging baseline (`mode-backend-staging.onrender.com`, `APP_ENV=staging`,
+Supabase ref `ssizauuehaggsovmlpqk`, `CHAT_STAGING_OPENAI_ONLY=true`):
+
+- Run completed with 21 successful streams, 0 errors, and 0 missing first-token timings.
+- `time_to_first_token_ms`: p50 5122, p95 7165, p99 20355, max 20355.
+- `total_response_ms`: p50 17072, p95 37219, p99 47829, max 47829.
+- Safety verification passed: `trainer_review_pending=true`, 1 active safety flag, 1 `safety_escalation` trainer system event.
+- Cleanup completed for disposable `smoke_test_20260511193408_094d8d96` tenant and auth users.
+- Latency is above target on free-tier staging; treat this as a documented staging capacity/SLO gap, not production readiness evidence for latency.
 
 ## Production Rollout
 

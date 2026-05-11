@@ -18,7 +18,7 @@ Memory/context strategy: bounded `UserDigest` plus trainer persona, 3-5 retrieve
 
 Streaming: SSE over FastAPI `StreamingResponse` in `backend/app/api/v1/chat.py` lines 307-448 and `backend/app/api/v1/chat_sessions.py` lines 267-446. Canonical events are `status`, `token`, `done`, and `error`, with temporary legacy `message_delta` aliasing.
 
-Env vars: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `REDIS_URL`, `CHAT_CACHE_ENABLED`, `CHAT_CACHE_TIMEOUT_MS`, `CHAT_ROUTER_TIMEOUT_MS`, `CHAT_STREAM_LEGACY_ALIAS_ENABLED`, `EXPOSE_ROUTE_DEBUG`, `TRAINER_INTELLIGENCE_ORCHESTRATION_ENABLED`.
+Env vars: `OPENAI_API_KEY`, `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `REDIS_URL`, `CHAT_CACHE_ENABLED`, `CHAT_CACHE_TIMEOUT_MS`, `CHAT_ROUTER_TIMEOUT_MS`, `CHAT_STREAM_LEGACY_ALIAS_ENABLED`, `CHAT_STAGING_OPENAI_ONLY`, `EXPOSE_ROUTE_DEBUG`, `TRAINER_INTELLIGENCE_ORCHESTRATION_ENABLED`.
 
 Critical risks identified: semantic cache remains TODO because no vector store/vector RPC exists; provider streaming token usage may be zero when provider APIs do not return usage during streaming; real external-provider latency needs staging trace baselines before production SLO sign-off; `CHAT_STREAM_LEGACY_ALIAS_ENABLED` should stay true until all clients support canonical token events.
 
