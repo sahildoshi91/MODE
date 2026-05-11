@@ -489,32 +489,32 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         )
 
     def _build_service(self, anthropic_enabled=False, trainer_intelligence_service=None):
-        with patch("app.modules.conversation.service.GeminiClient", return_value=FakeGeminiClient()):
-            with patch("app.modules.conversation.service.OpenAIClient", return_value=FakeOpenAIClient()):
-                with patch.object(sys.modules["app.modules.conversation.service"].settings, "anthropic_api_key", "test-anthropic-key" if anthropic_enabled else None):
-                    with patch("app.modules.conversation.service.AnthropicClient", return_value=FakeAnthropicClient()):
-                        return ConversationService(
-                            self.repository,
-                            self.profile_service,
-                            self.trainer_review_service,
-                            self.trainer_persona_repository,
-                            trainer_onboarding_service=self.trainer_onboarding_service,
-                            trainer_intelligence_service=trainer_intelligence_service,
-                        )
+        service = ConversationService(
+            self.repository,
+            self.profile_service,
+            self.trainer_review_service,
+            self.trainer_persona_repository,
+            trainer_onboarding_service=self.trainer_onboarding_service,
+            trainer_intelligence_service=trainer_intelligence_service,
+        )
+        service.gemini_client = FakeGeminiClient()
+        service.openai_client = FakeOpenAIClient()
+        service.anthropic_client = FakeAnthropicClient() if anthropic_enabled else None
+        return service
 
     def _build_service_with_repository(self, repository, anthropic_enabled=False, trainer_intelligence_service=None):
-        with patch("app.modules.conversation.service.GeminiClient", return_value=FakeGeminiClient()):
-            with patch("app.modules.conversation.service.OpenAIClient", return_value=FakeOpenAIClient()):
-                with patch.object(sys.modules["app.modules.conversation.service"].settings, "anthropic_api_key", "test-anthropic-key" if anthropic_enabled else None):
-                    with patch("app.modules.conversation.service.AnthropicClient", return_value=FakeAnthropicClient()):
-                        return ConversationService(
-                            repository,
-                            self.profile_service,
-                            self.trainer_review_service,
-                            self.trainer_persona_repository,
-                            trainer_onboarding_service=self.trainer_onboarding_service,
-                            trainer_intelligence_service=trainer_intelligence_service,
-                        )
+        service = ConversationService(
+            repository,
+            self.profile_service,
+            self.trainer_review_service,
+            self.trainer_persona_repository,
+            trainer_onboarding_service=self.trainer_onboarding_service,
+            trainer_intelligence_service=trainer_intelligence_service,
+        )
+        service.gemini_client = FakeGeminiClient()
+        service.openai_client = FakeOpenAIClient()
+        service.anthropic_client = FakeAnthropicClient() if anthropic_enabled else None
+        return service
 
     def test_handle_chat_uses_default_fast_route_with_gemini(self):
         service = self._build_service()

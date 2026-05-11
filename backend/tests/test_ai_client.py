@@ -8,7 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 
-from app.ai.client import OpenAIClient, _run_with_retries
+from app.ai.client import OpenAIClient, _run_with_retries, clear_cached_provider_clients, get_cached_openai_client
 from app.core.config import settings
 
 
@@ -23,6 +23,21 @@ class FakeOpenAIResponse:
 
 
 class OpenAIClientTests(unittest.TestCase):
+    def tearDown(self):
+        clear_cached_provider_clients()
+
+    def test_cached_openai_client_reuses_process_instance(self):
+        clear_cached_provider_clients()
+        fake_client = object()
+
+        with patch("app.ai.client.OpenAIClient", return_value=fake_client) as openai_client_cls:
+            first = get_cached_openai_client()
+            second = get_cached_openai_client()
+
+        self.assertIs(first, fake_client)
+        self.assertIs(second, fake_client)
+        openai_client_cls.assert_called_once()
+
     def test_create_chat_completion_uses_supported_sdk_client(self):
         fake_response = FakeOpenAIResponse('{"title":"Builder"}')
         create_mock = unittest.mock.Mock(return_value=fake_response)

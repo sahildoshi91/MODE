@@ -17,6 +17,9 @@ from app.ai.client import (
     OpenAIClient,
     TextCompletion,
     TokenUsage as AIClientTokenUsage,
+    get_cached_anthropic_client,
+    get_cached_gemini_client,
+    get_cached_openai_client,
 )
 from app.core.config import settings
 from app.core.tenancy import TrainerContext
@@ -90,6 +93,7 @@ MINIMAL_SAFE_FALLBACK_MESSAGE = (
     "Try a low-risk option for now: keep intensity easy, avoid anything that worsens symptoms, "
     "and check in with your trainer before making a bigger change."
 )
+_CLIENT_OVERRIDE_UNSET = object()
 SAFETY_ESCALATION_HOLDING_RESPONSE = (
     "I want to be careful here. That sounds like it may need your trainer's review, so I'm flagging it for them now. "
     "For the moment, keep things easy, avoid anything that worsens symptoms, and do not push through pain or medical symptoms."
@@ -191,22 +195,45 @@ class ConversationService:
         self.router = ConversationRouter()
         self.intent_router = IntentRouter()
         self.chat_cache = get_chat_cache()
-        self.gemini_client: GeminiClient | None = self._safe_init_gemini_client()
-        self.openai_client: OpenAIClient | None = self._safe_init_openai_client()
-        self.anthropic_client: AnthropicClient | None = None
-        if settings.anthropic_api_key:
-            try:
-                self.anthropic_client = AnthropicClient()
-            except RuntimeError:
-                self.anthropic_client = None
-                logger.warning("Anthropic client unavailable, continuing with fallback providers")
-            except Exception:
-                self.anthropic_client = None
-                logger.exception("Anthropic client failed to initialize, continuing with fallback providers")
+        self._gemini_client_override: Any = _CLIENT_OVERRIDE_UNSET
+        self._openai_client_override: Any = _CLIENT_OVERRIDE_UNSET
+        self._anthropic_client_override: Any = _CLIENT_OVERRIDE_UNSET
 
-    def _safe_init_gemini_client(self) -> GeminiClient | None:
+    @property
+    def gemini_client(self) -> GeminiClient | Any | None:
+        if self._gemini_client_override is not _CLIENT_OVERRIDE_UNSET:
+            return self._gemini_client_override
+        return self._safe_get_gemini_client()
+
+    @gemini_client.setter
+    def gemini_client(self, value: Any) -> None:
+        self._gemini_client_override = value
+
+    @property
+    def openai_client(self) -> OpenAIClient | Any | None:
+        if self._openai_client_override is not _CLIENT_OVERRIDE_UNSET:
+            return self._openai_client_override
+        return self._safe_get_openai_client()
+
+    @openai_client.setter
+    def openai_client(self, value: Any) -> None:
+        self._openai_client_override = value
+
+    @property
+    def anthropic_client(self) -> AnthropicClient | Any | None:
+        if self._anthropic_client_override is not _CLIENT_OVERRIDE_UNSET:
+            return self._anthropic_client_override
+        if not settings.anthropic_api_key:
+            return None
+        return self._safe_get_anthropic_client()
+
+    @anthropic_client.setter
+    def anthropic_client(self, value: Any) -> None:
+        self._anthropic_client_override = value
+
+    def _safe_get_gemini_client(self) -> GeminiClient | None:
         try:
-            return GeminiClient()
+            return get_cached_gemini_client()
         except RuntimeError:
             logger.warning("Gemini client unavailable, continuing with fallback providers")
             return None
@@ -214,11 +241,21 @@ class ConversationService:
             logger.exception("Gemini client failed to initialize, continuing with fallback providers")
             return None
 
-    def _safe_init_openai_client(self) -> OpenAIClient | None:
+    def _safe_get_openai_client(self) -> OpenAIClient | None:
         try:
-            return OpenAIClient()
+            return get_cached_openai_client()
         except Exception:
             logger.exception("OpenAI client failed to initialize, continuing with fallback providers")
+            return None
+
+    def _safe_get_anthropic_client(self) -> AnthropicClient | None:
+        try:
+            return get_cached_anthropic_client()
+        except RuntimeError:
+            logger.warning("Anthropic client unavailable, continuing with fallback providers")
+            return None
+        except Exception:
+            logger.exception("Anthropic client failed to initialize, continuing with fallback providers")
             return None
 
     def _exception_attribute(self, exc: Exception, attribute: str) -> Any:
@@ -1162,10 +1199,11 @@ class ConversationService:
         }
 
     def _gemini_text_completion(self, prompt: PromptPackage) -> TextCompletion:
-        if not self.gemini_client:
+        gemini_client = self.gemini_client
+        if not gemini_client:
             raise ConversationProcessingError("Chat response could not be completed")
         combined_prompt = f"{prompt.system_prompt}\n\n{prompt.user_prompt}"
-        gemini_completion = self.gemini_client.create_chat_completion(combined_prompt)
+        gemini_completion = gemini_client.create_chat_completion(combined_prompt)
         return TextCompletion(
             text=gemini_completion.text,
             token_usage=AIClientTokenUsage(
@@ -1183,9 +1221,10 @@ class ConversationService:
         prompt: PromptPackage,
     ) -> tuple[TextCompletion, str]:
         if provider == "openai":
-            if not settings.openai_api_key or not self.openai_client:
+            openai_client = self.openai_client
+            if not settings.openai_api_key or not openai_client:
                 raise RuntimeError("openai_client_not_configured")
-            completion = self.openai_client.create_chat_completion_with_usage(
+            completion = openai_client.create_chat_completion_with_usage(
                 model=route.model if route.provider == "openai" else GPT_5_4_MINI_MODEL,
                 messages=[
                     {"role": "system", "content": prompt.system_prompt},
@@ -1195,9 +1234,10 @@ class ConversationService:
             return completion, route.model if route.provider == "openai" else GPT_5_4_MINI_MODEL
 
         if provider == "anthropic":
-            if not self.anthropic_client:
+            anthropic_client = self.anthropic_client
+            if not anthropic_client:
                 raise RuntimeError("anthropic_client_not_configured")
-            completion = self.anthropic_client.create_chat_completion(
+            completion = anthropic_client.create_chat_completion(
                 model=ANTHROPIC_SONNET_MODEL,
                 system_prompt=prompt.system_prompt,
                 user_prompt=prompt.user_prompt,
@@ -2432,7 +2472,8 @@ class ConversationService:
         if prompt is None:
             raise ConversationProcessingError("Chat response could not be completed")
 
-        if route.provider == "anthropic" and self.anthropic_client:
+        anthropic_client = self.anthropic_client
+        if route.provider == "anthropic" and anthropic_client:
             route_debug = self._build_route_debug(route, "anthropic", ANTHROPIC_SONNET_MODEL)
             result_state = StreamResultState()
             result_state.trace_metadata = self._build_trace_metadata(
@@ -2444,7 +2485,7 @@ class ConversationService:
             def anthropic_iterator() -> Iterator[str]:
                 try:
                     full_response: list[str] = []
-                    for text in self.anthropic_client.stream_chat_completion(
+                    for text in anthropic_client.stream_chat_completion(
                         model=ANTHROPIC_SONNET_MODEL,
                         system_prompt=prompt.system_prompt,
                         user_prompt=prompt.user_prompt,
@@ -2501,7 +2542,8 @@ class ConversationService:
 
             return conversation["id"], anthropic_iterator(), route_debug, result_state
 
-        if route.provider == "openai" and self.openai_client:
+        openai_client = self.openai_client
+        if route.provider == "openai" and openai_client:
             route_debug = self._build_route_debug(route, "openai", route.model)
             result_state = StreamResultState()
             result_state.trace_metadata = self._build_trace_metadata(
@@ -2513,7 +2555,7 @@ class ConversationService:
             def openai_iterator() -> Iterator[str]:
                 try:
                     full_response: list[str] = []
-                    for text in self.openai_client.stream_chat_completion(
+                    for text in openai_client.stream_chat_completion(
                         model=route.model,
                         messages=[
                             {"role": "system", "content": prompt.system_prompt},
@@ -2572,7 +2614,8 @@ class ConversationService:
 
             return conversation["id"], openai_iterator(), route_debug, result_state
 
-        if route.provider != "gemini" or not self.gemini_client:
+        gemini_client = self.gemini_client
+        if route.provider != "gemini" or not gemini_client:
             route_debug = self._build_route_debug(route, route.provider, route.model)
             result_state = StreamResultState()
 
@@ -2654,7 +2697,7 @@ class ConversationService:
         def chunk_iterator() -> Iterator[str]:
             try:
                 full_response: list[str] = []
-                for text in self.gemini_client.stream_chat_completion(combined_prompt):
+                for text in gemini_client.stream_chat_completion(combined_prompt):
                     full_response.append(text)
                     yield text
 

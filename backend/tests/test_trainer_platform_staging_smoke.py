@@ -263,9 +263,9 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
 
     def _send_chat(self, access_token: str, message: str) -> dict:
         with (
-            patch("app.modules.conversation.service.GeminiClient", return_value=FakeLLMClient()),
-            patch("app.modules.conversation.service.OpenAIClient", return_value=FakeLLMClient()),
-            patch("app.modules.conversation.service.AnthropicClient", return_value=FakeLLMClient()),
+            patch("app.modules.conversation.service.get_cached_gemini_client", return_value=FakeLLMClient()),
+            patch("app.modules.conversation.service.get_cached_openai_client", return_value=FakeLLMClient()),
+            patch("app.modules.conversation.service.get_cached_anthropic_client", return_value=FakeLLMClient()),
         ):
             response = self.client.post(
                 "/api/v1/chat",

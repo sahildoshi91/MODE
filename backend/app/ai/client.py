@@ -2,6 +2,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Iterator
 
 try:
@@ -259,3 +260,24 @@ class GeminiClient:
                 thoughts_tokens=getattr(usage, "thoughts_token_count", 0) or 0,
             ),
         )
+
+
+@lru_cache(maxsize=1)
+def get_cached_openai_client() -> OpenAIClient:
+    return OpenAIClient()
+
+
+@lru_cache(maxsize=1)
+def get_cached_anthropic_client() -> AnthropicClient:
+    return AnthropicClient()
+
+
+@lru_cache(maxsize=1)
+def get_cached_gemini_client() -> GeminiClient:
+    return GeminiClient()
+
+
+def clear_cached_provider_clients() -> None:
+    get_cached_openai_client.cache_clear()
+    get_cached_anthropic_client.cache_clear()
+    get_cached_gemini_client.cache_clear()

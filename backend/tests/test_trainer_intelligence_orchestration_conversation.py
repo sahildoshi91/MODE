@@ -136,14 +136,15 @@ class ConversationOrchestrationTests(unittest.TestCase):
         )
 
     def _build_service(self, orchestration_service):
-        with patch("app.modules.conversation.service.GeminiClient", return_value=FakeGeminiClient()):
-            return ConversationService(
-                self.repository,
-                FakeProfileService(),
-                FakeTrainerReviewService(),
-                FakeTrainerPersonaRepository(),
-                trainer_intelligence_service=orchestration_service,
-            )
+        service = ConversationService(
+            self.repository,
+            FakeProfileService(),
+            FakeTrainerReviewService(),
+            FakeTrainerPersonaRepository(),
+            trainer_intelligence_service=orchestration_service,
+        )
+        service.gemini_client = FakeGeminiClient()
+        return service
 
     def test_orchestration_flag_off_keeps_prompt_without_layered_context(self):
         service = self._build_service(FakeTrainerIntelligenceService())

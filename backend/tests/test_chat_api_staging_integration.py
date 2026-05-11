@@ -173,7 +173,7 @@ class ChatApiStagingIntegrationTests(unittest.TestCase):
                     pass
 
     def _chat(self, access_token, payload):
-        with patch("app.modules.conversation.service.GeminiClient", return_value=FakeGeminiClient()):
+        with patch("app.modules.conversation.service.get_cached_gemini_client", return_value=FakeGeminiClient()):
             return self.client.post(
                 "/api/v1/chat",
                 json=payload,

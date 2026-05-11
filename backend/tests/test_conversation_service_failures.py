@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -134,6 +135,35 @@ class ConversationServiceFailureTests(unittest.TestCase):
             message="What should I do today?",
             client_context={"platform": "ios"},
         )
+
+    def test_service_construction_does_not_initialize_provider_clients(self):
+        with (
+            patch("app.modules.conversation.service.get_cached_gemini_client") as gemini_factory,
+            patch("app.modules.conversation.service.get_cached_openai_client") as openai_factory,
+            patch("app.modules.conversation.service.get_cached_anthropic_client") as anthropic_factory,
+        ):
+            for _ in range(10):
+                ConversationService(
+                    BaseConversationRepository(),
+                    WorkingProfileService(),
+                    FakeTrainerReviewService(),
+                    FakeTrainerPersonaRepository(),
+                )
+
+        gemini_factory.assert_not_called()
+        openai_factory.assert_not_called()
+        anthropic_factory.assert_not_called()
+
+    def test_provider_factory_failure_does_not_crash_service_construction(self):
+        service = ConversationService(
+            BaseConversationRepository(),
+            WorkingProfileService(),
+            FakeTrainerReviewService(),
+            FakeTrainerPersonaRepository(),
+        )
+
+        with patch("app.modules.conversation.service.get_cached_gemini_client", side_effect=RuntimeError("missing")):
+            self.assertIsNone(service.gemini_client)
 
     def test_prompt_includes_user_why_as_motivation_baseline(self):
         service = ConversationService(
