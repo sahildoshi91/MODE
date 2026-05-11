@@ -6,7 +6,7 @@ services:
     branch: feature-chat-routing-analytics-publish
     rootDir: backend
     region: oregon
-    plan: starter
+    plan: free
     autoDeployTrigger: commit
     healthCheckPath: /healthz
     buildCommand: pip install -r requirements.txt
