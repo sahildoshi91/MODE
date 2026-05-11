@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     chat_cache_timeout_ms: int = Field(default=25, ge=1, le=500)
     chat_router_timeout_ms: int = Field(default=200, ge=1, le=1000)
     chat_stream_legacy_alias_enabled: bool = True
+    chat_staging_openai_only: bool = True
     atlas_enabled: bool = True
     atlas_background_learning_enabled: bool = True
     atlas_review_required: bool = True

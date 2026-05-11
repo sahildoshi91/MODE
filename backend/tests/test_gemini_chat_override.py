@@ -13,6 +13,7 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from app.ai.client import GeminiCompletion, TokenUsage
+from app.core.config import settings
 from app.core.tenancy import TrainerContext
 from app.modules.conversation.schemas import ChatRequest
 from app.modules.conversation.service import (
@@ -551,6 +552,25 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertIn("Coach Alex", prompt)
         self.assertIn("Strength Coach", prompt)
         self.assertIn("I can train four days a week.", prompt)
+
+    def test_staging_runtime_can_force_fast_path_to_openai_only(self):
+        original_app_env = settings.app_env
+        original_openai_only = settings.chat_staging_openai_only
+        settings.app_env = "staging"
+        settings.chat_staging_openai_only = True
+        try:
+            service = self._build_service()
+
+            response = service.handle_chat("user-123", self.trainer_context, self.request)
+        finally:
+            settings.app_env = original_app_env
+            settings.chat_staging_openai_only = original_openai_only
+
+        self.assertEqual(response.assistant_message, "GPT says hello")
+        self.assertEqual(response.route_debug.selected_provider, "openai")
+        self.assertEqual(response.route_debug.execution_provider, "openai")
+        self.assertEqual(service.gemini_client.prompts, [])
+        self.assertEqual(len(service.openai_client.calls), 1)
 
     def test_stream_chat_yields_chunks_and_persists_full_response(self):
         service = self._build_service()

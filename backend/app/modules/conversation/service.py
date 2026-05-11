@@ -722,7 +722,8 @@ class ConversationService:
                 user_profile=profile,
             )
         )
-        return self._apply_intent_route(route, intent_route), profile
+        routed = self._apply_intent_route(route, intent_route)
+        return self._apply_runtime_provider_constraints(routed), profile
 
     def _apply_intent_route(self, route: RoutingDecision, intent_route: IntentRoute) -> RoutingDecision:
         intent_payload = intent_route.model_dump(mode="json")
@@ -753,6 +754,20 @@ class ConversationService:
                 intent_route=intent_payload,
             )
         return replace(route, intent_route=intent_payload)
+
+    def _apply_runtime_provider_constraints(self, route: RoutingDecision) -> RoutingDecision:
+        if (
+            settings.app_env == "staging"
+            and settings.chat_staging_openai_only
+            and route.provider in {"gemini", "anthropic"}
+        ):
+            return replace(
+                route,
+                provider="openai",
+                model=GPT_5_4_MINI_MODEL,
+                reason=f"{route.reason}_staging_openai_only",
+            )
+        return route
 
     @staticmethod
     def _is_safety_escalation_route(route: RoutingDecision) -> bool:
