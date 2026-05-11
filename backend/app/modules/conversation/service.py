@@ -1295,22 +1295,55 @@ class ConversationService:
         intent = route.intent_route if isinstance(route.intent_route, dict) else {}
         is_safety_escalation = route.flow == "safety_escalation" or bool(intent.get("notify_trainer"))
 
-        if not is_safety_escalation:
-            covered, reason, matched_memory_key = self._is_question_covered_by_memory_theme(
-                trainer_id=trainer_id,
-                client_id=client_id,
-                question=request.message,
-            )
-            if covered:
-                logger.info(
-                    "Skipped trainer review queueing due to memory-theme coverage trainer_id=%s client_id=%s conversation_id=%s reason=%s matched_memory_key=%s",
+        if is_safety_escalation:
+            queue_item = None
+            try:
+                queue_item = self.trainer_review_service.queue_unanswered_question(
+                    trainer_id=trainer_id,
+                    client_id=client_id,
+                    conversation_id=conversation_id,
+                    message_id=user_message_id,
+                    user_question=request.message,
+                    model_draft_answer=assistant_message,
+                    confidence_score=route.retrieval_confidence,
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to queue safety escalation trainer review trainer_id=%s client_id=%s conversation_id=%s",
                     trainer_id,
                     client_id,
                     conversation_id,
-                    reason,
-                    matched_memory_key,
                 )
-                return
+            self._emit_safety_escalation_event_safely(
+                trainer_context=trainer_context,
+                conversation_id=conversation_id,
+                message_id=user_message_id,
+                route=route,
+                request=request,
+                queue_item=queue_item,
+            )
+            self._tag_trainer_review_pending_safely(
+                trainer_context=trainer_context,
+                conversation_id=conversation_id,
+                route=route,
+            )
+            return
+
+        covered, reason, matched_memory_key = self._is_question_covered_by_memory_theme(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            question=request.message,
+        )
+        if covered:
+            logger.info(
+                "Skipped trainer review queueing due to memory-theme coverage trainer_id=%s client_id=%s conversation_id=%s reason=%s matched_memory_key=%s",
+                trainer_id,
+                client_id,
+                conversation_id,
+                reason,
+                matched_memory_key,
+            )
+            return
 
         queue_item = self.trainer_review_service.queue_unanswered_question(
             trainer_id=trainer_id,
@@ -1321,15 +1354,7 @@ class ConversationService:
             model_draft_answer=assistant_message,
             confidence_score=route.retrieval_confidence,
         )
-        if is_safety_escalation:
-            self._emit_safety_escalation_event_safely(
-                trainer_context=trainer_context,
-                conversation_id=conversation_id,
-                message_id=user_message_id,
-                route=route,
-                request=request,
-                queue_item=queue_item,
-            )
+        del queue_item
         self._tag_trainer_review_pending_safely(
             trainer_context=trainer_context,
             conversation_id=conversation_id,

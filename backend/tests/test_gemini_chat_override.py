@@ -172,6 +172,12 @@ class FakeTrainerReviewService:
         return item
 
 
+class BrokenTrainerReviewService:
+    def queue_unanswered_question(self, **kwargs):
+        del kwargs
+        raise RuntimeError("trainer review queue unavailable")
+
+
 class FakeTrainerPersonaRepository:
     def __init__(self):
         self.default_persona = {
@@ -606,6 +612,25 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         metadata = self.repository.metadata_updates[-1]["metadata"]
         self.assertTrue(metadata["trainer_review_pending"])
         self.assertIn("pain_language", metadata["trainer_review_risk_flags"])
+        self.assertEqual(metadata["active_safety_flags"][0]["type"], "injury")
+
+    def test_safety_escalation_tags_and_events_when_review_queue_fails(self):
+        self.trainer_review_service = BrokenTrainerReviewService()
+        service = self._build_service()
+        request = ChatRequest(
+            message="My knee is really hurting after squats. What should I do?",
+            client_context={},
+        )
+
+        response = service.handle_chat("user-123", self.trainer_context, request)
+
+        self.assertEqual(response.assistant_message, SAFETY_ESCALATION_HOLDING_RESPONSE)
+        self.assertEqual(len(self.repository.system_events), 1)
+        event = self.repository.system_events[0]
+        self.assertEqual(event["event_type"], "safety_escalation")
+        self.assertIsNone(event["payload"]["queue_id"])
+        metadata = self.repository.metadata_updates[-1]["metadata"]
+        self.assertTrue(metadata["trainer_review_pending"])
         self.assertEqual(metadata["active_safety_flags"][0]["type"], "injury")
 
     def test_stream_safety_escalation_yields_before_trainer_notification(self):
