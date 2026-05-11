@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -78,28 +79,30 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
             ),
         )
         cls.client = TestClient(app)
+        cls.run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         cls.run_id = uuid4().hex
+        cls.record_prefix = f"smoke_test_{cls.run_timestamp}_{cls.run_id[:8]}"
         cls.password = f"ModeStage!{cls.run_id[:12]}"
         cls.user_ids = []
         cls.tenant_ids = []
 
-        cls.trainer_1_user = cls._create_auth_user(f"mode-stage-trainer1+{cls.run_id}@example.com")
-        cls.trainer_2_user = cls._create_auth_user(f"mode-stage-trainer2+{cls.run_id}@example.com")
-        cls.client_1_user = cls._create_auth_user(f"mode-stage-client1+{cls.run_id}@example.com")
-        cls.client_2_user = cls._create_auth_user(f"mode-stage-client2+{cls.run_id}@example.com")
-        cls.outsider_user = cls._create_auth_user(f"mode-stage-outsider+{cls.run_id}@example.com")
+        cls.trainer_1_user = cls._create_auth_user(f"{cls.record_prefix}_trainer1@example.com")
+        cls.trainer_2_user = cls._create_auth_user(f"{cls.record_prefix}_trainer2@example.com")
+        cls.client_1_user = cls._create_auth_user(f"{cls.record_prefix}_client1@example.com")
+        cls.client_2_user = cls._create_auth_user(f"{cls.record_prefix}_client2@example.com")
+        cls.outsider_user = cls._create_auth_user(f"{cls.record_prefix}_outsider@example.com")
 
         cls.tenant_1_id, cls.trainer_1_id = cls._bootstrap_trainer_tenant(
             trainer_user_id=cls.trainer_1_user["id"],
-            tenant_name=f"MODE Stage Tenant A {cls.run_id}",
-            tenant_slug=f"mode-stage-a-{cls.run_id}",
-            trainer_display_name="Coach Stage A",
+            tenant_name=f"{cls.record_prefix}_tenant_a",
+            tenant_slug=f"{cls.record_prefix}_tenant_a",
+            trainer_display_name=f"{cls.record_prefix}_trainer_a",
         )
         cls.tenant_2_id, cls.trainer_2_id = cls._bootstrap_trainer_tenant(
             trainer_user_id=cls.trainer_2_user["id"],
-            tenant_name=f"MODE Stage Tenant B {cls.run_id}",
-            tenant_slug=f"mode-stage-b-{cls.run_id}",
-            trainer_display_name="Coach Stage B",
+            tenant_name=f"{cls.record_prefix}_tenant_b",
+            tenant_slug=f"{cls.record_prefix}_tenant_b",
+            trainer_display_name=f"{cls.record_prefix}_trainer_b",
         )
         cls.tenant_ids.extend([cls.tenant_1_id, cls.tenant_2_id])
 
@@ -169,7 +172,7 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
                     "tenant_name": tenant_name,
                     "tenant_slug": tenant_slug,
                     "trainer_display_name": trainer_display_name,
-                    "default_persona_name": "Staging Coach",
+                    "default_persona_name": f"{tenant_slug}_persona",
                     "tone_description": "Clear and practical.",
                     "coaching_philosophy": "Protect isolation and consistency.",
                 },
@@ -263,9 +266,9 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
 
     def _send_chat(self, access_token: str, message: str) -> dict:
         with (
-            patch("app.modules.conversation.service.GeminiClient", return_value=FakeLLMClient()),
-            patch("app.modules.conversation.service.OpenAIClient", return_value=FakeLLMClient()),
-            patch("app.modules.conversation.service.AnthropicClient", return_value=FakeLLMClient()),
+            patch("app.modules.conversation.service.get_cached_gemini_client", return_value=FakeLLMClient()),
+            patch("app.modules.conversation.service.get_cached_openai_client", return_value=FakeLLMClient()),
+            patch("app.modules.conversation.service.get_cached_anthropic_client", return_value=FakeLLMClient()),
         ):
             response = self.client.post(
                 "/api/v1/chat",
@@ -344,16 +347,16 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
         self.assertEqual(payload.get("output", {}).get("action_type"), "message_client")
 
     def test_trainer_coach_events_are_idempotent_and_trainer_scoped(self):
-        event_key = f"coach-event-smoke-{self.run_id}-{uuid4().hex[:8]}"
+        event_key = f"{self.record_prefix}_coach_event_{uuid4().hex[:8]}"
         payload = {
             "event_key": event_key,
             "event_type": "rule_updated",
-            "message": "Rule updated from staging smoke",
+            "message": f"{self.record_prefix}_rule_updated",
             "severity": "success",
             "visibility": "system",
             "status": "confirmed",
             "client_id": self.client_1_id,
-            "payload": {"source": "staging_smoke"},
+            "payload": {"source": self.record_prefix},
         }
 
         create_response = self.client.post(
@@ -386,13 +389,13 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
         create_response = self.client.post(
             "/api/v1/trainer-programs/templates",
             json={
-                "name": f"Stage Template {self.run_id[:8]}",
+                "name": f"{self.record_prefix}_program_template",
                 "goal_type": "strength",
                 "experience_level": "intermediate",
                 "equipment_access": "full_gym",
                 "frequency": 3,
                 "template_json": {"blocks": [{"day": 1, "focus": "lower"}]},
-                "metadata": {"source": "staging_smoke"},
+                "metadata": {"source": self.record_prefix},
             },
             headers=self._headers(self.trainer_1_access_token),
         )
@@ -412,9 +415,9 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
         patch_response = self.client.patch(
             f"/api/v1/trainer-programs/templates/{template_id}",
             json={
-                "name": f"Stage Template Updated {self.run_id[:8]}",
+                "name": f"{self.record_prefix}_program_template_updated",
                 "frequency": 4,
-                "metadata": {"source": "staging_smoke_patch"},
+                "metadata": {"source": f"{self.record_prefix}_patch"},
             },
             headers=self._headers(self.trainer_1_access_token),
         )
@@ -442,32 +445,32 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
         self.assertTrue(archive_response.json().get("is_archived"))
 
     def test_trainer_coach_approve_bundle_applies_program_memory_delivery_and_idempotency(self):
-        prompt = f"Adjust plan and outreach for smoke flow {self.run_id[:8]}-{uuid4().hex[:6]}"
+        prompt = f"{self.record_prefix}_adjust_plan_{uuid4().hex[:6]}"
         self._send_chat(self.client_1_access_token, prompt)
         queue_item = self._latest_queue_item_for_client(self.trainer_1_access_token, self.client_1_id)
         output_id = queue_item.get("output_id")
         self.assertTrue(output_id)
 
-        idempotency_key = f"approve-smoke-{self.run_id}-{uuid4().hex[:8]}"
+        idempotency_key = f"{self.record_prefix}_approve_{uuid4().hex[:8]}"
         approve_payload = {
-            "edited_output_text": f"Approved via staging smoke {self.run_id[:8]}",
+            "edited_output_text": f"{self.record_prefix}_approved_output",
             "edited_output_json": {
-                "summary": f"Approved via staging smoke {self.run_id[:8]}",
+                "summary": f"{self.record_prefix}_approved_summary",
                 "action_type": "adjust_plan",
             },
             "idempotency_key": idempotency_key,
             "apply_bundle": {
                 "memory_deltas": [
                     {
-                        "memory_key": f"smoke_memory_{self.run_id[:8]}",
+                        "memory_key": f"{self.record_prefix}_memory",
                         "text": "Client responds well to concise weekly accountability nudges.",
                         "memory_type": "note",
                         "visibility": "ai_usable",
-                        "tags": ["staging", "smoke"],
+                        "tags": ["staging", "smoke", self.record_prefix],
                     }
                 ],
                 "program_template": {
-                    "name": f"Program from approve {self.run_id[:8]}",
+                    "name": f"{self.record_prefix}_approved_program",
                     "goal_type": "fat_loss",
                     "experience_level": "beginner",
                     "equipment_access": "minimal",
@@ -478,11 +481,11 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
                             {"day": 3, "focus": "conditioning"},
                         ]
                     },
-                    "metadata": {"source": "staging_smoke_approve_bundle"},
+                    "metadata": {"source": f"{self.record_prefix}_approve_bundle"},
                 },
                 "delivery": {
                     "mode": "send_client_message",
-                    "message_text": "Sharing your updated plan now.",
+                    "message_text": f"{self.record_prefix}_client_delivery",
                 },
             },
         }
@@ -578,10 +581,10 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
         ingest_response = self.client.post(
             "/api/v1/trainer-knowledge/ingest",
             json={
-                "title": f"Stage Methodology {self.run_id[:8]}",
+                "title": f"{self.record_prefix}_methodology",
                 "raw_text": "If fatigue is elevated, reduce intensity before reducing frequency.",
                 "document_type": "text",
-                "metadata": {"source": "staging_smoke"},
+                "metadata": {"source": self.record_prefix},
             },
             headers=self._headers(self.trainer_1_access_token),
         )
@@ -601,7 +604,7 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
         patch_response = self.client.patch(
             f"/api/v1/trainer-knowledge/{created_document_id}",
             json={
-                "title": f"Stage Methodology Updated {self.run_id[:8]}",
+                "title": f"{self.record_prefix}_methodology_updated",
                 "raw_text": "Updated: reduce intensity first, then adjust volume if fatigue stays high.",
             },
             headers=self._headers(self.trainer_1_access_token),
@@ -610,7 +613,7 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
         patch_payload = patch_response.json()
         self.assertEqual(
             patch_payload.get("document", {}).get("title"),
-            f"Stage Methodology Updated {self.run_id[:8]}",
+            f"{self.record_prefix}_methodology_updated",
         )
 
     def test_client_tokens_cannot_read_internal_only_coach_memory(self):
@@ -619,7 +622,7 @@ class TrainerPlatformStagingSmokeTests(unittest.TestCase):
                 "trainer_id": self.trainer_1_id,
                 "client_id": self.client_1_id,
                 "memory_type": "note",
-                "memory_key": f"internal-only-visibility-{self.run_id}",
+                "memory_key": f"{self.record_prefix}_internal_only_visibility",
                 "value_json": {
                     "visibility": "internal_only",
                     "text": "Internal trainer note for RLS smoke coverage.",

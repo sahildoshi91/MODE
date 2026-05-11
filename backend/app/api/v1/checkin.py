@@ -10,6 +10,7 @@ from app.core.dependencies import get_ai_feedback_logger_service, get_daily_chec
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
 from app.modules.ai_feedback.service import AIFeedbackService
+from app.modules.conversation.cache import invalidate_chat_context
 from app.modules.daily_checkins.repository import DailyCheckinRepositoryError
 from app.modules.daily_checkins.schemas import (
     CheckinProgressResponse,
@@ -289,6 +290,12 @@ async def submit_daily_checkin(
             client_id,
             request.date.isoformat(),
         )
+        if trainer_context.trainer_id and trainer_context.client_id:
+            invalidate_chat_context(
+                trainer_context.trainer_id,
+                trainer_context.client_id,
+                reason="readiness_score_updated",
+            )
         return result
     except DailyCheckinRepositoryError as exc:
         logger.exception(
@@ -518,7 +525,14 @@ async def log_generated_workout(
         },
     )
     try:
-        return service.log_generated_workout(user.id, request, client_id=client_id)
+        result = service.log_generated_workout(user.id, request, client_id=client_id)
+        if trainer_context.trainer_id and trainer_context.client_id:
+            invalidate_chat_context(
+                trainer_context.trainer_id,
+                trainer_context.client_id,
+                reason="workout_logged",
+            )
+        return result
     except ValueError as exc:
         logger.warning(
             "Log-generated-workout validation failed user_id=%s generated_plan_id=%s detail=%s",

@@ -69,6 +69,10 @@ class RouteDebug(BaseModel):
     task_type: str
     response_mode: str
     fallback_reason: str | None = None
+    intent_route: str | None = None
+    router_confidence: float | None = None
+    risk_flags: list[str] = Field(default_factory=list)
+    user_status_message: str | None = None
 
 
 class ConversationUsage(BaseModel):

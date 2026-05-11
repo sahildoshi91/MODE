@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -15,6 +16,7 @@ from app.core.auth import AuthenticatedUser, require_user
 from app.core.dependencies import get_chat_session_service, get_trainer_context
 from app.core.tenancy import TrainerContext
 from app.main import app
+from app.modules.conversation.intent import IntentRouter
 from app.modules.conversation.schemas import TokenUsage
 
 
@@ -48,7 +50,14 @@ def _session_payload():
 
 class FakeChatSessionApiService:
     def __init__(self):
+        self.conversation_service = type(
+            "FakeConversationService",
+            (),
+            {"intent_router": IntentRouter(), "trainer_intelligence_service": None},
+        )()
         self.persisted_ai_messages = []
+        self.post_stream_side_effects = []
+        self.event_order = []
 
     def list_history(self, **kwargs):
         del kwargs
@@ -108,6 +117,10 @@ class FakeChatSessionApiService:
             "message_index": 2,
             "metadata": kwargs.get("metadata") or {},
         }
+
+    def persist_post_stream_side_effects(self, **kwargs):
+        self.event_order.append("post_stream_side_effects")
+        self.post_stream_side_effects.append(kwargs)
 
 
 class MissingChatSessionStorageService(FakeChatSessionApiService):
@@ -178,6 +191,43 @@ class ChatSessionsApiTests(unittest.TestCase):
         fake_service = FakeChatSessionApiService()
         app.dependency_overrides[get_chat_session_service] = lambda: fake_service
 
+        from app.modules.conversation.streaming import ChatStreamSseEncoder
+
+        original_encode = ChatStreamSseEncoder.encode
+
+        def recording_encode(encoder, payload, *args, **kwargs):
+            if str(payload.get("type") or "") == "done":
+                fake_service.event_order.append("done_encoded")
+            return original_encode(encoder, payload, *args, **kwargs)
+
+        with patch("app.api.v1.chat_sessions.ChatStreamSseEncoder.encode", recording_encode):
+            response = self.client.post(
+                "/api/v1/chat/sessions/session-1/messages/stream",
+                json={"message": "Reach step goal"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        event_types = _sse_event_types(response.text)
+        self.assertEqual(event_types[0], "status")
+        self.assertTrue(set(event_types).issubset({"status", "token", "message_delta", "done", "error"}))
+        self.assertIn("token", event_types)
+        self.assertIn("message_delta", event_types)
+        self.assertIn("done", event_types)
+        self.assertIn('"content": "Good "', response.text)
+        self.assertIn('"assistant_message": "Good next move."', response.text)
+        self.assertIn('"ai_message"', response.text)
+        self.assertEqual(len(fake_service.persisted_ai_messages), 1)
+        self.assertEqual(fake_service.persisted_ai_messages[0]["content"], "Good next move.")
+        self.assertEqual(len(fake_service.post_stream_side_effects), 1)
+        self.assertEqual(fake_service.post_stream_side_effects[0]["conversation_id"], "conversation-1")
+        self.assertEqual(fake_service.post_stream_side_effects[0]["request"].message, "Reach step goal")
+        self.assertEqual(fake_service.event_order[-2:], ["done_encoded", "post_stream_side_effects"])
+
+    def test_message_stream_uses_intent_status_copy(self):
+        fake_service = FakeChatSessionApiService()
+        app.dependency_overrides[get_chat_session_service] = lambda: fake_service
+
         response = self.client.post(
             "/api/v1/chat/sessions/session-1/messages/stream",
             json={"message": "Reach step goal"},
@@ -185,15 +235,8 @@ class ChatSessionsApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        event_types = _sse_event_types(response.text)
-        self.assertEqual(event_types[0], "status")
-        self.assertTrue(set(event_types).issubset({"status", "message_delta", "done", "error"}))
-        self.assertIn("message_delta", event_types)
-        self.assertIn("done", event_types)
-        self.assertIn('"assistant_message": "Good next move."', response.text)
-        self.assertIn('"ai_message"', response.text)
-        self.assertEqual(len(fake_service.persisted_ai_messages), 1)
-        self.assertEqual(fake_service.persisted_ai_messages[0]["content"], "Good next move.")
+        self.assertIn('"message": "Reading your message..."', response.text)
+        self.assertIn('"message": "Checking your latest coaching context..."', response.text)
 
 
 if __name__ == "__main__":

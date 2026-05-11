@@ -13,6 +13,11 @@ class ConversationRepository:
     def __init__(self, supabase: Client):
         self.supabase = supabase
 
+    def _admin_supabase(self) -> Client:
+        from app.db.client import get_supabase_admin_client
+
+        return get_supabase_admin_client()
+
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
         response = (
             self.supabase
@@ -444,6 +449,53 @@ class ConversationRepository:
             .eq('id', conversation_id)
             .execute()
         )
+
+    def update_conversation_metadata(self, conversation_id: str, metadata: dict[str, Any]) -> None:
+        (
+            self.supabase
+            .table('conversations')
+            .update(
+                {
+                    'metadata': metadata,
+                    'updated_at': datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            .eq('id', conversation_id)
+            .execute()
+        )
+
+    def get_trainer_system_event_by_key(self, trainer_id: str, event_key: str) -> dict[str, Any] | None:
+        response = (
+            self._admin_supabase()
+            .table("trainer_system_events")
+            .select("*")
+            .eq("trainer_id", trainer_id)
+            .eq("event_key", event_key)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def insert_trainer_system_event(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        response = self._admin_supabase().table("trainer_system_events").insert(payload).execute()
+        return (response.data or [None])[0]
+
+    def get_client_tenant_id(self, trainer_id: str, client_id: str) -> str | None:
+        response = (
+            self._admin_supabase()
+            .table("clients")
+            .select("tenant_id")
+            .eq("id", client_id)
+            .eq("assigned_trainer_id", trainer_id)
+            .limit(1)
+            .execute()
+        )
+        row = response.data[0] if response.data else None
+        return str(row.get("tenant_id")) if isinstance(row, dict) and row.get("tenant_id") else None
+
+    def insert_coach_memory(self, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self.supabase.table("coach_memory").insert(payload).execute()
+        return (response.data or [None])[0] or {}
 
     @classmethod
     def _error_text(cls, exc: Exception) -> str:

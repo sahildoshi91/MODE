@@ -7,6 +7,7 @@ from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.dependencies import get_trainer_coach_service, get_trainer_context
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
+from app.modules.conversation.cache import invalidate_chat_context
 from app.modules.trainer_coach.schemas import (
     CoachCreateEventRequest,
     CoachEventsResponse,
@@ -52,6 +53,23 @@ def _enforce_trainer_coach_limit(
             "client_id": trainer_context.client_id,
         },
     )
+
+
+def _invalidate_queue_mutation_context(
+    trainer_context: TrainerContext,
+    response: CoachQueueMutationResponse,
+    *,
+    reason: str,
+    include_trainer_persona: bool = False,
+) -> None:
+    client_id = getattr(response.output, "client_id", None) if response and response.output else None
+    if trainer_context.trainer_id and client_id:
+        invalidate_chat_context(
+            trainer_context.trainer_id,
+            client_id,
+            reason=reason,
+            include_trainer_persona=include_trainer_persona,
+        )
 
 
 @router.get("/workspace", response_model=CoachWorkspaceResponse)
@@ -153,7 +171,15 @@ async def approve_trainer_coach_queue_item(
         trainer_context=trainer_context,
     )
     try:
-        return service.approve_queue_item(trainer_context, output_id, request)
+        response = service.approve_queue_item(trainer_context, output_id, request)
+        reason = "trainer_modifies_plan" if response.program_template else "trainer_note_added"
+        _invalidate_queue_mutation_context(
+            trainer_context,
+            response,
+            reason=reason,
+            include_trainer_persona=bool(response.program_template),
+        )
+        return response
     except ValueError as exc:
         _map_value_error(exc)
 

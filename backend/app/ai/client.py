@@ -2,21 +2,8 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any, Iterator
-
-try:
-    from google import genai
-    from google.genai import types
-except ImportError:  # pragma: no cover - exercised in runtime environments missing the SDK.
-    genai = None
-    types = None
-
-try:
-    import anthropic
-except ImportError:  # pragma: no cover - exercised in runtime environments missing the SDK.
-    anthropic = None
-
-from openai import OpenAI
 
 from app.core.config import settings
 
@@ -26,6 +13,11 @@ GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_FLASH_LITE_MODEL = "gemini-2.5-flash-lite"
 GPT_5_4_MINI_MODEL = "gpt-5.4-mini"
 ANTHROPIC_SONNET_MODEL = "claude-sonnet-4-20250514"
+
+OpenAI = None
+anthropic = None
+genai = None
+types = None
 
 
 @dataclass
@@ -46,6 +38,35 @@ class GeminiCompletion:
 class TextCompletion:
     text: str
     token_usage: TokenUsage
+
+
+def _load_openai_class() -> Any:
+    global OpenAI
+    if OpenAI is None:
+        from openai import OpenAI as OpenAIClass
+
+        OpenAI = OpenAIClass
+    return OpenAI
+
+
+def _load_anthropic_module() -> Any:
+    global anthropic
+    if anthropic is None:
+        import anthropic as anthropic_module
+
+        anthropic = anthropic_module
+    return anthropic
+
+
+def _load_gemini_modules() -> tuple[Any, Any]:
+    global genai, types
+    if genai is None or types is None:
+        from google import genai as genai_module
+        from google.genai import types as types_module
+
+        genai = genai_module
+        types = types_module
+    return genai, types
 
 
 def _run_with_retries(provider: str, model: str, fn):
@@ -78,7 +99,8 @@ def _run_with_retries(provider: str, model: str, fn):
 
 class OpenAIClient:
     def __init__(self) -> None:
-        self.client = OpenAI(
+        openai_class = _load_openai_class()
+        self.client = openai_class(
             api_key=settings.openai_api_key,
             timeout=settings.ai_request_timeout_seconds,
         )
@@ -108,6 +130,30 @@ class OpenAIClient:
             ),
         )
 
+    def stream_chat_completion(self, model: str, messages: list[dict[str, str]]) -> Iterator[str]:
+        stream = _run_with_retries(
+            "openai",
+            model,
+            lambda: self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=True,
+            ),
+        )
+        try:
+            for chunk in stream:
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                delta = getattr(choices[0], "delta", None)
+                content = getattr(delta, "content", None) if delta is not None else None
+                if content:
+                    yield str(content)
+        finally:
+            close = getattr(stream, "close", None)
+            if callable(close):
+                close()
+
     def _normalize_message_content(self, content: Any) -> str:
         if isinstance(content, str):
             return content.strip()
@@ -132,21 +178,29 @@ class OpenAIClient:
 
 class AnthropicClient:
     def __init__(self) -> None:
-        if anthropic is None:
-            raise RuntimeError("anthropic is not installed. Run `pip install anthropic` in the backend environment.")
+        try:
+            anthropic_module = _load_anthropic_module()
+        except ImportError as exc:
+            raise RuntimeError(
+                "anthropic is not installed. Run `pip install anthropic` in the backend environment."
+            ) from exc
 
         api_key = os.environ.get("ANTHROPIC_API_KEY") or settings.anthropic_api_key
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is not set")
 
-        self.client = anthropic.Anthropic(api_key=api_key)
+        self.client = anthropic_module.Anthropic(api_key=api_key)
 
     def create_chat_completion(self, model: str, system_prompt: str, user_prompt: str) -> TextCompletion:
-        response = self.client.messages.create(
-            model=model,
-            max_tokens=1024,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
+        response = _run_with_retries(
+            "anthropic",
+            model,
+            lambda: self.client.messages.create(
+                model=model,
+                max_tokens=1024,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            ),
         )
         text_parts = []
         for block in getattr(response, "content", []) or []:
@@ -167,12 +221,17 @@ class AnthropicClient:
         )
 
     def stream_chat_completion(self, model: str, system_prompt: str, user_prompt: str) -> Iterator[str]:
-        with self.client.messages.stream(
-            model=model,
-            max_tokens=1024,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        ) as stream:
+        stream_context = _run_with_retries(
+            "anthropic",
+            model,
+            lambda: self.client.messages.stream(
+                model=model,
+                max_tokens=1024,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            ),
+        )
+        with stream_context as stream:
             for text in stream.text_stream:
                 if text:
                     yield text
@@ -180,23 +239,30 @@ class AnthropicClient:
 
 class GeminiClient:
     def __init__(self) -> None:
-        if genai is None or types is None:
+        try:
+            genai_module, types_module = _load_gemini_modules()
+        except ImportError as exc:
             raise RuntimeError(
                 "google-genai is not installed. Run `pip install google-genai` in the backend environment."
-            )
+            ) from exc
 
         api_key = os.environ.get("GEMINI_API_KEY") or settings.gemini_api_key
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY is not set")
 
-        self.client = genai.Client(api_key=api_key)
+        self._types = types_module
+        self.client = genai_module.Client(api_key=api_key)
 
     def stream_chat_completion(self, prompt: str, *, model: str = GEMINI_MODEL) -> Iterator[str]:
-        stream = self.client.models.generate_content_stream(
-            model=model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
+        stream = _run_with_retries(
+            "gemini",
+            model,
+            lambda: self.client.models.generate_content_stream(
+                model=model,
+                contents=prompt,
+                config=self._types.GenerateContentConfig(
+                    thinking_config=self._types.ThinkingConfig(thinking_budget=0),
+                ),
             ),
         )
 
@@ -206,11 +272,15 @@ class GeminiClient:
                 yield text
 
     def create_chat_completion(self, prompt: str, *, model: str = GEMINI_MODEL) -> GeminiCompletion:
-        response = self.client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
+        response = _run_with_retries(
+            "gemini",
+            model,
+            lambda: self.client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=self._types.GenerateContentConfig(
+                    thinking_config=self._types.ThinkingConfig(thinking_budget=0),
+                ),
             ),
         )
         usage = getattr(response, "usage_metadata", None)
@@ -223,3 +293,24 @@ class GeminiClient:
                 thoughts_tokens=getattr(usage, "thoughts_token_count", 0) or 0,
             ),
         )
+
+
+@lru_cache(maxsize=1)
+def get_cached_openai_client() -> OpenAIClient:
+    return OpenAIClient()
+
+
+@lru_cache(maxsize=1)
+def get_cached_anthropic_client() -> AnthropicClient:
+    return AnthropicClient()
+
+
+@lru_cache(maxsize=1)
+def get_cached_gemini_client() -> GeminiClient:
+    return GeminiClient()
+
+
+def clear_cached_provider_clients() -> None:
+    get_cached_openai_client.cache_clear()
+    get_cached_anthropic_client.cache_clear()
+    get_cached_gemini_client.cache_clear()

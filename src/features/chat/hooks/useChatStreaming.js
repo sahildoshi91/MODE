@@ -1,6 +1,8 @@
 export const CHAT_STREAM_EVENT_TYPES = Object.freeze({
   STATUS: 'status',
+  TOKEN: 'token',
   MESSAGE_DELTA: 'message_delta',
+  LEGACY_ALIAS: 'legacy_alias',
   DONE: 'done',
   ERROR: 'error',
 });
@@ -40,8 +42,9 @@ const STATUS_COPY = Object.freeze({
 
 /**
  * @typedef {Object} ChatStreamMessageDeltaEvent
- * @property {'message_delta'} type
+ * @property {'message_delta'|'token'} type
  * @property {string} delta
+ * @property {string=} content
  */
 
 /**
@@ -71,7 +74,15 @@ export function getChatStreamStatusMessage(stage, fallback = null) {
 export function normalizeChatStreamEvent(payload, meta = {}) {
   const rawType = normalizeType(payload, meta);
 
-  if (rawType === CHAT_STREAM_EVENT_TYPES.MESSAGE_DELTA || rawType === 'delta') {
+  if (rawType === CHAT_STREAM_EVENT_TYPES.MESSAGE_DELTA && payload?.legacy_alias) {
+    return {
+      ...payload,
+      type: CHAT_STREAM_EVENT_TYPES.LEGACY_ALIAS,
+      delta: payload?.delta ?? payload?.content ?? '',
+    };
+  }
+
+  if (rawType === CHAT_STREAM_EVENT_TYPES.TOKEN || rawType === CHAT_STREAM_EVENT_TYPES.MESSAGE_DELTA || rawType === 'delta') {
     const delta = payload?.delta ?? payload?.text ?? payload?.content ?? '';
     return {
       ...payload,

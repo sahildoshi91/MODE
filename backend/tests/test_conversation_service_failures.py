@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -11,7 +12,11 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from app.core.tenancy import TrainerContext
 from app.modules.conversation.schemas import ChatRequest
-from app.modules.conversation.service import ConversationProcessingError, ConversationService
+from app.modules.conversation.service import (
+    MINIMAL_SAFE_FALLBACK_MESSAGE,
+    ConversationProcessingError,
+    ConversationService,
+)
 
 
 class BaseConversationRepository:
@@ -60,6 +65,12 @@ class BrokenConversationRepository(BaseConversationRepository):
     def find_active_conversation(self, client_id, trainer_id):
         del client_id, trainer_id
         raise RuntimeError("database lookup failed")
+
+
+class TimeoutConversationRepository(BaseConversationRepository):
+    def find_active_conversation(self, client_id, trainer_id):
+        del client_id, trainer_id
+        raise TimeoutError("postgres timeout")
 
 
 class CreateConversationBrokenRepository(BaseConversationRepository):
@@ -124,6 +135,35 @@ class ConversationServiceFailureTests(unittest.TestCase):
             message="What should I do today?",
             client_context={"platform": "ios"},
         )
+
+    def test_service_construction_does_not_initialize_provider_clients(self):
+        with (
+            patch("app.modules.conversation.service.get_cached_gemini_client") as gemini_factory,
+            patch("app.modules.conversation.service.get_cached_openai_client") as openai_factory,
+            patch("app.modules.conversation.service.get_cached_anthropic_client") as anthropic_factory,
+        ):
+            for _ in range(10):
+                ConversationService(
+                    BaseConversationRepository(),
+                    WorkingProfileService(),
+                    FakeTrainerReviewService(),
+                    FakeTrainerPersonaRepository(),
+                )
+
+        gemini_factory.assert_not_called()
+        openai_factory.assert_not_called()
+        anthropic_factory.assert_not_called()
+
+    def test_provider_factory_failure_does_not_crash_service_construction(self):
+        service = ConversationService(
+            BaseConversationRepository(),
+            WorkingProfileService(),
+            FakeTrainerReviewService(),
+            FakeTrainerPersonaRepository(),
+        )
+
+        with patch("app.modules.conversation.service.get_cached_gemini_client", side_effect=RuntimeError("missing")):
+            self.assertIsNone(service.gemini_client)
 
     def test_prompt_includes_user_why_as_motivation_baseline(self):
         service = ConversationService(
@@ -192,6 +232,23 @@ class ConversationServiceFailureTests(unittest.TestCase):
             service.handle_chat("user-123", self.trainer_context, self.request)
 
         self.assertEqual(repository.saved_messages, [])
+
+    def test_stream_events_postgres_timeout_returns_minimal_safe_response(self):
+        service = ConversationService(
+            TimeoutConversationRepository(),
+            WorkingProfileService(),
+            FakeTrainerReviewService(),
+            FakeTrainerPersonaRepository(),
+        )
+
+        events = list(service.stream_chat_events("user-123", self.trainer_context, self.request))
+
+        self.assertNotIn("error", [event.get("type") for event in events])
+        token_events = [event for event in events if event.get("type") == "token"]
+        self.assertEqual(token_events[-1]["content"], MINIMAL_SAFE_FALLBACK_MESSAGE)
+        done_events = [event for event in events if event.get("type") == "done"]
+        self.assertTrue(done_events[-1]["fallback_triggered"])
+        self.assertEqual(done_events[-1]["_trace"]["risk_flags"], ["postgres_timeout"])
 
 
 if __name__ == "__main__":

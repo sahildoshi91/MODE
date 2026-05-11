@@ -3,6 +3,7 @@ import sys
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -35,6 +36,7 @@ class FakeTrainerCoachService:
     def __init__(self):
         self.events_by_key = {}
         self.now = datetime.now(timezone.utc)
+        self.program_template = {}
 
     def build_workspace(self, trainer_context, target_date=None):
         del target_date
@@ -160,6 +162,7 @@ class FakeTrainerCoachService:
             ],
             memory_applied_count=0,
             delivery={},
+            program_template=self.program_template,
             queue_count=0 if review_status in {"approved", "rejected"} else 1,
         )
 
@@ -249,6 +252,39 @@ class TrainerCoachApiTests(unittest.TestCase):
             headers={"Authorization": "Bearer ignored-by-override"},
         )
         self.assertEqual(response.status_code, 404, response.text)
+
+    def test_approve_queue_item_invalidates_client_chat_cache(self):
+        with patch("app.api.v1.trainer_coach.invalidate_chat_context") as invalidate:
+            response = self.client.post(
+                "/api/v1/trainer-coach/queue/output-1/approve",
+                json={"idempotency_key": "approve-1"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        invalidate.assert_called_once_with(
+            "trainer-1",
+            "client-1",
+            reason="trainer_note_added",
+            include_trainer_persona=False,
+        )
+
+    def test_approve_queue_item_with_program_invalidates_trainer_persona_cache(self):
+        self.fake_service.program_template = {"id": "program-template-1"}
+        with patch("app.api.v1.trainer_coach.invalidate_chat_context") as invalidate:
+            response = self.client.post(
+                "/api/v1/trainer-coach/queue/output-1/approve",
+                json={"idempotency_key": "approve-1"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        invalidate.assert_called_once_with(
+            "trainer-1",
+            "client-1",
+            reason="trainer_modifies_plan",
+            include_trainer_persona=True,
+        )
 
     def test_trainer_only_enforcement_blocks_client_actor(self):
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(

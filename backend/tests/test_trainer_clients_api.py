@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -609,6 +610,35 @@ class TrainerClientsApiTests(unittest.TestCase):
         )
         self.assertEqual(location_response.status_code, 200)
         self.assertEqual(location_response.json()["meeting_location"], "Midtown Strength Studio")
+
+    def test_trainer_memory_mutations_invalidate_chat_cache(self):
+        with patch("app.api.v1.trainer_clients.invalidate_chat_context") as invalidate:
+            create_response = self.client.post(
+                "/api/v1/trainer-clients/client-1/memory",
+                json={
+                    "memory_type": "note",
+                    "text": "Keep warm-ups under 8 minutes.",
+                    "visibility": "ai_usable",
+                },
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+            patch_response = self.client.patch(
+                "/api/v1/trainer-clients/client-1/memory/mem-1",
+                json={"visibility": "internal_only"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+            delete_response = self.client.delete(
+                "/api/v1/trainer-clients/client-1/memory/mem-1",
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(create_response.status_code, 200)
+        self.assertEqual(patch_response.status_code, 200)
+        self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(invalidate.call_count, 3)
+        invalidate.assert_any_call("trainer-123", "client-1", reason="trainer_note_added")
+        invalidate.assert_any_call("trainer-123", "client-1", reason="trainer_note_updated")
+        invalidate.assert_any_call("trainer-123", "client-1", reason="trainer_note_deleted")
 
     def test_list_update_remove_and_invite_code_routes(self):
         list_response = self.client.get(

@@ -16,6 +16,7 @@ from app.modules.profile.schemas import (
     ProfilePatchRequest,
     ProfileWhyPatchRequest,
 )
+from app.modules.conversation.cache import invalidate_chat_context
 from app.modules.profile.service import (
     ProfilePersistenceVerificationError,
     ProfileService,
@@ -26,6 +27,11 @@ from app.modules.trainer_clients.service import TrainerClientService
 
 
 router = APIRouter()
+
+
+def _invalidate_profile_chat_context(trainer_context: TrainerContext, *, reason: str) -> None:
+    if trainer_context.trainer_id and trainer_context.client_id:
+        invalidate_chat_context(trainer_context.trainer_id, trainer_context.client_id, reason=reason)
 
 
 def _handle_profile_value_error(exc: ValueError) -> None:
@@ -57,7 +63,9 @@ async def patch_my_profile(
     service: ProfileService = Depends(get_profile_service),
 ):
     require_client_actor(user, trainer_context)
-    return service.upsert_profile_patch(trainer_context.client_id, request.fields)
+    response = service.upsert_profile_patch(trainer_context.client_id, request.fields)
+    _invalidate_profile_chat_context(trainer_context, reason="profile_updated")
+    return response
 
 
 @router.get("/me/algorithm", response_model=AlgorithmHomeResponse)
@@ -79,11 +87,13 @@ async def patch_my_why(
 ):
     require_client_actor(user, trainer_context)
     try:
-        return service.update_user_why(
+        response = service.update_user_why(
             client_id=trainer_context.client_id,
             trainer_id=trainer_context.trainer_id,
             user_why=request.user_why,
         )
+        _invalidate_profile_chat_context(trainer_context, reason="goal_changed")
+        return response
     except ProfileStorageUnavailableError as exc:
         _handle_profile_storage_error(exc)
     except ProfilePersistenceVerificationError as exc:
@@ -99,11 +109,13 @@ async def create_my_memory(
 ):
     require_client_actor(user, trainer_context)
     try:
-        return service.create_algorithm_memory(
+        response = service.create_algorithm_memory(
             client_id=trainer_context.client_id,
             trainer_id=trainer_context.trainer_id,
             request=request,
         )
+        _invalidate_profile_chat_context(trainer_context, reason="trainer_note_added")
+        return response
     except ProfilePersistenceVerificationError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except ValueError as exc:
@@ -120,12 +132,14 @@ async def patch_my_memory(
 ):
     require_client_actor(user, trainer_context)
     try:
-        return service.update_algorithm_memory(
+        response = service.update_algorithm_memory(
             client_id=trainer_context.client_id,
             trainer_id=trainer_context.trainer_id,
             memory_id=memory_id,
             request=request,
         )
+        _invalidate_profile_chat_context(trainer_context, reason="trainer_note_updated")
+        return response
     except ValueError as exc:
         _handle_profile_value_error(exc)
 
@@ -139,11 +153,13 @@ async def delete_my_memory(
 ):
     require_client_actor(user, trainer_context)
     try:
-        return service.delete_algorithm_memory(
+        response = service.delete_algorithm_memory(
             client_id=trainer_context.client_id,
             trainer_id=trainer_context.trainer_id,
             memory_id=memory_id,
         )
+        _invalidate_profile_chat_context(trainer_context, reason="trainer_note_deleted")
+        return response
     except ProfilePersistenceVerificationError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except ValueError as exc:

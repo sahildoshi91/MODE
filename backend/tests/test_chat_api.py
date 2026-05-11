@@ -202,6 +202,22 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["detail"], "Chat response could not be completed")
 
+    def test_chat_emits_structured_trace(self):
+        app.dependency_overrides[get_conversation_service] = lambda: FakeConversationService()
+
+        with self.assertLogs("app.modules.conversation.trace", level="INFO") as logs:
+            response = self.client.post(
+                "/api/v1/chat",
+                json={"message": "Hello"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        joined = "\n".join(logs.output)
+        self.assertIn('"event": "chat_trace"', joined)
+        self.assertIn('"time_to_first_token_ms"', joined)
+        self.assertIn('"model_used": "gemini-2.5-flash"', joined)
+
     def test_stream_hides_route_debug_and_emits_error_event(self):
         app.dependency_overrides[get_conversation_service] = lambda: ExplodingConversationService()
 
@@ -215,7 +231,8 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(_sse_event_types(response.text)[0], "status")
         self.assertNotIn('"route_debug"', response.text)
         self.assertIn('"type": "error"', response.text)
-        self.assertIn("I couldn't finish that response", response.text)
+        self.assertIn("Something went wrong. Your trainer has been notified.", response.text)
+        self.assertIn('"retry": true', response.text)
 
     def test_stream_emits_status_delta_done_contract(self):
         app.dependency_overrides[get_conversation_service] = lambda: FakeConversationService()
@@ -229,10 +246,13 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         event_types = _sse_event_types(response.text)
         self.assertEqual(event_types[0], "status")
+        self.assertIn("token", event_types)
         self.assertIn("message_delta", event_types)
         self.assertIn("done", event_types)
-        self.assertTrue(set(event_types).issubset({"status", "message_delta", "done", "error"}))
-        self.assertLess(event_types.index("status"), event_types.index("message_delta"))
+        self.assertTrue(set(event_types).issubset({"status", "token", "message_delta", "done", "error"}))
+        self.assertLess(event_types.index("status"), event_types.index("token"))
+        self.assertLess(event_types.index("token"), event_types.index("message_delta"))
+        self.assertIn('"content": "hello"', response.text)
         self.assertIn('"delta": "hello"', response.text)
         self.assertIn('"assistant_message": "hello"', response.text)
 

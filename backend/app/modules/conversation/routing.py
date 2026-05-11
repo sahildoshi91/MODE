@@ -93,9 +93,10 @@ class RoutingDecision:
     retrieval_confidence: float | None
     needs_trainer_review: bool = False
     requires_async: bool = False
+    intent_route: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "task_type": self.task_type,
             "model": self.model,
             "provider": self.provider,
@@ -112,6 +113,9 @@ class RoutingDecision:
             "needs_trainer_review": self.needs_trainer_review,
             "requires_async": self.requires_async,
         }
+        if self.intent_route:
+            payload["intent_route"] = self.intent_route
+        return payload
 
 
 class ConversationRouter:

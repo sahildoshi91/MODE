@@ -4,11 +4,12 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from app.core.config import settings
 from app.modules.conversation.schemas import ChatRequest
 
 
-CHAT_STREAM_EVENT_TYPES = frozenset({"status", "message_delta", "done", "error"})
-CHAT_STREAM_FRIENDLY_ERROR_MESSAGE = "I couldn't finish that response. Try again in a moment."
+CHAT_STREAM_EVENT_TYPES = frozenset({"status", "token", "message_delta", "done", "error"})
+CHAT_STREAM_FRIENDLY_ERROR_MESSAGE = "Something went wrong. Your trainer has been notified."
 
 STREAMING_RESPONSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -61,9 +62,29 @@ def status_event(stage: str, *, request: ChatRequest | Any | None = None, **payl
     }
 
 
+def status_event_for_intent(
+    stage: str,
+    *,
+    routed_intent: Any | None = None,
+    request: ChatRequest | Any | None = None,
+    **payload: Any,
+) -> dict[str, Any]:
+    status_messages = getattr(routed_intent, "status_messages", None)
+    if isinstance(status_messages, dict):
+        routed_message = str(status_messages.get(stage) or "").strip()
+        if routed_message:
+            payload["message"] = routed_message
+    if stage == STATUS_GENERATING_RECOMMENDATION and "message" not in payload:
+        routed_message = str(getattr(routed_intent, "user_status_message", "") or "").strip()
+        if routed_message:
+            payload["message"] = routed_message
+    return status_event(stage, request=request, **payload)
+
+
 def message_delta_event(delta: str, **payload: Any) -> dict[str, Any]:
     return {
-        "type": "message_delta",
+        "type": "token",
+        "content": delta,
         "delta": delta,
         **payload,
     }
@@ -82,6 +103,7 @@ def error_event(detail: str | None = None, **payload: Any) -> dict[str, Any]:
         "type": "error",
         "message": CHAT_STREAM_FRIENDLY_ERROR_MESSAGE,
         "detail": safe_detail,
+        "retry": True,
         **payload,
     }
 
@@ -102,15 +124,7 @@ class ChatStreamSseEncoder:
         error_detail: str | None = None,
         completed_message_id: str | None = None,
     ) -> str:
-        event_type = str(payload.get("type") or "")
-        if event_type not in CHAT_STREAM_EVENT_TYPES:
-            event_type = "status"
-            payload = {
-                "type": event_type,
-                "stage": STATUS_PREPARING_COACHING_RESPONSE,
-                "message": GENERIC_STATUS_MESSAGE,
-                **payload,
-            }
+        event_type, payload = self._normalized_payload(payload)
 
         self.seq += 1
         payload_with_meta = {
@@ -118,12 +132,54 @@ class ChatStreamSseEncoder:
             "request_id": self.request_id,
             "seq": self.seq,
         }
+
+        self.record_encoded_event(
+            payload,
+            persist=persist,
+            request_status=request_status,
+            error_detail=error_detail,
+            completed_message_id=completed_message_id,
+            seq=self.seq,
+        )
+
+        canonical = f"event: {event_type}\ndata: {json.dumps(payload_with_meta, default=str)}\n\n"
+        if event_type != "token" or not settings.chat_stream_legacy_alias_enabled:
+            return canonical
+
+        self.seq += 1
+        legacy_payload = {
+            **payload_with_meta,
+            "type": "message_delta",
+            "delta": payload_with_meta.get("content") or payload_with_meta.get("delta") or "",
+            "seq": self.seq,
+            "legacy_alias": True,
+            "legacy_alias_for_seq": payload_with_meta.get("seq"),
+        }
+        return canonical + f"event: message_delta\ndata: {json.dumps(legacy_payload, default=str)}\n\n"
+
+    def record_encoded_event(
+        self,
+        payload: dict[str, Any],
+        *,
+        persist: bool = True,
+        request_status: str | None = None,
+        error_detail: str | None = None,
+        completed_message_id: str | None = None,
+        seq: int | None = None,
+    ) -> None:
+        event_type, payload = self._normalized_payload(payload)
+        seq_value = int(seq if seq is not None else self.seq)
+        payload_with_meta = {
+            **payload,
+            "request_id": self.request_id,
+            "seq": seq_value,
+        }
         stage = payload_with_meta.get("stage")
 
         if persist and callable(self.append_event):
             self.append_event(
                 request_id=self.request_id,
-                seq=self.seq,
+                seq=seq_value,
                 event_type=event_type,
                 stage=str(stage) if stage else None,
                 payload=payload_with_meta,
@@ -132,9 +188,20 @@ class ChatStreamSseEncoder:
             self.update_status(
                 request_id=self.request_id,
                 status=request_status,
-                latest_event_seq=self.seq,
+                latest_event_seq=seq_value,
                 completed_message_id=completed_message_id,
                 error_detail=error_detail,
             )
 
-        return f"event: {event_type}\ndata: {json.dumps(payload_with_meta, default=str)}\n\n"
+    @staticmethod
+    def _normalized_payload(payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        event_type = str(payload.get("type") or "")
+        if event_type in CHAT_STREAM_EVENT_TYPES:
+            return event_type, payload
+        event_type = "status"
+        return event_type, {
+            "type": event_type,
+            "stage": STATUS_PREPARING_COACHING_RESPONSE,
+            "message": GENERIC_STATUS_MESSAGE,
+            **payload,
+        }

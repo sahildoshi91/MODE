@@ -5,6 +5,7 @@ from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.dependencies import get_trainer_context, get_trainer_persona_service
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
+from app.modules.conversation.cache import invalidate_trainer_persona
 from app.modules.trainer_persona.schemas import TrainerPersona
 from app.modules.trainer_persona.service import TrainerPersonaService
 
@@ -53,4 +54,6 @@ async def create_persona(
 ):
     trainer_id = require_trainer_actor(user, trainer_context)
     _rate_limit_trainer_personas(http_request, user, trainer_context, action="persona_create")
-    return service.create_persona(trainer_id, request)
+    response = service.create_persona(trainer_id, request)
+    invalidate_trainer_persona(trainer_id, reason="trainer_persona_created")
+    return response

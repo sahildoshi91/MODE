@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -42,22 +42,24 @@ class DailyCheckinStagingIntegrationTests(unittest.TestCase):
             ),
         )
         cls.client = TestClient(app)
+        cls.run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         cls.run_id = uuid4().hex
+        cls.record_prefix = f"smoke_test_{cls.run_timestamp}_{cls.run_id[:8]}"
         cls.password = f"ModeStage!{cls.run_id[:12]}"
         cls.user_ids = []
         cls.tenant_id = None
         cls.trainer_id = None
         cls.client_id = None
 
-        cls.trainer_user = cls._create_auth_user(f"mode-checkin-trainer+{cls.run_id}@example.com")
-        cls.client_user = cls._create_auth_user(f"mode-checkin-client+{cls.run_id}@example.com")
+        cls.trainer_user = cls._create_auth_user(f"{cls.record_prefix}_checkin_trainer@example.com")
+        cls.client_user = cls._create_auth_user(f"{cls.record_prefix}_checkin_client@example.com")
 
         tenant_row = (
             cls.admin.table("tenants")
             .insert(
                 {
-                    "name": f"MODE Checkin {cls.run_id}",
-                    "slug": f"mode-checkin-{cls.run_id}",
+                    "name": f"{cls.record_prefix}_checkin_tenant",
+                    "slug": f"{cls.record_prefix}_checkin_tenant",
                 }
             )
             .execute()
@@ -71,7 +73,7 @@ class DailyCheckinStagingIntegrationTests(unittest.TestCase):
                 {
                     "tenant_id": cls.tenant_id,
                     "user_id": cls.trainer_user["id"],
-                    "display_name": "Coach Checkin",
+                    "display_name": f"{cls.record_prefix}_checkin_trainer",
                 }
             )
             .execute()
@@ -82,7 +84,7 @@ class DailyCheckinStagingIntegrationTests(unittest.TestCase):
         cls.admin.table("trainer_personas").insert(
             {
                 "trainer_id": cls.trainer_id,
-                "persona_name": "Checkin Coach",
+                "persona_name": f"{cls.record_prefix}_checkin_persona",
                 "tone_description": "Warm, direct, practical.",
                 "coaching_philosophy": "Protect reliability before adding complexity.",
                 "is_default": True,

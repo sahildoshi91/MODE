@@ -36,8 +36,9 @@ from app.modules.conversation.streaming import (
     done_event,
     error_event,
     message_delta_event,
-    status_event,
+    status_event_for_intent,
 )
+from app.modules.conversation.trace import ChatTraceAccumulator, strip_private_trace
 
 
 router = APIRouter()
@@ -279,36 +280,74 @@ async def stream_chat_session_message(
     async def event_stream():
         encoder = ChatStreamSseEncoder(request_id=request_id)
         assistant_chunks: list[str] = []
+        conversation_service = getattr(service, "conversation_service", None)
+        intent_router = getattr(conversation_service, "intent_router", None)
+        intent_preview = None
+        if intent_router and hasattr(intent_router, "classify_with_fallback"):
+            intent_preview = intent_router.classify_with_fallback(request.message)
+        trace = ChatTraceAccumulator(
+            request_id=request_id,
+            user_id=user.id,
+            trainer_id=str(trainer_context.trainer_id or ""),
+        )
 
         yield encoder.encode(
-            status_event(STATUS_READING_USER_MESSAGE, request=request, session_id=session_id),
+            status_event_for_intent(
+                STATUS_READING_USER_MESSAGE,
+                routed_intent=intent_preview,
+                request=request,
+                session_id=session_id,
+            ),
             persist=False,
             request_status="working",
         )
         try:
             yield encoder.encode(
-                status_event(STATUS_LOADING_CLIENT_PROFILE, request=request, session_id=session_id),
+                status_event_for_intent(
+                    STATUS_LOADING_CLIENT_PROFILE,
+                    routed_intent=intent_preview,
+                    request=request,
+                    session_id=session_id,
+                ),
                 persist=False,
                 request_status="working",
             )
             if (
                 settings.trainer_intelligence_orchestration_enabled
-                and getattr(service.conversation_service, "trainer_intelligence_service", None)
+                and getattr(conversation_service, "trainer_intelligence_service", None)
                 and trainer_context.trainer_id
                 and trainer_context.client_id
             ):
                 yield encoder.encode(
-                    status_event(STATUS_RETRIEVING_TRAINER_KNOWLEDGE, request=request, session_id=session_id),
+                    status_event_for_intent(
+                        STATUS_RETRIEVING_TRAINER_KNOWLEDGE,
+                        routed_intent=intent_preview,
+                        request=request,
+                        session_id=session_id,
+                    ),
                     persist=False,
                     request_status="working",
                 )
                 yield encoder.encode(
-                    status_event(STATUS_CHECKING_RECENT_SIGNALS, request=request, session_id=session_id),
+                    status_event_for_intent(
+                        STATUS_CHECKING_RECENT_SIGNALS,
+                        routed_intent=intent_preview,
+                        request=request,
+                        session_id=session_id,
+                    ),
                     persist=False,
                     request_status="working",
                 )
+            status_payload = {"session_id": session_id}
+            if intent_preview:
+                status_payload["intent_route"] = intent_preview.route.value
             yield encoder.encode(
-                status_event(STATUS_GENERATING_RECOMMENDATION, request=request, session_id=session_id),
+                status_event_for_intent(
+                    STATUS_GENERATING_RECOMMENDATION,
+                    routed_intent=intent_preview,
+                    request=request,
+                    **status_payload,
+                ),
                 persist=False,
                 request_status="working",
             )
@@ -325,10 +364,11 @@ async def stream_chat_session_message(
             )
             if not isinstance(assistant_message_metadata, dict):
                 assistant_message_metadata = {}
-            del session, route_debug
+            del route_debug
             yield encoder.encode(
-                status_event(
+                status_event_for_intent(
                     STATUS_WRITING_FINAL_COACH_RESPONSE,
+                    routed_intent=intent_preview,
                     request=request,
                     session_id=session_id,
                     conversation_id=conversation_id,
@@ -344,12 +384,14 @@ async def stream_chat_session_message(
                 if not text_chunk:
                     continue
                 assistant_chunks.append(text_chunk)
+                token_payload = message_delta_event(
+                    text_chunk,
+                    session_id=session_id,
+                    conversation_id=conversation_id,
+                )
+                trace.observe_payload(token_payload)
                 yield encoder.encode(
-                    message_delta_event(
-                        text_chunk,
-                        session_id=session_id,
-                        conversation_id=conversation_id,
-                    ),
+                    token_payload,
                     persist=False,
                     request_status="streaming",
                 )
@@ -370,42 +412,61 @@ async def stream_chat_session_message(
                     "conversation_usage": conversation_usage.model_dump() if conversation_usage else None,
                 },
             )
+            done_payload = done_event(
+                session_id=session_id,
+                conversation_id=conversation_id,
+                assistant_message=assistant_message,
+                user_message=user_message,
+                ai_message=saved_ai_message,
+                token_usage=token_usage.model_dump() if token_usage else None,
+                conversation_usage=conversation_usage.model_dump() if conversation_usage else None,
+                _trace=getattr(result_state, "trace_metadata", {}) or {},
+            )
+            trace.observe_payload(done_payload)
             yield encoder.encode(
-                done_event(
-                    session_id=session_id,
-                    conversation_id=conversation_id,
-                    assistant_message=assistant_message,
-                    user_message=user_message,
-                    ai_message=saved_ai_message,
-                    token_usage=token_usage.model_dump() if token_usage else None,
-                    conversation_usage=conversation_usage.model_dump() if conversation_usage else None,
-                ),
+                strip_private_trace(done_payload),
                 persist=False,
                 request_status="completed",
             )
+            persist_side_effects = getattr(service, "persist_post_stream_side_effects", None)
+            if callable(persist_side_effects) and result_state is not None:
+                persist_side_effects(
+                    trainer_context=trainer_context,
+                    session=session,
+                    request=request,
+                    conversation_id=conversation_id,
+                )
         except ValueError as exc:
+            payload = error_event(str(exc) or CONTROLLED_CHAT_ERROR_DETAIL, session_id=session_id)
+            trace.observe_payload(payload)
             yield encoder.encode(
-                error_event(str(exc) or CONTROLLED_CHAT_ERROR_DETAIL, session_id=session_id),
+                payload,
                 persist=False,
                 request_status="failed",
                 error_detail=str(exc) or CONTROLLED_CHAT_ERROR_DETAIL,
             )
         except ConversationProcessingError as exc:
             detail = str(exc) or CONTROLLED_CHAT_ERROR_DETAIL
+            payload = error_event(detail, session_id=session_id)
+            trace.observe_payload(payload)
             yield encoder.encode(
-                error_event(detail, session_id=session_id),
+                payload,
                 persist=False,
                 request_status="failed",
                 error_detail=detail,
             )
         except Exception:
             logger.exception("Unexpected chat session stream generator failure session_id=%s", session_id)
+            payload = error_event(CONTROLLED_CHAT_ERROR_DETAIL, session_id=session_id)
+            trace.observe_payload(payload)
             yield encoder.encode(
-                error_event(CONTROLLED_CHAT_ERROR_DETAIL, session_id=session_id),
+                payload,
                 persist=False,
                 request_status="failed",
                 error_detail=CONTROLLED_CHAT_ERROR_DETAIL,
             )
+        finally:
+            trace.build().log()
 
     return StreamingResponse(
         event_stream(),

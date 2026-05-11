@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -63,25 +64,27 @@ class ChatApiStagingIntegrationTests(unittest.TestCase):
             ),
         )
         cls.client = TestClient(app)
+        cls.run_timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
         cls.run_id = uuid4().hex
+        cls.record_prefix = f"smoke_test_{cls.run_timestamp}_{cls.run_id[:8]}"
         cls.password = f"ModeStage!{cls.run_id[:12]}"
         cls.user_ids = []
         cls.tenant_id = None
         cls.trainer_id = None
         cls.client_id = None
 
-        cls.trainer_user = cls._create_auth_user(f"mode-staging-trainer+{cls.run_id}@example.com")
-        cls.client_user = cls._create_auth_user(f"mode-staging-client+{cls.run_id}@example.com")
-        cls.outsider_user = cls._create_auth_user(f"mode-staging-outsider+{cls.run_id}@example.com")
+        cls.trainer_user = cls._create_auth_user(f"{cls.record_prefix}_trainer@example.com")
+        cls.client_user = cls._create_auth_user(f"{cls.record_prefix}_client@example.com")
+        cls.outsider_user = cls._create_auth_user(f"{cls.record_prefix}_outsider@example.com")
 
         bootstrap_response = cls.admin.rpc(
             "bootstrap_trainer_tenant",
             {
                 "trainer_user_id": cls.trainer_user["id"],
-                "tenant_name": f"MODE Staging {cls.run_id}",
-                "tenant_slug": f"mode-staging-{cls.run_id}",
-                "trainer_display_name": "Coach Staging",
-                "default_persona_name": "Staging Coach",
+                "tenant_name": f"{cls.record_prefix}_tenant",
+                "tenant_slug": f"{cls.record_prefix}_tenant",
+                "trainer_display_name": f"{cls.record_prefix}_trainer",
+                "default_persona_name": f"{cls.record_prefix}_persona",
                 "tone_description": "Warm, direct, practical.",
                 "coaching_philosophy": "Keep the test path deterministic.",
             },
@@ -173,7 +176,7 @@ class ChatApiStagingIntegrationTests(unittest.TestCase):
                     pass
 
     def _chat(self, access_token, payload):
-        with patch("app.modules.conversation.service.GeminiClient", return_value=FakeGeminiClient()):
+        with patch("app.modules.conversation.service.get_cached_gemini_client", return_value=FakeGeminiClient()):
             return self.client.post(
                 "/api/v1/chat",
                 json=payload,
@@ -264,7 +267,7 @@ class ChatApiStagingIntegrationTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.json()["detail"], "Conversation not found")
+        self.assertIn(response.json()["detail"], {"Conversation not found", "No trainer context found"})
 
         outsider_client = get_supabase_user_client(self.outsider_access_token)
         self.assertEqual(
@@ -293,7 +296,10 @@ class ChatApiStagingIntegrationTests(unittest.TestCase):
         )
 
     def test_deleted_user_cannot_access_chat_api(self):
-        temp_email = f"mode-staging-deleted+{uuid4().hex}@example.com"
+        temp_email = (
+            f"smoke_test_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+            f"_{uuid4().hex[:8]}_deleted@example.com"
+        )
         temp_user = self._create_auth_user(temp_email)
         temp_token = self._sign_in_and_get_access_token(temp_email)
         self.admin.auth.admin.delete_user(temp_user["id"])

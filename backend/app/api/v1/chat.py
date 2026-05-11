@@ -27,6 +27,7 @@ from app.modules.conversation.streaming import (
     message_delta_event,
     status_event,
 )
+from app.modules.conversation.trace import ChatTraceAccumulator, strip_private_trace
 
 
 router = APIRouter()
@@ -38,6 +39,35 @@ def _public_chat_response(response: ChatResponse) -> ChatResponse:
     if settings.expose_route_debug:
         return response
     return response.model_copy(update={"route_debug": None})
+
+
+def _trace_metadata_from_response(response: ChatResponse) -> dict[str, object]:
+    route_debug = response.route_debug
+    if route_debug is None:
+        return {
+            "route": "unknown",
+            "router_confidence": 0.0,
+            "risk_flags": [],
+            "cache_hit": False,
+            "retrieval_latency_ms": None,
+            "model_used": "unknown",
+            "fallback_used": bool(response.fallback_triggered),
+            "escalation_triggered": False,
+        }
+    return {
+        "route": route_debug.intent_route or route_debug.flow,
+        "router_confidence": route_debug.router_confidence or 0.0,
+        "risk_flags": route_debug.risk_flags,
+        "cache_hit": False,
+        "retrieval_latency_ms": None,
+        "model_used": route_debug.execution_model or route_debug.selected_model,
+        "fallback_used": bool(response.fallback_triggered or route_debug.fallback_reason),
+        "escalation_triggered": bool(
+            route_debug.intent_route == "SAFETY_ESCALATION"
+            or route_debug.flow == "safety_escalation"
+            or route_debug.response_mode == "safe_interim_escalation"
+        ),
+    }
 
 
 def _raise_chat_value_error(exc: ValueError) -> None:
@@ -120,9 +150,24 @@ async def chat(
             "client_id": trainer_context.client_id,
         },
     )
+    trace = ChatTraceAccumulator(
+        request_id=str(request.request_id) if request.request_id else str(uuid4()),
+        user_id=user.id,
+        trainer_id=str(trainer_context.trainer_id or ""),
+    )
     try:
-        return _public_chat_response(service.handle_chat(user.id, trainer_context, request))
+        response = service.handle_chat(user.id, trainer_context, request)
+        if response.request_id:
+            trace.request_id = response.request_id
+        trace.observe_payload(message_delta_event(response.assistant_message or ""))
+        trace.observe_payload(done_event(
+            token_usage=response.token_usage.model_dump(),
+            _trace=_trace_metadata_from_response(response),
+        ))
+        return _public_chat_response(response)
     except ValueError as exc:
+        payload = error_event(str(exc) or CONTROLLED_CHAT_ERROR_DETAIL)
+        trace.observe_payload(payload)
         _raise_chat_value_error(exc)
     except ConversationProcessingError as exc:
         logger.warning(
@@ -132,8 +177,12 @@ async def chat(
             trainer_context.client_id,
             exc_info=exc,
         )
+        payload = error_event(CONTROLLED_CHAT_ERROR_DETAIL)
+        trace.observe_payload(payload)
         raise HTTPException(status_code=502, detail=CONTROLLED_CHAT_ERROR_DETAIL)
     except Exception as exc:
+        payload = error_event(CONTROLLED_CHAT_ERROR_DETAIL)
+        trace.observe_payload(payload)
         _raise_controlled_chat_error(
             endpoint="/api/v1/chat",
             exc=exc,
@@ -141,6 +190,8 @@ async def chat(
             trainer_context=trainer_context,
             request=request,
         )
+    finally:
+        trace.build().log()
 
 
 @router.get("/history", response_model=ChatHistoryResponse)
@@ -281,6 +332,11 @@ async def chat_stream(
         nonlocal request_id
         encoder = ChatStreamSseEncoder(request_id=request_id)
         request_record_created = False
+        trace = ChatTraceAccumulator(
+            request_id=request_id,
+            user_id=user.id,
+            trainer_id=str(trainer_context.trainer_id or ""),
+        )
 
         def maybe_attach_request_record(payload: dict[str, object]) -> None:
             nonlocal request_id, request_record_created
@@ -315,7 +371,7 @@ async def chat_stream(
             payload_type = str(payload.get("type") or "")
             if payload_type == "status":
                 return "working"
-            if payload_type == "message_delta":
+            if payload_type in {"token", "message_delta"}:
                 return "streaming"
             if payload_type == "done":
                 return "completed"
@@ -333,17 +389,24 @@ async def chat_stream(
             for payload in event_iterator:
                 if await http_request.is_disconnected():
                     break
-                maybe_attach_request_record(payload)
+                trace.observe_payload(payload)
                 payload_type = str(payload.get("type") or "")
-                yield encoder.encode(
-                    payload,
-                    persist=payload_type != "message_delta",
-                    request_status=request_status_for(payload),
-                    error_detail=str(payload.get("detail") or "") if payload_type == "error" else None,
+                client_payload = strip_private_trace(payload)
+                request_status = request_status_for(payload)
+                error_detail = str(payload.get("detail") or "") if payload_type == "error" else None
+                yield encoder.encode(client_payload, persist=False)
+                maybe_attach_request_record(payload)
+                encoder.record_encoded_event(
+                    client_payload,
+                    persist=payload_type not in {"token", "message_delta"},
+                    request_status=request_status,
+                    error_detail=error_detail,
                 )
         except ValueError as exc:
             payload = error_event(str(exc) or CONTROLLED_CHAT_ERROR_DETAIL)
-            yield encoder.encode(
+            trace.observe_payload(payload)
+            yield encoder.encode(payload, persist=False)
+            encoder.record_encoded_event(
                 payload,
                 request_status="failed",
                 error_detail=str(payload.get("detail") or CONTROLLED_CHAT_ERROR_DETAIL),
@@ -351,7 +414,9 @@ async def chat_stream(
         except ConversationProcessingError as exc:
             detail = str(exc) or CONTROLLED_CHAT_ERROR_DETAIL
             payload = error_event(detail)
-            yield encoder.encode(
+            trace.observe_payload(payload)
+            yield encoder.encode(payload, persist=False)
+            encoder.record_encoded_event(
                 payload,
                 request_status="failed",
                 error_detail=detail,
@@ -365,11 +430,16 @@ async def chat_stream(
                 exc_info=exc,
             )
             payload = error_event(CONTROLLED_CHAT_ERROR_DETAIL)
-            yield encoder.encode(
+            trace.observe_payload(payload)
+            yield encoder.encode(payload, persist=False)
+            encoder.record_encoded_event(
                 payload,
                 request_status="failed",
                 error_detail=CONTROLLED_CHAT_ERROR_DETAIL,
             )
+        finally:
+            trace.request_id = request_id
+            trace.build().log()
 
     return StreamingResponse(
         event_stream(),

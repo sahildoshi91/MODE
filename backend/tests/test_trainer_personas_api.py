@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -28,9 +29,9 @@ class FakeTrainerPersonaService:
         return []
 
     def create_persona(self, trainer_id, request):
-        del trainer_id, request
+        del trainer_id
         self.create_calls += 1
-        return {}
+        return request
 
 
 class TrainerPersonasApiTests(unittest.TestCase):
@@ -82,6 +83,33 @@ class TrainerPersonasApiTests(unittest.TestCase):
 
         self.assertEqual(self.fake_service.list_calls, 0)
         self.assertEqual(self.fake_service.create_calls, 0)
+
+    def test_create_persona_invalidates_trainer_persona_cache(self):
+        app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
+            id="trainer-user-123",
+            email="trainer@example.com",
+            access_token="token-123",
+        )
+
+        with patch("app.api.v1.trainer_personas.invalidate_trainer_persona") as invalidate:
+            response = self.client.post(
+                "/api/v1/trainer-personas",
+                json={
+                    "trainer_id": "trainer-123",
+                    "persona_name": "Strength Coach",
+                    "tone_description": "Clear and supportive",
+                    "coaching_philosophy": "Progress over perfection.",
+                    "communication_rules": {},
+                    "onboarding_preferences": {},
+                    "fallback_behavior": {},
+                    "is_default": True,
+                },
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(self.fake_service.create_calls, 1)
+        invalidate.assert_called_once_with("trainer-123", reason="trainer_persona_created")
 
 
 if __name__ == "__main__":

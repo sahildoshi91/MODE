@@ -3,6 +3,7 @@ import sys
 import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -2378,6 +2379,26 @@ class DailyCheckinApiTests(unittest.TestCase):
         self.assertEqual(self.fake_service.last_submit["client_id"], "client-submit")
         self.assertEqual(self.fake_service.last_submit["time_to_complete"], 9)
 
+    def test_readiness_score_updated_invalidates_cache(self):
+        with patch("app.api.v1.checkin.invalidate_chat_context") as invalidate:
+            response = self.client.post(
+                "/api/v1/checkin",
+                json={
+                    "date": "2026-03-27",
+                    "inputs": {
+                        "sleep": 5,
+                        "stress": 4,
+                        "soreness": 4,
+                        "nutrition": 4,
+                        "motivation": 5,
+                    },
+                },
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        invalidate.assert_called_once_with("trainer-1", "client-default", reason="readiness_score_updated")
+
     def test_checkin_rejects_missing_client_context(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
             tenant_id="tenant-1",
@@ -2644,6 +2665,23 @@ class DailyCheckinApiTests(unittest.TestCase):
         self.assertEqual(self.fake_service.last_log["user_id"], "user-123")
         self.assertEqual(self.fake_service.last_log["client_id"], "client-default")
         self.assertEqual(self.fake_service.last_log["request"]["feel_rating"], 4)
+
+    def test_workout_logged_invalidates_cache(self):
+        with patch("app.api.v1.checkin.invalidate_chat_context") as invalidate:
+            response = self.client.post(
+                "/api/v1/checkin/log-workout",
+                json={
+                    "generated_plan_id": "generated-plan-1",
+                    "title": "Builder",
+                    "elapsed_seconds": 930,
+                    "completed": True,
+                    "feel_rating": 4,
+                },
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        invalidate.assert_called_once_with("trainer-1", "client-default", reason="workout_logged")
 
     def test_log_generated_workout_rejects_non_owner_context(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(

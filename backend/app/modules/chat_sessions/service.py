@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
+import logging
 import re
 from typing import Any
 
@@ -59,6 +60,8 @@ LEGACY_TO_CANONICAL_MODE = {
     "BLUE": "RECOVER",
     "RED": "REST",
 }
+
+logger = logging.getLogger(__name__)
 
 CLIENT_MODE_BRIEF_BUNDLES = {
     "BEAST": {
@@ -443,6 +446,32 @@ class ChatSessionService:
             content=content,
             metadata=metadata or {},
         )
+
+    def persist_post_stream_side_effects(
+        self,
+        *,
+        trainer_context: TrainerContext,
+        session: dict[str, Any],
+        request: ChatSessionSendRequest,
+        conversation_id: str,
+    ) -> None:
+        if not self.conversation_service or not conversation_id:
+            return
+        persist_memory = getattr(self.conversation_service, "persist_memory_after_response", None)
+        if not callable(persist_memory):
+            return
+        try:
+            persist_memory(
+                trainer_context=trainer_context,
+                request=self._to_legacy_chat_request(request, session),
+                conversation_id=conversation_id,
+            )
+        except Exception:
+            logger.exception(
+                "Chat session post-stream side effects failed session_id=%s conversation_id=%s",
+                session.get("id") if isinstance(session, dict) else None,
+                conversation_id,
+            )
 
     def _resolve_scope(
         self,

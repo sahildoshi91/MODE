@@ -7,6 +7,7 @@ from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.dependencies import get_trainer_client_service, get_trainer_context
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
+from app.modules.conversation.cache import invalidate_chat_context
 from app.modules.trainer_clients.schemas import (
     ConnectionRequestStatus,
     TrainerAIContextResponse,
@@ -51,6 +52,11 @@ def _handle_service_value_error(exc: ValueError) -> None:
     }:
         raise HTTPException(status_code=404, detail=detail) from exc
     raise HTTPException(status_code=400, detail=detail) from exc
+
+
+def _invalidate_client_chat_context(trainer_context: TrainerContext, client_id: str, *, reason: str) -> None:
+    if trainer_context.trainer_id and client_id:
+        invalidate_chat_context(trainer_context.trainer_id, client_id, reason=reason)
 
 
 @router.get("", response_model=TrainerClientListResponse)
@@ -250,7 +256,9 @@ async def create_trainer_client_memory(
         },
     )
     try:
-        return service.create_memory(trainer_context, client_id, request)
+        response = service.create_memory(trainer_context, client_id, request)
+        _invalidate_client_chat_context(trainer_context, client_id, reason="trainer_note_added")
+        return response
     except ValueError as exc:
         _handle_service_value_error(exc)
 
@@ -266,7 +274,9 @@ async def patch_trainer_client_memory(
 ):
     require_trainer_actor(user, trainer_context)
     try:
-        return service.update_memory(trainer_context, client_id, memory_id, request)
+        response = service.update_memory(trainer_context, client_id, memory_id, request)
+        _invalidate_client_chat_context(trainer_context, client_id, reason="trainer_note_updated")
+        return response
     except ValueError as exc:
         _handle_service_value_error(exc)
 
@@ -281,7 +291,9 @@ async def archive_trainer_client_memory(
 ):
     require_trainer_actor(user, trainer_context)
     try:
-        return service.archive_memory(trainer_context, client_id, memory_id)
+        response = service.archive_memory(trainer_context, client_id, memory_id)
+        _invalidate_client_chat_context(trainer_context, client_id, reason="trainer_note_deleted")
+        return response
     except ValueError as exc:
         _handle_service_value_error(exc)
 
