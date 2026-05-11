@@ -475,6 +475,19 @@ class ConversationRepository:
         response = self.supabase.table("trainer_system_events").insert(payload).execute()
         return (response.data or [None])[0]
 
+    def get_client_tenant_id(self, trainer_id: str, client_id: str) -> str | None:
+        response = (
+            self.supabase
+            .table("clients")
+            .select("tenant_id")
+            .eq("id", client_id)
+            .eq("assigned_trainer_id", trainer_id)
+            .limit(1)
+            .execute()
+        )
+        row = response.data[0] if response.data else None
+        return str(row.get("tenant_id")) if isinstance(row, dict) and row.get("tenant_id") else None
+
     def insert_coach_memory(self, payload: dict[str, Any]) -> dict[str, Any]:
         response = self.supabase.table("coach_memory").insert(payload).execute()
         return (response.data or [None])[0] or {}

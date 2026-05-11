@@ -1372,7 +1372,20 @@ class ConversationService:
         queue_item: Any,
     ) -> None:
         trainer_id = trainer_context.trainer_id
-        if not trainer_context.tenant_id or not trainer_id:
+        client_id = trainer_context.client_id
+        tenant_id = trainer_context.tenant_id
+        if trainer_id and client_id and not tenant_id:
+            get_client_tenant_id = getattr(self.repository, "get_client_tenant_id", None)
+            if callable(get_client_tenant_id):
+                with suppress(Exception):
+                    tenant_id = get_client_tenant_id(trainer_id, client_id)
+        if not tenant_id or not trainer_id:
+            logger.warning(
+                "Skipped safety escalation trainer event due to missing tenant_id trainer_id=%s client_id=%s conversation_id=%s",
+                trainer_id,
+                client_id,
+                conversation_id,
+            )
             return
         try:
             request_hash = hashlib.sha256(str(request.message or "").encode("utf-8")).hexdigest()
@@ -1390,9 +1403,9 @@ class ConversationService:
             now = datetime.now(timezone.utc).isoformat()
             self.repository.insert_trainer_system_event(
                 {
-                    "tenant_id": trainer_context.tenant_id,
+                    "tenant_id": tenant_id,
                     "trainer_id": trainer_id,
-                    "client_id": trainer_context.client_id,
+                    "client_id": client_id,
                     "output_id": None,
                     "event_key": event_key,
                     "event_type": "safety_escalation",

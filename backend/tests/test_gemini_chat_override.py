@@ -114,6 +114,11 @@ class FakeConversationRepository:
         self.system_events.append(event)
         return event
 
+    def get_client_tenant_id(self, trainer_id, client_id):
+        if trainer_id == "trainer-123" and client_id == "client-123":
+            return "tenant-123"
+        return None
+
     def record_usage_event(self, **kwargs):
         payload = {"id": f"usage-{len(self.usage_events) + 1}", **kwargs}
         self.usage_events.append(payload)
@@ -632,6 +637,28 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         metadata = self.repository.metadata_updates[-1]["metadata"]
         self.assertTrue(metadata["trainer_review_pending"])
         self.assertEqual(metadata["active_safety_flags"][0]["type"], "injury")
+
+    def test_safety_escalation_derives_tenant_for_event_when_context_is_missing_it(self):
+        service = self._build_service()
+        trainer_context = TrainerContext(
+            tenant_id=None,
+            trainer_id="trainer-123",
+            trainer_user_id="trainer-user-123",
+            trainer_display_name="Coach Alex",
+            client_id="client-123",
+            persona_id="persona-123",
+            persona_name="Strength Coach",
+        )
+        request = ChatRequest(
+            message="My knee is really hurting after squats. What should I do?",
+            client_context={},
+        )
+
+        response = service.handle_chat("user-123", trainer_context, request)
+
+        self.assertEqual(response.assistant_message, SAFETY_ESCALATION_HOLDING_RESPONSE)
+        self.assertEqual(self.repository.system_events[0]["tenant_id"], "tenant-123")
+        self.assertTrue(self.repository.metadata_updates[-1]["metadata"]["trainer_review_pending"])
 
     def test_stream_safety_escalation_yields_before_trainer_notification(self):
         service = self._build_service()
