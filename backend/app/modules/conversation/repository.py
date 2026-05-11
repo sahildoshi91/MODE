@@ -13,6 +13,11 @@ class ConversationRepository:
     def __init__(self, supabase: Client):
         self.supabase = supabase
 
+    def _admin_supabase(self) -> Client:
+        from app.db.client import get_supabase_admin_client
+
+        return get_supabase_admin_client()
+
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
         response = (
             self.supabase
@@ -461,7 +466,7 @@ class ConversationRepository:
 
     def get_trainer_system_event_by_key(self, trainer_id: str, event_key: str) -> dict[str, Any] | None:
         response = (
-            self.supabase
+            self._admin_supabase()
             .table("trainer_system_events")
             .select("*")
             .eq("trainer_id", trainer_id)
@@ -472,12 +477,12 @@ class ConversationRepository:
         return response.data[0] if response.data else None
 
     def insert_trainer_system_event(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        response = self.supabase.table("trainer_system_events").insert(payload).execute()
+        response = self._admin_supabase().table("trainer_system_events").insert(payload).execute()
         return (response.data or [None])[0]
 
     def get_client_tenant_id(self, trainer_id: str, client_id: str) -> str | None:
         response = (
-            self.supabase
+            self._admin_supabase()
             .table("clients")
             .select("tenant_id")
             .eq("id", client_id)
