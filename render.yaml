@@ -1,0 +1,36 @@
+services:
+  - type: web
+    runtime: python
+    name: mode-backend-staging
+    repo: https://github.com/sahildoshi91/MODE
+    branch: feature-chat-routing-analytics-publish
+    rootDir: backend
+    region: oregon
+    plan: starter
+    autoDeployTrigger: commit
+    healthCheckPath: /healthz
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_ENV
+        value: staging
+      - key: CHAT_CACHE_ENABLED
+        value: "true"
+      - key: CHAT_CACHE_TIMEOUT_MS
+        value: "25"
+      - key: CHAT_ROUTER_TIMEOUT_MS
+        value: "200"
+      - key: CHAT_STREAM_LEGACY_ALIAS_ENABLED
+        value: "true"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
