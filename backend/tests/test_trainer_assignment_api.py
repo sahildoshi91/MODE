@@ -13,9 +13,12 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from fastapi.testclient import TestClient
 
 from app.core.auth import AuthenticatedUser, require_user
-from app.core.dependencies import get_trainer_context
+from app.core.config import settings
+from app.core.dependencies import get_onboarding_service, get_trainer_context
+from app.core.rate_limit import _rate_limiter
 from app.core.tenancy import TrainerContext
 from app.main import app
+from app.modules.onboarding.service import OnboardingServiceError
 
 
 class FakeResponse:
@@ -69,6 +72,13 @@ class FakeAdminClient:
 
 class TrainerAssignmentApiTests(unittest.TestCase):
     def setUp(self):
+        self._original_rate_limit_enabled = settings.rate_limit_enabled
+        self._original_rate_limit_window_seconds = settings.rate_limit_window_seconds
+        self._original_rate_limit_onboarding_per_window = settings.rate_limit_onboarding_per_window
+        settings.rate_limit_enabled = True
+        settings.rate_limit_window_seconds = 60
+        settings.rate_limit_onboarding_per_window = 50
+        _rate_limiter._windows.clear()
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
             id="user-123",
             email="user@example.com",
@@ -77,9 +87,13 @@ class TrainerAssignmentApiTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def tearDown(self):
+        settings.rate_limit_enabled = self._original_rate_limit_enabled
+        settings.rate_limit_window_seconds = self._original_rate_limit_window_seconds
+        settings.rate_limit_onboarding_per_window = self._original_rate_limit_onboarding_per_window
+        _rate_limiter._windows.clear()
         app.dependency_overrides.clear()
 
-    def test_status_lists_available_trainers_for_unassigned_user(self):
+    def test_status_hides_global_trainer_discovery_for_unscoped_user(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
             tenant_id=None,
             trainer_id=None,
@@ -102,8 +116,8 @@ class TrainerAssignmentApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["needs_assignment"])
-        self.assertEqual(len(response.json()["available_trainers"]), 2)
-        self.assertEqual(response.json()["available_trainers_count"], 2)
+        self.assertEqual(len(response.json()["available_trainers"]), 0)
+        self.assertEqual(response.json()["available_trainers_count"], 0)
         self.assertEqual(response.json()["scope"], "global_fallback")
         self.assertEqual(response.json()["viewer_role"], "unassigned")
         self.assertEqual(response.json()["viewer_display_name"], "user")
@@ -112,6 +126,33 @@ class TrainerAssignmentApiTests(unittest.TestCase):
         self.assertEqual(response.json()["trainer_onboarding_completed_steps"], 0)
         self.assertEqual(response.json()["trainer_onboarding_total_steps"], 8)
         self.assertIsNone(response.json()["trainer_onboarding_last_step"])
+
+    def test_assign_trainer_rejects_global_fallback_when_user_has_no_tenant_scope(self):
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id=None,
+            trainer_id=None,
+            trainer_user_id=None,
+            trainer_display_name=None,
+            client_id=None,
+        )
+        fake_admin_client = FakeAdminClient(
+            trainers=[
+                {"id": "trainer-1", "tenant_id": "tenant-1", "display_name": "Coach Maya", "is_active": True},
+            ]
+        )
+
+        with patch("app.api.v1.trainer_assignment.get_supabase_client", return_value=fake_admin_client):
+            response = self.client.post(
+                "/api/v1/trainer-assignment/assign",
+                json={"trainer_id": "trainer-1"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["detail"],
+            "Direct trainer selection is disabled. Attach with a trainer invite code instead.",
+        )
 
     def test_status_scopes_trainers_to_existing_client_tenant(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
@@ -194,7 +235,7 @@ class TrainerAssignmentApiTests(unittest.TestCase):
         self.assertEqual(response.json()["trainer_onboarding_status"], "completed")
         self.assertEqual(response.json()["trainer_onboarding_completed_steps"], 8)
 
-    def test_assign_trainer_uses_rpc_for_unassigned_user(self):
+    def test_assign_trainer_is_disabled_even_for_scoped_unassigned_client(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
             tenant_id="tenant-1",
             trainer_id=None,
@@ -218,16 +259,14 @@ class TrainerAssignmentApiTests(unittest.TestCase):
                 headers={"Authorization": "Bearer ignored-by-override"},
             )
 
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()["needs_assignment"])
-        self.assertEqual(response.json()["assigned_trainer_id"], "trainer-1")
-        self.assertEqual(response.json()["viewer_role"], "client")
+        self.assertEqual(response.status_code, 403)
         self.assertEqual(
-            fake_admin_client.rpc_calls,
-            [("assign_client_to_trainer", {"client_user_id": "user-123", "trainer_record_id": "trainer-1"})],
+            response.json()["detail"],
+            "Direct trainer selection is disabled. Attach with a trainer invite code instead.",
         )
+        self.assertEqual(fake_admin_client.rpc_calls, [])
 
-    def test_assign_trainer_rejects_selection_outside_tenant_scope_before_cross_tenant_link_check(self):
+    def test_assign_trainer_does_not_allow_tenant_selection_bypass(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
             tenant_id="tenant-legacy",
             trainer_id=None,
@@ -251,13 +290,13 @@ class TrainerAssignmentApiTests(unittest.TestCase):
                 headers={"Authorization": "Bearer ignored-by-override"},
             )
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 403)
         self.assertEqual(
             response.json()["detail"],
-            "Selected trainer was not found in the available trainer scope",
+            "Direct trainer selection is disabled. Attach with a trainer invite code instead.",
         )
 
-    def test_assign_trainer_rejects_selection_outside_scoped_trainer_list(self):
+    def test_assign_trainer_does_not_allow_scoped_list_selection(self):
         app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
             tenant_id="tenant-1",
             trainer_id=None,
@@ -281,11 +320,35 @@ class TrainerAssignmentApiTests(unittest.TestCase):
                 headers={"Authorization": "Bearer ignored-by-override"},
             )
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 403)
         self.assertEqual(
             response.json()["detail"],
-            "Selected trainer was not found in the available trainer scope",
+            "Direct trainer selection is disabled. Attach with a trainer invite code instead.",
         )
+
+    def test_assign_by_invite_returns_generic_failure_message(self):
+        class _FailingOnboardingService:
+            def assign_by_invite(self, *, user, invite_code):
+                del user, invite_code
+                raise OnboardingServiceError("Invite code is invalid", status_code=404)
+
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id=None,
+            trainer_user_id=None,
+            trainer_display_name=None,
+            client_id="client-123",
+        )
+        app.dependency_overrides[get_onboarding_service] = lambda: _FailingOnboardingService()
+
+        response = self.client.post(
+            "/api/v1/trainer-assignment/assign-by-invite",
+            json={"invite_code": "ABC123"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "Unable to attach trainer with invite code")
 
 
 if __name__ == "__main__":

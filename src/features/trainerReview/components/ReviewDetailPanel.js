@@ -1,15 +1,18 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 
-import { ModeButton, ModeCard, ModeChip, ModeInput, ModeText } from '../../../../lib/components';
+import { ModeButton, ModeCard, ModeChip, ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
-import { formatTimestamp, previewText, sourceLabel, statusLabel } from '../utils/reviewFormatters';
+import DraftReviewStructuredCard from '../../draftReview/components/DraftReviewStructuredCard';
+import { formatTimestamp, sourceLabel, statusLabel } from '../utils/reviewFormatters';
 
 export default function ReviewDetailPanel({
   selectedOutput,
   feedbackEvents,
-  editedText,
-  onEditedTextChange,
+  draftModel,
+  onDraftModelChange,
+  onRetryRender,
+  onRegeneratePlan,
   isMutating,
   mutationError,
   mutationSuccess,
@@ -23,7 +26,7 @@ export default function ReviewDetailPanel({
 
   return (
     <>
-      <ModeCard style={styles.outputCard}>
+      <ModeCard variant="hero" style={styles.outputCard}>
         <View style={styles.outputMetaRow}>
           <ModeChip label={sourceLabel(selectedOutput.source_type)} selected={false} />
           <ModeChip label={statusLabel(selectedOutput.review_status)} selected={selectedOutput.review_status === 'approved'} />
@@ -31,17 +34,13 @@ export default function ReviewDetailPanel({
         <ModeText variant="caption" tone="secondary">
           Created {formatTimestamp(selectedOutput.created_at)}
         </ModeText>
-        <ModeText variant="label" style={styles.sectionLabel}>Original Output</ModeText>
-        <ModeText variant="body" style={styles.bodyBlock}>
-          {selectedOutput.output_text || previewText(selectedOutput)}
-        </ModeText>
-        <ModeText variant="label" style={styles.sectionLabel}>Edited Output</ModeText>
-        <ModeInput
-          multiline
-          value={editedText}
-          onChangeText={onEditedTextChange}
-          placeholder="Edit output text before approving."
-          style={styles.editorInput}
+        <DraftReviewStructuredCard
+          model={draftModel}
+          modelKey={selectedOutput.id || selectedOutput.output_id}
+          onModelChange={onDraftModelChange}
+          onRetryRender={onRetryRender}
+          onRegeneratePlan={onRegeneratePlan}
+          testIDPrefix="trainer-review-detail"
         />
         {mutationError ? <ModeText variant="caption" tone="error">{mutationError}</ModeText> : null}
         {mutationSuccess ? <ModeText variant="caption" tone="secondary">{mutationSuccess}</ModeText> : null}
@@ -104,12 +103,6 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     marginTop: theme.spacing[1],
-  },
-  bodyBlock: {
-    lineHeight: 22,
-  },
-  editorInput: {
-    minHeight: 140,
   },
   actionRow: {
     flexDirection: 'row',

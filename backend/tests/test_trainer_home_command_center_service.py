@@ -11,6 +11,11 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from app.core.tenancy import TrainerContext
+from app.modules.checkin_signals import (
+    CHECKIN_SIGNAL_SUMMARY_VERSION,
+    build_checkin_question_summaries,
+    build_signal_fingerprint,
+)
 from app.modules.trainer_home.service import TrainerHomeService
 
 
@@ -18,16 +23,66 @@ class FakeCommandCenterRepository:
     def __init__(self):
         self.cache = {}
         self.upsert_calls = []
+        self.trainer_settings = {
+            "id": "trainer-1",
+            "display_name": "Coach Maya",
+            "default_meeting_location": "Main Gym",
+            "auto_fill_meeting_location": True,
+        }
+        self.client_rows = [
+            {
+                "id": "client-1",
+                "tenant_id": "tenant-1",
+                "user_id": "client-user-1",
+                "client_name": "Taylor",
+                "created_at": "2026-03-27T12:00:00+00:00",
+            },
+            {
+                "id": "client-2",
+                "tenant_id": "tenant-1",
+                "user_id": "client-user-2",
+                "client_name": "Jordan",
+                "created_at": "2026-03-27T12:00:00+00:00",
+            },
+        ]
+        self.checkin_rows = [
+            {
+                "client_id": "client-1",
+                "date": "2026-04-11",
+                "inputs": {"sleep": 4, "stress": 4, "soreness": 3, "nutrition": 4, "motivation": 3},
+                "total_score": 18,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-10",
+                "inputs": {"sleep": 4, "stress": 3, "soreness": 3, "nutrition": 4, "motivation": 3},
+                "total_score": 17,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-2",
+                "date": "2026-04-07",
+                "inputs": {"sleep": 2, "stress": 3, "soreness": 3, "nutrition": 3, "motivation": 1},
+                "total_score": 12,
+                "assigned_mode": "RECOVER",
+            },
+        ]
+        self.schedule_preference_rows = []
+        self.schedule_exception_rows = []
 
     def list_clients_for_trainer(self, trainer_id):
         del trainer_id
-        return [
-            {"id": "client-1", "tenant_id": "tenant-1", "user_id": "client-user-1", "client_name": "Taylor"},
-            {"id": "client-2", "tenant_id": "tenant-1", "user_id": "client-user-2", "client_name": "Jordan"},
-        ]
+        return [dict(row) for row in self.client_rows]
+
+    def get_trainer_settings(self, trainer_id):
+        del trainer_id
+        return self.trainer_settings
 
     def list_schedule_for_day(self, trainer_id, session_date):
-        del trainer_id, session_date
+        del trainer_id
+        if session_date.isoformat() != "2026-04-11":
+            return []
         return [
             {
                 "id": "schedule-1",
@@ -37,8 +92,27 @@ class FakeCommandCenterRepository:
                 "session_start_at": "2026-04-11T17:00:00+00:00",
                 "session_end_at": "2026-04-11T18:00:00+00:00",
                 "session_type": "strength",
+                "meeting_location": "Downtown Performance Lab",
                 "status": "scheduled",
             }
+        ]
+
+    def list_schedule_preferences_for_clients(self, trainer_id, client_ids):
+        del trainer_id
+        allowed_ids = set(client_ids)
+        return [
+            row for row in self.schedule_preference_rows
+            if row.get("client_id") in allowed_ids
+        ]
+
+    def list_schedule_exceptions_between(self, trainer_id, start_date, end_date, client_ids=None):
+        del trainer_id, start_date, end_date
+        allowed_ids = set(client_ids or [])
+        if not allowed_ids:
+            return self.schedule_exception_rows
+        return [
+            row for row in self.schedule_exception_rows
+            if row.get("client_id") in allowed_ids
         ]
 
     def list_schedule_between(self, trainer_id, start_date, end_date):
@@ -56,20 +130,23 @@ class FakeCommandCenterRepository:
             }
         ]
 
-    def list_checkins_between(self, start_date, end_date):
+    def list_checkins_between(self, start_date, end_date, *, client_ids=None):
         del start_date, end_date
-        return [
-            {"client_id": "client-1", "date": "2026-04-11", "total_score": 18, "assigned_mode": "BUILD"},
-            {"client_id": "client-1", "date": "2026-04-10", "total_score": 17, "assigned_mode": "BUILD"},
-            {"client_id": "client-2", "date": "2026-04-07", "total_score": 12, "assigned_mode": "RECOVER"},
-        ]
+        allowed_client_ids = set(client_ids or [])
+        if client_ids is None:
+            return [dict(row) for row in self.checkin_rows]
+        return [dict(row) for row in self.checkin_rows if row.get("client_id") in allowed_client_ids]
 
-    def list_completed_workouts_between(self, start_time, end_time):
+    def list_completed_workouts_between(self, start_time, end_time, *, user_ids=None):
         del start_time, end_time
-        return [
+        allowed_user_ids = set(user_ids or [])
+        rows = [
             {"id": "w-1", "user_id": "client-user-1", "completed": True, "created_at": "2026-04-10T12:00:00+00:00"},
             {"id": "w-2", "user_id": "client-user-1", "completed": True, "created_at": "2026-04-09T12:00:00+00:00"},
         ]
+        if user_ids is None:
+            return rows
+        return [row for row in rows if row.get("user_id") in allowed_user_ids]
 
     def list_coach_memory_for_trainer(self, trainer_id):
         del trainer_id
@@ -103,6 +180,19 @@ class FakeCommandCenterRepository:
         return self.cache[key]
 
 
+def build_signal_cache_metadata(repository, client_id, target_date):
+    rows = [
+        row
+        for row in repository.list_checkins_between(target_date - timedelta(days=6), target_date)
+        if row.get("client_id") == client_id
+    ]
+    summaries = build_checkin_question_summaries(rows, target_date)
+    return {
+        "signal_summary_version": CHECKIN_SIGNAL_SUMMARY_VERSION,
+        "signal_fingerprint": build_signal_fingerprint(summaries),
+    }
+
+
 class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
     def test_build_command_center_prioritizes_clients_and_returns_three_talking_points(self):
         repository = FakeCommandCenterRepository()
@@ -127,17 +217,200 @@ class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
         self.assertEqual(first_client.priority_tier, "critical")
         self.assertEqual(second_client.client_id, "client-1")
         self.assertEqual(second_client.priority_tier, "low")
+        self.assertEqual(second_client.meeting_location, "Downtown Performance Lab")
 
         self.assertEqual(len(first_client.talking_points.points), 3)
         self.assertEqual(len(second_client.talking_points.points), 3)
         self.assertTrue(
+            any("motivation averaged 1.0/5" in point.lower() for point in first_client.talking_points.points),
+            msg=f"Unexpected talking points: {first_client.talking_points.points}",
+        )
+        self.assertTrue(
+            any(flag.code == "low_motivation_7d" for flag in first_client.risk_flags),
+            msg=f"Unexpected risk flags: {first_client.risk_flags}",
+        )
+        self.assertTrue(
             any("knee" in point.lower() for point in first_client.talking_points.points),
             msg=f"Unexpected talking points: {first_client.talking_points.points}",
         )
+        self.assertEqual(response.totals.today_missing_checkins, 1)
+        self.assertEqual(response.totals.clients_with_recent_missed_checkins, 2)
+        self.assertEqual(response.totals.clients_with_low_7d_readiness, 1)
+        self.assertEqual(response.totals.clients_with_recent_low_readiness, 1)
         self.assertEqual(len(repository.upsert_calls), 2)
+
+    def test_build_command_center_counts_recent_missed_days_excluding_today(self):
+        repository = FakeCommandCenterRepository()
+        repository.client_rows = [
+            {
+                "id": "client-1",
+                "tenant_id": "tenant-1",
+                "user_id": "client-user-1",
+                "client_name": "Taylor",
+                "created_at": "2026-03-27T12:00:00+00:00",
+            }
+        ]
+        repository.checkin_rows = [
+            {
+                "client_id": "client-1",
+                "date": "2026-04-11",
+                "inputs": {"sleep": 4, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 20,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-10",
+                "inputs": {"sleep": 4, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 20,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-08",
+                "inputs": {"sleep": 4, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 20,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-06",
+                "inputs": {"sleep": 4, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 20,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-04",
+                "inputs": {"sleep": 4, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 20,
+                "assigned_mode": "BUILD",
+            },
+        ]
+        service = TrainerHomeService(repository, openai_client=False)
+        trainer_context = TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id=None,
+        )
+
+        response = service.build_command_center(trainer_context, date(2026, 4, 11))
+        client = response.clients[0]
+
+        self.assertEqual(response.totals.today_missing_checkins, 0)
+        self.assertEqual(response.totals.recent_missed_checkin_days, 3)
+        self.assertEqual(response.totals.clients_with_recent_missed_checkins, 1)
+        self.assertEqual(
+            client.missed_checkin_dates_7d,
+            [date(2026, 4, 9), date(2026, 4, 7), date(2026, 4, 5)],
+        )
+        self.assertEqual(client.week_summary.missed_checkin_dates_7d, client.missed_checkin_dates_7d)
+
+    def test_build_command_center_does_not_count_missed_dates_before_client_creation(self):
+        repository = FakeCommandCenterRepository()
+        repository.client_rows = [
+            {
+                "id": "client-1",
+                "tenant_id": "tenant-1",
+                "user_id": "client-user-1",
+                "client_name": "Taylor",
+                "created_at": "2026-04-08T12:00:00+00:00",
+            }
+        ]
+        repository.checkin_rows = [
+            {
+                "client_id": "client-1",
+                "date": "2026-04-11",
+                "inputs": {"sleep": 4, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 20,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-10",
+                "inputs": {"sleep": 4, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 20,
+                "assigned_mode": "BUILD",
+            },
+        ]
+        service = TrainerHomeService(repository, openai_client=False)
+        trainer_context = TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id=None,
+        )
+
+        response = service.build_command_center(trainer_context, date(2026, 4, 11))
+        client = response.clients[0]
+
+        self.assertEqual(response.totals.recent_missed_checkin_days, 2)
+        self.assertEqual(client.missed_checkin_dates_7d, [date(2026, 4, 9), date(2026, 4, 8)])
+
+    def test_build_command_center_separates_low_average_from_recent_low_days(self):
+        repository = FakeCommandCenterRepository()
+        repository.client_rows = [
+            {
+                "id": "client-1",
+                "tenant_id": "tenant-1",
+                "user_id": "client-user-1",
+                "client_name": "Taylor",
+                "created_at": "2026-03-27T12:00:00+00:00",
+            }
+        ]
+        repository.checkin_rows = [
+            {
+                "client_id": "client-1",
+                "date": "2026-04-11",
+                "inputs": {"sleep": 4, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 20,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-10",
+                "inputs": {"sleep": 3, "stress": 3, "soreness": 3, "nutrition": 3, "motivation": 3},
+                "total_score": 15,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-09",
+                "inputs": {"sleep": 4, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 20,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-08",
+                "inputs": {"sleep": 4, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 20,
+                "assigned_mode": "BUILD",
+            },
+        ]
+        service = TrainerHomeService(repository, openai_client=False)
+        trainer_context = TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id=None,
+        )
+
+        response = service.build_command_center(trainer_context, date(2026, 4, 11))
+        client = response.clients[0]
+
+        self.assertEqual(response.totals.clients_with_low_7d_readiness, 0)
+        self.assertEqual(response.totals.clients_with_recent_low_readiness, 1)
+        self.assertEqual(client.recent_low_readiness_dates, [date(2026, 4, 10)])
+        self.assertEqual(client.week_summary.recent_low_readiness_dates, client.recent_low_readiness_dates)
 
     def test_build_command_center_uses_cache_when_fresh(self):
         repository = FakeCommandCenterRepository()
+        target_date = date(2026, 4, 11)
         repository.cache[("trainer-1", "client-1")] = {
             "trainer_id": "trainer-1",
             "client_id": "client-1",
@@ -149,6 +422,7 @@ class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
             "generation_strategy": "llm",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "expires_at": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            "metadata": build_signal_cache_metadata(repository, "client-1", target_date),
         }
         repository.cache[("trainer-1", "client-2")] = {
             "trainer_id": "trainer-1",
@@ -161,6 +435,39 @@ class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
             "generation_strategy": "deterministic",
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "expires_at": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            "metadata": build_signal_cache_metadata(repository, "client-2", target_date),
+        }
+        service = TrainerHomeService(repository, openai_client=False)
+        trainer_context = TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id=None,
+        )
+
+        response = service.build_command_center(trainer_context, target_date)
+
+        self.assertEqual(len(repository.upsert_calls), 0)
+        for client in response.clients:
+            self.assertTrue(client.talking_points.cache_hit)
+            self.assertTrue(client.talking_points.generation_strategy.startswith("cache:"))
+            self.assertEqual(len(client.talking_points.points), 3)
+
+    def test_build_command_center_regenerates_cache_without_signal_fingerprint(self):
+        repository = FakeCommandCenterRepository()
+        repository.cache[("trainer-1", "client-2")] = {
+            "trainer_id": "trainer-1",
+            "client_id": "client-2",
+            "points_json": [
+                "Old cache point A",
+                "Old cache point B",
+                "Old cache point C",
+            ],
+            "generation_strategy": "deterministic",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "expires_at": (datetime.now(timezone.utc) + timedelta(hours=4)).isoformat(),
+            "metadata": {},
         }
         service = TrainerHomeService(repository, openai_client=False)
         trainer_context = TrainerContext(
@@ -173,11 +480,82 @@ class TrainerHomeCommandCenterServiceTests(unittest.TestCase):
 
         response = service.build_command_center(trainer_context, date(2026, 4, 11))
 
-        self.assertEqual(len(repository.upsert_calls), 0)
-        for client in response.clients:
-            self.assertTrue(client.talking_points.cache_hit)
-            self.assertTrue(client.talking_points.generation_strategy.startswith("cache:"))
-            self.assertEqual(len(client.talking_points.points), 3)
+        client_two = next(client for client in response.clients if client.client_id == "client-2")
+        self.assertFalse(client_two.talking_points.cache_hit)
+        self.assertTrue(repository.upsert_calls)
+        refreshed_payload = next(
+            payload for payload in repository.upsert_calls if payload["client_id"] == "client-2"
+        )
+        self.assertEqual(
+            refreshed_payload["metadata"]["signal_summary_version"],
+            CHECKIN_SIGNAL_SUMMARY_VERSION,
+        )
+        self.assertTrue(refreshed_payload["metadata"]["signal_fingerprint"])
+
+    def test_build_command_center_applies_recurring_and_add_exception(self):
+        repository = FakeCommandCenterRepository()
+        repository.schedule_preference_rows = [
+            {
+                "trainer_id": "trainer-1",
+                "client_id": "client-2",
+                "recurring_weekdays": [],
+                "preferred_meeting_location": None,
+                "auto_use_trainer_default_location": True,
+            }
+        ]
+        repository.schedule_exception_rows = [
+            {
+                "trainer_id": "trainer-1",
+                "client_id": "client-2",
+                "session_date": "2026-04-11",
+                "exception_type": "add",
+                "meeting_location_override": "Satellite Studio",
+            }
+        ]
+        service = TrainerHomeService(repository, openai_client=False)
+        trainer_context = TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id=None,
+        )
+
+        response = service.build_command_center(trainer_context, date(2026, 4, 11))
+        jordan = next(item for item in response.clients if item.client_id == "client-2")
+
+        self.assertEqual(response.totals.scheduled_today, 2)
+        self.assertTrue(jordan.scheduled_today)
+        self.assertEqual(jordan.session_status, "scheduled")
+        self.assertEqual(jordan.meeting_location, "Satellite Studio")
+
+    def test_build_command_center_includes_recurring_schedule_for_tomorrow(self):
+        repository = FakeCommandCenterRepository()
+        repository.schedule_preference_rows = [
+            {
+                "trainer_id": "trainer-1",
+                "client_id": "client-2",
+                "recurring_weekdays": [7],
+                "preferred_meeting_location": None,
+                "auto_use_trainer_default_location": True,
+            }
+        ]
+        service = TrainerHomeService(repository, openai_client=False)
+        trainer_context = TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id=None,
+        )
+
+        response = service.build_command_center(trainer_context, date(2026, 4, 12))
+        taylor = next(item for item in response.clients if item.client_id == "client-1")
+        jordan = next(item for item in response.clients if item.client_id == "client-2")
+
+        self.assertEqual(response.totals.scheduled_today, 1)
+        self.assertFalse(taylor.scheduled_today)
+        self.assertTrue(jordan.scheduled_today)
 
 
 if __name__ == "__main__":

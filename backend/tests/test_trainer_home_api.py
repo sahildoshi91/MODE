@@ -30,6 +30,7 @@ class FakeTrainerHomeRepository:
                 "session_start_at": "2026-04-10T17:00:00+00:00",
                 "session_end_at": "2026-04-10T18:00:00+00:00",
                 "session_type": "strength",
+                "meeting_location": "Westside Performance",
                 "notes": "Focus on lower body mechanics",
                 "status": "scheduled",
             },
@@ -41,6 +42,7 @@ class FakeTrainerHomeRepository:
                 "session_start_at": "2026-04-10T19:00:00+00:00",
                 "session_end_at": "2026-04-10T19:45:00+00:00",
                 "session_type": "conditioning",
+                "meeting_location": "North Gym Floor",
                 "notes": "",
                 "status": "no_show",
             },
@@ -53,22 +55,54 @@ class FakeTrainerHomeRepository:
             {"id": "client-2", "user_id": "client-user-2", "client_name": "Jordan", "assigned_trainer_id": "trainer-1"},
         ]
 
-    def list_checkins_between(self, start_date, end_date):
+    def list_checkins_between(self, start_date, end_date, *, client_ids=None):
         del start_date, end_date
-        return [
-            {"client_id": "client-1", "date": "2026-04-10", "total_score": 18, "assigned_mode": "BUILD"},
-            {"client_id": "client-1", "date": "2026-04-09", "total_score": 17, "assigned_mode": "BUILD"},
-            {"client_id": "client-1", "date": "2026-04-08", "total_score": 19, "assigned_mode": "BUILD"},
-            {"client_id": "client-2", "date": "2026-04-09", "total_score": 12, "assigned_mode": "RECOVER"},
+        allowed_client_ids = set(client_ids or [])
+        rows = [
+            {
+                "client_id": "client-1",
+                "date": "2026-04-10",
+                "inputs": {"sleep": 4, "stress": 3, "soreness": 4, "nutrition": 3, "motivation": 4},
+                "total_score": 18,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-09",
+                "inputs": {"sleep": 2, "stress": 3, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 17,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-1",
+                "date": "2026-04-08",
+                "inputs": {"sleep": 3, "stress": 4, "soreness": 4, "nutrition": 4, "motivation": 4},
+                "total_score": 19,
+                "assigned_mode": "BUILD",
+            },
+            {
+                "client_id": "client-2",
+                "date": "2026-04-09",
+                "inputs": {"sleep": 2, "stress": 3, "soreness": 3, "nutrition": 3, "motivation": 1},
+                "total_score": 12,
+                "assigned_mode": "RECOVER",
+            },
         ]
+        if client_ids is None:
+            return rows
+        return [row for row in rows if row.get("client_id") in allowed_client_ids]
 
-    def list_completed_workouts_between(self, start_time, end_time):
+    def list_completed_workouts_between(self, start_time, end_time, *, user_ids=None):
         del start_time, end_time
-        return [
+        allowed_user_ids = set(user_ids or [])
+        rows = [
             {"id": "w-1", "user_id": "client-user-1", "completed": True, "created_at": "2026-04-09T11:00:00+00:00"},
             {"id": "w-2", "user_id": "client-user-1", "completed": True, "created_at": "2026-04-08T11:00:00+00:00"},
             {"id": "w-3", "user_id": "client-user-2", "completed": True, "created_at": "2026-04-08T13:00:00+00:00"},
         ]
+        if user_ids is None:
+            return rows
+        return [row for row in rows if row.get("user_id") in allowed_user_ids]
 
 
 class TrainerHomeApiTests(unittest.TestCase):
@@ -133,11 +167,19 @@ class TrainerHomeApiTests(unittest.TestCase):
 
         taylor = next(item for item in payload["clients"] if item["client_id"] == "client-1")
         jordan = next(item for item in payload["clients"] if item["client_id"] == "client-2")
+        self.assertEqual(taylor["meeting_location"], "Westside Performance")
         self.assertEqual(taylor["week_summary"]["checkins_completed_7d"], 3)
         self.assertEqual(taylor["week_summary"]["avg_mode_7d"], "BUILD")
         self.assertEqual(taylor["week_summary"]["workouts_completed_7d"], 2)
+        taylor_sleep = next(item for item in taylor["week_summary"]["question_summaries"] if item["key"] == "sleep")
+        self.assertEqual(taylor_sleep["average_7d"], 3.0)
+        self.assertEqual(taylor_sleep["responses_7d"], 3)
+        self.assertEqual(len(taylor_sleep["daily_responses"]), 7)
         self.assertEqual(jordan["week_summary"]["checkins_completed_7d"], 1)
         self.assertEqual(jordan["week_summary"]["workouts_completed_7d"], 1)
+        jordan_motivation = next(item for item in jordan["week_summary"]["question_summaries"] if item["key"] == "motivation")
+        self.assertEqual(jordan_motivation["status"], "low")
+        self.assertEqual(jordan_motivation["average_7d"], 1.0)
         self.assertLessEqual(len(jordan["talking_points"]), 3)
         self.assertTrue(
             any("No check-in logged today" in point for point in jordan["talking_points"]),

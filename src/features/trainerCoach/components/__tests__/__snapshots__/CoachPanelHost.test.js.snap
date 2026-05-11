@@ -1,0 +1,842 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`CoachPanelHost matches small-screen /note snapshot without filter wrapping regressions 1`] = `
+<View
+  style={
+    {
+      "height": 568,
+      "width": 320,
+    }
+  }
+>
+  <Modal
+    animationType="slide"
+    onRequestClose={[MockFunction]}
+    transparent={true}
+    visible={true}
+  >
+    <View
+      style={
+        {
+          "flex": 1,
+          "justifyContent": "flex-end",
+        }
+      }
+    >
+      <View
+        accessibilityState={
+          {
+            "busy": undefined,
+            "checked": undefined,
+            "disabled": undefined,
+            "expanded": undefined,
+            "selected": undefined,
+          }
+        }
+        accessibilityValue={
+          {
+            "max": undefined,
+            "min": undefined,
+            "now": undefined,
+            "text": undefined,
+          }
+        }
+        accessible={true}
+        collapsable={false}
+        focusable={true}
+        onBlur={[Function]}
+        onClick={[Function]}
+        onFocus={[Function]}
+        onResponderGrant={[Function]}
+        onResponderMove={[Function]}
+        onResponderRelease={[Function]}
+        onResponderTerminate={[Function]}
+        onResponderTerminationRequest={[Function]}
+        onStartShouldSetResponder={[Function]}
+        style={
+          {
+            "backgroundColor": "rgba(11,16,24,0.42)",
+            "bottom": 0,
+            "left": 0,
+            "position": "absolute",
+            "right": 0,
+            "top": 0,
+          }
+        }
+        testID="trainer-coach-note-backdrop"
+      />
+      <View
+        style={
+          [
+            {
+              "backgroundColor": "rgba(7, 14, 27, 0.96)",
+              "borderColor": "rgba(118, 150, 210, 0.26)",
+              "borderTopLeftRadius": 30,
+              "borderTopRightRadius": 30,
+              "borderWidth": 1,
+              "maxHeight": "88%",
+              "minHeight": "58%",
+              "overflow": "hidden",
+            },
+            {
+              "marginBottom": 0,
+            },
+          ]
+        }
+        testID="trainer-coach-panel-sheet"
+      >
+        <View
+          onMoveShouldSetResponder={[Function]}
+          onMoveShouldSetResponderCapture={[Function]}
+          onResponderEnd={[Function]}
+          onResponderGrant={[Function]}
+          onResponderMove={[Function]}
+          onResponderReject={[Function]}
+          onResponderRelease={[Function]}
+          onResponderStart={[Function]}
+          onResponderTerminate={[Function]}
+          onResponderTerminationRequest={[Function]}
+          onStartShouldSetResponder={[Function]}
+          onStartShouldSetResponderCapture={[Function]}
+          style={
+            {
+              "alignItems": "center",
+              "paddingBottom": 4,
+              "paddingTop": 6,
+            }
+          }
+          testID="trainer-coach-note-swipe-dismiss"
+        >
+          <View
+            style={
+              {
+                "backgroundColor": "rgba(154, 175, 219, 0.4)",
+                "borderRadius": 999,
+                "height": 4,
+                "width": 42,
+              }
+            }
+          />
+        </View>
+        <View
+          style={
+            {
+              "flex": 1,
+              "minHeight": 220,
+            }
+          }
+        >
+          <RCTScrollView
+            contentContainerStyle={
+              {
+                "gap": 12,
+                "paddingBottom": 16,
+                "paddingHorizontal": 16,
+                "paddingTop": 12,
+              }
+            }
+            keyboardShouldPersistTaps="handled"
+            style={
+              {
+                "flex": 1,
+              }
+            }
+          >
+            <View>
+              <View
+                style={
+                  {
+                    "gap": 10,
+                  }
+                }
+              >
+                <View
+                  style={
+                    {
+                      "alignItems": "center",
+                      "flexDirection": "row",
+                      "gap": 10,
+                      "justifyContent": "space-between",
+                    }
+                  }
+                >
+                  <View
+                    accessibilityState={
+                      {
+                        "busy": undefined,
+                        "checked": undefined,
+                        "disabled": undefined,
+                        "expanded": undefined,
+                        "selected": undefined,
+                      }
+                    }
+                    accessibilityValue={
+                      {
+                        "max": undefined,
+                        "min": undefined,
+                        "now": undefined,
+                        "text": undefined,
+                      }
+                    }
+                    accessible={true}
+                    collapsable={false}
+                    focusable={true}
+                    onBlur={[Function]}
+                    onClick={[Function]}
+                    onFocus={[Function]}
+                    onResponderGrant={[Function]}
+                    onResponderMove={[Function]}
+                    onResponderRelease={[Function]}
+                    onResponderTerminate={[Function]}
+                    onResponderTerminationRequest={[Function]}
+                    onStartShouldSetResponder={[Function]}
+                    style={
+                      [
+                        {
+                          "alignItems": "center",
+                          "backgroundColor": "rgba(10, 19, 35, 0.72)",
+                          "borderColor": "rgba(118, 150, 210, 0.26)",
+                          "borderRadius": 16,
+                          "borderWidth": 1,
+                          "height": 32,
+                          "justifyContent": "center",
+                          "width": 32,
+                        },
+                        false,
+                      ]
+                    }
+                    testID="trainer-coach-knowledge-close"
+                  >
+                    <Text>
+                      X
+                    </Text>
+                  </View>
+                  <Text
+                    style={
+                      {
+                        "flex": 1,
+                        "textAlign": "center",
+                      }
+                    }
+                  >
+                    Coaching Knowledge
+                  </Text>
+                  <View
+                    accessibilityState={
+                      {
+                        "busy": undefined,
+                        "checked": undefined,
+                        "disabled": undefined,
+                        "expanded": undefined,
+                        "selected": undefined,
+                      }
+                    }
+                    accessibilityValue={
+                      {
+                        "max": undefined,
+                        "min": undefined,
+                        "now": undefined,
+                        "text": undefined,
+                      }
+                    }
+                    accessible={true}
+                    collapsable={false}
+                    focusable={true}
+                    onBlur={[Function]}
+                    onClick={[Function]}
+                    onFocus={[Function]}
+                    onResponderGrant={[Function]}
+                    onResponderMove={[Function]}
+                    onResponderRelease={[Function]}
+                    onResponderTerminate={[Function]}
+                    onResponderTerminationRequest={[Function]}
+                    onStartShouldSetResponder={[Function]}
+                    style={
+                      [
+                        {
+                          "alignItems": "center",
+                          "backgroundColor": "rgba(37, 67, 111, 0.46)",
+                          "borderColor": "rgba(124, 167, 234, 0.42)",
+                          "borderRadius": 16,
+                          "borderWidth": 1,
+                          "justifyContent": "center",
+                          "minHeight": 32,
+                          "paddingHorizontal": 10,
+                        },
+                        false,
+                      ]
+                    }
+                    testID="trainer-coach-knowledge-open-new"
+                  >
+                    <Text
+                      style={
+                        {
+                          "color": "rgba(236, 246, 255, 0.96)",
+                          "fontWeight": "700",
+                        }
+                      }
+                    >
+                      + New
+                    </Text>
+                  </View>
+                </View>
+                <View
+                  style={
+                    {
+                      "justifyContent": "center",
+                      "minHeight": 48,
+                    }
+                  }
+                >
+                  <TextInput
+                    onChangeText={[Function]}
+                    placeholder="Search knowledge"
+                    testID="trainer-coach-knowledge-search"
+                    value=""
+                  />
+                </View>
+                <View
+                  style={
+                    {
+                      "gap": 6,
+                    }
+                  }
+                >
+                  <View
+                    style={
+                      {
+                        "alignItems": "center",
+                        "flexDirection": "row",
+                        "gap": 8,
+                      }
+                    }
+                  >
+                    <View
+                      style={
+                        {
+                          "backgroundColor": "rgba(8, 17, 31, 0.72)",
+                          "borderColor": "rgba(118, 150, 210, 0.22)",
+                          "borderRadius": 18,
+                          "borderWidth": 1,
+                          "flex": 1,
+                          "flexDirection": "row",
+                          "gap": 2,
+                          "minHeight": 34,
+                          "padding": 2,
+                        }
+                      }
+                    >
+                      <View
+                        accessibilityRole="button"
+                        accessibilityState={
+                          {
+                            "busy": undefined,
+                            "checked": undefined,
+                            "disabled": undefined,
+                            "expanded": undefined,
+                            "selected": true,
+                          }
+                        }
+                        accessibilityValue={
+                          {
+                            "max": undefined,
+                            "min": undefined,
+                            "now": undefined,
+                            "text": undefined,
+                          }
+                        }
+                        accessible={true}
+                        collapsable={false}
+                        focusable={true}
+                        onBlur={[Function]}
+                        onClick={[Function]}
+                        onFocus={[Function]}
+                        onResponderGrant={[Function]}
+                        onResponderMove={[Function]}
+                        onResponderRelease={[Function]}
+                        onResponderTerminate={[Function]}
+                        onResponderTerminationRequest={[Function]}
+                        onStartShouldSetResponder={[Function]}
+                        style={
+                          [
+                            {
+                              "alignItems": "center",
+                              "borderRadius": 14,
+                              "flex": 1,
+                              "justifyContent": "center",
+                              "minHeight": 30,
+                              "paddingHorizontal": 10,
+                            },
+                            {
+                              "backgroundColor": "rgba(39, 72, 123, 0.48)",
+                              "borderColor": "rgba(124, 167, 234, 0.5)",
+                              "borderWidth": 1,
+                            },
+                            false,
+                          ]
+                        }
+                        testID="trainer-coach-knowledge-filter-scope-all"
+                      >
+                        <Text>
+                          All
+                        </Text>
+                      </View>
+                      <View
+                        accessibilityRole="button"
+                        accessibilityState={
+                          {
+                            "busy": undefined,
+                            "checked": undefined,
+                            "disabled": undefined,
+                            "expanded": undefined,
+                            "selected": false,
+                          }
+                        }
+                        accessibilityValue={
+                          {
+                            "max": undefined,
+                            "min": undefined,
+                            "now": undefined,
+                            "text": undefined,
+                          }
+                        }
+                        accessible={true}
+                        collapsable={false}
+                        focusable={true}
+                        onBlur={[Function]}
+                        onClick={[Function]}
+                        onFocus={[Function]}
+                        onResponderGrant={[Function]}
+                        onResponderMove={[Function]}
+                        onResponderRelease={[Function]}
+                        onResponderTerminate={[Function]}
+                        onResponderTerminationRequest={[Function]}
+                        onStartShouldSetResponder={[Function]}
+                        style={
+                          [
+                            {
+                              "alignItems": "center",
+                              "borderRadius": 14,
+                              "flex": 1,
+                              "justifyContent": "center",
+                              "minHeight": 30,
+                              "paddingHorizontal": 10,
+                            },
+                            false,
+                            false,
+                          ]
+                        }
+                        testID="trainer-coach-knowledge-filter-scope-global"
+                      >
+                        <Text>
+                          Global
+                        </Text>
+                      </View>
+                      <View
+                        accessibilityRole="button"
+                        accessibilityState={
+                          {
+                            "busy": undefined,
+                            "checked": undefined,
+                            "disabled": undefined,
+                            "expanded": undefined,
+                            "selected": false,
+                          }
+                        }
+                        accessibilityValue={
+                          {
+                            "max": undefined,
+                            "min": undefined,
+                            "now": undefined,
+                            "text": undefined,
+                          }
+                        }
+                        accessible={true}
+                        collapsable={false}
+                        focusable={true}
+                        onBlur={[Function]}
+                        onClick={[Function]}
+                        onFocus={[Function]}
+                        onResponderGrant={[Function]}
+                        onResponderMove={[Function]}
+                        onResponderRelease={[Function]}
+                        onResponderTerminate={[Function]}
+                        onResponderTerminationRequest={[Function]}
+                        onStartShouldSetResponder={[Function]}
+                        style={
+                          [
+                            {
+                              "alignItems": "center",
+                              "borderRadius": 14,
+                              "flex": 1,
+                              "justifyContent": "center",
+                              "minHeight": 30,
+                              "paddingHorizontal": 10,
+                            },
+                            false,
+                            false,
+                          ]
+                        }
+                        testID="trainer-coach-knowledge-filter-scope-client"
+                      >
+                        <Text>
+                          Client
+                        </Text>
+                      </View>
+                    </View>
+                    <View
+                      accessibilityLabel="Filter coaching knowledge"
+                      accessibilityRole="button"
+                      accessibilityState={
+                        {
+                          "busy": undefined,
+                          "checked": undefined,
+                          "disabled": undefined,
+                          "expanded": undefined,
+                          "selected": undefined,
+                        }
+                      }
+                      accessibilityValue={
+                        {
+                          "max": undefined,
+                          "min": undefined,
+                          "now": undefined,
+                          "text": undefined,
+                        }
+                      }
+                      accessible={true}
+                      collapsable={false}
+                      focusable={true}
+                      onBlur={[Function]}
+                      onClick={[Function]}
+                      onFocus={[Function]}
+                      onResponderGrant={[Function]}
+                      onResponderMove={[Function]}
+                      onResponderRelease={[Function]}
+                      onResponderTerminate={[Function]}
+                      onResponderTerminationRequest={[Function]}
+                      onStartShouldSetResponder={[Function]}
+                      style={
+                        [
+                          {
+                            "alignItems": "center",
+                            "backgroundColor": "rgba(12, 21, 40, 0.72)",
+                            "borderColor": "rgba(118, 150, 210, 0.3)",
+                            "borderRadius": 22,
+                            "borderWidth": 1,
+                            "height": 44,
+                            "justifyContent": "center",
+                            "width": 44,
+                          },
+                          false,
+                          false,
+                        ]
+                      }
+                      testID="trainer-coach-knowledge-filter-menu"
+                    >
+                      <Text
+                        allowFontScaling={false}
+                        selectable={false}
+                        style={
+                          [
+                            {
+                              "color": "#C7D6F3",
+                              "fontSize": 15,
+                            },
+                            undefined,
+                            {
+                              "fontFamily": "feather",
+                              "fontStyle": "normal",
+                              "fontWeight": "normal",
+                            },
+                            {},
+                          ]
+                        }
+                      >
+                        
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+                <View
+                  style={
+                    {
+                      "gap": 6,
+                    }
+                  }
+                >
+                  <View
+                    collapsable={false}
+                    onMoveShouldSetResponder={[Function]}
+                    onMoveShouldSetResponderCapture={[Function]}
+                    onResponderEnd={[Function]}
+                    onResponderGrant={[Function]}
+                    onResponderMove={[Function]}
+                    onResponderReject={[Function]}
+                    onResponderRelease={[Function]}
+                    onResponderStart={[Function]}
+                    onResponderTerminate={[Function]}
+                    onResponderTerminationRequest={[Function]}
+                    onStartShouldSetResponder={[Function]}
+                    onStartShouldSetResponderCapture={[Function]}
+                    style={
+                      {
+                        "borderRadius": 14,
+                        "overflow": "hidden",
+                        "transform": [
+                          {
+                            "translateX": 0,
+                          },
+                        ],
+                      }
+                    }
+                  >
+                    <View
+                      accessibilityLabel="Expand knowledge note"
+                      accessibilityRole="button"
+                      accessibilityState={
+                        {
+                          "busy": undefined,
+                          "checked": undefined,
+                          "disabled": undefined,
+                          "expanded": false,
+                          "selected": undefined,
+                        }
+                      }
+                      accessibilityValue={
+                        {
+                          "max": undefined,
+                          "min": undefined,
+                          "now": undefined,
+                          "text": undefined,
+                        }
+                      }
+                      accessible={true}
+                      collapsable={false}
+                      focusable={true}
+                      onBlur={[Function]}
+                      onClick={[Function]}
+                      onFocus={[Function]}
+                      onResponderGrant={[Function]}
+                      onResponderMove={[Function]}
+                      onResponderRelease={[Function]}
+                      onResponderTerminate={[Function]}
+                      onResponderTerminationRequest={[Function]}
+                      onStartShouldSetResponder={[Function]}
+                      style={
+                        [
+                          {
+                            "alignItems": "flex-start",
+                            "backgroundColor": "rgba(11, 21, 38, 0.54)",
+                            "borderColor": "rgba(94, 126, 184, 0.22)",
+                            "borderRadius": 14,
+                            "borderWidth": 1,
+                            "flexDirection": "row",
+                            "gap": 10,
+                            "justifyContent": "space-between",
+                            "minHeight": 60,
+                            "paddingHorizontal": 12,
+                            "paddingVertical": 10,
+                          },
+                          false,
+                          false,
+                        ]
+                      }
+                      testID="trainer-coach-knowledge-row-entry-1"
+                    >
+                      <View
+                        style={
+                          {
+                            "flex": 1,
+                            "gap": 2,
+                          }
+                        }
+                      >
+                        <Text
+                          style={
+                            {
+                              "fontWeight": "600",
+                            }
+                          }
+                        >
+                          Sleep adjustment
+                        </Text>
+                        <Text
+                          style={
+                            {
+                              "lineHeight": 18,
+                            }
+                          }
+                        >
+                          When sleep is poor, reduce intensity and prioritize movement quality.
+                        </Text>
+                        <Text>
+                          Global · AI On · Apr 22
+                        </Text>
+                      </View>
+                      <View
+                        style={
+                          {
+                            "alignItems": "center",
+                            "gap": 6,
+                            "paddingTop": 1,
+                          }
+                        }
+                      >
+                        <View
+                          accessibilityLabel="Edit knowledge note"
+                          accessibilityRole="button"
+                          accessibilityState={
+                            {
+                              "busy": undefined,
+                              "checked": undefined,
+                              "disabled": false,
+                              "expanded": undefined,
+                              "selected": undefined,
+                            }
+                          }
+                          accessibilityValue={
+                            {
+                              "max": undefined,
+                              "min": undefined,
+                              "now": undefined,
+                              "text": undefined,
+                            }
+                          }
+                          accessible={true}
+                          collapsable={false}
+                          focusable={true}
+                          hitSlop={8}
+                          onBlur={[Function]}
+                          onClick={[Function]}
+                          onFocus={[Function]}
+                          onResponderGrant={[Function]}
+                          onResponderMove={[Function]}
+                          onResponderRelease={[Function]}
+                          onResponderTerminate={[Function]}
+                          onResponderTerminationRequest={[Function]}
+                          onStartShouldSetResponder={[Function]}
+                          style={
+                            [
+                              {
+                                "alignItems": "center",
+                                "backgroundColor": "rgba(12, 20, 35, 0.64)",
+                                "borderColor": "rgba(103, 136, 194, 0.28)",
+                                "borderRadius": 14,
+                                "borderWidth": 1,
+                                "height": 28,
+                                "justifyContent": "center",
+                                "width": 28,
+                              },
+                              false,
+                            ]
+                          }
+                          testID="trainer-coach-knowledge-edit-entry-1"
+                        >
+                          <Text
+                            allowFontScaling={false}
+                            selectable={false}
+                            style={
+                              [
+                                {
+                                  "color": "#C7D6F3",
+                                  "fontSize": 14,
+                                },
+                                undefined,
+                                {
+                                  "fontFamily": "feather",
+                                  "fontStyle": "normal",
+                                  "fontWeight": "normal",
+                                },
+                                {},
+                              ]
+                            }
+                          >
+                            
+                          </Text>
+                        </View>
+                        <View
+                          accessibilityLabel="Archive knowledge note"
+                          accessibilityRole="button"
+                          accessibilityState={
+                            {
+                              "busy": undefined,
+                              "checked": undefined,
+                              "disabled": false,
+                              "expanded": undefined,
+                              "selected": undefined,
+                            }
+                          }
+                          accessibilityValue={
+                            {
+                              "max": undefined,
+                              "min": undefined,
+                              "now": undefined,
+                              "text": undefined,
+                            }
+                          }
+                          accessible={true}
+                          collapsable={false}
+                          focusable={true}
+                          hitSlop={8}
+                          onBlur={[Function]}
+                          onClick={[Function]}
+                          onFocus={[Function]}
+                          onResponderGrant={[Function]}
+                          onResponderMove={[Function]}
+                          onResponderRelease={[Function]}
+                          onResponderTerminate={[Function]}
+                          onResponderTerminationRequest={[Function]}
+                          onStartShouldSetResponder={[Function]}
+                          style={
+                            [
+                              {
+                                "alignItems": "center",
+                                "backgroundColor": "rgba(12, 20, 35, 0.64)",
+                                "borderColor": "rgba(103, 136, 194, 0.28)",
+                                "borderRadius": 14,
+                                "borderWidth": 1,
+                                "height": 28,
+                                "justifyContent": "center",
+                                "width": 28,
+                              },
+                              false,
+                            ]
+                          }
+                          testID="trainer-coach-knowledge-archive-entry-1"
+                        >
+                          <Text
+                            allowFontScaling={false}
+                            selectable={false}
+                            style={
+                              [
+                                {
+                                  "color": "#C7D6F3",
+                                  "fontSize": 14,
+                                },
+                                undefined,
+                                {
+                                  "fontFamily": "feather",
+                                  "fontStyle": "normal",
+                                  "fontWeight": "normal",
+                                },
+                                {},
+                              ]
+                            }
+                          >
+                            
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+              </View>
+            </View>
+          </RCTScrollView>
+        </View>
+      </View>
+    </View>
+  </Modal>
+</View>
+`;

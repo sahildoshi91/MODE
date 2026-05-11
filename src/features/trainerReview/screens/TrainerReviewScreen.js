@@ -9,6 +9,13 @@ import {
   SafeScreen,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { BREATHING_TRANSITIONS_ENABLED } from '../../../config/featureFlags';
+import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/loading';
+import {
+  buildRegenerationLaunchContext,
+  rebuildJSON,
+  transformPlan,
+} from '../../draftReview/domain/draftReviewModel';
 import ReviewDetailPanel from '../components/ReviewDetailPanel';
 import ReviewFiltersCard from '../components/ReviewFiltersCard';
 import ReviewQueueList from '../components/ReviewQueueList';
@@ -24,6 +31,7 @@ export default function TrainerReviewScreen({
   accessToken,
   bottomInset = 0,
   topToolbar = null,
+  onOpenTrainerCoach = null,
 }) {
   const [statusFilter, setStatusFilter] = useState('open');
   const [sourceFilter, setSourceFilter] = useState('all');
@@ -36,7 +44,7 @@ export default function TrainerReviewScreen({
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState(null);
 
-  const [editedText, setEditedText] = useState('');
+  const [draftModel, setDraftModel] = useState(null);
   const [isMutating, setIsMutating] = useState(false);
   const [mutationError, setMutationError] = useState(null);
   const [mutationSuccess, setMutationSuccess] = useState(null);
@@ -44,6 +52,10 @@ export default function TrainerReviewScreen({
   const selectedOutput = detailPayload?.output || null;
   const feedbackEvents = Array.isArray(detailPayload?.feedback_events) ? detailPayload.feedback_events : [];
   const outputItems = Array.isArray(outputsPayload?.items) ? outputsPayload.items : [];
+  const breathingTransitionsEnabled = Boolean(BREATHING_TRANSITIONS_ENABLED);
+  const isBreathingTransitionActive = !selectedOutputId
+    ? isLoadingOutputs
+    : isLoadingDetail;
 
   const loadOutputs = useCallback(async () => {
     if (!accessToken) {
@@ -79,11 +91,7 @@ export default function TrainerReviewScreen({
         outputId,
       });
       setDetailPayload(payload);
-      const reviewedText = typeof payload?.output?.reviewed_output_text === 'string'
-        ? payload.output.reviewed_output_text
-        : '';
-      const originalText = typeof payload?.output?.output_text === 'string' ? payload.output.output_text : '';
-      setEditedText(reviewedText || originalText);
+      setDraftModel(payload?.output ? transformPlan(payload.output) : null);
     } catch (error) {
       setDetailError(error?.message || 'Unable to load output detail.');
     } finally {
@@ -104,13 +112,27 @@ export default function TrainerReviewScreen({
     setSelectedOutputId(null);
     setDetailPayload(null);
     setDetailError(null);
+    setDraftModel(null);
     setMutationError(null);
     setMutationSuccess(null);
   };
 
-  const runMutation = async (mutationFn, successMessage) => {
+  const resolveEditedOutputPayload = useCallback(() => {
+    if (!selectedOutput) {
+      return {
+        editedOutputText: null,
+        editedOutputJson: null,
+      };
+    }
+    const uiState = draftModel && typeof draftModel === 'object'
+      ? draftModel
+      : transformPlan(selectedOutput);
+    return rebuildJSON(uiState, selectedOutput);
+  }, [draftModel, selectedOutput]);
+
+  const runMutation = async (mutationFn, successMessage, { afterSuccess } = {}) => {
     if (!accessToken || !selectedOutputId || isMutating) {
-      return;
+      return false;
     }
     setIsMutating(true);
     setMutationError(null);
@@ -120,45 +142,99 @@ export default function TrainerReviewScreen({
       await loadOutputDetail(selectedOutputId);
       await loadOutputs();
       setMutationSuccess(successMessage);
+      if (typeof afterSuccess === 'function') {
+        afterSuccess();
+      }
+      return true;
     } catch (error) {
       setMutationError(error?.message || 'Unable to update output.');
+      return false;
     } finally {
       setIsMutating(false);
     }
   };
 
-  const handleSaveEdit = async () => runMutation(
-    () => editTrainerReviewOutput({
-      accessToken,
-      outputId: selectedOutputId,
-      editedOutputText: editedText.trim(),
-      autoApplyDeltas: true,
-    }),
-    'Edit saved.',
-  );
+  const handleSaveEdit = async () => {
+    const { editedOutputText, editedOutputJson } = resolveEditedOutputPayload();
+    await runMutation(
+      () => editTrainerReviewOutput({
+        accessToken,
+        outputId: selectedOutputId,
+        editedOutputText,
+        editedOutputJson,
+        autoApplyDeltas: false,
+      }),
+      'Edit saved.',
+    );
+  };
 
-  const handleApprove = async () => runMutation(
-    () => approveTrainerReviewOutput({
-      accessToken,
-      outputId: selectedOutputId,
-      editedOutputText: editedText.trim(),
-      autoApplyDeltas: true,
-    }),
-    'Output approved.',
-  );
+  const handleApprove = async () => {
+    const { editedOutputText, editedOutputJson } = resolveEditedOutputPayload();
+    await runMutation(
+      () => approveTrainerReviewOutput({
+        accessToken,
+        outputId: selectedOutputId,
+        editedOutputText,
+        editedOutputJson,
+        autoApplyDeltas: false,
+      }),
+      'Output approved.',
+    );
+  };
 
-  const handleReject = async () => runMutation(
-    () => rejectTrainerReviewOutput({
-      accessToken,
-      outputId: selectedOutputId,
-      reason: 'Rejected in trainer review workspace.',
-      editedOutputText: editedText.trim(),
-    }),
-    'Output rejected.',
-  );
+  const handleReject = async () => {
+    const { editedOutputText, editedOutputJson } = resolveEditedOutputPayload();
+    await runMutation(
+      () => rejectTrainerReviewOutput({
+        accessToken,
+        outputId: selectedOutputId,
+        reason: 'Rejected in trainer review workspace.',
+        editedOutputText,
+        editedOutputJson,
+      }),
+      'Output rejected.',
+    );
+  };
+
+  const handleRetryRender = () => {
+    if (!selectedOutput) {
+      return;
+    }
+    setDraftModel(transformPlan(selectedOutput));
+    setMutationError(null);
+  };
+
+  const handleRegeneratePlan = async () => {
+    if (!selectedOutput) {
+      return;
+    }
+    const { editedOutputText, editedOutputJson } = resolveEditedOutputPayload();
+    await runMutation(
+      () => rejectTrainerReviewOutput({
+        accessToken,
+        outputId: selectedOutputId,
+        reason: 'Rejected for regeneration in trainer review workspace.',
+        editedOutputText,
+        editedOutputJson,
+      }),
+      'Draft rejected and regeneration launched.',
+      {
+        afterSuccess: () => {
+          if (typeof onOpenTrainerCoach === 'function') {
+            onOpenTrainerCoach(buildRegenerationLaunchContext(selectedOutput, draftModel));
+          }
+        },
+      },
+    );
+  };
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
+    <SafeScreen
+      includeTopInset={false}
+      style={styles.screen}
+      atmosphere="coach"
+      atmosphereOverlayStrength={0.93}
+    >
       <HeaderBar
         title={selectedOutputId ? 'Review Detail' : 'AI Review'}
         onBack={selectedOutputId ? handleBackToList : null}
@@ -185,7 +261,7 @@ export default function TrainerReviewScreen({
               onRefresh={loadOutputs}
             />
 
-            {isLoadingOutputs ? (
+            {!breathingTransitionsEnabled && isLoadingOutputs ? (
               <View style={styles.loadingState}>
                 <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
                 <ModeText variant="caption" tone="secondary">Loading review queue...</ModeText>
@@ -216,7 +292,7 @@ export default function TrainerReviewScreen({
           </>
         ) : (
           <>
-            {isLoadingDetail ? (
+            {!breathingTransitionsEnabled && isLoadingDetail ? (
               <View style={styles.loadingState}>
                 <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
                 <ModeText variant="caption" tone="secondary">Loading output detail...</ModeText>
@@ -239,8 +315,10 @@ export default function TrainerReviewScreen({
               <ReviewDetailPanel
                 selectedOutput={selectedOutput}
                 feedbackEvents={feedbackEvents}
-                editedText={editedText}
-                onEditedTextChange={setEditedText}
+                draftModel={draftModel}
+                onDraftModelChange={setDraftModel}
+                onRetryRender={handleRetryRender}
+                onRegeneratePlan={handleRegeneratePlan}
                 isMutating={isMutating}
                 mutationError={mutationError}
                 mutationSuccess={mutationSuccess}
@@ -252,6 +330,15 @@ export default function TrainerReviewScreen({
           </>
         )}
       </ScrollView>
+      {breathingTransitionsEnabled ? (
+        <BreathingTransitionOverlay
+          active={isBreathingTransitionActive}
+          context={BREATHING_CONTEXT.TRAINER_REVIEW_LOAD}
+          variant="overlay"
+          progressLabel={selectedOutputId ? 'Loading output detail...' : 'Loading review queue...'}
+          testID="trainer-review-breathing-loader"
+        />
+      ) : null}
     </SafeScreen>
   );
 }

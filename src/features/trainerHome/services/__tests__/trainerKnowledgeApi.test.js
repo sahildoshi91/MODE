@@ -8,8 +8,12 @@ jest.mock('../../../../services/apiNetworkError', () => ({
 
 import { fetchWithApiFallback } from '../../../../services/apiRequest';
 import {
+  archiveTrainerKnowledgeEntry,
+  createTrainerKnowledgeEntry,
   deleteTrainerKnowledgeDocument,
+  listTrainerKnowledgeEntries,
   saveTrainerKnowledgeDocumentWithFallback,
+  updateTrainerKnowledgeEntry,
   updateTrainerKnowledgeDocument,
 } from '../trainerKnowledgeApi';
 
@@ -172,5 +176,173 @@ describe('trainerKnowledgeApi', () => {
         }),
       }),
     );
+  });
+
+  it('lists knowledge entries with query filters', async () => {
+    fetchWithApiFallback.mockResolvedValue({
+      response: createJsonResponse([]),
+      baseUrl: 'http://127.0.0.1:8000',
+    });
+
+    await listTrainerKnowledgeEntries({
+      accessToken: 'trainer-token',
+      includeArchived: true,
+      scope: 'client_specific',
+      aiEnabled: true,
+      clientId: 'client-1',
+      query: 'sleep',
+      limit: 20,
+      offset: 10,
+    });
+
+    expect(fetchWithApiFallback).toHaveBeenCalledWith(
+      '/api/v1/trainer-knowledge/entries?include_archived=true&scope=client&ai_usable=true&ai_enabled=true&client_id=client-1&query=sleep&limit=20&offset=10',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer trainer-token',
+        }),
+      }),
+    );
+  });
+
+  it('creates, updates, and archives knowledge entries with new endpoint contracts', async () => {
+    fetchWithApiFallback
+      .mockResolvedValueOnce({
+        response: createJsonResponse({ entry: { id: 'entry-1' } }),
+        baseUrl: 'http://127.0.0.1:8000',
+      })
+      .mockResolvedValueOnce({
+        response: createJsonResponse({ entry: { id: 'entry-1', title: 'Updated' } }),
+        baseUrl: 'http://127.0.0.1:8000',
+      })
+      .mockResolvedValueOnce({
+        response: createJsonResponse({ entry: { id: 'entry-1', status: 'archived' } }),
+        baseUrl: 'http://127.0.0.1:8000',
+      });
+
+    await createTrainerKnowledgeEntry({
+      accessToken: 'trainer-token',
+      title: 'Initial',
+      rawContent: 'Reduce intensity when sleep is poor',
+      knowledgeType: 'coaching_rule',
+      scope: 'global',
+      tags: ['sleep', 'recovery'],
+      aiEnabled: true,
+    });
+    await updateTrainerKnowledgeEntry({
+      accessToken: 'trainer-token',
+      entryId: 'entry-1',
+      title: 'Updated',
+      rawContent: 'Updated',
+      status: 'active',
+    });
+    await archiveTrainerKnowledgeEntry({
+      accessToken: 'trainer-token',
+      entryId: 'entry-1',
+    });
+
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/trainer-knowledge/entries',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/trainer-knowledge/entries/entry-1',
+      expect.objectContaining({ method: 'PATCH' }),
+    );
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/trainer-knowledge/entries/entry-1',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('falls back to legacy document save when entries endpoint returns method not allowed', async () => {
+    fetchWithApiFallback
+      .mockResolvedValueOnce({
+        response: createJsonResponse(
+          { detail: 'Method Not Allowed' },
+          { ok: false, status: 405 },
+        ),
+        baseUrl: 'http://127.0.0.1:8000',
+      })
+      .mockResolvedValueOnce({
+        response: createJsonResponse({
+          document: {
+            id: 'doc-legacy-1',
+            trainer_id: 'trainer-1',
+            title: 'Legacy saved note',
+            raw_text: 'Fallback body',
+            metadata: {
+              legacy_knowledge_entry: {
+                scope: 'global',
+                knowledge_type: 'coaching_rule',
+                ai_enabled: true,
+                status: 'active',
+              },
+            },
+          },
+          extracted_rules: [],
+          extraction: { rules_created: 0 },
+        }),
+        baseUrl: 'http://127.0.0.1:8000',
+      });
+
+    const result = await createTrainerKnowledgeEntry({
+      accessToken: 'trainer-token',
+      title: 'Legacy saved note',
+      rawContent: 'Fallback body',
+      knowledgeType: 'coaching_rule',
+      scope: 'global',
+      tags: ['sleep'],
+      aiEnabled: true,
+    });
+
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/trainer-knowledge/entries',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetchWithApiFallback).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/trainer-knowledge/ingest',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(result?.entry?.id).toBe('doc-legacy-1');
+    expect(result?.entry?.scope).toBe('global');
+    expect(result?.entry?.knowledge_type).toBe('rule');
+  });
+
+  it('normalizes client scope alias to canonical client for entry create and update payloads', async () => {
+    fetchWithApiFallback
+      .mockResolvedValueOnce({
+        response: createJsonResponse({ entry: { id: 'entry-5' } }),
+        baseUrl: 'http://127.0.0.1:8000',
+      })
+      .mockResolvedValueOnce({
+        response: createJsonResponse({ entry: { id: 'entry-5' } }),
+        baseUrl: 'http://127.0.0.1:8000',
+      });
+
+    await createTrainerKnowledgeEntry({
+      accessToken: 'trainer-token',
+      title: 'Client note',
+      rawContent: 'Client-specific content',
+      scope: 'client',
+      clientId: 'client-1',
+    });
+
+    await updateTrainerKnowledgeEntry({
+      accessToken: 'trainer-token',
+      entryId: 'entry-5',
+      scope: 'client',
+    });
+
+    const createCallBody = JSON.parse(fetchWithApiFallback.mock.calls[0][1].body);
+    const updateCallBody = JSON.parse(fetchWithApiFallback.mock.calls[1][1].body);
+    expect(createCallBody.scope).toBe('client');
+    expect(updateCallBody.scope).toBe('client');
   });
 });

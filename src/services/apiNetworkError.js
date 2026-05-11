@@ -4,7 +4,15 @@ import { getApiRequestDebugState } from './apiRequest';
 export function buildApiNetworkError(error, path, options = {}) {
   const rootError = error?.cause || error;
   const errorMessage = typeof rootError?.message === 'string' ? rootError.message : 'Network request failed';
-  const isTimeout = /timed out|abort/i.test(errorMessage) || rootError?.name === 'AbortError';
+  const attemptedErrors = Array.isArray(error?.attemptedErrors) ? error.attemptedErrors : [];
+  const hasTimeoutAttempt = attemptedErrors.some((attempt) => {
+    if (attempt?.is_timeout) {
+      return true;
+    }
+    const attemptMessage = typeof attempt?.message === 'string' ? attempt.message : '';
+    return /timed out|abort/i.test(attemptMessage);
+  });
+  const isTimeout = /timed out|abort/i.test(errorMessage) || rootError?.name === 'AbortError' || hasTimeoutAttempt;
   const attemptedBaseUrls = Array.isArray(error?.attemptedBaseUrls) && error.attemptedBaseUrls.length > 0
     ? error.attemptedBaseUrls
     : getApiBaseUrls();
@@ -37,6 +45,7 @@ export function buildApiNetworkError(error, path, options = {}) {
   networkError.request_id = null;
   networkError.resolved_api_base_url = resolvedApiBaseUrl;
   networkError.attempted_base_urls = normalizedAttemptedBaseUrls;
+  networkError.attempt_errors = attemptedErrors;
   networkError.last_successful_base_url = requestDebugState.lastSuccessfulBaseUrl || null;
   networkError.raw_error_message = errorMessage;
   return networkError;

@@ -63,7 +63,7 @@ class TrainerIntelligenceRepository:
         response = (
             self.supabase
             .table("user_fitness_profiles")
-            .select("client_id, primary_goal, experience_level, equipment_access, onboarding_status, preferred_session_length")
+            .select("client_id, primary_goal, user_why, experience_level, equipment_access, onboarding_status, preferred_session_length")
             .eq("client_id", client_id)
             .limit(1)
             .execute()
@@ -94,3 +94,81 @@ class TrainerIntelligenceRepository:
             .execute()
         )
         return response.data or []
+
+    def list_active_knowledge_entries(
+        self,
+        trainer_id: str,
+        *,
+        limit: int,
+        client_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        query = (
+            self.supabase
+            .table("trainer_knowledge_entries")
+            .select(
+                "id, trainer_id, client_id, title, raw_content, structured_summary, knowledge_type, scope, tags, "
+                "ai_enabled, status, confidence_score, embedding_status, last_embedded_at, "
+                "usage_count, last_used_at, updated_at, created_at, source, source_message_id"
+            )
+            .eq("trainer_id", trainer_id)
+            .eq("status", "active")
+            .eq("ai_enabled", True)
+        )
+        if client_id:
+            query = query.or_(f"client_id.is.null,client_id.eq.{client_id}")
+        response = (
+            query
+            .order("updated_at", desc=True)
+            .limit(max(1, min(limit, 200)))
+            .execute()
+        )
+        return response.data or []
+
+    def create_knowledge_usage_logs(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not rows:
+            return []
+        response = (
+            self.supabase
+            .table("trainer_knowledge_usage_logs")
+            .insert(rows)
+            .execute()
+        )
+        return response.data or []
+
+    def get_knowledge_entry_usage(self, trainer_id: str, entry_id: str) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("trainer_knowledge_entries")
+            .select("id, usage_count")
+            .eq("trainer_id", trainer_id)
+            .eq("id", entry_id)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def increment_knowledge_entry_usage(
+        self,
+        trainer_id: str,
+        entry_id: str,
+        *,
+        timestamp_iso: str,
+    ) -> None:
+        current = self.get_knowledge_entry_usage(trainer_id, entry_id)
+        if not current:
+            return
+        next_count = int(current.get("usage_count") or 0) + 1
+        (
+            self.supabase
+            .table("trainer_knowledge_entries")
+            .update(
+                {
+                    "usage_count": next_count,
+                    "last_used_at": timestamp_iso,
+                    "updated_at": timestamp_iso,
+                }
+            )
+            .eq("trainer_id", trainer_id)
+            .eq("id", entry_id)
+            .execute()
+        )

@@ -16,12 +16,32 @@ class TrainerHomeTotals(BaseModel):
     workouts_completed_7d: int
 
 
+class TrainerHomeCheckinDailyResponse(BaseModel):
+    date: date
+    score: int | None = None
+
+
+class TrainerHomeCheckinQuestionSummary(BaseModel):
+    key: str
+    label: str
+    average_7d: float | None = None
+    responses_7d: int = 0
+    low_days_7d: int = 0
+    latest_score: int | None = None
+    latest_date: date | None = None
+    status: Literal["low", "watch", "steady", "no_data"] = "no_data"
+    daily_responses: list[TrainerHomeCheckinDailyResponse] = Field(default_factory=list)
+
+
 class TrainerHomeWeekSummary(BaseModel):
     checkins_completed_7d: int = 0
     checkins_completed_today: bool = False
     avg_score_7d: float | None = None
     avg_mode_7d: str | None = None
     workouts_completed_7d: int = 0
+    missed_checkin_dates_7d: list[date] = Field(default_factory=list)
+    recent_low_readiness_dates: list[date] = Field(default_factory=list)
+    question_summaries: list[TrainerHomeCheckinQuestionSummary] = Field(default_factory=list)
 
 
 class TrainerHomeClientItem(BaseModel):
@@ -32,6 +52,7 @@ class TrainerHomeClientItem(BaseModel):
     session_start_at: datetime | None = None
     session_end_at: datetime | None = None
     session_type: str | None = None
+    meeting_location: str | None = None
     notes: str | None = None
     status: str = "scheduled"
     week_summary: TrainerHomeWeekSummary
@@ -70,17 +91,30 @@ class TrainerHomeCommandCenterClientItem(BaseModel):
     session_end_at: datetime | None = None
     session_type: str | None = None
     session_status: str | None = None
+    meeting_location: str | None = None
+    recurring_weekdays: list[int] = Field(default_factory=list)
+    preferred_meeting_location: str | None = None
+    auto_use_trainer_default_location: bool = True
+    selected_date_exception_type: Literal["skip", "add"] | None = None
+    selected_date_meeting_location_override: str | None = None
     week_summary: TrainerHomeWeekSummary
     risk_flags: list[TrainerHomeRiskFlag] = Field(default_factory=list)
     talking_points: TrainerHomeTalkingPointSet = Field(default_factory=TrainerHomeTalkingPointSet)
     last_checkin_date: date | None = None
     days_since_last_checkin: int | None = None
+    missed_checkin_dates_7d: list[date] = Field(default_factory=list)
+    recent_low_readiness_dates: list[date] = Field(default_factory=list)
 
 
 class TrainerHomeCommandCenterTotals(BaseModel):
     assigned_clients: int = 0
     scheduled_today: int = 0
     checkins_completed_today: int = 0
+    today_missing_checkins: int = 0
+    recent_missed_checkin_days: int = 0
+    clients_with_recent_missed_checkins: int = 0
+    clients_with_low_7d_readiness: int = 0
+    clients_with_recent_low_readiness: int = 0
     high_priority_clients: int = 0
     critical_priority_clients: int = 0
 

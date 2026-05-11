@@ -1,0 +1,134 @@
+{
+  "authenticated_allowlist": [
+    "auth_can_access_conversation",
+    "auth_can_view_client",
+    "auth_can_view_trainer",
+    "auth_is_client_assigned_to_trainer",
+    "auth_is_client_user",
+    "auth_is_tenant_member",
+    "auth_is_trainer_user",
+    "trainer_coach_approve_output"
+  ],
+  "dangerous_grant_findings": [],
+  "functions_discovered_count": 15,
+  "ok": true,
+  "rows": [
+    {
+      "category": "revoked_all_non_owner",
+      "function_name": "append_chat_message",
+      "grants_to": []
+    },
+    {
+      "category": "privileged_service_only",
+      "function_name": "assign_client_to_trainer",
+      "grants_to": [
+        "service_role"
+      ]
+    },
+    {
+      "category": "safe_allowlist",
+      "function_name": "auth_can_access_conversation",
+      "grants_to": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    {
+      "category": "safe_allowlist",
+      "function_name": "auth_can_view_client",
+      "grants_to": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    {
+      "category": "safe_allowlist",
+      "function_name": "auth_can_view_trainer",
+      "grants_to": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    {
+      "category": "safe_allowlist",
+      "function_name": "auth_is_client_assigned_to_trainer",
+      "grants_to": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    {
+      "category": "safe_allowlist",
+      "function_name": "auth_is_client_user",
+      "grants_to": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    {
+      "category": "safe_allowlist",
+      "function_name": "auth_is_tenant_member",
+      "grants_to": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    {
+      "category": "safe_allowlist",
+      "function_name": "auth_is_trainer_user",
+      "grants_to": [
+        "authenticated",
+        "service_role"
+      ]
+    },
+    {
+      "category": "privileged_service_only",
+      "function_name": "bootstrap_trainer_tenant",
+      "grants_to": [
+        "service_role"
+      ]
+    },
+    {
+      "category": "revoked_all_non_owner",
+      "function_name": "populate_client_name_from_email",
+      "grants_to": []
+    },
+    {
+      "category": "privileged_service_only",
+      "function_name": "security_assert_rls_enabled",
+      "grants_to": [
+        "service_role"
+      ]
+    },
+    {
+      "category": "privileged_service_only",
+      "function_name": "security_enforce_rate_limit",
+      "grants_to": [
+        "service_role"
+      ]
+    },
+    {
+      "category": "privileged_service_only",
+      "function_name": "security_list_public_tables",
+      "grants_to": [
+        "service_role"
+      ]
+    },
+    {
+      "category": "safe_allowlist",
+      "function_name": "trainer_coach_approve_output",
+      "grants_to": [
+        "authenticated",
+        "service_role"
+      ]
+    }
+  ],
+  "service_role_only_allowlist": [
+    "assign_client_to_trainer",
+    "bootstrap_trainer_tenant",
+    "security_assert_rls_enabled",
+    "security_enforce_rate_limit",
+    "security_list_public_tables"
+  ],
+  "source_migration": "sql/20260426e_add_distributed_rate_limits_and_rpc_execute_allowlist.sql"
+}

@@ -12,7 +12,10 @@ class TrainerHomeRepository:
         response = (
             self.supabase
             .table("trainer_daily_schedule")
-            .select("id, trainer_id, client_id, session_date, session_start_at, session_end_at, session_type, notes, status")
+            .select(
+                "id, trainer_id, client_id, session_date, session_start_at, session_end_at, "
+                "session_type, meeting_location, notes, status"
+            )
             .eq("trainer_id", trainer_id)
             .eq("session_date", session_date.isoformat())
             .order("session_start_at")
@@ -25,17 +28,31 @@ class TrainerHomeRepository:
         response = (
             self.supabase
             .table("clients")
-            .select("id, tenant_id, user_id, client_name, assigned_trainer_id")
+            .select("id, tenant_id, user_id, client_name, assigned_trainer_id, created_at")
             .eq("assigned_trainer_id", trainer_id)
             .execute()
         )
         return response.data or []
 
+    def get_trainer_settings(self, trainer_id: str) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("trainers")
+            .select("id, display_name, default_meeting_location, auto_fill_meeting_location")
+            .eq("id", trainer_id)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
     def list_schedule_between(self, trainer_id: str, start_date: date, end_date: date) -> list[dict[str, Any]]:
         response = (
             self.supabase
             .table("trainer_daily_schedule")
-            .select("id, trainer_id, client_id, session_date, session_start_at, session_end_at, session_type, notes, status")
+            .select(
+                "id, trainer_id, client_id, session_date, session_start_at, session_end_at, "
+                "session_type, meeting_location, notes, status"
+            )
             .eq("trainer_id", trainer_id)
             .gte("session_date", start_date.isoformat())
             .lte("session_date", end_date.isoformat())
@@ -45,27 +62,93 @@ class TrainerHomeRepository:
         )
         return response.data or []
 
-    def list_checkins_between(self, start_date: date, end_date: date) -> list[dict[str, Any]]:
+    def list_schedule_preferences_for_clients(
+        self,
+        trainer_id: str,
+        client_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        if not client_ids:
+            return []
         response = (
             self.supabase
-            .table("daily_checkins")
-            .select("client_id, date, total_score, assigned_mode")
-            .gte("date", start_date.isoformat())
-            .lte("date", end_date.isoformat())
+            .table("trainer_client_schedule_preferences")
+            .select(
+                "id, trainer_id, client_id, recurring_weekdays, preferred_meeting_location, "
+                "auto_use_trainer_default_location, created_at, updated_at"
+            )
+            .eq("trainer_id", trainer_id)
+            .in_("client_id", client_ids)
             .execute()
         )
         return response.data or []
 
-    def list_completed_workouts_between(self, start_time: datetime, end_time: datetime) -> list[dict[str, Any]]:
-        response = (
+    def list_schedule_exceptions_between(
+        self,
+        trainer_id: str,
+        *,
+        start_date: date,
+        end_date: date,
+        client_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        query = (
+            self.supabase
+            .table("trainer_client_schedule_exceptions")
+            .select(
+                "id, trainer_id, client_id, session_date, exception_type, "
+                "meeting_location_override, created_at, updated_at"
+            )
+            .eq("trainer_id", trainer_id)
+            .gte("session_date", start_date.isoformat())
+            .lte("session_date", end_date.isoformat())
+            .order("session_date")
+            .order("created_at")
+        )
+        if client_ids:
+            query = query.in_("client_id", client_ids)
+        response = query.execute()
+        return response.data or []
+
+    def list_checkins_between(
+        self,
+        start_date: date,
+        end_date: date,
+        *,
+        client_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        if client_ids is not None and not client_ids:
+            return []
+        query = (
+            self.supabase
+            .table("daily_checkins")
+            .select("client_id, date, inputs, total_score, assigned_mode")
+            .gte("date", start_date.isoformat())
+            .lte("date", end_date.isoformat())
+        )
+        if client_ids:
+            query = query.in_("client_id", client_ids)
+        response = query.execute()
+        return response.data or []
+
+    def list_completed_workouts_between(
+        self,
+        start_time: datetime,
+        end_time: datetime,
+        *,
+        user_ids: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        if user_ids is not None and not user_ids:
+            return []
+        query = (
             self.supabase
             .table("workouts")
             .select("id, user_id, completed, created_at")
             .eq("completed", True)
             .gte("created_at", start_time.isoformat())
             .lte("created_at", end_time.isoformat())
-            .execute()
         )
+        if user_ids:
+            query = query.in_("user_id", user_ids)
+        response = query.execute()
         return response.data or []
 
     def get_talking_points_cache(self, trainer_id: str, client_id: str) -> dict[str, Any] | None:

@@ -1,27 +1,49 @@
 from fastapi import APIRouter
 
+from app.api.v1.account import router as account_router
+from app.api.v1.analytics import router as analytics_router
+from app.api.v1.atlas import router as atlas_router
+from app.api.v1.auth_password import router as auth_password_router
 from app.api.v1.chat import router as chat_router
+from app.api.v1.chat_sessions import router as chat_sessions_router
 from app.api.v1.checkin import router as checkin_router
+from app.api.v1.onboarding import router as onboarding_router
 from app.api.v1.plans import router as plans_router
 from app.api.v1.profiles import router as profiles_router
+from app.api.v1.storage_private import router as storage_private_router
 from app.api.v1.trainer_assignment import router as trainer_assignment_router
 from app.api.v1.trainer_clients import router as trainer_clients_router
 from app.api.v1.trainer_home import router as trainer_home_router
 from app.api.v1.trainer_knowledge import router as trainer_knowledge_router
 from app.api.v1.trainer_personas import router as trainer_personas_router
+from app.api.v1.trainer_programs import router as trainer_programs_router
 from app.api.v1.trainer_review import router as trainer_review_router
+from app.api.v1.trainer_coach import router as trainer_coach_router
+from app.api.v1.trainer_assistant import router as trainer_assistant_router
+from app.api.v1.trainer_settings import router as trainer_settings_router
 from app.api.v1.workouts import router as workouts_router
 
 
 api_router = APIRouter(prefix="/api/v1")
+api_router.include_router(account_router, prefix="/account", tags=["account"])
+api_router.include_router(auth_password_router, prefix="/auth/password", tags=["auth-password"])
+api_router.include_router(storage_private_router, prefix="/storage", tags=["storage-private"])
 api_router.include_router(chat_router, prefix="/chat", tags=["chat"])
+api_router.include_router(chat_sessions_router, prefix="/chat/sessions", tags=["chat-sessions"])
 api_router.include_router(checkin_router, prefix="/checkin", tags=["checkin"])
 api_router.include_router(profiles_router, prefix="/profiles", tags=["profiles"])
 api_router.include_router(plans_router, prefix="/plans", tags=["plans"])
 api_router.include_router(workouts_router, prefix="/workouts", tags=["workouts"])
+api_router.include_router(onboarding_router, prefix="/onboarding", tags=["onboarding"])
+api_router.include_router(analytics_router, prefix="/analytics", tags=["analytics"])
+api_router.include_router(atlas_router, prefix="/atlas", tags=["atlas"])
 api_router.include_router(trainer_assignment_router, prefix="/trainer-assignment", tags=["trainer-assignment"])
 api_router.include_router(trainer_home_router, prefix="/trainer-home", tags=["trainer-home"])
 api_router.include_router(trainer_clients_router, prefix="/trainer-clients", tags=["trainer-clients"])
 api_router.include_router(trainer_personas_router, prefix="/trainer-personas", tags=["trainer-personas"])
+api_router.include_router(trainer_programs_router, prefix="/trainer-programs", tags=["trainer-programs"])
 api_router.include_router(trainer_knowledge_router, prefix="/trainer-knowledge", tags=["trainer-knowledge"])
 api_router.include_router(trainer_review_router, prefix="/trainer-review", tags=["trainer-review"])
+api_router.include_router(trainer_coach_router, prefix="/trainer-coach", tags=["trainer-coach"])
+api_router.include_router(trainer_assistant_router, prefix="/trainer-assistant", tags=["trainer-assistant"])
+api_router.include_router(trainer_settings_router, prefix="/trainer-settings", tags=["trainer-settings"])

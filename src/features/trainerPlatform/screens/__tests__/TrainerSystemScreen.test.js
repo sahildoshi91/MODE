@@ -1,0 +1,1104 @@
+jest.mock('react-native-safe-area-context', () => {
+  const React = require('react');
+  return {
+    SafeAreaProvider: ({ children }) => children,
+    SafeAreaView: ({ children }) => React.createElement('SafeAreaView', null, children),
+    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
+  };
+});
+
+jest.mock('../../../../services/apiBaseUrl', () => ({
+  getApiDebugInfo: jest.fn(() => ({
+    resolvedApiBaseUrl: 'http://127.0.0.1:8000',
+  })),
+}));
+
+jest.mock('../../../../services/apiRequest', () => ({
+  fetchWithApiFallback: jest.fn(),
+}));
+
+jest.mock('../../../trainerHome/services/trainerKnowledgeApi', () => ({
+  archiveTrainerKnowledgeEntry: jest.fn().mockResolvedValue({}),
+  archiveTrainerRule: jest.fn().mockResolvedValue({}),
+  createTrainerKnowledgeEntry: jest.fn().mockResolvedValue({}),
+  createTrainerKnowledgeDocument: jest.fn().mockResolvedValue({}),
+  deleteTrainerKnowledgeDocument: jest.fn().mockResolvedValue({}),
+  listTrainerKnowledgeEntries: jest.fn(),
+  listTrainerKnowledgeDocuments: jest.fn(),
+  refineTrainerKnowledgeEntry: jest.fn().mockResolvedValue({}),
+  listTrainerRules: jest.fn().mockResolvedValue([]),
+  saveTrainerKnowledgeDocumentWithFallback: jest.fn().mockResolvedValue({
+    extraction: { rules_created: 0, fallback_reason: null },
+  }),
+  updateTrainerKnowledgeEntry: jest.fn().mockResolvedValue({}),
+  updateTrainerKnowledgeDocument: jest.fn().mockResolvedValue({}),
+  updateTrainerRule: jest.fn().mockResolvedValue({}),
+}));
+
+jest.mock('../../../trainerClients/services/trainerHomeApi', () => ({
+  archiveTrainerClientMemory: jest.fn().mockResolvedValue({}),
+  createTrainerClientMemory: jest.fn().mockResolvedValue({
+    id: 'memory-new',
+    memory_type: 'note',
+    memory_key: 'note_20260420000000',
+    visibility: 'ai_usable',
+    text: 'New memory',
+    tags: [],
+  }),
+  getTrainerClientAIContext: jest.fn().mockResolvedValue({
+    context_preview_text: 'Taylor responds well to concise coaching prompts.',
+  }),
+  getTrainerClientDetail: jest.fn().mockResolvedValue({
+    client: {
+      client_id: 'client-1',
+      client_name: 'Taylor',
+    },
+    profile_snapshot: {
+      primary_goal: 'Build strength',
+      onboarding_status: 'active',
+      experience_level: 'intermediate',
+      current_mode: 'BUILD',
+    },
+    activity_summary: {
+      latest_checkin_date: '2026-04-19',
+      workouts_completed_7d: 3,
+      checkins_completed_7d: 4,
+      meeting_location: 'HQ Gym',
+      session_start_at: '2026-04-20T17:00:00.000Z',
+    },
+    memory_counts: {
+      total: 4,
+      ai_usable: 2,
+      internal_only: 2,
+    },
+    schedule_preferences: {
+      recurring_weekdays: [1, 3],
+      preferred_meeting_location: 'HQ Gym',
+      auto_use_trainer_default_location: true,
+      upcoming_exceptions: [],
+    },
+  }),
+  listTrainerClientMemory: jest.fn().mockResolvedValue([
+    {
+      id: 'memory-1',
+      trainer_id: 'trainer-1',
+      client_id: 'client-1',
+      memory_type: 'note',
+      memory_key: 'knee_injury',
+      visibility: 'ai_usable',
+      text: 'Client has a prior knee injury.',
+      tags: ['injury', 'knee'],
+      created_at: '2026-04-18T15:00:00.000Z',
+      updated_at: '2026-04-19T12:00:00.000Z',
+    },
+    {
+      id: 'memory-2',
+      trainer_id: 'trainer-1',
+      client_id: 'client-1',
+      memory_type: 'preference',
+      memory_key: 'diet_pref',
+      visibility: 'internal_only',
+      text: 'Vegetarian nutrition preference.',
+      tags: ['nutrition'],
+      created_at: '2026-04-17T15:00:00.000Z',
+      updated_at: '2026-04-17T15:00:00.000Z',
+    },
+  ]),
+  listTrainerClients: jest.fn(),
+  removeTrainerClient: jest.fn().mockResolvedValue({ client_id: 'client-1' }),
+  updateTrainerClientMemory: jest.fn().mockResolvedValue({
+    id: 'memory-1',
+    visibility: 'internal_only',
+  }),
+  updateTrainerClient: jest.fn().mockResolvedValue({ client_id: 'client-1', client_name: 'Taylor Swift' }),
+}));
+
+jest.mock('../../../profile/services/profileApi', () => ({
+  getTrainerSettingsMe: jest.fn(),
+  listTrainerPersonas: jest.fn(),
+  patchTrainerSettingsMe: jest.fn().mockResolvedValue({
+    default_meeting_location: 'HQ Gym',
+    auto_fill_meeting_location: true,
+    assistant_display_name: 'Atlas',
+  }),
+}));
+
+jest.mock('../../../trainerCoach/services/trainerCoachApi', () => ({
+  approveTrainerCoachQueueItem: jest.fn().mockResolvedValue({}),
+  editTrainerCoachQueueItem: jest.fn().mockResolvedValue({}),
+  getTrainerCoachQueue: jest.fn(),
+  rejectTrainerCoachQueueItem: jest.fn().mockResolvedValue({}),
+}));
+
+jest.mock('../../../trainerReview/services/trainerReviewApi', () => ({
+  approveTrainerReviewOutput: jest.fn().mockResolvedValue({}),
+  editTrainerReviewOutput: jest.fn().mockResolvedValue({}),
+  getTrainerReviewOutputs: jest.fn(),
+  rejectTrainerReviewOutput: jest.fn().mockResolvedValue({}),
+}));
+
+jest.mock('../../../atlas/services/atlasApi', () => ({
+  approveAtlasAdminReviewQueueItem: jest.fn().mockResolvedValue({}),
+  approveTrainerAiReviewQueueItem: jest.fn().mockResolvedValue({}),
+  deleteTrainerAiReviewQueueItem: jest.fn().mockResolvedValue({}),
+  getAtlasAdminMe: jest.fn().mockResolvedValue({ allowed: false }),
+  getAtlasAdminReviewQueue: jest.fn().mockResolvedValue([]),
+  getTrainerAiReviewQueue: jest.fn(),
+  rejectAtlasAdminReviewQueueItem: jest.fn().mockResolvedValue({}),
+  rejectTrainerAiReviewQueueItem: jest.fn().mockResolvedValue({}),
+  updateAtlasAdminReviewQueueItem: jest.fn().mockResolvedValue({}),
+  updateTrainerAiReviewQueueItem: jest.fn().mockResolvedValue({}),
+}));
+
+jest.mock('expo-constants', () => ({
+  expoConfig: {
+    version: '1.2.3',
+  },
+}));
+
+import React from 'react';
+import renderer, { act } from 'react-test-renderer';
+import { Alert, Keyboard, Platform, StyleSheet } from 'react-native';
+
+import { fetchWithApiFallback } from '../../../../services/apiRequest';
+import {
+  archiveTrainerKnowledgeEntry,
+  createTrainerKnowledgeEntry,
+  listTrainerKnowledgeEntries,
+  refineTrainerKnowledgeEntry,
+  updateTrainerKnowledgeEntry,
+} from '../../../trainerHome/services/trainerKnowledgeApi';
+import {
+  archiveTrainerClientMemory,
+  createTrainerClientMemory,
+  listTrainerClientMemory,
+  listTrainerClients,
+  updateTrainerClientMemory,
+} from '../../../trainerClients/services/trainerHomeApi';
+import { getTrainerSettingsMe, listTrainerPersonas } from '../../../profile/services/profileApi';
+import { getTrainerCoachQueue } from '../../../trainerCoach/services/trainerCoachApi';
+import { getTrainerReviewOutputs } from '../../../trainerReview/services/trainerReviewApi';
+import { getTrainerAiReviewQueue } from '../../../atlas/services/atlasApi';
+import { theme } from '../../../../../lib/theme';
+import { generateKnowledgeNoteTitle } from '../../utils/knowledgeNoteTitleSummary';
+import TrainerSystemScreen from '../TrainerSystemScreen';
+
+function createJsonResponse(payload = {}, { ok = true, status = 200 } = {}) {
+  return {
+    ok,
+    status,
+    json: jest.fn().mockResolvedValue(payload),
+    headers: {
+      get: jest.fn(() => null),
+    },
+  };
+}
+
+async function flushEffects() {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
+
+function findPressableByTestID(root, testID) {
+  return root.find(
+    (node) => node.props?.testID === testID && typeof node.props?.onPress === 'function',
+  );
+}
+
+function findBackButton(root) {
+  return root.find(
+    (node) => node.props?.accessibilityLabel === 'Go back' && typeof node.props?.onPress === 'function',
+  );
+}
+
+describe('TrainerSystemScreen', () => {
+  const openEventName = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+  const closeEventName = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+  let keyboardListeners = {};
+  let keyboardRemoveMocks = [];
+  let keyboardAddListenerSpy;
+  let mountedTrees = [];
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    keyboardListeners = {};
+    keyboardRemoveMocks = [];
+    keyboardAddListenerSpy = jest.spyOn(Keyboard, 'addListener').mockImplementation((eventName, callback) => {
+      keyboardListeners[eventName] = callback;
+      const remove = jest.fn(() => {
+        if (keyboardListeners[eventName] === callback) {
+          delete keyboardListeners[eventName];
+        }
+      });
+      keyboardRemoveMocks.push(remove);
+      return { remove };
+    });
+
+    listTrainerKnowledgeEntries.mockResolvedValue([
+      {
+        id: 'entry-1',
+        title: '',
+        raw_content: 'Lower load on high stress weeks and prioritize movement quality.',
+        knowledge_type: 'coaching_rule',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: ['stress'],
+        updated_at: '2026-04-20T15:00:00.000Z',
+        created_at: '2026-04-20T15:00:00.000Z',
+      },
+      {
+        id: 'entry-2',
+        title: 'Peak Week Strategy',
+        raw_content: 'Peak week check-in cadence and hydration guardrails.',
+        knowledge_type: 'programming_preference',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: ['peak_week'],
+        updated_at: '2026-04-19T15:00:00.000Z',
+        created_at: '2026-04-19T15:00:00.000Z',
+      },
+    ]);
+    createTrainerKnowledgeEntry.mockResolvedValue({
+      entry: {
+        id: 'entry-new',
+        title: 'Auto Title',
+        raw_content: 'Default note text',
+        knowledge_type: 'coaching_rule',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: [],
+        updated_at: '2026-04-20T20:00:00.000Z',
+        created_at: '2026-04-20T20:00:00.000Z',
+      },
+      extraction: { rules_created: 0, fallback_reason: null },
+    });
+    updateTrainerKnowledgeEntry.mockResolvedValue({
+      entry: {
+        id: 'entry-1',
+        title: 'Edited Title',
+        raw_content: 'Edited note text',
+        knowledge_type: 'coaching_rule',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: ['edited'],
+        updated_at: '2026-04-20T16:00:00.000Z',
+        created_at: '2026-04-20T15:00:00.000Z',
+      },
+      extraction: { rules_created: 0, fallback_reason: null },
+    });
+    archiveTrainerKnowledgeEntry.mockResolvedValue({
+      entry: {
+        id: 'entry-1',
+        status: 'archived',
+        ai_enabled: false,
+        archived_at: '2026-04-20T17:00:00.000Z',
+      },
+    });
+    refineTrainerKnowledgeEntry.mockResolvedValue({
+      entry: {
+        id: 'entry-1',
+        title: 'Edited Title',
+        raw_content: 'Edited note text\n\nadd_example: Track readiness before intensity.',
+        knowledge_type: 'coaching_rule',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: ['edited'],
+        updated_at: '2026-04-20T18:00:00.000Z',
+        created_at: '2026-04-20T15:00:00.000Z',
+      },
+    });
+    listTrainerClients.mockResolvedValue({
+      count: 3,
+      items: [
+        { client_id: 'client-1', client_name: 'Taylor', user_id: 'client-user-1' },
+        { client_id: 'client-2', client_name: 'Jordan', user_id: 'client-user-2' },
+      ],
+    });
+    listTrainerClientMemory.mockResolvedValue([
+      {
+        id: 'memory-1',
+        trainer_id: 'trainer-1',
+        client_id: 'client-1',
+        memory_type: 'note',
+        memory_key: 'knee_injury',
+        visibility: 'ai_usable',
+        text: 'Client has a prior knee injury.',
+        tags: ['injury', 'knee'],
+        created_at: '2026-04-18T15:00:00.000Z',
+        updated_at: '2026-04-19T12:00:00.000Z',
+      },
+      {
+        id: 'memory-2',
+        trainer_id: 'trainer-1',
+        client_id: 'client-1',
+        memory_type: 'preference',
+        memory_key: 'diet_pref',
+        visibility: 'internal_only',
+        text: 'Vegetarian nutrition preference.',
+        tags: ['nutrition'],
+        created_at: '2026-04-17T15:00:00.000Z',
+        updated_at: '2026-04-17T15:00:00.000Z',
+      },
+    ]);
+    getTrainerSettingsMe.mockResolvedValue({
+      default_meeting_location: 'HQ Gym',
+      auto_fill_meeting_location: true,
+      assistant_display_name: 'Atlas',
+    });
+    listTrainerPersonas.mockResolvedValue([
+      {
+        id: 'persona-default',
+        trainer_id: 'trainer-1',
+        persona_name: 'Nova',
+        tone_description: 'Confident and calm',
+        coaching_philosophy: 'Consistency over intensity.',
+        communication_rules: {
+          identity: { summary: 'Calm accountability with high standards.' },
+        },
+        onboarding_preferences: {
+          trainer_onboarding_answers: {
+            coaching_identity: { summary: 'Calm accountability with high standards.' },
+            tone: { style: 'Warm and direct' },
+            philosophy: { summary: 'Consistency over intensity.' },
+          },
+        },
+        is_default: true,
+      },
+    ]);
+    getTrainerCoachQueue.mockResolvedValue({
+      count: 1,
+      items: [
+        {
+          output_id: 'draft-1',
+          client_name: 'Taylor',
+          summary: 'Reduce load this week.',
+          headline: 'Adjust plan',
+          priority_tier: 'high',
+          output_text: 'Reduce load this week.',
+        },
+      ],
+    });
+    getTrainerReviewOutputs.mockResolvedValue({
+      count: 2,
+      items: [
+        { id: 'output-1', output_text: 'Open output 1', source_type: 'chat', review_status: 'open' },
+        { id: 'output-2', output_text: 'Open output 2', source_type: 'chat', review_status: 'open' },
+      ],
+    });
+    getTrainerAiReviewQueue.mockResolvedValue([]);
+    fetchWithApiFallback.mockImplementation((path) => {
+      if (path === '/api/v1/trainer-review/queue') {
+        return Promise.resolve({
+          response: createJsonResponse([
+            {
+              id: 'qa-1',
+              user_question: 'How do I stay consistent?',
+              model_draft_answer: 'Start with a smaller target.',
+              confidence_score: 0.42,
+              status: 'open',
+            },
+          ]),
+        });
+      }
+      return Promise.resolve({
+        response: createJsonResponse({}),
+      });
+    });
+  });
+
+  afterEach(async () => {
+    if (mountedTrees.length > 0) {
+      await act(async () => {
+        mountedTrees.forEach((tree) => tree.unmount());
+        mountedTrees = [];
+      });
+    }
+    keyboardAddListenerSpy?.mockRestore();
+  });
+
+  async function renderScreen(overrides = {}) {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <TrainerSystemScreen
+          accessToken="trainer-token"
+          bottomInset={typeof overrides.bottomInset === 'number' ? overrides.bottomInset : 12}
+          assignmentStatus={{
+            viewer_display_name: 'Coach Maya',
+            trainer_onboarding_completed: true,
+            trainer_onboarding_status: 'completed',
+            trainer_onboarding_completed_steps: 8,
+            trainer_onboarding_total_steps: 8,
+            ...overrides.assignmentStatus,
+          }}
+          session={{
+            user: { email: 'maya@example.com' },
+          }}
+          onSignOut={jest.fn()}
+          onOpenTrainerCoach={overrides.onOpenTrainerCoach || jest.fn()}
+        />,
+      );
+    });
+    await flushEffects();
+    mountedTrees.push(tree);
+    return tree;
+  }
+
+  async function revealMemoryRowSwipe(tree, memoryId, direction = 'left') {
+    const rowSwipeHost = tree.root.findByProps({ testID: `trainer-system-client-memory-row-swipe-${memoryId}` });
+    await act(async () => {
+      if (direction === 'left') {
+        rowSwipeHost.props.onPress();
+      } else {
+        rowSwipeHost.props.onLongPress();
+      }
+    });
+  }
+
+  it('renders the compact trainer system hub and loads summary counts', async () => {
+    const tree = await renderScreen();
+    const rendered = JSON.stringify(tree.toJSON());
+
+    expect(rendered).toContain('System');
+    expect(rendered).toContain('Build');
+    expect(rendered).toContain('Coach Workspace');
+    expect(rendered).toContain('Knowledge Workspace');
+    expect(rendered).toContain('Client List');
+    expect(rendered).not.toContain('Add / Edit / Remove Clients');
+    expect(rendered).toContain('Review Hub');
+    expect(rendered).toContain('Coach Maya');
+    expect(rendered).toContain('Atlas is calibrated and ready for trainer-controlled coaching.');
+
+    expect(listTrainerKnowledgeEntries).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+    }));
+    expect(listTrainerClients).toHaveBeenCalledWith({
+      accessToken: 'trainer-token',
+      limit: 1,
+      offset: 0,
+    });
+    expect(getTrainerCoachQueue).toHaveBeenCalledWith({ accessToken: 'trainer-token', limit: 50 });
+    expect(getTrainerReviewOutputs).toHaveBeenCalledWith({
+      accessToken: 'trainer-token',
+      status: 'open',
+      limit: 50,
+      offset: 0,
+    });
+    expect(fetchWithApiFallback).toHaveBeenCalledWith(
+      '/api/v1/trainer-review/queue',
+      expect.objectContaining({ method: 'GET' }),
+    );
+    expect(listTrainerPersonas).toHaveBeenCalledWith({ accessToken: 'trainer-token' });
+  });
+
+  it('opens coach workspace and preserves coach launch payloads', async () => {
+    const onOpenTrainerCoach = jest.fn();
+    const tree = await renderScreen({
+      onOpenTrainerCoach,
+      assignmentStatus: {
+        trainer_onboarding_completed: false,
+        trainer_onboarding_status: 'in_progress',
+        trainer_onboarding_completed_steps: 3,
+        trainer_onboarding_total_steps: 8,
+      },
+    });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-coach-workspace').props.onPress();
+    });
+
+    expect(JSON.stringify(tree.toJSON())).toContain('Coach Workspace');
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-coach-workspace-review').props.onPress();
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-coach-workspace-resume').props.onPress();
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-coach-workspace-retrain').props.onPress();
+    });
+
+    expect(onOpenTrainerCoach).toHaveBeenNthCalledWith(1, {
+      entrypoint: 'trainer_agent_training',
+      onboarding_action: 'review',
+    });
+    expect(onOpenTrainerCoach).toHaveBeenNthCalledWith(2, {
+      entrypoint: 'trainer_agent_training',
+      onboarding_action: 'resume',
+    });
+    expect(onOpenTrainerCoach).toHaveBeenNthCalledWith(3, {
+      entrypoint: 'trainer_agent_training',
+      onboarding_action: 'retrain',
+    });
+  });
+
+  it('opens knowledge workspace and shows notes-first controls', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-knowledge-workspace').props.onPress();
+    });
+    await flushEffects();
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Knowledge Workspace');
+    expect(rendered).toContain('Trainer knowledge for AI memory and coaching context.');
+    expect(rendered).toContain('Knowledge Library');
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-row-entry-1').length,
+    ).toBeGreaterThan(0);
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-edit-entry-1').length,
+    ).toBeGreaterThan(0);
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-delete-entry-1').length,
+    ).toBeGreaterThan(0);
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-notes-new').length,
+    ).toBeGreaterThan(0);
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-knowledge-toggle-memory-bank'),
+    ).toHaveLength(0);
+  });
+
+  it('lifts the knowledge note sheet above the keyboard and resets on close', async () => {
+    const tree = await renderScreen();
+    const findSheetDock = () => tree.root.findByProps({ testID: 'trainer-system-notes-sheet-dock' });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-knowledge-workspace').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-notes-new').props.onPress();
+    });
+
+    expect(keyboardRemoveMocks.length).toBeGreaterThanOrEqual(2);
+    expect(StyleSheet.flatten(findSheetDock().props.style).marginBottom).toBe(0);
+
+    act(() => {
+      keyboardListeners[openEventName]?.({
+        endCoordinates: { height: 248 },
+      });
+    });
+
+    expect(StyleSheet.flatten(findSheetDock().props.style).marginBottom).toBe(248 + theme.spacing[1]);
+
+    act(() => {
+      keyboardListeners[closeEventName]?.();
+    });
+
+    expect(StyleSheet.flatten(findSheetDock().props.style).marginBottom).toBe(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('creates a new note with generated title when title is blank', async () => {
+    const tree = await renderScreen();
+    const rawText = 'If stress is high, lower intensity before changing frequency.';
+    const expectedTitle = generateKnowledgeNoteTitle(rawText);
+    createTrainerKnowledgeEntry.mockImplementationOnce(async ({ title, rawContent: nextRawText }) => ({
+      entry: {
+        id: 'entry-created',
+        title,
+        raw_content: nextRawText,
+        knowledge_type: 'coaching_rule',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: [],
+        updated_at: '2026-04-20T21:00:00.000Z',
+        created_at: '2026-04-20T21:00:00.000Z',
+      },
+      extraction: { rules_created: 0, fallback_reason: null },
+    }));
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-knowledge-workspace').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-notes-new').props.onPress();
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'trainer-system-note-sheet-raw-input' }).props.onChangeText(rawText);
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-note-sheet-save').props.onPress();
+    });
+    await flushEffects();
+
+    expect(createTrainerKnowledgeEntry).toHaveBeenLastCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      title: expectedTitle,
+      rawContent: rawText,
+    }));
+    expect(JSON.stringify(tree.toJSON())).toContain(expectedTitle);
+  });
+
+  it('edits a note from inline edit icon and saves changes', async () => {
+    const tree = await renderScreen();
+    updateTrainerKnowledgeEntry.mockResolvedValueOnce({
+      entry: {
+        id: 'entry-1',
+        title: 'High Stress Deload',
+        raw_content: 'Updated load management instructions.',
+        knowledge_type: 'coaching_rule',
+        scope: 'global',
+        ai_enabled: true,
+        status: 'active',
+        tags: ['stress'],
+        updated_at: '2026-04-20T16:00:00.000Z',
+        created_at: '2026-04-20T15:00:00.000Z',
+      },
+      extraction: { rules_created: 0, fallback_reason: null },
+    });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-knowledge-workspace').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-note-edit-entry-1').props.onPress({
+        stopPropagation: jest.fn(),
+      });
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'trainer-system-note-sheet-title-input' }).props.onChangeText('High Stress Deload');
+      tree.root.findByProps({ testID: 'trainer-system-note-sheet-raw-input' }).props.onChangeText('Updated load management instructions.');
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-note-sheet-save').props.onPress();
+    });
+    await flushEffects();
+
+    expect(updateTrainerKnowledgeEntry).toHaveBeenLastCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      entryId: 'entry-1',
+      title: 'High Stress Deload',
+      rawContent: 'Updated load management instructions.',
+    }));
+    expect(JSON.stringify(tree.toJSON())).toContain('High Stress Deload');
+  });
+
+  it('deletes a note instantly from the inline delete icon', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-knowledge-workspace').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-note-delete-entry-1').props.onPress({
+        stopPropagation: jest.fn(),
+      });
+    });
+    await flushEffects();
+
+    expect(archiveTrainerKnowledgeEntry).toHaveBeenCalledWith({
+      accessToken: 'trainer-token',
+      entryId: 'entry-1',
+    });
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-note-row-entry-1'),
+    ).toHaveLength(0);
+  });
+
+  it('maps coach summary fields from persona with settings fallback', async () => {
+    listTrainerPersonas.mockResolvedValueOnce([]);
+    const fallbackTree = await renderScreen();
+    await act(async () => {
+      findPressableByTestID(fallbackTree.root, 'trainer-system-nav-coach-workspace').props.onPress();
+    });
+    let rendered = JSON.stringify(fallbackTree.toJSON());
+    expect(rendered).toContain('AI Name');
+    expect(rendered).toContain('Atlas');
+    expect(rendered).toContain('Not set yet');
+
+    const personaTree = await renderScreen();
+    await act(async () => {
+      findPressableByTestID(personaTree.root, 'trainer-system-nav-coach-workspace').props.onPress();
+    });
+    rendered = JSON.stringify(personaTree.toJSON());
+    expect(rendered).toContain('Nova');
+    expect(rendered).toContain('Calm accountability with high standards.');
+    expect(rendered).toContain('Warm and direct');
+    expect(rendered).toContain('Consistency over intensity.');
+  });
+
+  it('drills into client list and client detail, then supports back navigation', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    expect(JSON.stringify(tree.toJSON())).toContain('Client List');
+    expect(JSON.stringify(tree.toJSON())).toContain('Taylor');
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    const detailRendered = JSON.stringify(tree.toJSON());
+    expect(detailRendered).toContain('Client detail management');
+    expect(detailRendered).toContain('Build strength');
+    expect(detailRendered).not.toContain('Taylor responds well to concise coaching prompts.');
+
+    await act(async () => {
+      findBackButton(tree.root).props.onPress();
+    });
+
+    expect(JSON.stringify(tree.toJSON())).toContain('Client List');
+  });
+
+  it('renders an icon-only manage control in client list and opens client management', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-clients-manage').length,
+    ).toBeGreaterThan(0);
+    expect(
+      tree.root.findAll((node) => node.props?.name === 'user-plus').length,
+    ).toBeGreaterThan(0);
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-clients-manage').props.onPress();
+    });
+    await flushEffects();
+
+    expect(JSON.stringify(tree.toJSON())).toContain('Client Management');
+  });
+
+  it('removes the client detail refresh control', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-client-detail-refresh'),
+    ).toHaveLength(0);
+  });
+
+  it('renders two-row memory composer and removes legacy memory summary/context copy', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-input' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-submit' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-ai-toggle' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-internal-toggle' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-add-tags' })).not.toThrow();
+
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-client-memory-summary'),
+    ).toHaveLength(0);
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-client-memory-filter-recent'),
+    ).toHaveLength(0);
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).not.toContain('Capture new memory in Coach Chat using long-press or `/mem`.');
+    expect(rendered).not.toContain('2 memories • 1 AI-usable • 1 internal');
+    expect(rendered).not.toContain('Taylor responds well to concise coaching prompts.');
+  });
+
+  it('applies all/ai/internal filter chips in client detail memory workspace', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-filter-all' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-filter-ai' })).not.toThrow();
+    expect(() => tree.root.findByProps({ testID: 'trainer-system-client-memory-filter-internal' })).not.toThrow();
+    expect(
+      tree.root.findAll((node) => node.props?.testID === 'trainer-system-client-memory-filter-recent'),
+    ).toHaveLength(0);
+
+    const findMemoryRows = (rowTestId) => tree.root.findAll(
+      (node) => node.props?.testID === rowTestId && typeof node.props?.onPress === 'function',
+    );
+
+    expect(findMemoryRows('trainer-system-client-memory-row-memory-1').length).toBeGreaterThan(0);
+    expect(findMemoryRows('trainer-system-client-memory-row-memory-2').length).toBeGreaterThan(0);
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-filter-internal').props.onPress();
+    });
+
+    expect(findMemoryRows('trainer-system-client-memory-row-memory-1')).toHaveLength(0);
+    expect(findMemoryRows('trainer-system-client-memory-row-memory-2').length).toBeGreaterThan(0);
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-filter-ai').props.onPress();
+    });
+
+    expect(findMemoryRows('trainer-system-client-memory-row-memory-1').length).toBeGreaterThan(0);
+    expect(findMemoryRows('trainer-system-client-memory-row-memory-2')).toHaveLength(0);
+  });
+
+  it('creates memory from inline plus submit and clears tags after save', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    const composerInput = tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-input' });
+    await act(async () => {
+      composerInput.props.onChangeText('Needs lower-impact cardio before heavy lower-body days.');
+    });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-composer-add-tags').props.onPress();
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-tags-input' })
+        .props.onChangeText('cardio, readiness');
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-composer-tags-done').props.onPress();
+    });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-composer-submit').props.onPress();
+    });
+    await flushEffects();
+
+    expect(createTrainerClientMemory).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+      memoryType: 'note',
+      text: 'Needs lower-impact cardio before heavy lower-body days.',
+      visibility: 'ai_usable',
+      tags: ['cardio', 'readiness'],
+    }));
+
+    const refreshedComposerInput = tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-input' });
+    expect(refreshedComposerInput.props.value).toBe('');
+  });
+
+  it('creates memory from return key submit', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    const composerInput = tree.root.findByProps({ testID: 'trainer-system-client-memory-composer-input' });
+    await act(async () => {
+      composerInput.props.onChangeText('Sleep quality dips after late sessions.');
+    });
+    await act(async () => {
+      composerInput.props.onSubmitEditing();
+    });
+    await flushEffects();
+
+    expect(createTrainerClientMemory).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+      text: 'Sleep quality dips after late sessions.',
+      visibility: 'ai_usable',
+    }));
+  });
+
+  it('supports switching memory visibility to internal_only in edit flow', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await revealMemoryRowSwipe(tree, 'memory-1', 'left');
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-edit-memory-1').props.onPress();
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-edit-internal-toggle').props.onPress();
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-edit-save').props.onPress();
+    });
+    await flushEffects();
+
+    expect(updateTrainerClientMemory).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+      memoryId: 'memory-1',
+      visibility: 'internal_only',
+    }));
+  });
+
+  it('archives a memory row from client detail memory hub', async () => {
+    const tree = await renderScreen();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await revealMemoryRowSwipe(tree, 'memory-1', 'right');
+    });
+
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons = []) => {
+      const archiveAction = buttons.find((item) => item?.text === 'Archive');
+      archiveAction?.onPress?.();
+    });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-memory-archive-memory-1').props.onPress();
+    });
+    await flushEffects();
+
+    expect(alertSpy).toHaveBeenCalled();
+    expect(archiveTrainerClientMemory).toHaveBeenCalledWith({
+      accessToken: 'trainer-token',
+      clientId: 'client-1',
+      memoryId: 'memory-1',
+    });
+    alertSpy.mockRestore();
+  });
+
+  it('applies client detail bottom inset once in scroll content padding', async () => {
+    const tree = await renderScreen({ bottomInset: 40 });
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-client-row-client-1').props.onPress();
+    });
+    await flushEffects();
+
+    const scrollNode = tree.root.find(
+      (node) => Array.isArray(node.props?.contentContainerStyle),
+    );
+    const flattened = StyleSheet.flatten(scrollNode.props.contentContainerStyle);
+    expect(flattened.paddingBottom).toBe(theme.spacing[4] + 40);
+  });
+
+  it('shows admin-managed invite notice in client management', async () => {
+    const tree = await renderScreen();
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-clients-manage').props.onPress();
+    });
+    await flushEffects();
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Client Invites');
+    expect(rendered).toContain('Invite code management is handled by MODE platform admin services for security.');
+    expect(rendered).not.toContain('Create invite code');
+  });
+
+  it('shows Pending user only in Client Management assigned clients list', async () => {
+    listTrainerClients.mockResolvedValue({
+      count: 2,
+      items: [
+        { client_id: 'client-1', client_name: 'Taylor', user_id: 'client-user-1', is_pending_user: true },
+        { client_id: 'client-2', client_name: 'Jordan', user_id: 'client-user-2', is_pending_user: false },
+      ],
+    });
+
+    const tree = await renderScreen();
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
+    });
+    await flushEffects();
+    await act(async () => {
+      findPressableByTestID(tree.root, 'trainer-system-clients-manage').props.onPress();
+    });
+    await flushEffects();
+
+    let rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Pending user');
+    expect(rendered).toContain('Jordan');
+    expect(rendered).not.toContain('Taylor');
+
+    await act(async () => {
+      findBackButton(tree.root).props.onPress();
+    });
+    await flushEffects();
+
+    rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Taylor');
+    expect(rendered).not.toContain('Pending user');
+  });
+});

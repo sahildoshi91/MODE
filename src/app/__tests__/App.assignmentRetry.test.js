@@ -4,9 +4,16 @@ import renderer, { act } from 'react-test-renderer';
 const mockGetSession = jest.fn();
 const mockOnAuthStateChange = jest.fn();
 const mockSignOut = jest.fn();
+const mockClearSupabaseAuthSessionStorage = jest.fn();
+const mockIsInvalidRefreshTokenError = jest.fn();
 const mockGetTrainerAssignmentStatus = jest.fn();
 const mockAssignTrainer = jest.fn();
-const mockTrainerAssignmentScreen = jest.fn();
+const mockGetOnboardingBootstrap = jest.fn();
+const mockIngestMobileEvents = jest.fn();
+const mockSetOnboardingRole = jest.fn();
+const mockGetLocalDateString = jest.fn();
+const mockGetTodayCheckin = jest.fn();
+const mockSetStringAsync = jest.fn();
 
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react');
@@ -18,6 +25,8 @@ jest.mock('react-native-safe-area-context', () => {
 });
 
 jest.mock('../../services/supabaseClient', () => ({
+  clearSupabaseAuthSessionStorage: (...args) => mockClearSupabaseAuthSessionStorage(...args),
+  isInvalidRefreshTokenError: (...args) => mockIsInvalidRefreshTokenError(...args),
   supabase: {
     auth: {
       getSession: (...args) => mockGetSession(...args),
@@ -32,7 +41,26 @@ jest.mock('../../features/trainerAssignment/services/trainerAssignmentApi', () =
   assignTrainer: (...args) => mockAssignTrainer(...args),
 }));
 
+jest.mock('../../features/onboarding/services/onboardingApi', () => ({
+  getOnboardingBootstrap: (...args) => mockGetOnboardingBootstrap(...args),
+  ingestMobileEvents: (...args) => mockIngestMobileEvents(...args),
+  setOnboardingRole: (...args) => mockSetOnboardingRole(...args),
+}));
+
+jest.mock('../../features/dailyCheckin/services/checkinApi', () => ({
+  getLocalDateString: (...args) => mockGetLocalDateString(...args),
+  getTodayCheckin: (...args) => mockGetTodayCheckin(...args),
+}));
+
+jest.mock('expo-clipboard', () => ({
+  setStringAsync: (...args) => mockSetStringAsync(...args),
+}));
+
 jest.mock('../../config/featureFlags', () => ({
+  AUTH_PASSWORD_ENABLED: false,
+  AUTH_SOCIAL_ENABLED: false,
+  BREATHING_TRANSITION_DEMO_ENABLED: false,
+  BREATHING_TRANSITIONS_ENABLED: false,
   TRAINER_ROUTE_FOUNDATION_ENABLED: false,
 }));
 
@@ -48,10 +76,22 @@ jest.mock('../../features/auth/screens/OnboardingLandingScreen', () => {
     return React.createElement('MockOnboardingLandingScreen', props);
   };
 });
+jest.mock('../../features/onboarding/screens/ProductPreviewScreen', () => {
+  const React = require('react');
+  return function MockProductPreviewScreen(props) {
+    return React.createElement('MockProductPreviewScreen', props);
+  };
+});
 jest.mock('../../features/chat/screens/CoachChatScreen', () => {
   const React = require('react');
   return function MockCoachChatScreen(props) {
     return React.createElement('MockCoachChatScreen', props);
+  };
+});
+jest.mock('../../features/chat/components', () => {
+  const React = require('react');
+  return {
+    ChatShell: (props) => React.createElement('MockChatShell', props),
   };
 });
 jest.mock('../../features/dailyCheckin/screens/DailyCheckinScreen', () => {
@@ -68,8 +108,14 @@ jest.mock('../../features/insights/screens/CoachInsightsScreen', () => {
 });
 jest.mock('../../features/navigation/components/LiquidBottomNav', () => {
   const React = require('react');
-  return function MockLiquidBottomNav(props) {
+  function MockLiquidBottomNav(props) {
     return React.createElement('MockLiquidBottomNav', props);
+  }
+  return {
+    __esModule: true,
+    default: MockLiquidBottomNav,
+    NAV_BOTTOM_OFFSET: 10,
+    NAV_PILL_HEIGHT: 64,
   };
 });
 jest.mock('../../features/profile/screens/ProfileScreen', () => {
@@ -103,14 +149,6 @@ jest.mock('../../features/trainerPlatform/routes/TrainerRouteHost', () => {
   };
 });
 
-jest.mock('../../features/trainerAssignment/screens/TrainerAssignmentScreen', () => {
-  const React = require('react');
-  return function MockTrainerAssignmentScreen(props) {
-    mockTrainerAssignmentScreen(props);
-    return React.createElement('MockTrainerAssignmentScreen', props);
-  };
-});
-
 import App from '../App';
 
 function createNetworkError() {
@@ -123,12 +161,75 @@ function createNetworkError() {
   };
 }
 
+function createBootstrapNetworkError() {
+  return {
+    stage: 'network',
+    message: 'Unable to reach the backend for /api/v1/onboarding/bootstrap. Tried: http://192.168.6.142:8000.',
+    request_path: '/api/v1/onboarding/bootstrap',
+    attempted_base_urls: ['http://192.168.6.142:8000', 'http://127.0.0.1:8000'],
+    resolved_api_base_url: 'http://192.168.6.142:8000',
+    raw_error_message: 'connect ECONNREFUSED',
+    recommended_api_base_url: 'http://192.168.6.144:8000',
+    connectivity_probe: {
+      endpoint_path: '/healthz',
+      first_reachable_base_url: 'http://192.168.6.144:8000',
+      candidate_api_base_urls: ['http://192.168.6.142:8000', 'http://192.168.6.144:8000'],
+      attempts: [
+        {
+          baseUrl: 'http://192.168.6.142:8000',
+          ok: false,
+          status: null,
+          timedOut: false,
+          error: 'connect ECONNREFUSED',
+        },
+      ],
+    },
+  };
+}
+
+function createBootstrapBackendDownError() {
+  return {
+    ...createBootstrapNetworkError(),
+    recommended_api_base_url: 'http://192.168.6.142:8000',
+    connectivity_probe: {
+      endpoint_path: '/healthz',
+      first_reachable_base_url: null,
+      candidate_api_base_urls: ['http://192.168.6.142:8000', 'http://127.0.0.1:8000'],
+      attempts: [
+        {
+          baseUrl: 'http://192.168.6.142:8000',
+          ok: false,
+          status: null,
+          timedOut: false,
+          error: 'Network request failed',
+        },
+        {
+          baseUrl: 'http://127.0.0.1:8000',
+          ok: false,
+          status: null,
+          timedOut: false,
+          error: 'Network request failed',
+        },
+      ],
+    },
+  };
+}
+
 function createUnassignedStatus() {
   return {
     needs_assignment: true,
     viewer_role: 'unassigned',
     available_trainers: [],
     available_trainers_count: 0,
+  };
+}
+
+function createAssignedClientStatus() {
+  return {
+    needs_assignment: false,
+    viewer_role: 'client',
+    assigned_trainer_id: 'trainer-1',
+    trainer_display_name: 'Coach Test',
   };
 }
 
@@ -158,6 +259,32 @@ describe('App assignment status retry behavior', () => {
       },
     });
     mockAssignTrainer.mockResolvedValue({});
+    mockClearSupabaseAuthSessionStorage.mockResolvedValue();
+    mockIsInvalidRefreshTokenError.mockImplementation((error) => (
+      String(error?.message || '').toLowerCase().includes('invalid refresh token')
+      || String(error?.message || '').toLowerCase().includes('refresh token not found')
+      || String(error?.code || '').toLowerCase().includes('refresh_token_not_found')
+    ));
+    mockGetOnboardingBootstrap.mockResolvedValue({
+      role: 'client',
+      onboarding_complete: true,
+      onboarding_status: 'completed',
+      is_legacy_trainer: false,
+      assigned_trainer_id: null,
+    });
+    mockIngestMobileEvents.mockResolvedValue({});
+    mockSetOnboardingRole.mockResolvedValue({});
+    mockGetLocalDateString.mockReturnValue('2026-05-05');
+    mockGetTodayCheckin.mockResolvedValue({
+      completed: true,
+      date: '2026-05-05',
+      checkin: {
+        id: 'checkin-1',
+        date: '2026-05-05',
+        assigned_mode: 'BUILD',
+      },
+    });
+    mockSetStringAsync.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -188,7 +315,7 @@ describe('App assignment status retry behavior', () => {
     });
   });
 
-  it('keeps manual retry available after auto-retry is exhausted', async () => {
+  it('does not keep retrying indefinitely after auto-retry is exhausted', async () => {
     mockGetTrainerAssignmentStatus
       .mockRejectedValueOnce(createNetworkError())
       .mockRejectedValueOnce(createNetworkError())
@@ -207,12 +334,11 @@ describe('App assignment status retry behavior', () => {
 
     expect(mockGetTrainerAssignmentStatus).toHaveBeenCalledTimes(2);
 
-    const latestProps = mockTrainerAssignmentScreen.mock.calls.at(-1)?.[0];
     await act(async () => {
-      await latestProps.onRetryStatusLoad();
+      jest.advanceTimersByTime(3000);
     });
 
-    expect(mockGetTrainerAssignmentStatus).toHaveBeenCalledTimes(3);
+    expect(mockGetTrainerAssignmentStatus).toHaveBeenCalledTimes(2);
     await act(async () => {
       tree.unmount();
     });
@@ -233,6 +359,278 @@ describe('App assignment status retry behavior', () => {
     await flushEffects();
 
     expect(mockGetTrainerAssignmentStatus).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('lands active clients on Coach and opens Atlas chat when unassigned', async () => {
+    mockGetTrainerAssignmentStatus.mockResolvedValue(createUnassignedStatus());
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const nav = tree.root.findByType('MockLiquidBottomNav');
+    expect(nav.props.activeTab).toBe('coach');
+
+    const chat = tree.root.findByType('MockChatShell');
+    expect(chat.props.role).toBe('client');
+    expect(chat.props.sessionType).toBe('atlas_client_chat');
+    expect(chat.props.trainerId).toBeNull();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('blocks Coach on incomplete daily check-in and opens Coach after completion', async () => {
+    mockGetTrainerAssignmentStatus.mockResolvedValue(createUnassignedStatus());
+    mockGetTodayCheckin.mockResolvedValueOnce({
+      completed: false,
+      date: '2026-05-05',
+      checkin: null,
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const checkinScreen = tree.root.findByType('MockDailyCheckinScreen');
+    expect(checkinScreen.props.accessToken).toBe('session-token');
+    expect(tree.root.findAllByType('MockChatShell')).toHaveLength(0);
+    expect(tree.root.findAllByType('MockLiquidBottomNav')).toHaveLength(0);
+
+    await act(async () => {
+      await checkinScreen.props.onCheckinComplete({
+        id: 'checkin-2',
+        date: '2026-05-05',
+        assigned_mode: 'BUILD',
+      });
+    });
+    await flushEffects();
+
+    const chat = tree.root.findByType('MockChatShell');
+    expect(chat.props.sessionType).toBe('atlas_client_chat');
+    expect(tree.root.findByType('MockLiquidBottomNav').props.activeTab).toBe('coach');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('opens assigned clients on trainer-backed client chat after daily check-in status is complete', async () => {
+    mockGetTrainerAssignmentStatus.mockResolvedValue(createAssignedClientStatus());
+    mockGetOnboardingBootstrap.mockResolvedValue({
+      role: 'client',
+      onboarding_complete: true,
+      onboarding_status: 'completed',
+      is_legacy_trainer: false,
+      assigned_trainer_id: 'trainer-1',
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const chat = tree.root.findByType('MockChatShell');
+    expect(chat.props.role).toBe('client');
+    expect(chat.props.sessionType).toBe('client_chat');
+    expect(chat.props.trainerId).toBe('trainer-1');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('renders setup error when onboarding bootstrap fails and retries bootstrap', async () => {
+    mockGetOnboardingBootstrap.mockRejectedValueOnce(createBootstrapNetworkError());
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const renderedBeforeRetry = JSON.stringify(tree.toJSON());
+    expect(renderedBeforeRetry).toContain("We couldn't load your setup");
+    expect(renderedBeforeRetry).toContain('Unable to reach the backend for /api/v1/onboarding/bootstrap');
+    expect(mockGetOnboardingBootstrap).toHaveBeenCalledTimes(1);
+
+    const retryButton = tree.root.findByProps({ testID: 'app-shell-error-retry-button' });
+    await act(async () => {
+      retryButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(mockGetOnboardingBootstrap).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('renders bootstrap network diagnostics in dev/debug mode', async () => {
+    mockGetOnboardingBootstrap.mockRejectedValueOnce(createBootstrapNetworkError());
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Path:');
+    expect(rendered).toContain('/api/v1/onboarding/bootstrap');
+    expect(rendered).toContain('Tried hosts:');
+    expect(rendered).toContain('http://192.168.6.142:8000, http://127.0.0.1:8000');
+    expect(rendered).toContain('Resolved API Base:');
+    expect(rendered).toContain('http://192.168.6.142:8000');
+    expect(rendered).toContain('Recommended API Base:');
+    expect(rendered).toContain('http://192.168.6.144:8000');
+    expect(rendered).toContain('Network detail:');
+    expect(rendered).toContain('connect ECONNREFUSED');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('copies bootstrap diagnostics bundle from setup error state', async () => {
+    mockGetOnboardingBootstrap.mockRejectedValueOnce(createBootstrapNetworkError());
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const copyButton = tree.root.findByProps({ testID: 'app-bootstrap-copy-diagnostics-button' });
+    await act(async () => {
+      await copyButton.props.onPress();
+    });
+
+    expect(mockSetStringAsync).toHaveBeenCalledTimes(1);
+    expect(mockSetStringAsync.mock.calls[0][0]).toContain('MODE Onboarding Bootstrap Diagnostics');
+    expect(mockSetStringAsync.mock.calls[0][0]).toContain('/api/v1/onboarding/bootstrap');
+    expect(mockSetStringAsync.mock.calls[0][0]).toContain('Recommended API Base: http://192.168.6.144:8000');
+    expect(mockSetStringAsync.mock.calls[0][0]).toContain('Connectivity Probe');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows backend start remediation when no health probe is reachable', async () => {
+    mockGetOnboardingBootstrap.mockRejectedValueOnce(createBootstrapBackendDownError());
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Start backend: cd backend && ./venv/bin/python main.py. Then tap Retry.');
+
+    const copyButton = tree.root.findByProps({ testID: 'app-bootstrap-copy-diagnostics-button' });
+    await act(async () => {
+      await copyButton.props.onPress();
+    });
+
+    expect(mockSetStringAsync.mock.calls[0][0]).toContain(
+      'Recovery: Start backend: cd backend && ./venv/bin/python main.py. Then tap Retry.',
+    );
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('renders welcome-first auth for signed-out users and does not force preview', async () => {
+    mockGetSession.mockResolvedValueOnce({
+      data: {
+        session: null,
+      },
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const welcome = tree.root.findByType('MockOnboardingLandingScreen');
+    expect(typeof welcome.props.authProps).toBe('object');
+    expect(welcome.props.authProps.layoutMode).toBe('inline');
+    expect(typeof welcome.props.authProps.onContinueWithEmail).toBe('function');
+    expect(typeof welcome.props.onOpenPreview).toBe('function');
+    expect(mockGetTrainerAssignmentStatus).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('clears stale stored auth when session restore finds an invalid refresh token', async () => {
+    mockGetSession.mockResolvedValueOnce({
+      data: {
+        session: null,
+      },
+      error: new Error('Invalid Refresh Token: Refresh Token Not Found'),
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const welcome = tree.root.findByType('MockOnboardingLandingScreen');
+    expect(mockClearSupabaseAuthSessionStorage).toHaveBeenCalledTimes(1);
+    expect(welcome.props.authProps.infoMessage).toBe('Your previous sign-in expired. Please sign in again.');
+    expect(mockGetTrainerAssignmentStatus).not.toHaveBeenCalled();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('opens preview as an optional branch and returns to welcome auth', async () => {
+    mockGetSession.mockResolvedValueOnce({
+      data: {
+        session: null,
+      },
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const welcomeBeforePreview = tree.root.findByType('MockOnboardingLandingScreen');
+    await act(async () => {
+      welcomeBeforePreview.props.onOpenPreview();
+    });
+
+    const preview = tree.root.findByType('MockProductPreviewScreen');
+    expect(typeof preview.props.onBack).toBe('function');
+    expect(typeof preview.props.onContinue).toBe('function');
+
+    await act(async () => {
+      preview.props.onContinue();
+    });
+
+    const welcomeAfterPreview = tree.root.findByType('MockOnboardingLandingScreen');
+    expect(welcomeAfterPreview).toBeTruthy();
+
     await act(async () => {
       tree.unmount();
     });

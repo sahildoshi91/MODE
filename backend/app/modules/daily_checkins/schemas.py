@@ -64,6 +64,33 @@ class PreviousCheckinResponse(BaseModel):
     checkin: YesterdayCheckinSummary | None = None
 
 
+class LastTrainingSetup(BaseModel):
+    generated_plan_id: str
+    environment: str
+    time_available: int
+    created_at: datetime
+
+
+class LastTrainingSetupResponse(BaseModel):
+    setup: LastTrainingSetup | None = None
+
+
+class NutritionSetupDayType(str, Enum):
+    NORMAL = "normal"
+    CUSTOM = "custom"
+
+
+class LastNutritionSetup(BaseModel):
+    generated_plan_id: str
+    nutrition_day_type: NutritionSetupDayType
+    nutrition_day_note: str | None = None
+    created_at: datetime
+
+
+class LastNutritionSetupResponse(BaseModel):
+    setup: LastNutritionSetup | None = None
+
+
 class ScoreWindowChange(BaseModel):
     value: float | None = None
     previous_average: float | None = None

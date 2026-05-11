@@ -4,8 +4,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.v1 import api_router
 from app.api.v1.workouts import router as workout_router
 from app.core.config import settings
+from app.core.startup_guards import run_startup_guards
 
-app = FastAPI(title="MODE Backend", version="1.0.0")
+run_startup_guards()
+
+app = FastAPI(
+    title="MODE Backend",
+    version="1.0.0",
+    docs_url=None if settings.is_production else "/docs",
+    redoc_url=None if settings.is_production else "/redoc",
+    openapi_url=None if settings.is_production else "/openapi.json",
+)
 
 app.add_middleware(
     CORSMiddleware,

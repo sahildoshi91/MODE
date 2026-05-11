@@ -1,27 +1,20 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 
 import { ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import CoachChatScreen from '../../chat/screens/CoachChatScreen';
-import { TRAINER_REVIEW_ENABLED } from '../../../config/featureFlags';
+import { TRAINER_ASSISTANT_V1_ENABLED, TRAINER_REVIEW_ENABLED } from '../../../config/featureFlags';
+import TrainerAssistantScreen from '../../trainerAssistant/screens/TrainerAssistantScreen';
 import TrainerReviewScreen from '../../trainerReview/screens/TrainerReviewScreen';
 
 const COACH_SUBVIEW = {
+  ASSISTANT: 'assistant',
   CHAT: 'chat',
   REVIEW: 'review',
 };
 
-function CoachSubviewSwitcher({ activeSubview, onChange }) {
-  const options = useMemo(() => (
-    TRAINER_REVIEW_ENABLED
-      ? [
-        { key: COACH_SUBVIEW.CHAT, label: 'Chat' },
-        { key: COACH_SUBVIEW.REVIEW, label: 'Review' },
-      ]
-      : [{ key: COACH_SUBVIEW.CHAT, label: 'Chat' }]
-  ), []);
-
+function CoachSubviewSwitcher({ activeSubview, onChange, options }) {
   return (
     <View style={styles.switchRow}>
       {options.map((option) => {
@@ -38,7 +31,7 @@ function CoachSubviewSwitcher({ activeSubview, onChange }) {
           >
             <ModeText
               variant="caption"
-              tone={isActive ? 'inverse' : 'secondary'}
+              tone={isActive ? 'primary' : 'secondary'}
               style={styles.switchOptionText}
             >
               {option.label}
@@ -57,8 +50,8 @@ export default function TrainerCoachWorkspace({
   trainerOnboardingCompleted = false,
   trainerOnboardingStatus = 'not_started',
   trainerOnboardingCompletedSteps = 0,
+  onOpenTrainerCoach = null,
 }) {
-  const [activeSubview, setActiveSubview] = useState(COACH_SUBVIEW.CHAT);
   const normalizedOnboardingStatus = typeof trainerOnboardingStatus === 'string'
     ? trainerOnboardingStatus.trim().toLowerCase()
     : 'not_started';
@@ -70,6 +63,30 @@ export default function TrainerCoachWorkspace({
     || normalizedOnboardingStatus === 'calibration_pending'
     || Number(trainerOnboardingCompletedSteps) > 0
   );
+  const hasExplicitOnboardingAction = typeof chatLaunchContext?.onboarding_action === 'string'
+    && chatLaunchContext.onboarding_action.trim().length > 0;
+  const forceTrainingChat = Boolean(
+    chatLaunchContext?.entrypoint === 'trainer_agent_training'
+    && hasExplicitOnboardingAction,
+  );
+  const useTrainerAssistant = Boolean(
+    TRAINER_ASSISTANT_V1_ENABLED
+    && onboardingComplete
+    && !forceTrainingChat,
+  );
+  const [activeSubview, setActiveSubview] = useState(
+    useTrainerAssistant ? COACH_SUBVIEW.ASSISTANT : COACH_SUBVIEW.CHAT,
+  );
+
+  useEffect(() => {
+    setActiveSubview((current) => {
+      if (current === COACH_SUBVIEW.REVIEW && TRAINER_REVIEW_ENABLED) {
+        return current;
+      }
+      return useTrainerAssistant ? COACH_SUBVIEW.ASSISTANT : COACH_SUBVIEW.CHAT;
+    });
+  }, [useTrainerAssistant]);
+
   const resolvedChatLaunchContext = useMemo(() => {
     if (chatLaunchContext && typeof chatLaunchContext === 'object') {
       return chatLaunchContext;
@@ -82,10 +99,27 @@ export default function TrainerCoachWorkspace({
       onboarding_action: onboardingInProgress ? 'resume' : 'continue',
     };
   }, [chatLaunchContext, onboardingComplete, onboardingInProgress]);
+  const switchOptions = useMemo(() => {
+    if (useTrainerAssistant) {
+      return TRAINER_REVIEW_ENABLED
+        ? [
+          { key: COACH_SUBVIEW.ASSISTANT, label: 'Assistant' },
+          { key: COACH_SUBVIEW.REVIEW, label: 'Review' },
+        ]
+        : [{ key: COACH_SUBVIEW.ASSISTANT, label: 'Assistant' }];
+    }
+    return TRAINER_REVIEW_ENABLED
+      ? [
+        { key: COACH_SUBVIEW.CHAT, label: 'Chat' },
+        { key: COACH_SUBVIEW.REVIEW, label: 'Review' },
+      ]
+      : [{ key: COACH_SUBVIEW.CHAT, label: 'Chat' }];
+  }, [useTrainerAssistant]);
   const toolbar = (
     <CoachSubviewSwitcher
       activeSubview={activeSubview}
       onChange={setActiveSubview}
+      options={switchOptions}
     />
   );
 
@@ -93,6 +127,18 @@ export default function TrainerCoachWorkspace({
     return (
       <TrainerReviewScreen
         accessToken={accessToken}
+        bottomInset={coachChatBottomInset}
+        topToolbar={toolbar}
+        onOpenTrainerCoach={onOpenTrainerCoach}
+      />
+    );
+  }
+
+  if (useTrainerAssistant && activeSubview === COACH_SUBVIEW.ASSISTANT) {
+    return (
+      <TrainerAssistantScreen
+        accessToken={accessToken}
+        launchContext={chatLaunchContext}
         bottomInset={coachChatBottomInset}
         topToolbar={toolbar}
       />
@@ -115,8 +161,8 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     borderRadius: theme.radii.pill,
     borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.subtle,
+    borderColor: theme.colors.glass.borderStrong,
+    backgroundColor: theme.colors.surface.elevated,
     padding: 2,
     gap: 4,
   },
@@ -129,7 +175,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   switchOptionActive: {
-    backgroundColor: theme.colors.brand.progressCore,
+    backgroundColor: theme.colors.nav.activeBg,
+    borderWidth: 1,
+    borderColor: theme.colors.nav.activeBorder,
   },
   switchOptionPressed: {
     opacity: 0.88,

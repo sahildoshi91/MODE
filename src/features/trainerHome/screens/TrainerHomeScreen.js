@@ -561,7 +561,12 @@ export default function TrainerHomeScreen({
   };
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
+    <SafeScreen
+      includeTopInset={false}
+      style={styles.screen}
+      atmosphere="system"
+      atmosphereOverlayStrength={0.94}
+    >
       <HeaderBar
         title="Agent Lab"
         subtitle={`Trainer profile: ${profileLabel}`}
@@ -574,7 +579,7 @@ export default function TrainerHomeScreen({
         ]}
       >
         {!onboardingComplete ? (
-          <ModeCard variant="tinted">
+          <ModeCard variant="hero">
             <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Coach Profile</ModeText>
             <ModeText variant="bodySm" style={styles.onboardingTitle}>
               Complete your coaching profile
@@ -601,7 +606,7 @@ export default function TrainerHomeScreen({
           </ModeCard>
         ) : null}
 
-        <ModeCard variant="surface">
+        <ModeCard variant="hero">
           <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Quick Capture</ModeText>
           <ModeText variant="bodySm" tone="secondary">
             Drop one coaching principle, rule, or cue. Agent Lab will save it and update extracted rules.

@@ -9,4 +9,5 @@ export const SOURCE_FILTERS = [
   { key: 'chat', label: 'Chat' },
   { key: 'talking_points', label: 'Talking Points' },
   { key: 'generated_checkin_plan', label: 'Generated Plans' },
+  { key: 'trainer_assistant_draft', label: 'Assistant Drafts' },
 ];

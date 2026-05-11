@@ -3,9 +3,16 @@ import { Platform } from 'react-native';
 
 const DEFAULT_LOCAL_API_PORT = '8000';
 let preferredApiBaseUrl = null;
+const isDevBuild =
+  process.env.NODE_ENV !== 'production' &&
+  (typeof __DEV__ !== 'boolean' || __DEV__);
 
 function normalizeBaseUrl(url) {
   return url ? url.replace(/\/+$/, '') : null;
+}
+
+function isSecureHttpUrl(url) {
+  return typeof url === 'string' && /^https:\/\//i.test(url);
 }
 
 function extractExpoHost() {
@@ -30,6 +37,9 @@ function extractExpoHost() {
 }
 
 function buildAutoDetectedBaseUrls() {
+  if (!isDevBuild) {
+    return [];
+  }
   const autoDetectedBaseUrls = [];
 
   if (Platform.OS === 'android') {
@@ -45,6 +55,9 @@ function buildAutoDetectedBaseUrls() {
 }
 
 function buildLoopbackBaseUrls() {
+  if (!isDevBuild) {
+    return [];
+  }
   return [
     `http://localhost:${DEFAULT_LOCAL_API_PORT}`,
     `http://127.0.0.1:${DEFAULT_LOCAL_API_PORT}`,
@@ -72,7 +85,15 @@ function shouldSuppressLoopbackFallbacks(configuredBaseUrl) {
 }
 
 export function getConfiguredApiBaseUrl() {
-  return normalizeBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL);
+  const configured = normalizeBaseUrl(process.env.EXPO_PUBLIC_API_BASE_URL);
+  if (!configured) {
+    return null;
+  }
+  if (!isDevBuild && !isSecureHttpUrl(configured)) {
+    console.error('EXPO_PUBLIC_API_BASE_URL must use https in production builds.');
+    return null;
+  }
+  return configured;
 }
 
 export function getApiBaseUrls() {
@@ -82,7 +103,7 @@ export function getApiBaseUrls() {
   const preferAutoDetectedBaseUrls = isLocalNetworkUrl(configuredBaseUrl) && !shouldSuppressLoopbackFallbacks(configuredBaseUrl);
   const includeLoopbackBaseUrls = !shouldSuppressLoopbackFallbacks(configuredBaseUrl);
   const prioritizeConfiguredFirst = Boolean(
-    Constants.isDevice && isLocalNetworkUrl(configuredBaseUrl) && !isLoopbackUrl(configuredBaseUrl),
+    isLocalNetworkUrl(configuredBaseUrl) && !isLoopbackUrl(configuredBaseUrl),
   );
   const candidates = [];
   const pushCandidate = (url) => {
@@ -95,21 +116,21 @@ export function getApiBaseUrls() {
   if (prioritizeConfiguredFirst) {
     pushCandidate(configuredBaseUrl);
     autoDetectedBaseUrls.forEach(pushCandidate);
-    return candidates;
+  } else {
+    pushCandidate(preferredApiBaseUrl);
+    if (shouldSuppressLoopbackFallbacks(configuredBaseUrl)) {
+      pushCandidate(configuredBaseUrl);
+    } else {
+      if (preferAutoDetectedBaseUrls) {
+        autoDetectedBaseUrls.forEach(pushCandidate);
+      }
+      pushCandidate(configuredBaseUrl);
+      if (!preferAutoDetectedBaseUrls) {
+        autoDetectedBaseUrls.forEach(pushCandidate);
+      }
+    }
   }
 
-  pushCandidate(preferredApiBaseUrl);
-  if (shouldSuppressLoopbackFallbacks(configuredBaseUrl)) {
-    pushCandidate(configuredBaseUrl);
-  } else {
-    if (preferAutoDetectedBaseUrls) {
-      autoDetectedBaseUrls.forEach(pushCandidate);
-    }
-    pushCandidate(configuredBaseUrl);
-    if (!preferAutoDetectedBaseUrls) {
-      autoDetectedBaseUrls.forEach(pushCandidate);
-    }
-  }
   if (includeLoopbackBaseUrls) {
     loopbackBaseUrls.forEach(pushCandidate);
   }
@@ -129,6 +150,10 @@ export function resolveApiBaseUrl() {
   const [baseUrl] = getApiBaseUrls();
   if (baseUrl) {
     return baseUrl;
+  }
+
+  if (!isDevBuild) {
+    throw new Error('EXPO_PUBLIC_API_BASE_URL must be configured to an https URL for production builds.');
   }
 
   return `http://localhost:${DEFAULT_LOCAL_API_PORT}`;

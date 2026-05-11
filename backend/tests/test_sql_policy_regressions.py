@@ -12,6 +12,8 @@ COACH_MEMORY_POLICY_FILES = [
     "backend/sql/20260321_multi_tenant_rls_policies.sql",
     "backend/sql/20260412_fix_coach_memory_internal_visibility_rls.sql",
 ]
+ALGORITHM_HOME_POLICY_FILE = "backend/sql/20260504c_show_ai_usable_trainer_memory_on_algorithm_home.sql"
+ALGORITHM_HOME_WRITE_POLICY_FILE = "backend/sql/20260504b_your_mode_algorithm_home.sql"
 
 COACH_MEMORY_POLICY_BLOCK = re.compile(
     r"CREATE POLICY coach_memory_select_visible ON public\.coach_memory.*?;",
@@ -118,6 +120,36 @@ class SqlPolicyRegressionTests(unittest.TestCase):
         """
 
         self.assertFalse(_qual_passes_verification(missing_guard_qual))
+
+    def test_algorithm_home_policy_exposes_client_visible_and_ai_usable_trainer_memory(self):
+        text = (REPO_ROOT / ALGORITHM_HOME_POLICY_FILE).read_text()
+        blocks = COACH_MEMORY_POLICY_BLOCK.findall(text)
+
+        self.assertEqual(len(blocks), 1)
+        policy = blocks[0]
+        self.assertIn("public.auth_is_trainer_user(trainer_id)", policy)
+        self.assertIn("public.auth_is_client_user(client_id)", policy)
+        self.assertIn("public.auth_is_client_assigned_to_trainer(client_id, trainer_id)", policy)
+        self.assertIn("LOWER(COALESCE(value_json ->> 'is_archived', 'false')) <> 'true'", policy)
+        self.assertIn("LOWER(COALESCE(value_json ->> 'client_visible', 'false')) = 'true'", policy)
+        self.assertIn("LOWER(COALESCE(value_json ->> 'source', 'trainer')) = 'trainer'", policy)
+        self.assertIn("LOWER(COALESCE(value_json ->> 'ai_usable', 'false')) = 'true'", policy)
+        self.assertIn("COALESCE(LOWER(value_json ->> 'visibility'), 'internal_only') = 'ai_usable'", policy)
+        self.assertIn("LOWER(COALESCE(value_json ->> 'source', '')) = 'user'", policy)
+        self.assertIn("LOWER(COALESCE(value_json ->> 'created_by', '')) = 'user'", policy)
+
+    def test_algorithm_home_client_memory_write_policies_remain_client_owned(self):
+        text = (REPO_ROOT / ALGORITHM_HOME_WRITE_POLICY_FILE).read_text()
+
+        self.assertIn("ADD COLUMN IF NOT EXISTS user_why TEXT", text)
+        self.assertIn("ADD COLUMN IF NOT EXISTS algorithm_summary TEXT", text)
+        self.assertIn("ADD COLUMN IF NOT EXISTS algorithm_summary_updated_at TIMESTAMPTZ", text)
+        self.assertIn("NOTIFY pgrst, 'reload schema'", text)
+        self.assertIn("coach_memory_insert_client_visible_user", text)
+        self.assertIn("coach_memory_update_client_visible_user", text)
+        self.assertIn("public.auth_is_client_assigned_to_trainer(client_id, trainer_id)", text)
+        self.assertIn("LOWER(COALESCE(value_json ->> 'source', '')) = 'user'", text)
+        self.assertIn("LOWER(COALESCE(value_json ->> 'created_by', '')) = 'user'", text)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
-GeneratedOutputSourceType = Literal["chat", "talking_points", "generated_checkin_plan"]
+GeneratedOutputSourceType = Literal["chat", "talking_points", "generated_checkin_plan", "trainer_assistant_draft"]
 GeneratedOutputStatus = Literal["open", "approved", "rejected"]
 FeedbackEventType = Literal["edited", "approved", "rejected", "auto_applied"]
 FeedbackApplyStatus = Literal["not_applicable", "pending", "applied", "failed"]

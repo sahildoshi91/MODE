@@ -6,10 +6,25 @@ from app.core.tenancy import TrainerContext, resolve_trainer_context
 from app.db.client import get_supabase_admin_client, get_supabase_user_client
 from app.modules.ai_feedback.repository import AIFeedbackRepository
 from app.modules.ai_feedback.service import AIFeedbackService
+from app.modules.account_deletion.repository import AccountDeletionRepository
+from app.modules.account_deletion.service import AccountDeletionService
+from app.modules.atlas.repository import AtlasRepository
+from app.modules.atlas.service import (
+    AtlasObserverService,
+    AtlasReviewQueueService,
+    AtlasTrainerDeletionObserver,
+    TrainerAiReviewQueueService,
+)
+from app.modules.chat_sessions.repository import ChatSessionRepository
+from app.modules.chat_sessions.service import ChatSessionService
 from app.modules.conversation.repository import ConversationRepository
 from app.modules.conversation.service import ConversationService
 from app.modules.daily_checkins.repository import DailyCheckinRepository
 from app.modules.daily_checkins.service import DailyCheckinService
+from app.modules.mobile_analytics.repository import MobileAnalyticsRepository
+from app.modules.mobile_analytics.service import MobileAnalyticsService
+from app.modules.onboarding.repository import OnboardingRepository
+from app.modules.onboarding.service import OnboardingService
 from app.modules.plan.repository import PlanRepository
 from app.modules.plan.service import PlanService
 from app.modules.profile.repository import ProfileRepository
@@ -26,8 +41,16 @@ from app.modules.trainer_onboarding.repository import TrainerOnboardingRepositor
 from app.modules.trainer_onboarding.service import TrainerOnboardingService
 from app.modules.trainer_persona.repository import TrainerPersonaRepository
 from app.modules.trainer_persona.service import TrainerPersonaService
+from app.modules.trainer_programs.repository import TrainerProgramRepository
+from app.modules.trainer_programs.service import TrainerProgramService
 from app.modules.trainer_review.repository import TrainerReviewRepository
 from app.modules.trainer_review.service import TrainerReviewService
+from app.modules.trainer_coach.repository import TrainerCoachRepository
+from app.modules.trainer_coach.service import TrainerCoachService
+from app.modules.trainer_assistant.repository import TrainerAssistantRepository
+from app.modules.trainer_assistant.service import TrainerAssistantService
+from app.modules.trainer_settings.repository import TrainerSettingsRepository
+from app.modules.trainer_settings.service import TrainerSettingsService
 from app.modules.workout.repository import WorkoutRepository
 from app.modules.workout.service import WorkoutService
 
@@ -38,6 +61,45 @@ def get_request_scoped_supabase_client(
     if not user.access_token:
         raise ValueError("Authenticated user is missing access token")
     return get_supabase_user_client(user.access_token)
+
+
+def get_atlas_repository() -> AtlasRepository:
+    return AtlasRepository(get_supabase_admin_client())
+
+
+def get_atlas_observer_service(
+    repository: AtlasRepository = Depends(get_atlas_repository),
+) -> AtlasObserverService:
+    return AtlasObserverService(repository)
+
+
+def get_atlas_review_queue_service(
+    repository: AtlasRepository = Depends(get_atlas_repository),
+) -> AtlasReviewQueueService:
+    return AtlasReviewQueueService(repository)
+
+
+def get_trainer_ai_review_queue_service(
+    repository: AtlasRepository = Depends(get_atlas_repository),
+) -> TrainerAiReviewQueueService:
+    return TrainerAiReviewQueueService(repository)
+
+
+def get_atlas_trainer_deletion_observer(
+    repository: AtlasRepository = Depends(get_atlas_repository),
+) -> AtlasTrainerDeletionObserver:
+    return AtlasTrainerDeletionObserver(repository)
+
+
+def get_account_deletion_repository() -> AccountDeletionRepository:
+    return AccountDeletionRepository(get_supabase_admin_client())
+
+
+def get_account_deletion_service(
+    repository: AccountDeletionRepository = Depends(get_account_deletion_repository),
+    atlas_trainer_deletion_observer: AtlasTrainerDeletionObserver = Depends(get_atlas_trainer_deletion_observer),
+) -> AccountDeletionService:
+    return AccountDeletionService(repository, atlas_trainer_deletion_observer=atlas_trainer_deletion_observer)
 
 
 def get_workout_repository(
@@ -64,10 +126,35 @@ def get_profile_repository(
     return ProfileRepository(supabase)
 
 
+def get_profile_admin_repository() -> ProfileRepository:
+    return ProfileRepository(get_supabase_admin_client())
+
+
+def get_onboarding_repository() -> OnboardingRepository:
+    return OnboardingRepository(get_supabase_admin_client())
+
+
+def get_onboarding_service(
+    repository: OnboardingRepository = Depends(get_onboarding_repository),
+) -> OnboardingService:
+    return OnboardingService(repository)
+
+
+def get_mobile_analytics_repository() -> MobileAnalyticsRepository:
+    return MobileAnalyticsRepository(get_supabase_admin_client())
+
+
+def get_mobile_analytics_service(
+    repository: MobileAnalyticsRepository = Depends(get_mobile_analytics_repository),
+) -> MobileAnalyticsService:
+    return MobileAnalyticsService(repository)
+
+
 def get_profile_service(
     repository: ProfileRepository = Depends(get_profile_repository),
+    delete_repository: ProfileRepository = Depends(get_profile_admin_repository),
 ) -> ProfileService:
-    return ProfileService(repository)
+    return ProfileService(repository, delete_repository=delete_repository)
 
 
 def get_daily_checkin_repository(
@@ -146,8 +233,9 @@ def get_ai_feedback_admin_repository() -> AIFeedbackRepository:
 
 def get_ai_feedback_logger_service(
     repository: AIFeedbackRepository = Depends(get_ai_feedback_admin_repository),
+    atlas_observer_service: AtlasObserverService = Depends(get_atlas_observer_service),
 ) -> AIFeedbackService:
-    return AIFeedbackService(repository)
+    return AIFeedbackService(repository, atlas_observer_service=atlas_observer_service)
 
 
 def get_trainer_intelligence_repository() -> TrainerIntelligenceRepository:
@@ -177,6 +265,16 @@ def get_trainer_client_service(
     return TrainerClientService(repository)
 
 
+def get_trainer_settings_repository() -> TrainerSettingsRepository:
+    return TrainerSettingsRepository(get_supabase_admin_client())
+
+
+def get_trainer_settings_service(
+    repository: TrainerSettingsRepository = Depends(get_trainer_settings_repository),
+) -> TrainerSettingsService:
+    return TrainerSettingsService(repository)
+
+
 def get_trainer_review_repository(
     supabase: Client = Depends(get_request_scoped_supabase_client),
 ) -> TrainerReviewRepository:
@@ -186,8 +284,31 @@ def get_trainer_review_repository(
 def get_trainer_review_service(
     repository: TrainerReviewRepository = Depends(get_trainer_review_repository),
     ai_feedback_logger_service: AIFeedbackService = Depends(get_ai_feedback_logger_service),
+    atlas_observer_service: AtlasObserverService = Depends(get_atlas_observer_service),
 ) -> TrainerReviewService:
-    return TrainerReviewService(repository, ai_feedback_logger_service=ai_feedback_logger_service)
+    return TrainerReviewService(
+        repository,
+        ai_feedback_logger_service=ai_feedback_logger_service,
+        atlas_observer_service=atlas_observer_service,
+    )
+
+
+def get_trainer_program_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> TrainerProgramRepository:
+    return TrainerProgramRepository(supabase)
+
+
+def get_trainer_program_service(
+    repository: TrainerProgramRepository = Depends(get_trainer_program_repository),
+) -> TrainerProgramService:
+    return TrainerProgramService(repository)
+
+
+def get_trainer_coach_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> TrainerCoachRepository:
+    return TrainerCoachRepository(supabase)
 
 
 def get_ai_feedback_repository(
@@ -198,8 +319,44 @@ def get_ai_feedback_repository(
 
 def get_ai_feedback_service(
     repository: AIFeedbackRepository = Depends(get_ai_feedback_repository),
+    atlas_observer_service: AtlasObserverService = Depends(get_atlas_observer_service),
 ) -> AIFeedbackService:
-    return AIFeedbackService(repository)
+    return AIFeedbackService(repository, atlas_observer_service=atlas_observer_service)
+
+
+def get_trainer_coach_service(
+    repository: TrainerCoachRepository = Depends(get_trainer_coach_repository),
+    ai_feedback_service: AIFeedbackService = Depends(get_ai_feedback_service),
+    trainer_home_service: TrainerHomeService = Depends(get_trainer_home_service),
+    atlas_observer_service: AtlasObserverService = Depends(get_atlas_observer_service),
+) -> TrainerCoachService:
+    return TrainerCoachService(
+        repository=repository,
+        ai_feedback_service=ai_feedback_service,
+        trainer_home_service=trainer_home_service,
+        atlas_observer_service=atlas_observer_service,
+    )
+
+
+def get_trainer_assistant_repository(
+) -> TrainerAssistantRepository:
+    return TrainerAssistantRepository(get_supabase_admin_client())
+
+
+def get_trainer_assistant_service(
+    repository: TrainerAssistantRepository = Depends(get_trainer_assistant_repository),
+    trainer_home_service: TrainerHomeService = Depends(get_trainer_home_service),
+    trainer_client_service: TrainerClientService = Depends(get_trainer_client_service),
+    ai_feedback_service: AIFeedbackService = Depends(get_ai_feedback_service),
+    trainer_intelligence_service: TrainerIntelligenceService = Depends(get_trainer_intelligence_service),
+) -> TrainerAssistantService:
+    return TrainerAssistantService(
+        repository=repository,
+        trainer_home_service=trainer_home_service,
+        trainer_client_service=trainer_client_service,
+        ai_feedback_service=ai_feedback_service,
+        trainer_intelligence_service=trainer_intelligence_service,
+    )
 
 
 def get_conversation_repository(
@@ -225,4 +382,22 @@ def get_conversation_service(
         trainer_onboarding_service=trainer_onboarding_service,
         ai_feedback_logger_service=ai_feedback_logger_service,
         trainer_intelligence_service=trainer_intelligence_service,
+    )
+
+
+def get_chat_session_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> ChatSessionRepository:
+    return ChatSessionRepository(supabase, admin_supabase=get_supabase_admin_client())
+
+
+def get_chat_session_service(
+    repository: ChatSessionRepository = Depends(get_chat_session_repository),
+    conversation_service: ConversationService = Depends(get_conversation_service),
+    trainer_home_service: TrainerHomeService = Depends(get_trainer_home_service),
+) -> ChatSessionService:
+    return ChatSessionService(
+        repository,
+        conversation_service=conversation_service,
+        trainer_home_service=trainer_home_service,
     )

@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -14,7 +15,11 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from app.ai.client import GeminiCompletion, TokenUsage
 from app.core.tenancy import TrainerContext
 from app.modules.conversation.schemas import ChatRequest
-from app.modules.conversation.service import ConversationProcessingError, ConversationService
+from app.modules.conversation.service import (
+    SAFETY_ESCALATION_HOLDING_RESPONSE,
+    ConversationProcessingError,
+    ConversationService,
+)
 from app.modules.trainer_persona.repository import TrainerPersonaRepository
 from app.modules.trainer_onboarding.repository import TrainerOnboardingStorageUnavailableError
 from app.modules.trainer_onboarding.service import TrainerOnboardingTurnResult
@@ -30,6 +35,8 @@ class FakeConversationRepository:
         self.saved_messages = []
         self.updated_states = []
         self.usage_events = []
+        self.metadata_updates = []
+        self.system_events = []
         self.history = [
             {"role": "user", "message_text": "I want to get stronger."},
             {"role": "assistant", "message_text": "How many days can you train?"},
@@ -86,6 +93,27 @@ class FakeConversationRepository:
             }
         )
 
+    def update_conversation_metadata(self, conversation_id, metadata):
+        self.metadata_updates.append(
+            {
+                "conversation_id": conversation_id,
+                "metadata": metadata,
+            }
+        )
+        if conversation_id == self.created_conversation["id"]:
+            self.created_conversation["metadata"] = metadata
+
+    def get_trainer_system_event_by_key(self, trainer_id, event_key):
+        for event in self.system_events:
+            if event.get("trainer_id") == trainer_id and event.get("event_key") == event_key:
+                return event
+        return None
+
+    def insert_trainer_system_event(self, payload):
+        event = {"id": f"system-event-{len(self.system_events) + 1}", **payload}
+        self.system_events.append(event)
+        return event
+
     def record_usage_event(self, **kwargs):
         payload = {"id": f"usage-{len(self.usage_events) + 1}", **kwargs}
         self.usage_events.append(payload)
@@ -139,7 +167,9 @@ class FakeTrainerReviewService:
         self.queued = []
 
     def queue_unanswered_question(self, **kwargs):
-        self.queued.append(kwargs)
+        item = {"id": f"queue-{len(self.queued) + 1}", **kwargs}
+        self.queued.append(item)
+        return item
 
 
 class FakeTrainerPersonaRepository:
@@ -170,6 +200,28 @@ class FakeTrainerPersonaRepository:
             raise AssertionError("Unexpected persona id")
         self.default_persona.update(payload)
         return dict(self.default_persona)
+
+
+class FakeTrainerIntelligenceService:
+    def __init__(self, *, covered: bool = False, reason: str = "no_strong_match", matched_memory_key: str | None = None):
+        self.covered = covered
+        self.reason = reason
+        self.matched_memory_key = matched_memory_key
+        self.calls = []
+
+    def is_question_covered_by_memory_theme(self, *, trainer_id, client_id, question):
+        self.calls.append(
+            {
+                "trainer_id": trainer_id,
+                "client_id": client_id,
+                "question": question,
+            }
+        )
+        return {
+            "covered": self.covered,
+            "reason": self.reason,
+            "matched_memory_key": self.matched_memory_key,
+        }
 
 
 class FakeTrainerOnboardingService:
@@ -436,7 +488,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
             client_context={"platform": "ios"},
         )
 
-    def _build_service(self, anthropic_enabled=False):
+    def _build_service(self, anthropic_enabled=False, trainer_intelligence_service=None):
         with patch("app.modules.conversation.service.GeminiClient", return_value=FakeGeminiClient()):
             with patch("app.modules.conversation.service.OpenAIClient", return_value=FakeOpenAIClient()):
                 with patch.object(sys.modules["app.modules.conversation.service"].settings, "anthropic_api_key", "test-anthropic-key" if anthropic_enabled else None):
@@ -447,9 +499,10 @@ class ConversationServiceRoutingTests(unittest.TestCase):
                             self.trainer_review_service,
                             self.trainer_persona_repository,
                             trainer_onboarding_service=self.trainer_onboarding_service,
+                            trainer_intelligence_service=trainer_intelligence_service,
                         )
 
-    def _build_service_with_repository(self, repository, anthropic_enabled=False):
+    def _build_service_with_repository(self, repository, anthropic_enabled=False, trainer_intelligence_service=None):
         with patch("app.modules.conversation.service.GeminiClient", return_value=FakeGeminiClient()):
             with patch("app.modules.conversation.service.OpenAIClient", return_value=FakeOpenAIClient()):
                 with patch.object(sys.modules["app.modules.conversation.service"].settings, "anthropic_api_key", "test-anthropic-key" if anthropic_enabled else None):
@@ -460,6 +513,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
                             self.trainer_review_service,
                             self.trainer_persona_repository,
                             trainer_onboarding_service=self.trainer_onboarding_service,
+                            trainer_intelligence_service=trainer_intelligence_service,
                         )
 
     def test_handle_chat_uses_default_fast_route_with_gemini(self):
@@ -491,9 +545,14 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         service = self._build_service()
 
         conversation_id, chunks, route_debug, result_state = service.stream_chat("user-123", self.trainer_context, self.request)
-        streamed = "".join(chunks)
+        started_at = time.perf_counter()
+        first_chunk = next(chunks)
+        first_token_ms = (time.perf_counter() - started_at) * 1000
+        streamed = first_chunk + "".join(chunks)
 
         self.assertEqual(conversation_id, "convo-123")
+        self.assertEqual(first_chunk, "Gemini ")
+        self.assertLess(first_token_ms, 500)
         self.assertEqual(streamed, "Gemini stream")
         self.assertEqual(route_debug.execution_provider, "gemini")
         self.assertEqual(result_state.conversation_usage.total_tokens, 0)
@@ -513,7 +572,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertEqual(repository.saved_messages[-1]["message_text"], "Gemini says hello")
         self.assertEqual(repository.updated_states[-1]["stage"], "default_fast")
 
-    def test_risk_route_uses_openai_when_available(self):
+    def test_safety_escalation_uses_holding_response_and_notifies_trainer(self):
         service = self._build_service()
         request = ChatRequest(
             message="I felt chest pain and got dizzy during my workout. What should I do?",
@@ -522,13 +581,57 @@ class ConversationServiceRoutingTests(unittest.TestCase):
 
         response = service.handle_chat("user-123", self.trainer_context, request)
 
-        self.assertEqual(response.assistant_message, "GPT says hello")
-        self.assertEqual(response.conversation_state.current_stage, "safety_constrained")
+        self.assertEqual(response.assistant_message, SAFETY_ESCALATION_HOLDING_RESPONSE)
+        self.assertEqual(response.conversation_state.current_stage, "safety_escalation")
         self.assertFalse(response.fallback_triggered)
         self.assertEqual(response.route_debug.selected_model, "gpt-5.4-mini")
-        self.assertEqual(response.route_debug.execution_provider, "openai")
-        self.assertEqual(response.conversation_usage.total_tokens, 105)
-        self.assertEqual(service.openai_client.calls[0]["model"], "gpt-5.4-mini")
+        self.assertEqual(response.route_debug.execution_provider, "system")
+        self.assertEqual(response.route_debug.execution_model, "safety-escalation-hold")
+        self.assertEqual(response.conversation_usage.total_tokens, 0)
+        self.assertEqual(service.openai_client.calls, [])
+
+        self.assertEqual(len(self.trainer_review_service.queued), 1)
+        queued = self.trainer_review_service.queued[0]
+        self.assertEqual(queued["conversation_id"], "convo-123")
+        self.assertEqual(queued["message_id"], "msg-1")
+
+        self.assertEqual(len(self.repository.system_events), 1)
+        event = self.repository.system_events[0]
+        self.assertEqual(event["event_type"], "safety_escalation")
+        self.assertEqual(event["severity"], "warning")
+        self.assertEqual(event["visibility"], "trainer_private")
+        self.assertEqual(event["payload"]["queue_id"], "queue-1")
+        self.assertIn("pain_language", event["payload"]["risk_flags"])
+
+        metadata = self.repository.metadata_updates[-1]["metadata"]
+        self.assertTrue(metadata["trainer_review_pending"])
+        self.assertIn("pain_language", metadata["trainer_review_risk_flags"])
+        self.assertEqual(metadata["active_safety_flags"][0]["type"], "injury")
+
+    def test_stream_safety_escalation_yields_before_trainer_notification(self):
+        service = self._build_service()
+        request = ChatRequest(
+            message="My knee is really hurting after squats. What should I do?",
+            client_context={},
+        )
+
+        conversation_id, chunks, route_debug, result_state = service.stream_chat(
+            "user-123",
+            self.trainer_context,
+            request,
+        )
+        first_chunk = next(chunks)
+
+        self.assertEqual(conversation_id, "convo-123")
+        self.assertEqual(first_chunk, SAFETY_ESCALATION_HOLDING_RESPONSE)
+        self.assertEqual(route_debug.execution_provider, "system")
+        self.assertEqual(self.trainer_review_service.queued, [])
+
+        self.assertEqual("".join(chunks), "")
+        self.assertEqual(len(self.trainer_review_service.queued), 1)
+        self.assertEqual(len(self.repository.system_events), 1)
+        self.assertTrue(self.repository.metadata_updates[-1]["metadata"]["trainer_review_pending"])
+        self.assertEqual(result_state.conversation_usage.total_tokens, 0)
 
     def test_generated_workout_context_is_included_in_prompt_for_adjustments(self):
         service = self._build_service()
@@ -579,6 +682,64 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertEqual(response.route_debug.selected_provider, "anthropic")
         self.assertEqual(response.route_debug.execution_provider, "gemini")
         self.assertEqual(response.conversation_usage.last_execution_provider, "gemini")
+
+    def test_low_confidence_client_question_skips_trainer_review_when_memory_theme_covered(self):
+        intelligence_service = FakeTrainerIntelligenceService(
+            covered=True,
+            reason="token_overlap",
+            matched_memory_key="preference_late_night_snacking",
+        )
+        service = self._build_service(trainer_intelligence_service=intelligence_service)
+        request = ChatRequest(
+            message="Coach, I keep snacking late at night after stressful workdays. Give me the tough-love version.",
+            client_context={"trainer_persona_requested": True, "retrieval_confidence": 0.3},
+        )
+
+        response = service.handle_chat("user-123", self.trainer_context, request)
+
+        self.assertEqual(response.route_debug.flow, "persona_coach")
+        self.assertEqual(len(self.trainer_review_service.queued), 0)
+        self.assertEqual(len(intelligence_service.calls), 1)
+        self.assertEqual(intelligence_service.calls[0]["client_id"], "client-123")
+
+    def test_low_confidence_client_question_queues_when_memory_theme_not_covered(self):
+        intelligence_service = FakeTrainerIntelligenceService(covered=False, reason="no_strong_match")
+        service = self._build_service(trainer_intelligence_service=intelligence_service)
+        request = ChatRequest(
+            message="Coach, I'm feeling guilty and unmotivated. Give me the tough-love version.",
+            client_context={"trainer_persona_requested": True, "retrieval_confidence": 0.3},
+        )
+
+        response = service.handle_chat("user-123", self.trainer_context, request)
+
+        self.assertEqual(response.route_debug.flow, "persona_coach")
+        self.assertEqual(len(self.trainer_review_service.queued), 1)
+        self.assertEqual(len(intelligence_service.calls), 1)
+
+    def test_trainer_only_context_does_not_queue_review_even_when_route_needs_review(self):
+        intelligence_service = FakeTrainerIntelligenceService(covered=False, reason="no_strong_match")
+        service = self._build_service(trainer_intelligence_service=intelligence_service)
+        trainer_only_context = TrainerContext(
+            tenant_id="tenant-123",
+            trainer_id="trainer-123",
+            trainer_user_id="trainer-user-123",
+            trainer_display_name="Coach Alex",
+            client_id=None,
+            persona_id="persona-123",
+            persona_name="Strength Coach",
+            trainer_onboarding_completed=True,
+            trainer_onboarding_status="completed",
+        )
+        request = ChatRequest(
+            message="Coach, I'm feeling guilty and unmotivated. Give me the tough-love version.",
+            client_context={"trainer_persona_requested": True, "retrieval_confidence": 0.3},
+        )
+
+        response = service.handle_chat("user-123", trainer_only_context, request)
+
+        self.assertEqual(response.route_debug.flow, "persona_coach")
+        self.assertEqual(len(self.trainer_review_service.queued), 0)
+        self.assertEqual(len(intelligence_service.calls), 0)
 
     def test_persona_route_uses_anthropic_when_configured(self):
         service = self._build_service(anthropic_enabled=True)

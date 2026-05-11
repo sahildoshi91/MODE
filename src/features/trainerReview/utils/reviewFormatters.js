@@ -46,15 +46,17 @@ export function previewText(output) {
   if (!output || typeof output !== 'object') {
     return 'No output preview available.';
   }
+  const summary = typeof output.summary === 'string' ? output.summary.trim() : '';
+  if (summary) {
+    return summary.length > 220 ? `${summary.slice(0, 220).trim()}...` : summary;
+  }
+  const reviewedText = typeof output.reviewed_output_text === 'string' ? output.reviewed_output_text.trim() : '';
+  if (reviewedText && !reviewedText.startsWith('{') && !reviewedText.startsWith('[')) {
+    return reviewedText.length > 220 ? `${reviewedText.slice(0, 220).trim()}...` : reviewedText;
+  }
   const text = typeof output.output_text === 'string' ? output.output_text.trim() : '';
-  if (text) {
+  if (text && !text.startsWith('{') && !text.startsWith('[')) {
     return text.length > 220 ? `${text.slice(0, 220).trim()}...` : text;
   }
-  if (output.output_json && typeof output.output_json === 'object') {
-    const serialized = JSON.stringify(output.output_json);
-    if (serialized && serialized !== '{}') {
-      return serialized.length > 220 ? `${serialized.slice(0, 220).trim()}...` : serialized;
-    }
-  }
-  return 'No output preview available.';
+  return 'Draft preview available in detail view.';
 }

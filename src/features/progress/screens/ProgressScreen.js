@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
-  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   View,
 } from 'react-native';
+import { Check } from 'lucide-react-native';
 
 import {
   EmptyState,
@@ -16,9 +16,8 @@ import {
   ModeCard,
   ModeChip,
   ModeText,
-  ProgressBar,
+  SectionHeader,
   SafeScreen,
-  StreakRing,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { getCheckinProgress } from '../../dailyCheckin/services/checkinApi';
@@ -44,22 +43,183 @@ function formatDateLabel(dateText) {
   });
 }
 
-function clampToPercent(value) {
-  if (typeof value !== 'number' || Number.isNaN(value)) {
-    return 0;
-  }
-  return Math.max(0, Math.min(1, value));
-}
-
 function formatCheckinCount(value) {
   return value === 1 ? '1 check-in' : `${value} check-ins`;
 }
 
-const HABIT_ITEMS = [
-  { key: 'movement', label: 'Movement done' },
-  { key: 'protein', label: 'Protein anchor hit' },
-  { key: 'sleep', label: 'Sleep target protected' },
-];
+function parseDateOnly(dateText) {
+  if (!dateText || typeof dateText !== 'string') {
+    return null;
+  }
+
+  const [year, month, day] = dateText.split('-').map((part) => Number.parseInt(part, 10));
+  if (!year || !month || !day) {
+    return null;
+  }
+
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDateOnly(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString().slice(0, 10);
+}
+
+function addDays(date, days) {
+  const next = new Date(date.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function formatTrendPoints(value) {
+  const absoluteValue = Math.abs(Number.isFinite(value) ? value : 0);
+  return absoluteValue.toFixed(1).replace(/\.0$/, '');
+}
+
+function getScorePhrase(readinessScore) {
+  if (typeof readinessScore !== 'number' || Number.isNaN(readinessScore)) {
+    return '';
+  }
+
+  return ` with your 7-day average at ${formatScore(readinessScore)}`;
+}
+
+export function buildWeeklyCheckInDays({
+  asOfDate,
+  recentCheckins = [],
+  totalDays = 7,
+} = {}) {
+  const safeTotalDays = Number.isFinite(totalDays) && totalDays > 0
+    ? Math.floor(totalDays)
+    : 7;
+  const completedDates = new Set(
+    (Array.isArray(recentCheckins) ? recentCheckins : [])
+      .map((entry) => entry?.date)
+      .filter(Boolean),
+  );
+  const fallbackDate = Array.isArray(recentCheckins)
+    ? recentCheckins.find((entry) => entry?.date)?.date
+    : null;
+  const endDate = parseDateOnly(asOfDate) || parseDateOnly(fallbackDate) || new Date();
+  const startOffset = -(safeTotalDays - 1);
+
+  return Array.from({ length: safeTotalDays }, (_item, index) => {
+    const date = formatDateOnly(addDays(endDate, startOffset + index));
+    return {
+      date,
+      completed: completedDates.has(date),
+    };
+  });
+}
+
+export function getReadinessTrendInsight({
+  readinessScore,
+  weeklyTrend,
+} = {}) {
+  const trend = Number.isFinite(weeklyTrend) ? weeklyTrend : 0;
+  const scorePhrase = getScorePhrase(readinessScore);
+
+  if (trend <= -5) {
+    return `Readiness is down ${formatTrendPoints(trend)} points this week${scorePhrase}. Your body may be carrying more fatigue than usual, so today is a good day to prioritize recovery, sleep, and lower-intensity movement.`;
+  }
+
+  if (trend >= 5) {
+    return `Readiness is up ${formatTrendPoints(trend)} points this week${scorePhrase}. You may be ready to push a little more if training fits the plan.`;
+  }
+
+  if (trend <= -1) {
+    return `Readiness is slightly down this week${scorePhrase}. Keep intensity controlled and give recovery the same priority as the workout.`;
+  }
+
+  if (trend >= 1) {
+    return `Readiness is trending up${scorePhrase}. That is a good sign your habits are working, so keep building without forcing extra intensity.`;
+  }
+
+  return `Readiness is holding steady${scorePhrase}. Stay consistent and let today's score guide the right effort.`;
+}
+
+export function WeeklyCheckInStreak({
+  completedCount,
+  totalDays = 7,
+  completionPercent,
+  days = [],
+}) {
+  const safeTotalDays = Number.isFinite(totalDays) && totalDays > 0
+    ? Math.floor(totalDays)
+    : 7;
+  const visibleDays = Array.from({ length: safeTotalDays }, (_item, index) => (
+    days[index] || { date: `day-${index + 1}`, completed: false }
+  ));
+  const derivedCompletedCount = visibleDays.filter((day) => day.completed).length;
+  const safeCompletedCount = Number.isFinite(completedCount)
+    ? Math.max(0, Math.min(safeTotalDays, Math.round(completedCount)))
+    : derivedCompletedCount;
+  const safePercent = Number.isFinite(completionPercent)
+    ? Math.round(completionPercent)
+    : Math.round((safeCompletedCount / safeTotalDays) * 100);
+
+  return (
+    <View testID="weekly-checkin-streak" style={styles.weeklyStreak}>
+      <View style={styles.weeklyStreakRow}>
+        {visibleDays.map((day, index) => (
+          <View
+            key={day.date || `day-${index}`}
+            testID={`weekly-checkin-day-${index}`}
+            accessibilityLabel={`${formatDateLabel(day.date)} check-in ${day.completed ? 'completed' : 'missed'}`}
+            style={[
+              styles.weeklyStreakCircle,
+              day.completed ? styles.weeklyStreakCircleComplete : styles.weeklyStreakCircleMissed,
+            ]}
+          >
+            {day.completed ? (
+              <Check
+                testID={`weekly-checkin-day-check-${index}`}
+                size={11}
+                color={theme.colors.text.inverse}
+                strokeWidth={3}
+              />
+            ) : null}
+          </View>
+        ))}
+      </View>
+      <ModeText
+        testID="weekly-checkin-copy"
+        variant="bodySm"
+        tone="secondary"
+        style={styles.weeklyStreakCopy}
+      >
+        {`${safePercent}% (${safeCompletedCount} of ${safeTotalDays}) check-ins complete`}
+      </ModeText>
+    </View>
+  );
+}
+
+function ReadinessAverageCard({
+  label,
+  value,
+  helper,
+  testID,
+}) {
+  return (
+    <View testID={testID} style={styles.averageCard}>
+      <ModeText variant="caption" tone="tertiary" style={styles.averageLabel}>
+        {label}
+      </ModeText>
+      <ModeText variant="h2" tone="primary" style={styles.averageValue}>
+        {value}
+      </ModeText>
+      {helper ? (
+        <ModeText variant="caption" tone="secondary" style={styles.averageHelper}>
+          {helper}
+        </ModeText>
+      ) : null}
+    </View>
+  );
+}
 
 export default function ProgressScreen({
   accessToken,
@@ -72,11 +232,6 @@ export default function ProgressScreen({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
   const [section, setSection] = useState(initialSection);
-  const [habitState, setHabitState] = useState({
-    movement: false,
-    protein: false,
-    sleep: false,
-  });
 
   const loadProgress = useCallback(async ({ refresh = false } = {}) => {
     if (!accessToken) {
@@ -109,23 +264,30 @@ export default function ProgressScreen({
     loadProgress();
   }, [loadProgress]);
 
-  const consistencyRatio = useMemo(() => {
-    return clampToPercent((payload?.checkins_last_7_days || 0) / 7);
-  }, [payload?.checkins_last_7_days]);
+  const weeklyCheckInDays = useMemo(() => buildWeeklyCheckInDays({
+    asOfDate: payload?.as_of_date,
+    recentCheckins: payload?.recent_checkins,
+    totalDays: 7,
+  }), [payload?.as_of_date, payload?.recent_checkins]);
+  const weeklyCompletedCount = useMemo(() => (
+    weeklyCheckInDays.filter((day) => day.completed).length
+  ), [weeklyCheckInDays]);
+  const weeklyCompletionPercent = Math.round((weeklyCompletedCount / 7) * 100);
   const totalCheckinsCount = payload?.total_checkins_count || 0;
   const remainingForThirtyDayAverage = Math.max(0, 30 - totalCheckinsCount);
   const thirtyDayAvailabilityCopy = payload?.has_enough_for_30d
     ? '30-day trend is unlocked and updates with each new check-in.'
     : `${formatCheckinCount(remainingForThirtyDayAverage)} more needed to unlock your 30-day average.`;
 
-  const sevenDayChange = payload?.score_change_7d?.value || 0;
-  const changeFeedback = sevenDayChange >= 0
-    ? `Weekly readiness trend: +${Math.abs(sevenDayChange).toFixed(1)} (steady or improving).`
-    : `Weekly readiness trend: ${sevenDayChange.toFixed(1)} (recovery support recommended).`;
+  const sevenDayChange = payload?.score_change_7d?.value ?? 0;
+  const readinessTrendInsight = getReadinessTrendInsight({
+    readinessScore: payload?.avg_score_last_7_days,
+    weeklyTrend: sevenDayChange,
+  });
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
-      <HeaderBar title="Progress" subtitle="Consistency, habits, and recovery-aware trends" />
+    <SafeScreen includeTopInset={false} style={styles.screen} atmosphere="home">
+      <HeaderBar title="Progress" subtitle="Check-ins, readiness, and recovery-aware trends" />
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: theme.spacing[4] + bottomInset }]}
@@ -171,105 +333,48 @@ export default function ProgressScreen({
 
         {!isLoading && !errorMessage && payload ? (
           <>
-            <ModeCard variant="surface" style={styles.summaryCard}>
-              <View style={styles.summaryTopRow}>
-                <StreakRing value={payload.current_streak_days || 0} label="days" />
-                <View style={styles.summaryCopy}>
-                  <ModeText variant="h3">Current check-in streak</ModeText>
-                  <ModeText variant="label" tone="tertiary" style={styles.summarySectionLabel}>
-                    Weekly consistency
-                  </ModeText>
-                  <ModeText variant="bodySm" tone="secondary" style={styles.summarySectionMeta}>
-                    {payload.checkins_last_7_days || 0} of 7 check-ins complete
-                  </ModeText>
-                  <ProgressBar
-                    progress={consistencyRatio}
-                    trackColor={theme.colors.surface.base}
-                    fillColor={theme.colors.accent.primary}
-                    style={styles.progressBar}
-                  />
-                </View>
-              </View>
+            <ModeCard variant="hero" style={styles.summaryCard}>
+              <SectionHeader
+                title="Weekly check-in streak"
+                style={styles.summaryHeader}
+              />
+              <WeeklyCheckInStreak
+                completedCount={weeklyCompletedCount}
+                completionPercent={weeklyCompletionPercent}
+                days={weeklyCheckInDays}
+              />
             </ModeCard>
-
-            <InlineFeedback
-              type={sevenDayChange >= 0 ? 'success' : 'warning'}
-              message={changeFeedback}
-            />
 
             <ModeCard variant="tinted">
               <ModeText variant="h3">Readiness scores</ModeText>
-              <View style={styles.metricRow}>
-                <View style={styles.metricCell}>
-                  <ModeText variant="caption" tone="tertiary">7-day average</ModeText>
-                  <ModeText variant="h2">{formatScore(payload.avg_score_last_7_days)}</ModeText>
-                  <ModeText variant="bodySm" tone="secondary">
-                    {payload.avg_mode_last_7_days || 'Builds after your first week of check-ins.'}
-                  </ModeText>
-                </View>
-                <View style={styles.metricCell}>
-                  <ModeText variant="caption" tone="tertiary">30-day average</ModeText>
-                  <ModeText variant="h2">{formatScore(payload.avg_score_last_30_days)}</ModeText>
-                  <ModeText variant="bodySm" tone="secondary">
-                    {payload.avg_mode_last_30_days || thirtyDayAvailabilityCopy}
-                  </ModeText>
-                </View>
+              <ModeText
+                testID="readiness-trend-insight"
+                variant="bodySm"
+                tone="secondary"
+                style={styles.readinessInsight}
+              >
+                {readinessTrendInsight}
+              </ModeText>
+              <View style={styles.metricRowGlass}>
+                <ReadinessAverageCard
+                  testID="readiness-average-7d"
+                  label="7-day average"
+                  value={formatScore(payload.avg_score_last_7_days)}
+                  helper={payload.avg_mode_last_7_days || 'Builds after your first week of check-ins.'}
+                />
+                <ReadinessAverageCard
+                  testID="readiness-average-30d"
+                  label="30-day average"
+                  value={formatScore(payload.avg_score_last_30_days)}
+                  helper={payload.avg_mode_last_30_days || thirtyDayAvailabilityCopy}
+                />
               </View>
               <ModeText variant="bodySm" tone="secondary" style={styles.readinessFooter}>
                 Your readiness averages summarize recent daily check-in scores so you can spot short-term and long-term trends.
               </ModeText>
             </ModeCard>
 
-            <ModeCard variant="surface">
-              <ModeText variant="h3">Weekly consistency chart</ModeText>
-              <View style={styles.chartRow}>
-                {(payload.recent_checkins || []).slice(0, 7).reverse().map((entry) => {
-                  const normalized = clampToPercent((entry.score || 0) / 25);
-                  return (
-                    <View key={`${entry.date}-${entry.score}`} style={styles.chartItem}>
-                      <View style={styles.chartBarTrack}>
-                        <View style={[styles.chartBarFill, { height: `${Math.max(10, normalized * 100)}%` }]} />
-                      </View>
-                      <ModeText variant="caption" tone="tertiary">{formatDateLabel(entry.date)}</ModeText>
-                    </View>
-                  );
-                })}
-              </View>
-              <ModeText variant="bodySm" tone="secondary" style={styles.chartFooter}>
-                Each bar shows one recent day&apos;s readiness score from a completed check-in. If a day is missing, no check-in was logged for that date.
-              </ModeText>
-            </ModeCard>
-
-            <ModeCard variant="tinted">
-              <ModeText variant="h3">Today&apos;s quick wins</ModeText>
-              <ModeText variant="bodySm" tone="secondary" style={styles.habitIntro}>
-                Use these as a lightweight session checklist. They do not save or affect your streak, readiness averages, or coach insights yet.
-              </ModeText>
-
-              <View style={styles.habitList}>
-                {HABIT_ITEMS.map((item) => {
-                  const isDone = habitState[item.key];
-                  return (
-                    <Pressable
-                      key={item.key}
-                      style={[styles.habitRow, isDone && styles.habitRowDone]}
-                      onPress={() => {
-                        setHabitState((previous) => ({
-                          ...previous,
-                          [item.key]: !previous[item.key],
-                        }));
-                      }}
-                    >
-                      <ModeText variant="bodySm" tone={isDone ? 'accent' : 'secondary'}>{item.label}</ModeText>
-                      <View style={[styles.habitToggle, isDone && styles.habitToggleDone]} />
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </ModeCard>
-
             <ModeButton
-              variant="secondary"
               title="Open Coach Insights"
               onPress={onOpenInsights}
             />
@@ -310,101 +415,74 @@ const styles = StyleSheet.create({
   summaryCard: {
     marginBottom: 0,
   },
-  summaryTopRow: {
-    flexDirection: 'row',
-    gap: theme.spacing[2],
+  summaryHeader: {
+    marginBottom: theme.spacing[1],
+  },
+  weeklyStreak: {
     alignItems: 'center',
+    gap: theme.spacing[2],
   },
-  summaryCopy: {
-    flex: 1,
+  weeklyStreakCopy: {
+    textAlign: 'center',
   },
-  summarySectionLabel: {
+  weeklyStreakRow: {
+    width: '100%',
+    maxWidth: 280,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[1],
+  },
+  weeklyStreakCircle: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  weeklyStreakCircleComplete: {
+    backgroundColor: theme.colors.accent.primary,
+    borderColor: theme.colors.glass.borderActive,
+  },
+  weeklyStreakCircleMissed: {
+    backgroundColor: theme.colors.surface.base,
+    borderColor: theme.colors.border.soft,
+  },
+  readinessInsight: {
     marginTop: theme.spacing[1],
   },
-  summarySectionMeta: {
-    marginTop: theme.spacing[1],
-    marginBottom: theme.spacing[2],
-  },
-  progressBar: {
-    marginTop: theme.spacing[1],
-  },
-  metricRow: {
+  metricRowGlass: {
     marginTop: theme.spacing[2],
     flexDirection: 'row',
     gap: theme.spacing[2],
   },
-  metricCell: {
+  averageCard: {
     flex: 1,
+    minHeight: 104,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    paddingHorizontal: theme.spacing[1],
+    paddingVertical: theme.spacing[2],
+    borderRadius: theme.radii.s,
     borderWidth: 1,
     borderColor: theme.colors.border.soft,
-    borderRadius: theme.radii.s,
     backgroundColor: theme.colors.surface.base,
-    padding: theme.spacing[2],
+  },
+  averageLabel: {
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  averageValue: {
+    textAlign: 'center',
+    fontWeight: '700',
+  },
+  averageHelper: {
+    textAlign: 'center',
   },
   readinessFooter: {
     marginTop: theme.spacing[2],
-  },
-  chartRow: {
-    marginTop: theme.spacing[2],
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    justifyContent: 'space-between',
-    gap: 6,
-  },
-  chartItem: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 6,
-  },
-  chartBarTrack: {
-    width: '100%',
-    maxWidth: 24,
-    height: 72,
-    borderRadius: 12,
-    backgroundColor: theme.colors.surface.base,
-    justifyContent: 'flex-end',
-    overflow: 'hidden',
-  },
-  chartBarFill: {
-    width: '100%',
-    borderRadius: 12,
-    backgroundColor: theme.colors.accent.primary,
-  },
-  chartFooter: {
-    marginTop: theme.spacing[2],
-  },
-  habitIntro: {
-    marginTop: theme.spacing[1],
-  },
-  habitList: {
-    marginTop: theme.spacing[2],
-    gap: theme.spacing[1],
-  },
-  habitRow: {
-    borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    borderRadius: theme.radii.s,
-    backgroundColor: theme.colors.surface.base,
-    minHeight: 48,
-    paddingHorizontal: theme.spacing[2],
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  habitRowDone: {
-    borderColor: theme.colors.state.buildBorder,
-    backgroundColor: theme.colors.state.buildFill,
-  },
-  habitToggle: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 1,
-    borderColor: theme.colors.border.strong,
-    backgroundColor: theme.colors.surface.subtle,
-  },
-  habitToggleDone: {
-    borderColor: theme.colors.accent.primary,
-    backgroundColor: theme.colors.accent.primary,
   },
 });

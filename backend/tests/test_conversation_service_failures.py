@@ -11,7 +11,11 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from app.core.tenancy import TrainerContext
 from app.modules.conversation.schemas import ChatRequest
-from app.modules.conversation.service import ConversationProcessingError, ConversationService
+from app.modules.conversation.service import (
+    MINIMAL_SAFE_FALLBACK_MESSAGE,
+    ConversationProcessingError,
+    ConversationService,
+)
 
 
 class BaseConversationRepository:
@@ -62,6 +66,12 @@ class BrokenConversationRepository(BaseConversationRepository):
         raise RuntimeError("database lookup failed")
 
 
+class TimeoutConversationRepository(BaseConversationRepository):
+    def find_active_conversation(self, client_id, trainer_id):
+        del client_id, trainer_id
+        raise TimeoutError("postgres timeout")
+
+
 class CreateConversationBrokenRepository(BaseConversationRepository):
     def create_conversation(self, trainer_id, client_id, conversation_type, stage):
         del trainer_id, client_id, conversation_type, stage
@@ -102,6 +112,13 @@ class FakeTrainerPersonaRepository:
         return payload
 
 
+class FakeRoute:
+    task_type = "qa_quick"
+    response_mode = "direct_answer"
+    model = "gpt-5.4-mini"
+    flow = "default_fast"
+
+
 class ConversationServiceFailureTests(unittest.TestCase):
     def setUp(self):
         self.trainer_context = TrainerContext(
@@ -117,6 +134,32 @@ class ConversationServiceFailureTests(unittest.TestCase):
             message="What should I do today?",
             client_context={"platform": "ios"},
         )
+
+    def test_prompt_includes_user_why_as_motivation_baseline(self):
+        service = ConversationService(
+            BaseConversationRepository(),
+            WorkingProfileService(),
+            FakeTrainerReviewService(),
+            FakeTrainerPersonaRepository(),
+        )
+
+        prompt = service._build_prompt(
+            self.trainer_context,
+            {"id": "convo-123"},
+            self.request,
+            FakeRoute(),
+            {
+                "client_id": "client-123",
+                "primary_goal": "strength",
+                "user_why": "Dance until I am 100 and never tell my kids I am tired.",
+            },
+        )
+
+        self.assertIn(
+            "Client motivation baseline: Dance until I am 100 and never tell my kids I am tired.",
+            prompt.system_prompt,
+        )
+        self.assertIn("default reason behind recommendations", prompt.system_prompt)
 
     def test_handle_chat_wraps_profile_lookup_failures(self):
         repository = BaseConversationRepository()
@@ -159,6 +202,23 @@ class ConversationServiceFailureTests(unittest.TestCase):
             service.handle_chat("user-123", self.trainer_context, self.request)
 
         self.assertEqual(repository.saved_messages, [])
+
+    def test_stream_events_postgres_timeout_returns_minimal_safe_response(self):
+        service = ConversationService(
+            TimeoutConversationRepository(),
+            WorkingProfileService(),
+            FakeTrainerReviewService(),
+            FakeTrainerPersonaRepository(),
+        )
+
+        events = list(service.stream_chat_events("user-123", self.trainer_context, self.request))
+
+        self.assertNotIn("error", [event.get("type") for event in events])
+        token_events = [event for event in events if event.get("type") == "token"]
+        self.assertEqual(token_events[-1]["content"], MINIMAL_SAFE_FALLBACK_MESSAGE)
+        done_events = [event for event in events if event.get("type") == "done"]
+        self.assertTrue(done_events[-1]["fallback_triggered"])
+        self.assertEqual(done_events[-1]["_trace"]["risk_flags"], ["postgres_timeout"])
 
 
 if __name__ == "__main__":

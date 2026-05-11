@@ -1,15 +1,20 @@
+import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from app.core.auth import AuthenticatedUser, CurrentUser
-from app.core.dependencies import get_trainer_context
-from app.core.tenancy import TrainerContext
+from app.core.config import settings
+from app.core.dependencies import get_onboarding_service, get_trainer_context
+from app.core.rate_limit import enforce_rate_limit
+from app.core.tenancy import TrainerContext, resolve_trainer_context
 from app.db.client import get_supabase_client
+from app.modules.onboarding.service import OnboardingService, OnboardingServiceError
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class TrainerOption(BaseModel):
@@ -40,6 +45,10 @@ class TrainerAssignmentStatus(BaseModel):
 
 class TrainerAssignmentRequest(BaseModel):
     trainer_id: str
+
+
+class TrainerInviteCodeAssignmentRequest(BaseModel):
+    invite_code: str = Field(min_length=3, max_length=64)
 
 
 def _resolve_scope(trainer_context: TrainerContext) -> Literal["tenant", "global_fallback"]:
@@ -77,10 +86,12 @@ def _resolve_viewer_display_name(
 
 
 def _list_active_trainers(*, tenant_id: str | None) -> list[dict]:
+    if not tenant_id and not settings.trainer_assignment_global_fallback_enabled:
+        return []
     query = (
         get_supabase_client()
         .table("trainers")
-        .select("id, tenant_id, display_name, is_active")
+        .select("id, tenant_id, user_id, display_name, is_active")
         .eq("is_active", True)
     )
     if tenant_id:
@@ -150,68 +161,49 @@ async def get_assignment_status(
 @router.post("/assign", response_model=TrainerAssignmentStatus)
 async def assign_trainer(
     request: TrainerAssignmentRequest,
+    http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
 ):
+    del request, http_request, user, trainer_context
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Direct trainer selection is disabled. Attach with a trainer invite code instead.",
+    )
+
+
+@router.post("/assign-by-invite", response_model=TrainerAssignmentStatus)
+async def assign_trainer_by_invite(
+    request: TrainerInviteCodeAssignmentRequest,
+    http_request: Request,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    onboarding_service: OnboardingService = Depends(get_onboarding_service),
+):
+    enforce_rate_limit(
+        group="invite_redeem",
+        user=user,
+        request=http_request,
+        context={"tenant_id": trainer_context.tenant_id},
+    )
     if trainer_context.trainer_id and not trainer_context.client_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Trainer accounts cannot self-assign to a trainer",
         )
-    if trainer_context.trainer_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User is already assigned to an active trainer context",
+    try:
+        onboarding_service.assign_by_invite(user=user, invite_code=request.invite_code)
+    except OnboardingServiceError as exc:
+        logger.info(
+            "Invite assignment rejected user_id=%s status_code=%s reason=%s",
+            user.id,
+            exc.status_code,
+            exc.message,
         )
-
-    admin_client = get_supabase_client()
-    trainers = _list_active_trainers(tenant_id=trainer_context.tenant_id)
-    selected_trainer = next((trainer for trainer in trainers if trainer["id"] == request.trainer_id), None)
-    if not selected_trainer:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Selected trainer was not found in the available trainer scope",
-        )
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unable to attach trainer with invite code",
+        ) from exc
 
-    existing_clients = (
-        admin_client
-        .table("clients")
-        .select("id, tenant_id, assigned_trainer_id")
-        .eq("user_id", user.id)
-        .execute()
-    ).data or []
-
-    if len(existing_clients) > 1:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User has multiple client records and cannot self-assign automatically",
-        )
-
-    existing_client = existing_clients[0] if existing_clients else None
-    if existing_client and existing_client.get("assigned_trainer_id"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User is already assigned to an active trainer context",
-        )
-    if existing_client and existing_client.get("tenant_id") != selected_trainer.get("tenant_id"):
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="User is already linked to a different tenant and cannot self-assign to this trainer",
-        )
-
-    admin_client.rpc(
-        "assign_client_to_trainer",
-        {
-            "client_user_id": user.id,
-            "trainer_record_id": request.trainer_id,
-        },
-    ).execute()
-
-    updated_context = TrainerContext(
-        tenant_id=selected_trainer.get("tenant_id"),
-        trainer_id=selected_trainer["id"],
-        trainer_user_id=None,
-        trainer_display_name=selected_trainer["display_name"],
-        client_id=existing_client.get("id") if existing_client else None,
-    )
+    updated_context = resolve_trainer_context(get_supabase_client(), user.id)
     return _build_status_response(updated_context, user)

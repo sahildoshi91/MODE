@@ -2,6 +2,7 @@
   "expo": {
     "name": "MODE",
     "slug": "mode",
+    "scheme": "mode",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -9,7 +10,17 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "associatedDomains": [
+        "applinks:mode.app"
+      ],
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSExceptionDomains": {}
+        }
+      },
+      "bundleIdentifier": "com.anonymous.mode"
     },
     "android": {
       "adaptiveIcon": {
@@ -20,7 +31,10 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-asset"
+      "expo-asset",
+      "expo-font",
+      "expo-secure-store",
+      "expo-web-browser"
     ]
   }
 }

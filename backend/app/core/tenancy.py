@@ -110,16 +110,29 @@ def _resolve_onboarding_summary(
     }
 
 
+def _pick_preferred_client_record(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not rows:
+        return None
+
+    def _sort_key(row: dict[str, Any]) -> tuple[int, str]:
+        created_at = row.get("created_at")
+        return (1 if created_at else 0, str(created_at or ""))
+
+    assigned_rows = [row for row in rows if row.get("assigned_trainer_id")]
+    if assigned_rows:
+        return sorted(assigned_rows, key=_sort_key, reverse=True)[0]
+    return sorted(rows, key=_sort_key, reverse=True)[0]
+
+
 def resolve_trainer_context(supabase: Client, user_id: str) -> TrainerContext:
     client_response = (
         supabase
         .table("clients")
-        .select("id, tenant_id, user_id, assigned_trainer_id")
+        .select("id, tenant_id, user_id, assigned_trainer_id, created_at")
         .eq("user_id", user_id)
-        .limit(1)
         .execute()
     )
-    client_record = client_response.data[0] if client_response.data else None
+    client_record = _pick_preferred_client_record(client_response.data or [])
 
     trainer_response = (
         supabase

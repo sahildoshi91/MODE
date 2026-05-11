@@ -1,0 +1,745 @@
+{
+  "version": "2026-04-27",
+  "required_sink_categories": [
+    "vector_indexes",
+    "embedding_stores",
+    "retrieval_caches",
+    "analytics_events",
+    "logs",
+    "file_storage",
+    "notification_providers",
+    "email_providers",
+    "ai_memory_retrieval_systems"
+  ],
+  "tables": [
+    {
+      "schema": "public",
+      "table": "conversation_ai_request_events",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "fk_cascade",
+        "execution_order": 980,
+        "description": "Deleted by cascading foreign-key cleanup from parent conversation/request rows."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "conversation_usage_events",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "fk_cascade",
+        "execution_order": 975,
+        "description": "Deleted by cascading foreign-key cleanup from parent conversation/request rows."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "conversation_messages",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "fk_cascade",
+        "execution_order": 970,
+        "description": "Deleted by cascading foreign-key cleanup from parent conversation/request rows."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "conversation_ai_requests",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 965,
+        "description": "Per-request records are trainer/client scoped and must be deleted for deleted trainers."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "chat_messages",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "fk_cascade",
+        "execution_order": 960,
+        "description": "Chat messages contain conversational personal data and are deleted by cascading cleanup from parent chat sessions."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "chat_sessions",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "fk_cascade",
+        "execution_order": 955,
+        "description": "Chat session headers are trainer/client scoped and are deleted by cascading cleanup from parent trainer/client rows."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_knowledge_usage_logs",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 950,
+        "description": "Usage telemetry links directly to trainer/client records."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_knowledge_versions",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 945,
+        "description": "Historical knowledge revisions contain personal notes and prompts."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_rules",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 940,
+        "description": "Trainer-authored coaching rules can contain personal strategy data."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_rule_versions",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 935,
+        "description": "Rule version history is tied to deleted trainer accounts."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_ai_review_queue",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 934,
+        "description": "Trainer-specific AI learning proposals are scoped to one identifiable trainer."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_ai_learning_events",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 933,
+        "description": "Trainer-specific learning events are tenant-scoped and may reveal trainer preferences."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_ai_knowledge",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 932,
+        "description": "Approved trainer-AI rules remain scoped to one trainer and are deleted with that trainer."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "atlas_learning_events",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "retention_ttl",
+        "execution_order": 931,
+        "description": "Atlas learning events store sanitized summaries only and are retained with bounded TTL."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "atlas_review_queue",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "retention_ttl",
+        "execution_order": 930,
+        "description": "Atlas review queue rows store sanitized, generalized proposals awaiting admin review."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "atlas_audit_logs",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "retention_ttl",
+        "execution_order": 929,
+        "description": "Atlas audit logs retain minimal privacy review and decision metadata."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "atlas_knowledge",
+      "classification": "non_personal",
+      "deletion_policy": {
+        "action": "keep",
+        "execution_order": 928,
+        "description": "Approved Atlas knowledge is anonymized generalized coaching doctrine with no trainer or client identifiers."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "atlas_profile",
+      "classification": "non_personal",
+      "deletion_policy": {
+        "action": "keep",
+        "execution_order": 927,
+        "description": "Atlas profile stores non-personal product persona defaults."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "ai_feedback_events",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 930,
+        "description": "Feedback events can contain user-linked generated content."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "ai_generated_outputs",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 925,
+        "description": "Generated outputs can contain user prompts and health context."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_mutation_operations",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 920,
+        "description": "Mutation audit records are tied to trainer/client entities."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_system_events",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 915,
+        "description": "System events may include user-linked operational metadata."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_assistant_router_events",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 910,
+        "description": "Routing events include user-scoped prompt routing metadata."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_client_schedule_exceptions",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "client_ids",
+        "column": "client_id",
+        "execution_order": 905,
+        "description": "Schedule exceptions include client-specific attendance constraints."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_client_schedule_preferences",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "client_ids",
+        "column": "client_id",
+        "execution_order": 900,
+        "description": "Schedule preferences are personal behavior data."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_daily_schedule",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "client_ids",
+        "column": "client_id",
+        "execution_order": 895,
+        "description": "Daily schedule rows include personal availability and visit metadata."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "client_trainer_assignments",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "client_ids",
+        "column": "client_id",
+        "execution_order": 890,
+        "description": "Assignments map identifiable client-trainer relationships."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "user_fitness_profiles",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "client_ids",
+        "column": "client_id",
+        "execution_order": 885,
+        "description": "Fitness profile content is personal health data."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "onboarding_answers",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "client_ids",
+        "column": "client_id",
+        "execution_order": 880,
+        "description": "Onboarding questionnaires contain personal preferences and health context."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "daily_checkins",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "client_ids",
+        "column": "client_id",
+        "execution_order": 875,
+        "description": "Daily check-ins contain personal and health-related data."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "generated_checkin_plans",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "client_ids",
+        "column": "client_id",
+        "execution_order": 870,
+        "description": "Generated plans are user-specific health and performance outputs."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "workouts",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "user_id",
+        "column": "user_id",
+        "execution_order": 865,
+        "description": "Workout logs represent personal fitness history."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "workout_plans",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "user_id",
+        "column": "user_id",
+        "execution_order": 860,
+        "description": "Workout plans are personal training records."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "profiles",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "user_id",
+        "column": "id",
+        "execution_order": 855,
+        "description": "Profile rows are direct personal identifiers."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_knowledge_entries",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 850,
+        "description": "Knowledge entries can contain identifiable coaching and injury notes."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_knowledge_documents",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 845,
+        "description": "Knowledge documents may include personal and proprietary client references."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_program_templates",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 840,
+        "description": "Program templates contain trainer-authored personalized coaching material."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_faq_examples",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 835,
+        "description": "FAQ examples may embed trainer/client-specific language."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_personas",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 830,
+        "description": "Persona configuration is trainer personal/professional profile data."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_response_approvals",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 825,
+        "description": "Approval records tie generated content to identifiable trainer/client entities."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "unanswered_question_queue",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 820,
+        "description": "Queued questions may contain identifiable conversation fragments."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_onboarding_profiles",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 815,
+        "description": "Onboarding profile stores trainer-specific personal and operational details."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_onboarding_events",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 810,
+        "description": "Onboarding events are user-scoped timeline records."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "coach_memory",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "client_ids",
+        "column": "client_id",
+        "execution_order": 805,
+        "description": "Coach memory contains sensitive client notes and constraints."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "conversations",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "client_ids",
+        "column": "client_id",
+        "execution_order": 800,
+        "description": "Conversation headers are directly linked to identifiable user communication."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_invite_codes",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 795,
+        "description": "Invite metadata maps to identifiable trainer account state."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_profile_core",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "user_account_id",
+        "column": "user_account_id",
+        "execution_order": 790,
+        "description": "Trainer profile includes name, contact email, and notes."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "onboarding_states",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "user_account_id",
+        "column": "user_account_id",
+        "execution_order": 785,
+        "description": "Onboarding state stores personal journey metadata."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "user_roles",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "user_account_id",
+        "column": "user_account_id",
+        "execution_order": 780,
+        "description": "Role selection is personal account metadata."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "clients",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "user_id",
+        "column": "user_id",
+        "execution_order": 775,
+        "description": "Client account records are personal identifiers."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainers",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "user_id",
+        "column": "user_id",
+        "execution_order": 770,
+        "description": "Trainer account records are personal identifiers."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "storage_upload_grants",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "sink_handler",
+        "sink_category": "file_storage",
+        "execution_order": 765,
+        "description": "Upload grants are lifecycle metadata handled by storage cleanup sink."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "storage_object_ownership",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "sink_handler",
+        "sink_category": "file_storage",
+        "execution_order": 760,
+        "description": "Ownership map is enforced and deleted by file storage sink cleanup."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "mobile_analytics_events",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "sink_handler",
+        "sink_category": "analytics_events",
+        "execution_order": 755,
+        "description": "Analytics events are deleted by analytics sink cleanup handler."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "trainer_talking_points",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "sink_handler",
+        "sink_category": "retrieval_caches",
+        "execution_order": 750,
+        "description": "Talking-point cache invalidation is handled by retrieval cache sink cleanup."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "user_accounts",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "user_id",
+        "column": "auth_user_id",
+        "execution_order": 100,
+        "description": "Primary account identity table must be deleted before auth user purge."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "tenants",
+      "classification": "non_personal",
+      "deletion_policy": {
+        "action": "keep",
+        "execution_order": 50,
+        "description": "Shared tenant records are retained and reassigned where needed."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "security_rate_limit_windows",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "retention_ttl",
+        "execution_order": 40,
+        "description": "Rate-limit windows are operational telemetry with bounded retention."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "account_deletion_audits",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "retention_ttl",
+        "execution_order": 30,
+        "description": "Deletion audits are retained for compliance evidence with minimal payloads."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "storage_cleanup_job_heartbeats",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "retention_ttl",
+        "execution_order": 20,
+        "description": "Cleanup heartbeats are operational telemetry retained with bounded TTL."
+      }
+    }
+  ],
+  "external_sinks": {
+    "vector_indexes": {
+      "handler_policy": "assert_disabled",
+      "description": "No external vector index is configured in this repository."
+    },
+    "embedding_stores": {
+      "handler_policy": "assert_disabled",
+      "description": "No external embedding store is configured in this repository."
+    },
+    "retrieval_caches": {
+      "handler_policy": "active_handler",
+      "handler_name": "retrieval_caches_cleanup",
+      "description": "Invalidate retrieval caches tied to deleted users/trainers/clients."
+    },
+    "analytics_events": {
+      "handler_policy": "active_handler",
+      "handler_name": "analytics_events_cleanup",
+      "description": "Delete analytics events for deleted users."
+    },
+    "logs": {
+      "handler_policy": "assert_disabled",
+      "description": "External log sink exports are disabled; local logs are retention-managed."
+    },
+    "file_storage": {
+      "handler_policy": "active_handler",
+      "handler_name": "file_storage_cleanup",
+      "description": "Delete owned storage objects, grants, and ownership metadata."
+    },
+    "notification_providers": {
+      "handler_policy": "assert_disabled",
+      "description": "No third-party notification provider sink is configured."
+    },
+    "email_providers": {
+      "handler_policy": "assert_disabled",
+      "description": "No external email event sink is configured in application code."
+    },
+    "ai_memory_retrieval_systems": {
+      "handler_policy": "assert_disabled",
+      "description": "No external AI memory retrieval service is configured."
+    }
+  }
+}

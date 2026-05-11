@@ -77,6 +77,7 @@ describe('Phase 3 primitive refactor', () => {
 
     expect(cardStyle.backgroundColor).toBe(theme.colors.state.overdriveFill);
     expect(cardStyle.borderColor).toBe(theme.colors.state.overdriveBorder);
+    expect(cardStyle.borderWidth).toBe(1);
 
     unmountWithAct(tree);
   });
@@ -96,6 +97,7 @@ describe('Phase 3 primitive refactor', () => {
 
       expect(containerStyle.backgroundColor).toBe(backgroundColor);
       expect(containerStyle.borderColor).toBe(borderColor);
+      expect(containerStyle.borderWidth).toBe(1);
 
       unmountWithAct(tree);
     });

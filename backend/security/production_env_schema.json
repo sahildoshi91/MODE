@@ -1,0 +1,52 @@
+{
+  "version": "2026-04-26",
+  "required_environment": "production",
+  "required_env_vars": [
+    {
+      "name": "APP_ENV",
+      "allowed_values": ["production", "prod"],
+      "description": "Runtime mode for backend startup and release preflight gates."
+    },
+    {
+      "name": "SUPABASE_URL",
+      "must_be_https": true,
+      "disallow_host_tokens": ["staging", "localhost", "127.0.0.1"],
+      "description": "Server-side Supabase project URL."
+    },
+    {
+      "name": "SUPABASE_SERVICE_ROLE_KEY",
+      "description": "Server-only service role key required for privileged RPC/storage operations."
+    },
+    {
+      "name": "MODE_SECURITY_DATABASE_URL",
+      "description": "Direct Postgres URL for live security posture checks."
+    },
+    {
+      "name": "EXPO_PUBLIC_API_BASE_URL",
+      "must_be_https": true,
+      "disallow_host_tokens": ["staging", "localhost", "127.0.0.1", "192.168.", "10.", "172.16."],
+      "description": "Production mobile API origin; must not point to staging/local/LAN endpoints."
+    },
+    {
+      "name": "EXPO_PUBLIC_SUPABASE_URL",
+      "must_be_https": true,
+      "disallow_host_tokens": ["staging", "localhost", "127.0.0.1"],
+      "description": "Production mobile Supabase URL."
+    }
+  ],
+  "required_backend_settings": [
+    "startup_guard_enabled=true",
+    "account_deletion_enabled=true",
+    "account_deletion_contract_enforced=true",
+    "auth_password_proxy_enabled=true",
+    "rate_limit_backend=postgres",
+    "storage_private_bucket=<non-empty>",
+    "storage_upload_window_seconds in [30,300]",
+    "personal_data_inventory_path=<existing-file>",
+    "account_deletion_active_sink_categories=<non-empty>",
+    "account_deletion_disabled_sink_categories=<non-empty>"
+  ],
+  "forbidden_client_env_vars": [
+    "EXPO_PUBLIC_SUPABASE_SERVICE_ROLE_KEY"
+  ]
+}

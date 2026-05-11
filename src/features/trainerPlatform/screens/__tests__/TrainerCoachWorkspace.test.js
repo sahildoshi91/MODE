@@ -2,6 +2,7 @@ import React from 'react';
 import renderer, { act } from 'react-test-renderer';
 
 const mockCoachChatScreen = jest.fn();
+const mockTrainerAssistantScreen = jest.fn();
 
 jest.mock('../../../chat/screens/CoachChatScreen', () => {
   const React = require('react');
@@ -18,11 +19,20 @@ jest.mock('../../../trainerReview/screens/TrainerReviewScreen', () => {
   };
 });
 
+jest.mock('../../../trainerAssistant/screens/TrainerAssistantScreen', () => {
+  const React = require('react');
+  return function MockTrainerAssistantScreen(props) {
+    mockTrainerAssistantScreen(props);
+    return React.createElement('MockTrainerAssistantScreen', props);
+  };
+});
+
 import TrainerCoachWorkspace from '../TrainerCoachWorkspace';
 
 describe('TrainerCoachWorkspace', () => {
   beforeEach(() => {
     mockCoachChatScreen.mockReset();
+    mockTrainerAssistantScreen.mockReset();
   });
 
   it('auto-launches onboarding continue when onboarding has not started', () => {
@@ -67,7 +77,7 @@ describe('TrainerCoachWorkspace', () => {
     });
   });
 
-  it('keeps default coach entry when onboarding is completed', () => {
+  it('routes to trainer assistant when onboarding is completed', () => {
     act(() => {
       renderer.create(
         <TrainerCoachWorkspace
@@ -81,8 +91,9 @@ describe('TrainerCoachWorkspace', () => {
       );
     });
 
-    const props = mockCoachChatScreen.mock.calls.at(-1)?.[0];
-    expect(props.launchContext).toBeNull();
+    const assistantProps = mockTrainerAssistantScreen.mock.calls.at(-1)?.[0];
+    expect(assistantProps.accessToken).toBe('trainer-access-token');
+    expect(mockCoachChatScreen).not.toHaveBeenCalled();
   });
 
   it('respects explicit launch context when provided', () => {
@@ -100,6 +111,29 @@ describe('TrainerCoachWorkspace', () => {
           trainerOnboardingCompleted={false}
           trainerOnboardingStatus="not_started"
           trainerOnboardingCompletedSteps={0}
+        />,
+      );
+    });
+
+    const props = mockCoachChatScreen.mock.calls.at(-1)?.[0];
+    expect(props.launchContext).toEqual(launchContext);
+  });
+
+  it('keeps explicit onboarding review/retrain launch in chat even after completion', () => {
+    const launchContext = {
+      entrypoint: 'trainer_agent_training',
+      onboarding_action: 'review',
+    };
+
+    act(() => {
+      renderer.create(
+        <TrainerCoachWorkspace
+          accessToken="trainer-access-token"
+          chatLaunchContext={launchContext}
+          coachChatBottomInset={24}
+          trainerOnboardingCompleted
+          trainerOnboardingStatus="completed"
+          trainerOnboardingCompletedSteps={8}
         />,
       );
     });

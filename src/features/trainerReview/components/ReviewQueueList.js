@@ -3,7 +3,26 @@ import { StyleSheet, View } from 'react-native';
 
 import { ModeButton, ModeCard, ModeChip, ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
-import { formatTimestamp, previewText, sourceLabel, statusLabel } from '../utils/reviewFormatters';
+import { transformPlan } from '../../draftReview/domain/draftReviewModel';
+import { formatTimestamp, sourceLabel, statusLabel } from '../utils/reviewFormatters';
+
+function resolvePreviewText(item) {
+  const model = transformPlan(item);
+  if (model?.kind === 'nutrition_plan') {
+    return `${model.title} · ${model.calories} kcal · ${model.protein}g protein`;
+  }
+  if (model?.kind === 'training_plan') {
+    const exerciseCount = Array.isArray(model.exercises) ? model.exercises.length : 0;
+    const durationText = Number.isFinite(Number(model.durationMinutes)) && Number(model.durationMinutes) > 0
+      ? `${Number(model.durationMinutes)} min`
+      : 'duration TBD';
+    return `${model.title} · ${exerciseCount} exercises · ${durationText}`;
+  }
+  if (model?.kind === 'generic_structured') {
+    return model.summary || model.title || 'Draft ready for review.';
+  }
+  return model?.message || 'We could not render this draft preview yet.';
+}
 
 export default function ReviewQueueList({
   outputItems,
@@ -23,7 +42,7 @@ export default function ReviewQueueList({
         {formatTimestamp(item.created_at)}
       </ModeText>
       <ModeText variant="body" style={styles.previewText}>
-        {previewText(item)}
+        {resolvePreviewText(item)}
       </ModeText>
       <ModeButton
         title="Open Review"

@@ -31,20 +31,25 @@ jest.mock('lucide-react-native', () => {
 
   return {
     Activity: createIcon('Activity'),
+    Apple: createIcon('Apple'),
     ArrowDownUp: createIcon('ArrowDownUp'),
     ArrowRightLeft: createIcon('ArrowRightLeft'),
     BedSingle: createIcon('BedSingle'),
     CircleDot: createIcon('CircleDot'),
     Clock3: createIcon('Clock3'),
+    Coffee: createIcon('Coffee'),
     Dumbbell: createIcon('Dumbbell'),
     Flame: createIcon('Flame'),
+    GlassWater: createIcon('GlassWater'),
     Info: createIcon('Info'),
     Lightbulb: createIcon('Lightbulb'),
     PersonStanding: createIcon('PersonStanding'),
     PlayCircle: createIcon('PlayCircle'),
     Snowflake: createIcon('Snowflake'),
+    Soup: createIcon('Soup'),
     StretchHorizontal: createIcon('StretchHorizontal'),
     TreePine: createIcon('TreePine'),
+    Utensils: createIcon('Utensils'),
     Wind: createIcon('Wind'),
   };
 });
@@ -83,6 +88,65 @@ jest.mock('../../../../../lib/components', () => {
     ModeText: ({ children, style }) => React.createElement(Text, { style }, children),
     ProgressBar: ({ style, progress }) => React.createElement(View, { style, accessibilityValue: { now: progress } }),
     SafeScreen: ({ children, style }) => React.createElement(View, { style }, children),
+    GlassCard: ({ children, style }) => React.createElement(View, { style }, children),
+    GlassSurface: ({ children, style, onPress }) => React.createElement(
+      Pressable,
+      { style, onPress },
+      children,
+    ),
+    GlassPill: ({ label, onPress, style, testID }) => React.createElement(
+      Pressable,
+      { style, onPress, testID },
+      React.createElement(Text, null, label),
+    ),
+    GlassToggle: ({ value, onValueChange, disabled, style, testID }) => React.createElement(
+      Pressable,
+      {
+        disabled,
+        style,
+        onPress: () => {
+          if (!disabled) {
+            onValueChange?.(!value);
+          }
+        },
+        testID,
+      },
+      React.createElement(Text, null, value ? 'on' : 'off'),
+    ),
+    GlassSlider: ({ style, testID }) => React.createElement(View, { style, testID }),
+    HeroOverlayCard: ({ children, style, title, body, eyebrow, testID }) => React.createElement(
+      View,
+      { style, testID },
+      eyebrow ? React.createElement(Text, null, eyebrow) : null,
+      title ? React.createElement(Text, null, title) : null,
+      body ? React.createElement(Text, null, body) : null,
+      children,
+    ),
+    MiniStat: ({ style, label, value, helper }) => React.createElement(
+      View,
+      { style },
+      React.createElement(Text, null, label),
+      React.createElement(Text, null, value),
+      helper ? React.createElement(Text, null, helper) : null,
+    ),
+    MacroBar: ({ style, testID, label, valueLabel }) => React.createElement(
+      View,
+      { style, testID: testID || 'macro-bar' },
+      label ? React.createElement(Text, null, label) : null,
+      valueLabel ? React.createElement(Text, null, valueLabel) : null,
+    ),
+    ProgressRing: ({ style, testID, centerValue, label }) => React.createElement(
+      View,
+      { style, testID: testID || 'progress-ring' },
+      centerValue !== undefined ? React.createElement(Text, null, centerValue) : null,
+      label ? React.createElement(Text, null, label) : null,
+    ),
+    SectionHeader: ({ style, title, subtitle }) => React.createElement(
+      View,
+      { style },
+      React.createElement(Text, null, title),
+      subtitle ? React.createElement(Text, null, subtitle) : null,
+    ),
   };
 });
 
@@ -106,6 +170,8 @@ jest.mock('../../../../services/apiRequest', () => ({
 
 jest.mock('../../services/checkinApi', () => ({
   generateCheckinPlan: jest.fn(),
+  getLastNutritionSetup: jest.fn(),
+  getLastTrainingSetup: jest.fn(),
   getPreviousCheckin: jest.fn(),
   getTodayCheckin: jest.fn(),
   logGeneratedWorkout: jest.fn(),
@@ -115,12 +181,18 @@ jest.mock('../../services/checkinApi', () => ({
 }));
 
 import React from 'react';
+import { StyleSheet, Text, TextInput } from 'react-native';
 import renderer, { act } from 'react-test-renderer';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import DailyCheckinScreen from '../DailyCheckinScreen';
+import DailyCheckinScreen, {
+  CheckinPlanBuilder,
+  CHECKIN_PLAN_TYPE,
+} from '../DailyCheckinScreen';
 import {
   generateCheckinPlan,
+  getLastNutritionSetup,
+  getLastTrainingSetup,
   getPreviousCheckin,
   getTodayCheckin,
   logGeneratedWorkout,
@@ -135,6 +207,34 @@ async function flushEffects() {
     await Promise.resolve();
     await Promise.resolve();
   });
+}
+
+function buildInitialResult(overrides = {}) {
+  return {
+    id: 'checkin-1',
+    date: '2026-04-11',
+    score: 18,
+    mode: 'BUILD',
+    inputs: {
+      sleep: 4,
+      stress: 4,
+      soreness: 3,
+      nutrition: 4,
+      motivation: 3,
+    },
+    training: {
+      type: 'Moderate cardio or controlled strength',
+      duration: '30-45 min',
+      intensity: 'Moderate',
+    },
+    nutrition: {
+      rule: 'Anchor each meal with protein, add balanced carbs, and keep snacks intentional.',
+    },
+    mindset: {
+      cue: 'Build momentum with disciplined reps.',
+    },
+    ...overrides,
+  };
 }
 
 describe('DailyCheckinScreen training routine flow', () => {
@@ -162,7 +262,7 @@ describe('DailyCheckinScreen training routine flow', () => {
           intensity: 'Moderate',
         },
         nutrition: {
-          rule: 'Keep meals balanced and steady all day.',
+          rule: 'Anchor each meal with protein, add balanced carbs, and keep snacks intentional.',
         },
         mindset: {
           cue: 'Build momentum with disciplined reps.',
@@ -170,6 +270,8 @@ describe('DailyCheckinScreen training routine flow', () => {
       },
     });
     getPreviousCheckin.mockResolvedValue({ checkin: null });
+    getLastTrainingSetup.mockResolvedValue({ setup: null });
+    getLastNutritionSetup.mockResolvedValue({ setup: null });
     generateCheckinPlan.mockResolvedValue({
       plan_id: 'generated-plan-1',
       content: '{"title":"Builder Blast"}',
@@ -224,8 +326,33 @@ describe('DailyCheckinScreen training routine flow', () => {
     await act(async () => {
       tree = renderer.create(
         <SafeAreaProvider>
-          <DailyCheckinScreen
+          <CheckinPlanBuilder
             accessToken="client-token"
+            initialPlanType={CHECKIN_PLAN_TYPE.TRAINING}
+            initialResult={{
+              id: 'checkin-1',
+              date: '2026-04-11',
+              score: 18,
+              mode: 'BUILD',
+              inputs: {
+                sleep: 4,
+                stress: 4,
+                soreness: 3,
+                nutrition: 4,
+                motivation: 3,
+              },
+              training: {
+                type: 'Moderate cardio or controlled strength',
+                duration: '30-45 min',
+                intensity: 'Moderate',
+              },
+              nutrition: {
+                rule: 'Anchor each meal with protein, add balanced carbs, and keep snacks intentional.',
+              },
+              mindset: {
+                cue: 'Build momentum with disciplined reps.',
+              },
+            }}
             bottomInset={0}
             floatingNavClearance={74}
           />
@@ -235,18 +362,21 @@ describe('DailyCheckinScreen training routine flow', () => {
 
     await flushEffects();
 
-    await act(async () => {
-      tree.root.findByProps({ testID: 'build-training-routine-action' }).props.onPress();
-    });
-
-    await flushEffects();
-
     const setupRendered = JSON.stringify(tree.toJSON());
+    expect(setupRendered).toContain('Use Last Training Setup');
+    expect(setupRendered).toContain('No previous setup found');
     expect(setupRendered).toContain('Hotel Room');
     expect(setupRendered).not.toContain('Home Gym');
     expect(setupRendered).not.toContain('Limited');
+    expect(tree.root.findByProps({ testID: 'last-training-setup-toggle' }).props.disabled).toBe(true);
+    expect(tree.root.findByProps({ testID: 'last-training-setup-switch' }).props.disabled).toBe(true);
     expect(tree.root.findByProps({ testID: 'training-time-scroller' }).props.horizontal).toBe(true);
     expect(tree.root.findByProps({ testID: 'training-time-row' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'training-time-slider' })).toBeTruthy();
+    expect(
+      StyleSheet.flatten(tree.root.findByProps({ testID: 'mode-button-generate-my-workout' }).props.style)
+        .backgroundColor,
+    ).toBeUndefined();
 
     await act(async () => {
       tree.root.findByProps({ testID: 'environment-option-hotel_room' }).props.onPress();
@@ -291,6 +421,408 @@ describe('DailyCheckinScreen training routine flow', () => {
     });
 
     expect(tree.root.findByProps({ testID: 'training-guided-exercise-icon-0' })).toBeTruthy();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('opens Coach after a saved daily check-in submit', async () => {
+    getTodayCheckin.mockResolvedValueOnce({
+      completed: false,
+      date: '2026-04-11',
+      current_streak: 0,
+      checkin: null,
+    });
+    submitTodayCheckin.mockResolvedValueOnce({
+      id: 'checkin-new',
+      date: '2026-04-11',
+      score: 18,
+      mode: 'BUILD',
+      inputs: {
+        sleep: 4,
+        stress: 4,
+        soreness: 3,
+        nutrition: 4,
+        motivation: 3,
+      },
+      training: {
+        type: 'Moderate cardio or controlled strength',
+        duration: '30-45 min',
+        intensity: 'Moderate',
+      },
+      nutrition: {
+        rule: 'Anchor each meal with protein, add balanced carbs, and keep snacks intentional.',
+      },
+      mindset: {
+        cue: 'Build momentum with disciplined reps.',
+      },
+    });
+    const onCheckinComplete = jest.fn();
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <DailyCheckinScreen
+            accessToken="client-token"
+            bottomInset={0}
+            floatingNavClearance={74}
+            onCheckinComplete={onCheckinComplete}
+          />
+        </SafeAreaProvider>,
+      );
+    });
+    await flushEffects();
+
+    const pressAnswer = async (label) => {
+      const textNode = tree.root.findAll((node) => (
+        node.type === Text && node.props?.children === label
+      ))[0];
+      let target = textNode;
+      while (target && typeof target.props?.onPress !== 'function') {
+        target = target.parent;
+      }
+      await act(async () => {
+        target.props.onPress();
+      });
+      await flushEffects();
+    };
+
+    await pressAnswer('Good sleep');
+    await pressAnswer('Mostly calm');
+    await pressAnswer('Some soreness');
+    await pressAnswer('Solid nutrition');
+    await pressAnswer('I can show up');
+
+    expect(onCheckinComplete).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'checkin-new',
+      mode: 'BUILD',
+      score: 18,
+    }));
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('applies the last training setup when the setup toggle is enabled', async () => {
+    getLastTrainingSetup.mockResolvedValueOnce({
+      setup: {
+        generated_plan_id: 'generated-plan-prior',
+        environment: 'home_gym',
+        time_available: 40,
+        created_at: '2026-04-10T17:00:00+00:00',
+      },
+    });
+
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <CheckinPlanBuilder
+            accessToken="client-token"
+            initialPlanType={CHECKIN_PLAN_TYPE.TRAINING}
+            initialResult={{
+              id: 'checkin-1',
+              date: '2026-04-11',
+              score: 18,
+              mode: 'BUILD',
+              inputs: {
+                sleep: 4,
+                stress: 4,
+                soreness: 3,
+                nutrition: 4,
+                motivation: 3,
+              },
+              training: {
+                type: 'Moderate cardio or controlled strength',
+                duration: '30-45 min',
+                intensity: 'Moderate',
+              },
+              nutrition: {
+                rule: 'Anchor each meal with protein, add balanced carbs, and keep snacks intentional.',
+              },
+              mindset: {
+                cue: 'Build momentum with disciplined reps.',
+              },
+            }}
+            bottomInset={0}
+            floatingNavClearance={74}
+          />
+        </SafeAreaProvider>,
+      );
+    });
+
+    await flushEffects();
+
+    expect(getLastTrainingSetup).toHaveBeenCalledWith({
+      accessToken: 'client-token',
+      excludeCheckinId: 'checkin-1',
+    });
+
+    const setupRendered = JSON.stringify(tree.toJSON());
+    expect(setupRendered).toContain('Use Last Training Setup');
+    expect(setupRendered).toContain('Full Gym • 45m');
+    expect(tree.root.findByProps({ testID: 'last-training-setup-toggle' }).props.disabled).toBe(false);
+    expect(tree.root.findByProps({ testID: 'last-training-setup-switch' }).props.disabled).toBe(false);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'last-training-setup-toggle' }).props.onPress();
+    });
+
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'mode-button-generate-my-workout' }).props.onPress();
+    });
+
+    await flushEffects();
+
+    expect(generateCheckinPlan).toHaveBeenCalledWith(expect.objectContaining({
+      environment: 'full_gym',
+      timeAvailable: 45,
+      includeYesterdayContext: false,
+    }));
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows a disabled last nutrition setup toggle when no setup exists', async () => {
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <CheckinPlanBuilder
+            accessToken="client-token"
+            initialPlanType={CHECKIN_PLAN_TYPE.NUTRITION}
+            initialResult={buildInitialResult()}
+            bottomInset={0}
+            floatingNavClearance={74}
+          />
+        </SafeAreaProvider>,
+      );
+    });
+
+    await flushEffects();
+
+    expect(getLastNutritionSetup).toHaveBeenCalledWith({
+      accessToken: 'client-token',
+      excludeCheckinId: 'checkin-1',
+    });
+    expect(getPreviousCheckin).not.toHaveBeenCalled();
+
+    const setupRendered = JSON.stringify(tree.toJSON());
+    expect(setupRendered).toContain('Use Last Nutrition Setup');
+    expect(setupRendered).toContain('No previous setup found');
+    expect(tree.root.findByProps({ testID: 'last-nutrition-setup-toggle' }).props.disabled).toBe(true);
+    expect(tree.root.findByProps({ testID: 'last-nutrition-setup-switch' }).props.disabled).toBe(true);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('applies the last custom nutrition setup and renders nutrition icons without raw emoji', async () => {
+    getLastNutritionSetup.mockResolvedValueOnce({
+      setup: {
+        generated_plan_id: 'generated-nutrition-prior',
+        nutrition_day_type: 'custom',
+        nutrition_day_note: 'Hotel breakfast, restaurant dinner.',
+        created_at: '2026-04-10T17:00:00+00:00',
+      },
+    });
+    generateCheckinPlan.mockResolvedValueOnce({
+      plan_id: 'generated-nutrition-1',
+      content: '{"title":"🥗 Travel Fuel"}',
+      structured: {
+        title: '🥗 Travel Fuel',
+        totalCalories: 2100,
+        totalProtein: 155,
+        coachNote: '💧 Keep protein and hydration steady.',
+        meals: [
+          {
+            name: '🍳 Breakfast',
+            timing: 'Morning',
+            emoji: '🍳',
+            foods: [
+              {
+                name: '🥣 Greek yogurt bowl',
+                amount: '1 bowl',
+                calories: 420,
+                protein: 35,
+              },
+            ],
+            totalCalories: 420,
+            totalProtein: 35,
+            notes: '🥤 Add water before coffee.',
+          },
+        ],
+      },
+    });
+
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <CheckinPlanBuilder
+            accessToken="client-token"
+            initialPlanType={CHECKIN_PLAN_TYPE.NUTRITION}
+            initialResult={buildInitialResult()}
+            bottomInset={0}
+            floatingNavClearance={74}
+          />
+        </SafeAreaProvider>,
+      );
+    });
+
+    await flushEffects();
+
+    expect(JSON.stringify(tree.toJSON())).toContain('Custom day • Hotel breakfast, restaurant dinner.');
+    expect(tree.root.findByProps({ testID: 'last-nutrition-setup-toggle' }).props.disabled).toBe(false);
+    expect(tree.root.findByProps({ testID: 'last-nutrition-setup-switch' }).props.disabled).toBe(false);
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'last-nutrition-setup-toggle' }).props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'mode-button-generate-my-nutrition-plan' }).props.onPress();
+    });
+    await flushEffects();
+
+    expect(generateCheckinPlan).toHaveBeenCalledWith(expect.objectContaining({
+      planType: CHECKIN_PLAN_TYPE.NUTRITION,
+      nutritionDayNote: 'Hotel breakfast, restaurant dinner.',
+      includeYesterdayContext: false,
+    }));
+    expect(tree.root.findByProps({ testID: 'nutrition-calories-icon' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'nutrition-protein-icon' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'nutrition-meal-icon-0' })).toBeTruthy();
+
+    const planRendered = JSON.stringify(tree.toJSON());
+    expect(planRendered).toContain('Travel Fuel');
+    expect(planRendered).toContain('Breakfast');
+    expect(planRendered).not.toContain('🥗');
+    expect(planRendered).not.toContain('💧');
+    expect(planRendered).not.toContain('🍳');
+    expect(planRendered).not.toContain('🥣');
+    expect(planRendered).not.toContain('🥤');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('applies a normal last nutrition setup without a note', async () => {
+    getLastNutritionSetup.mockResolvedValueOnce({
+      setup: {
+        generated_plan_id: 'generated-nutrition-prior',
+        nutrition_day_type: 'normal',
+        nutrition_day_note: null,
+        created_at: '2026-04-10T17:00:00+00:00',
+      },
+    });
+
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <CheckinPlanBuilder
+            accessToken="client-token"
+            initialPlanType={CHECKIN_PLAN_TYPE.NUTRITION}
+            initialResult={buildInitialResult()}
+            bottomInset={0}
+            floatingNavClearance={74}
+          />
+        </SafeAreaProvider>,
+      );
+    });
+
+    await flushEffects();
+
+    expect(JSON.stringify(tree.toJSON())).toContain('Normal day');
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'last-nutrition-setup-toggle' }).props.onPress();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'mode-button-generate-my-nutrition-plan' }).props.onPress();
+    });
+    await flushEffects();
+
+    expect(generateCheckinPlan).toHaveBeenCalledWith(expect.objectContaining({
+      planType: CHECKIN_PLAN_TYPE.NUTRITION,
+      nutritionDayNote: undefined,
+      includeYesterdayContext: false,
+    }));
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('turns off the last nutrition setup when the user edits the note', async () => {
+    getLastNutritionSetup.mockResolvedValueOnce({
+      setup: {
+        generated_plan_id: 'generated-nutrition-prior',
+        nutrition_day_type: 'custom',
+        nutrition_day_note: 'Hotel breakfast, restaurant dinner.',
+        created_at: '2026-04-10T17:00:00+00:00',
+      },
+    });
+
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <CheckinPlanBuilder
+            accessToken="client-token"
+            initialPlanType={CHECKIN_PLAN_TYPE.NUTRITION}
+            initialResult={buildInitialResult()}
+            bottomInset={0}
+            floatingNavClearance={74}
+          />
+        </SafeAreaProvider>,
+      );
+    });
+
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'last-nutrition-setup-toggle' }).props.onPress();
+    });
+    await flushEffects();
+
+    expect(tree.root.findByProps({ testID: 'last-nutrition-setup-switch' }).findByType(Text).props.children).toBe('on');
+
+    const noteInput = tree.root.findByType(TextInput);
+    await act(async () => {
+      noteInput.props.onChangeText('Office lunch, late dinner.');
+    });
+    await flushEffects();
+
+    expect(tree.root.findByProps({ testID: 'last-nutrition-setup-switch' }).findByType(Text).props.children).toBe('off');
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'mode-button-generate-my-nutrition-plan' }).props.onPress();
+    });
+    await flushEffects();
+
+    expect(generateCheckinPlan).toHaveBeenCalledWith(expect.objectContaining({
+      nutritionDayNote: 'Office lunch, late dinner.',
+      includeYesterdayContext: false,
+    }));
 
     await act(async () => {
       tree.unmount();

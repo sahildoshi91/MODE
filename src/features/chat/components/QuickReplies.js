@@ -1,7 +1,7 @@
 import React from 'react';
 import { ScrollView, StyleSheet } from 'react-native';
 
-import { ModeChip } from '../../../../lib/components';
+import { FloatingQuickActionChip } from '../../../../lib/components/glass';
 import { theme } from '../../../../lib/theme';
 
 export default function QuickReplies({
@@ -24,7 +24,7 @@ export default function QuickReplies({
       contentContainerStyle={[styles.container, contentContainerStyle]}
     >
       {replies.map((reply) => (
-        <ModeChip
+        <FloatingQuickActionChip
           key={reply}
           label={reply}
           onPress={disabled ? undefined : () => onSelect(reply)}
@@ -46,7 +46,7 @@ const styles = StyleSheet.create({
   },
   replyChip: {
     marginRight: theme.spacing[1],
-    minHeight: 36,
+    minHeight: 32,
   },
   replyChipDisabled: {
     opacity: 0.5,

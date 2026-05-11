@@ -60,6 +60,8 @@ async function requestTrainerApi(path, { accessToken, method = 'GET', body } = {
       && (
         path.startsWith('/api/v1/trainer-home/command-center')
         || path.startsWith('/api/v1/trainer-clients/')
+        || path.startsWith('/api/v1/trainer-settings/')
+        || path.startsWith('/api/v1/profiles/me/trainer-schedule')
       )
     );
     throw error;
@@ -100,6 +102,141 @@ export async function getTrainerClientDetail({
   const encodedClientId = encodeURIComponent(clientId);
   const suffix = date ? `?date=${encodeURIComponent(date)}` : '';
   return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}/detail${suffix}`, { accessToken });
+}
+
+export async function listTrainerClients({
+  accessToken,
+  query = null,
+  limit = 50,
+  offset = 0,
+} = {}) {
+  const params = [];
+  if (typeof query === 'string' && query.trim().length > 0) {
+    params.push(`search=${encodeURIComponent(query.trim())}`);
+  }
+  if (typeof limit === 'number') {
+    params.push(`limit=${encodeURIComponent(String(limit))}`);
+  }
+  if (typeof offset === 'number') {
+    params.push(`offset=${encodeURIComponent(String(offset))}`);
+  }
+  const suffix = params.length > 0 ? `?${params.join('&')}` : '';
+  return requestTrainerApi(`/api/v1/trainer-clients${suffix}`, { accessToken });
+}
+
+export async function listTrainerConnectionRequests({
+  accessToken,
+  status = 'pending',
+} = {}) {
+  const suffix = status ? `?status=${encodeURIComponent(status)}` : '';
+  return requestTrainerApi(`/api/v1/trainer-clients/connection-requests${suffix}`, { accessToken });
+}
+
+export async function approveTrainerConnectionRequest({
+  accessToken,
+  requestId,
+  trainerResponseNote = null,
+} = {}) {
+  return requestTrainerApi(
+    `/api/v1/trainer-clients/connection-requests/${encodeURIComponent(requestId)}/approve`,
+    {
+      accessToken,
+      method: 'POST',
+      body: {
+        trainer_response_note: trainerResponseNote,
+      },
+    },
+  );
+}
+
+export async function rejectTrainerConnectionRequest({
+  accessToken,
+  requestId,
+  trainerResponseNote = null,
+} = {}) {
+  return requestTrainerApi(
+    `/api/v1/trainer-clients/connection-requests/${encodeURIComponent(requestId)}/reject`,
+    {
+      accessToken,
+      method: 'POST',
+      body: {
+        trainer_response_note: trainerResponseNote,
+      },
+    },
+  );
+}
+
+export async function updateTrainerClient({
+  accessToken,
+  clientId,
+  clientName,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}`, {
+    accessToken,
+    method: 'PATCH',
+    body: {
+      client_name: clientName,
+    },
+  });
+}
+
+export async function removeTrainerClient({
+  accessToken,
+  clientId,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}`, {
+    accessToken,
+    method: 'DELETE',
+  });
+}
+
+export async function listTrainerInviteCodes({
+  accessToken,
+} = {}) {
+  return requestTrainerApi('/api/v1/trainer-clients/invite-codes', { accessToken });
+}
+
+export async function createTrainerInviteCode({
+  accessToken,
+  code,
+  label,
+  expiresAt,
+  maxUses,
+  metadata,
+} = {}) {
+  const body = {};
+  if (typeof code === 'string' && code.trim().length > 0) {
+    body.code = code.trim();
+  }
+  if (typeof label === 'string' && label.trim().length > 0) {
+    body.label = label.trim();
+  }
+  if (typeof expiresAt === 'string' && expiresAt.trim().length > 0) {
+    body.expires_at = expiresAt.trim();
+  }
+  if (typeof maxUses === 'number') {
+    body.max_uses = maxUses;
+  }
+  if (metadata && typeof metadata === 'object') {
+    body.metadata = metadata;
+  }
+  return requestTrainerApi('/api/v1/trainer-clients/invite-codes', {
+    accessToken,
+    method: 'POST',
+    body,
+  });
+}
+
+export async function deactivateTrainerInviteCode({
+  accessToken,
+  inviteId,
+}) {
+  return requestTrainerApi(`/api/v1/trainer-clients/invite-codes/${encodeURIComponent(inviteId)}`, {
+    accessToken,
+    method: 'DELETE',
+  });
 }
 
 export async function listTrainerClientMemory({
@@ -200,4 +337,127 @@ export async function getTrainerClientAIContext({
 }) {
   const encodedClientId = encodeURIComponent(clientId);
   return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}/ai-context`, { accessToken });
+}
+
+export async function updateTrainerClientMeetingLocation({
+  accessToken,
+  clientId,
+  sessionDate,
+  meetingLocation,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}/meeting-location`, {
+    accessToken,
+    method: 'PATCH',
+    body: {
+      session_date: sessionDate,
+      meeting_location: meetingLocation,
+    },
+  });
+}
+
+export async function getTrainerSettingsMe({ accessToken }) {
+  return requestTrainerApi('/api/v1/trainer-settings/me', { accessToken });
+}
+
+export async function patchTrainerSettingsMe({
+  accessToken,
+  defaultMeetingLocation,
+  autoFillMeetingLocation,
+  assistantDisplayName,
+} = {}) {
+  const body = {};
+  if (typeof defaultMeetingLocation !== 'undefined') {
+    body.default_meeting_location = defaultMeetingLocation;
+  }
+  if (typeof autoFillMeetingLocation !== 'undefined') {
+    body.auto_fill_meeting_location = autoFillMeetingLocation;
+  }
+  if (typeof assistantDisplayName !== 'undefined') {
+    body.assistant_display_name = assistantDisplayName;
+  }
+  return requestTrainerApi('/api/v1/trainer-settings/me', {
+    accessToken,
+    method: 'PATCH',
+    body,
+  });
+}
+
+export async function getTrainerClientSchedulePreferences({
+  accessToken,
+  clientId,
+  date = null,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  const suffix = date ? `?date=${encodeURIComponent(date)}` : '';
+  return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}/schedule-preferences${suffix}`, {
+    accessToken,
+  });
+}
+
+export async function patchTrainerClientSchedulePreferences({
+  accessToken,
+  clientId,
+  recurringWeekdays,
+  preferredMeetingLocation,
+  autoUseTrainerDefaultLocation,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  const body = {};
+  if (typeof recurringWeekdays !== 'undefined') {
+    body.recurring_weekdays = recurringWeekdays;
+  }
+  if (typeof preferredMeetingLocation !== 'undefined') {
+    body.preferred_meeting_location = preferredMeetingLocation;
+  }
+  if (typeof autoUseTrainerDefaultLocation !== 'undefined') {
+    body.auto_use_trainer_default_location = autoUseTrainerDefaultLocation;
+  }
+  return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}/schedule-preferences`, {
+    accessToken,
+    method: 'PATCH',
+    body,
+  });
+}
+
+export async function createTrainerClientScheduleException({
+  accessToken,
+  clientId,
+  sessionDate,
+  exceptionType,
+  meetingLocationOverride,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  const body = {
+    session_date: sessionDate,
+    exception_type: exceptionType,
+  };
+  if (typeof meetingLocationOverride !== 'undefined') {
+    body.meeting_location_override = meetingLocationOverride;
+  }
+  return requestTrainerApi(`/api/v1/trainer-clients/${encodedClientId}/schedule-exceptions`, {
+    accessToken,
+    method: 'POST',
+    body,
+  });
+}
+
+export async function deleteTrainerClientScheduleException({
+  accessToken,
+  clientId,
+  sessionDate,
+}) {
+  const encodedClientId = encodeURIComponent(clientId);
+  const encodedSessionDate = encodeURIComponent(sessionDate);
+  return requestTrainerApi(
+    `/api/v1/trainer-clients/${encodedClientId}/schedule-exceptions/${encodedSessionDate}`,
+    {
+      accessToken,
+      method: 'DELETE',
+    },
+  );
+}
+
+export async function getMyTrainerSchedule({ accessToken }) {
+  return requestTrainerApi('/api/v1/profiles/me/trainer-schedule', { accessToken });
 }

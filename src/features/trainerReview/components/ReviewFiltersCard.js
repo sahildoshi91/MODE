@@ -13,7 +13,7 @@ export default function ReviewFiltersCard({
   onRefresh,
 }) {
   return (
-    <ModeCard style={styles.filterCard}>
+    <ModeCard variant="hero" style={styles.filterCard}>
       <ModeText variant="label">Queue Filters</ModeText>
       <View style={styles.filterRow}>
         {STATUS_FILTERS.map((filter) => (

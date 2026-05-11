@@ -1,0 +1,1 @@
+"""Trainer program templates module."""

@@ -10,6 +10,11 @@ from app.ai.client import GPT_5_4_MINI_MODEL, OpenAIClient
 from app.core.config import settings
 from app.core.tenancy import TrainerContext
 from app.modules.ai_feedback.service import AIFeedbackService
+from app.modules.checkin_signals import (
+    CHECKIN_SIGNAL_SUMMARY_VERSION,
+    build_checkin_question_summaries,
+    build_signal_fingerprint,
+)
 from app.modules.trainer_home.repository import TrainerHomeRepository
 from app.modules.trainer_home.schemas import (
     TrainerHomeCommandCenterClientItem,
@@ -63,7 +68,11 @@ class TrainerHomeService:
         }
 
         week_start = target_date - timedelta(days=6)
-        checkin_rows = self.repository.list_checkins_between(week_start, target_date)
+        checkin_rows = self.repository.list_checkins_between(
+            week_start,
+            target_date,
+            client_ids=list(scheduled_client_ids),
+        )
         checkins_by_client: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in checkin_rows:
             client_id = row.get("client_id")
@@ -77,7 +86,11 @@ class TrainerHomeService:
         }
         start_time = datetime.combine(week_start, time.min, tzinfo=timezone.utc)
         end_time = datetime.combine(target_date, time.max, tzinfo=timezone.utc)
-        workout_rows = self.repository.list_completed_workouts_between(start_time, end_time)
+        workout_rows = self.repository.list_completed_workouts_between(
+            start_time,
+            end_time,
+            user_ids=list(user_ids),
+        )
         workouts_by_user: dict[str, int] = defaultdict(int)
         for row in workout_rows:
             user_id = row.get("user_id")
@@ -119,6 +132,7 @@ class TrainerHomeService:
                     session_start_at=self._coerce_datetime(row.get("session_start_at")),
                     session_end_at=self._coerce_datetime(row.get("session_end_at")),
                     session_type=row.get("session_type"),
+                    meeting_location=self._normalize_meeting_location(row.get("meeting_location")),
                     notes=row.get("notes"),
                     status=row.get("status") or "scheduled",
                     week_summary=week_summary,
@@ -183,6 +197,27 @@ class TrainerHomeService:
 
         schedule_today_rows = self.repository.list_schedule_for_day(trainer_id, target_date)
         schedule_today_by_client = self._map_preferred_schedule_rows(schedule_today_rows)
+        trainer_settings = self.repository.get_trainer_settings(trainer_id) or {}
+        trainer_default_meeting_location = self._normalize_meeting_location(trainer_settings.get("default_meeting_location"))
+        trainer_auto_fill_meeting_location = bool(trainer_settings.get("auto_fill_meeting_location", True))
+
+        schedule_preference_rows = self.repository.list_schedule_preferences_for_clients(trainer_id, client_ids)
+        schedule_preference_by_client = {
+            str(row.get("client_id")): row
+            for row in schedule_preference_rows
+            if row.get("client_id")
+        }
+        schedule_exception_rows = self.repository.list_schedule_exceptions_between(
+            trainer_id,
+            start_date=target_date,
+            end_date=target_date,
+            client_ids=client_ids,
+        )
+        schedule_exception_by_client = {
+            str(row.get("client_id")): row
+            for row in schedule_exception_rows
+            if row.get("client_id")
+        }
 
         schedule_history_rows = self.repository.list_schedule_between(
             trainer_id,
@@ -196,7 +231,12 @@ class TrainerHomeService:
                 schedule_history_by_client[client_id].append(row)
 
         week_start = target_date - timedelta(days=6)
-        checkin_rows = self.repository.list_checkins_between(week_start, target_date)
+        recent_missed_start = target_date - timedelta(days=7)
+        checkin_rows = self.repository.list_checkins_between(
+            recent_missed_start,
+            target_date,
+            client_ids=client_ids,
+        )
         checkins_by_client: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in checkin_rows:
             client_id = row.get("client_id")
@@ -210,7 +250,11 @@ class TrainerHomeService:
         }
         start_time = datetime.combine(week_start, time.min, tzinfo=timezone.utc)
         end_time = datetime.combine(target_date, time.max, tzinfo=timezone.utc)
-        workout_rows = self.repository.list_completed_workouts_between(start_time, end_time)
+        workout_rows = self.repository.list_completed_workouts_between(
+            start_time,
+            end_time,
+            user_ids=list(user_ids),
+        )
         workouts_by_user: dict[str, int] = defaultdict(int)
         for row in workout_rows:
             user_id = row.get("user_id")
@@ -224,28 +268,63 @@ class TrainerHomeService:
         for client_id in client_ids:
             client_row = client_map.get(client_id) or {}
             client_checkins = checkins_by_client.get(client_id, [])
+            client_week_checkins = self._checkins_between(client_checkins, week_start, target_date)
             client_schedule_today = schedule_today_by_client.get(client_id)
+            client_schedule_preferences = schedule_preference_by_client.get(client_id) or {}
+            client_selected_exception = schedule_exception_by_client.get(client_id) or {}
             client_schedule_history = schedule_history_by_client.get(client_id, [])
 
+            recurring_weekdays = self._normalize_weekdays(client_schedule_preferences.get("recurring_weekdays"))
+            preferred_meeting_location = self._normalize_meeting_location(client_schedule_preferences.get("preferred_meeting_location"))
+            auto_use_trainer_default_location = bool(
+                client_schedule_preferences.get("auto_use_trainer_default_location", True)
+            )
+            selected_exception_type = self._normalize_exception_type(client_selected_exception.get("exception_type"))
+            selected_exception_location = self._normalize_meeting_location(
+                client_selected_exception.get("meeting_location_override")
+            )
+            resolved_schedule = self._resolve_schedule_for_day(
+                target_date=target_date,
+                concrete_schedule=client_schedule_today,
+                recurring_weekdays=recurring_weekdays,
+                selected_date_exception_type=selected_exception_type if client_selected_exception else None,
+                selected_date_exception_location=selected_exception_location,
+                preferred_meeting_location=preferred_meeting_location,
+                auto_use_trainer_default_location=auto_use_trainer_default_location,
+                trainer_default_meeting_location=trainer_default_meeting_location,
+                trainer_auto_fill_meeting_location=trainer_auto_fill_meeting_location,
+            )
+
             workouts_completed_7d = workouts_by_user.get(client_row.get("user_id"), 0)
-            week_summary = self._build_week_summary(
+            missed_checkin_dates_7d = self._missed_checkin_dates_7d(
+                client_row=client_row,
                 client_checkins=client_checkins,
                 target_date=target_date,
+            )
+            recent_low_readiness_dates = self._recent_low_readiness_dates(
+                client_week_checkins,
+                target_date=target_date,
+            )
+            week_summary = self._build_week_summary(
+                client_checkins=client_week_checkins,
+                target_date=target_date,
                 workouts_completed_7d=workouts_completed_7d,
+                missed_checkin_dates_7d=missed_checkin_dates_7d,
+                recent_low_readiness_dates=recent_low_readiness_dates,
             )
             last_checkin_date = self._latest_checkin_date(client_checkins)
             days_since_last_checkin = self._days_since(target_date, last_checkin_date)
             status_counts = self._schedule_status_counts(client_schedule_history)
             risk_flags = self._build_risk_flags(
                 week_summary=week_summary,
-                scheduled_today=bool(client_schedule_today),
-                schedule_status=(client_schedule_today or {}).get("status"),
+                scheduled_today=bool(resolved_schedule["scheduled"]),
+                schedule_status=resolved_schedule["session_status"],
                 status_counts=status_counts,
                 days_since_last_checkin=days_since_last_checkin,
             )
             priority_score = self._priority_score(
                 week_summary=week_summary,
-                scheduled_today=bool(client_schedule_today),
+                scheduled_today=bool(resolved_schedule["scheduled"]),
                 status_counts=status_counts,
                 days_since_last_checkin=days_since_last_checkin,
             )
@@ -264,16 +343,26 @@ class TrainerHomeService:
                     client_name=self._client_name(client_row, client_id),
                     priority_score=round(priority_score, 2),
                     priority_tier=self._priority_tier(priority_score),
-                    scheduled_today=bool(client_schedule_today),
-                    session_start_at=self._coerce_datetime((client_schedule_today or {}).get("session_start_at")),
-                    session_end_at=self._coerce_datetime((client_schedule_today or {}).get("session_end_at")),
-                    session_type=(client_schedule_today or {}).get("session_type"),
-                    session_status=(client_schedule_today or {}).get("status"),
+                    scheduled_today=bool(resolved_schedule["scheduled"]),
+                    session_start_at=resolved_schedule["session_start_at"],
+                    session_end_at=resolved_schedule["session_end_at"],
+                    session_type=resolved_schedule["session_type"],
+                    session_status=resolved_schedule["session_status"],
+                    meeting_location=resolved_schedule["meeting_location"],
+                    recurring_weekdays=recurring_weekdays,
+                    preferred_meeting_location=preferred_meeting_location,
+                    auto_use_trainer_default_location=auto_use_trainer_default_location,
+                    selected_date_exception_type=(
+                        selected_exception_type if client_selected_exception else None
+                    ),
+                    selected_date_meeting_location_override=selected_exception_location,
                     week_summary=week_summary,
                     risk_flags=risk_flags,
                     talking_points=talking_points,
                     last_checkin_date=last_checkin_date,
                     days_since_last_checkin=days_since_last_checkin,
+                    missed_checkin_dates_7d=missed_checkin_dates_7d,
+                    recent_low_readiness_dates=recent_low_readiness_dates,
                 )
             )
 
@@ -282,6 +371,15 @@ class TrainerHomeService:
             assigned_clients=len(client_ids),
             scheduled_today=sum(1 for item in client_items if item.scheduled_today),
             checkins_completed_today=sum(1 for item in client_items if item.week_summary.checkins_completed_today),
+            today_missing_checkins=sum(1 for item in client_items if not item.week_summary.checkins_completed_today),
+            recent_missed_checkin_days=sum(len(item.missed_checkin_dates_7d) for item in client_items),
+            clients_with_recent_missed_checkins=sum(1 for item in client_items if item.missed_checkin_dates_7d),
+            clients_with_low_7d_readiness=sum(
+                1
+                for item in client_items
+                if item.week_summary.avg_score_7d is not None and item.week_summary.avg_score_7d < 15
+            ),
+            clients_with_recent_low_readiness=sum(1 for item in client_items if item.recent_low_readiness_dates),
             high_priority_clients=sum(1 for item in client_items if item.priority_tier in {"high", "critical"}),
             critical_priority_clients=sum(1 for item in client_items if item.priority_tier == "critical"),
         )
@@ -298,6 +396,8 @@ class TrainerHomeService:
         client_checkins: list[dict[str, Any]],
         target_date: date,
         workouts_completed_7d: int,
+        missed_checkin_dates_7d: list[date] | None = None,
+        recent_low_readiness_dates: list[date] | None = None,
     ) -> TrainerHomeWeekSummary:
         scores = []
         modes: list[str] = []
@@ -314,13 +414,80 @@ class TrainerHomeService:
 
         avg_score = round(sum(scores) / len(scores), 2) if scores else None
         avg_mode = self._dominant_mode(modes, avg_score)
+        question_summaries = build_checkin_question_summaries(client_checkins, target_date)
         return TrainerHomeWeekSummary(
             checkins_completed_7d=len(client_checkins),
             checkins_completed_today=self._has_today_checkin(client_checkins, target_date),
             avg_score_7d=avg_score,
             avg_mode_7d=avg_mode,
             workouts_completed_7d=workouts_completed_7d,
+            missed_checkin_dates_7d=missed_checkin_dates_7d or [],
+            recent_low_readiness_dates=recent_low_readiness_dates or [],
+            question_summaries=question_summaries,
         )
+
+    def _checkins_between(
+        self,
+        rows: list[dict[str, Any]],
+        start_date: date,
+        end_date: date,
+    ) -> list[dict[str, Any]]:
+        windowed = []
+        for row in rows:
+            row_date = self._coerce_date(row.get("date"), None)
+            if row_date and start_date <= row_date <= end_date:
+                windowed.append(row)
+        return windowed
+
+    def _missed_checkin_dates_7d(
+        self,
+        *,
+        client_row: dict[str, Any],
+        client_checkins: list[dict[str, Any]],
+        target_date: date,
+    ) -> list[date]:
+        completed_dates = {
+            row_date
+            for row in client_checkins
+            if (row_date := self._coerce_date(row.get("date"), None)) is not None
+        }
+        created_date = self._coerce_date(client_row.get("created_at"), None)
+        dates = [
+            target_date - timedelta(days=offset)
+            for offset in range(1, 8)
+        ]
+        return [
+            checkin_date
+            for checkin_date in dates
+            if (created_date is None or checkin_date >= created_date)
+            and checkin_date not in completed_dates
+        ]
+
+    def _recent_low_readiness_dates(
+        self,
+        client_checkins: list[dict[str, Any]],
+        *,
+        target_date: date,
+    ) -> list[date]:
+        low_dates: set[date] = set()
+        start_date = target_date - timedelta(days=6)
+        for row in client_checkins:
+            row_date = self._coerce_date(row.get("date"), None)
+            if row_date is None or row_date < start_date or row_date > target_date:
+                continue
+            if self._is_low_readiness_checkin(row):
+                low_dates.add(row_date)
+        return sorted(low_dates, reverse=True)
+
+    def _is_low_readiness_checkin(self, row: dict[str, Any]) -> bool:
+        score = row.get("total_score")
+        try:
+            if score is not None and float(score) <= 15:
+                return True
+        except (TypeError, ValueError):
+            pass
+        mode = self._normalize_mode(row.get("assigned_mode"))
+        return mode in {"RECOVER", "REST"}
 
     def _build_risk_flags(
         self,
@@ -350,6 +517,21 @@ class TrainerHomeService:
                     label="Low 7-Day Readiness",
                     severity="high" if week_summary.avg_score_7d < 13 else "medium",
                     detail=f"Average readiness is {week_summary.avg_score_7d:.1f}/25 over the last 7 days.",
+                )
+            )
+
+        for signal in self._actionable_question_summaries(week_summary, statuses={"low"})[:2]:
+            average = signal.average_7d
+            detail_average = f"{average:.1f}/5" if average is not None else "N/A"
+            flags.append(
+                TrainerHomeRiskFlag(
+                    code=f"low_{signal.key}_7d",
+                    label=f"Low {signal.label}",
+                    severity="high" if average is not None and average <= 2 else "medium",
+                    detail=(
+                        f"{signal.label} averaged {detail_average} across "
+                        f"{signal.responses_7d} check-ins in the last 7 days."
+                    ),
                 )
             )
 
@@ -435,6 +617,9 @@ class TrainerHomeService:
         elif week_summary.avg_score_7d < 18:
             score += 1.0
 
+        low_signal_count = len(self._actionable_question_summaries(week_summary, statuses={"low"})[:2])
+        score += low_signal_count * 1.25
+
         if week_summary.workouts_completed_7d <= 0:
             score += 2.5
         elif week_summary.workouts_completed_7d <= 1:
@@ -462,6 +647,66 @@ class TrainerHomeService:
         if score >= 4:
             return "medium"
         return "low"
+
+    def _actionable_question_summaries(
+        self,
+        week_summary: TrainerHomeWeekSummary,
+        *,
+        statuses: set[str],
+    ) -> list[Any]:
+        summaries = [
+            summary
+            for summary in week_summary.question_summaries
+            if summary.status in statuses and summary.average_7d is not None
+        ]
+        return sorted(summaries, key=self._question_summary_sort_key)
+
+    def _question_summary_sort_key(self, summary: Any) -> tuple[Any, ...]:
+        status_rank = {"low": 0, "watch": 1, "steady": 2, "no_data": 3}
+        key_rank = {
+            "sleep": 0,
+            "motivation": 1,
+            "stress": 2,
+            "soreness": 3,
+            "nutrition": 4,
+        }
+        average = summary.average_7d if summary.average_7d is not None else 99
+        return (
+            status_rank.get(summary.status, 9),
+            average,
+            key_rank.get(summary.key, 9),
+        )
+
+    def _build_signal_talking_points(self, week_summary: TrainerHomeWeekSummary) -> list[str]:
+        points: list[str] = []
+        for signal in self._actionable_question_summaries(week_summary, statuses={"low", "watch"})[:2]:
+            average = f"{signal.average_7d:.1f}/5" if signal.average_7d is not None else "N/A"
+            response_line = f"{signal.responses_7d} responses"
+            if signal.key == "sleep":
+                points.append(
+                    f"Sleep averaged {average} over 7 days; ask about bedtime consistency, wake-ups, and whether today's intensity should stay controlled."
+                )
+            elif signal.key == "motivation":
+                points.append(
+                    f"Motivation averaged {average} over 7 days; identify the main friction point and set one small action they can complete today."
+                )
+            elif signal.key == "stress":
+                points.append(
+                    f"Stress readiness averaged {average}; ask what has felt heaviest and pair training with one simple downshift cue."
+                )
+            elif signal.key == "soreness":
+                points.append(
+                    f"Body feel averaged {average}; ask where soreness is showing up and adjust load or range before progressing."
+                )
+            elif signal.key == "nutrition":
+                points.append(
+                    f"Nutrition averaged {average}; confirm the easiest protein, hydration, or meal-prep anchor for the next 24 hours."
+                )
+            else:
+                points.append(
+                    f"{signal.label} is trending {signal.status} at {average} across {response_line}; ask one specific follow-up before loading the session."
+                )
+        return points
 
     def _map_preferred_schedule_rows(self, rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         mapped: dict[str, dict[str, Any]] = {}
@@ -551,6 +796,84 @@ class TrainerHomeService:
                 tags.append(tag)
         return tags
 
+    def _normalize_meeting_location(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        text = value.strip()
+        return text or None
+
+    def _normalize_weekdays(self, value: Any) -> list[int]:
+        if not isinstance(value, list):
+            return []
+        normalized: list[int] = []
+        for item in value:
+            try:
+                day = int(item)
+            except (TypeError, ValueError):
+                continue
+            if day < 1 or day > 7:
+                continue
+            if day not in normalized:
+                normalized.append(day)
+        normalized.sort()
+        return normalized
+
+    def _normalize_exception_type(self, value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"skip", "add"}:
+            return "skip"
+        return normalized
+
+    def _resolve_schedule_for_day(
+        self,
+        *,
+        target_date: date,
+        concrete_schedule: dict[str, Any] | None,
+        recurring_weekdays: list[int],
+        selected_date_exception_type: str | None,
+        selected_date_exception_location: str | None,
+        preferred_meeting_location: str | None,
+        auto_use_trainer_default_location: bool,
+        trainer_default_meeting_location: str | None,
+        trainer_auto_fill_meeting_location: bool,
+    ) -> dict[str, Any]:
+        if concrete_schedule:
+            return {
+                "scheduled": True,
+                "session_status": (concrete_schedule or {}).get("status"),
+                "session_type": (concrete_schedule or {}).get("session_type"),
+                "session_start_at": self._coerce_datetime((concrete_schedule or {}).get("session_start_at")),
+                "session_end_at": self._coerce_datetime((concrete_schedule or {}).get("session_end_at")),
+                "meeting_location": self._normalize_meeting_location((concrete_schedule or {}).get("meeting_location")),
+            }
+
+        scheduled_from_recurring = target_date.isoweekday() in set(recurring_weekdays)
+        normalized_exception_type = str(selected_date_exception_type or "").strip().lower()
+        if normalized_exception_type == "skip":
+            scheduled = False
+        elif normalized_exception_type == "add":
+            scheduled = True
+        else:
+            scheduled = scheduled_from_recurring
+
+        resolved_meeting_location = None
+        if scheduled:
+            if self._normalize_meeting_location(selected_date_exception_location):
+                resolved_meeting_location = self._normalize_meeting_location(selected_date_exception_location)
+            elif preferred_meeting_location:
+                resolved_meeting_location = preferred_meeting_location
+            elif auto_use_trainer_default_location and trainer_auto_fill_meeting_location:
+                resolved_meeting_location = trainer_default_meeting_location
+
+        return {
+            "scheduled": scheduled,
+            "session_status": "scheduled" if scheduled else None,
+            "session_type": None,
+            "session_start_at": None,
+            "session_end_at": None,
+            "meeting_location": resolved_meeting_location,
+        }
+
     def _command_center_sort_key(self, item: TrainerHomeCommandCenterClientItem) -> tuple[Any, ...]:
         scheduled_weight = 0 if item.scheduled_today else 1
         session_start = item.session_start_at
@@ -578,6 +901,7 @@ class TrainerHomeService:
         trainer_id = trainer_context.trainer_id
         client_id = client_row.get("id")
         now = datetime.now(timezone.utc)
+        signal_fingerprint = build_signal_fingerprint(week_summary.question_summaries)
         if not trainer_id or not client_id:
             return TrainerHomeTalkingPointSet(
                 points=self._ensure_three_points([]),
@@ -588,7 +912,12 @@ class TrainerHomeService:
         if cache_row and not refresh_talking_points:
             cache_points = self._sanitize_points(cache_row.get("points_json"))
             cache_expires = self._coerce_datetime(cache_row.get("expires_at"))
-            if len(cache_points) == 3 and cache_expires and cache_expires > now:
+            cache_metadata = cache_row.get("metadata") if isinstance(cache_row.get("metadata"), dict) else {}
+            cache_matches_signals = (
+                cache_metadata.get("signal_summary_version") == CHECKIN_SIGNAL_SUMMARY_VERSION
+                and cache_metadata.get("signal_fingerprint") == signal_fingerprint
+            )
+            if len(cache_points) == 3 and cache_expires and cache_expires > now and cache_matches_signals:
                 return TrainerHomeTalkingPointSet(
                     points=cache_points,
                     generation_strategy=f"cache:{cache_row.get('generation_strategy') or 'deterministic'}",
@@ -641,6 +970,12 @@ class TrainerHomeService:
                     "metadata": {
                         "risk_flags": [flag.code for flag in risk_flags],
                         "ai_memory_count": len(ai_usable_memory),
+                        "signal_summary_version": CHECKIN_SIGNAL_SUMMARY_VERSION,
+                        "signal_fingerprint": signal_fingerprint,
+                        "low_signal_keys": [
+                            signal.key
+                            for signal in self._actionable_question_summaries(week_summary, statuses={"low"})
+                        ],
                     },
                     "updated_at": now.isoformat(),
                 }
@@ -674,6 +1009,8 @@ class TrainerHomeService:
         ai_usable_memory: list[dict[str, Any]],
     ) -> list[str]:
         points: list[str] = []
+
+        points.extend(self._build_signal_talking_points(week_summary))
 
         if ai_usable_memory:
             first_memory_text = str(ai_usable_memory[0].get("text") or "").strip()
@@ -722,6 +1059,14 @@ class TrainerHomeService:
         payload = {
             "client_name": client_name,
             "week_summary": week_summary.model_dump(mode="json"),
+            "checkin_question_summaries": [
+                summary.model_dump(mode="json")
+                for summary in week_summary.question_summaries
+            ],
+            "priority_checkin_signals": [
+                summary.model_dump(mode="json")
+                for summary in self._actionable_question_summaries(week_summary, statuses={"low", "watch"})[:3]
+            ],
             "risk_flags": [flag.model_dump(mode="json") for flag in risk_flags],
             "ai_usable_memory": [
                 {
@@ -737,6 +1082,8 @@ class TrainerHomeService:
                 "exact_points": 3,
                 "style": "high-signal talking points for a trainer preparing to coach this client today",
                 "constraints": [
+                    "When low or watch check-in question signals exist, lead with those specifics.",
+                    "Give extra attention to low sleep or low motivation when present.",
                     "Keep each point concise and action-oriented.",
                     "Avoid medical certainty.",
                     "No markdown bullets; plain strings only.",
@@ -873,6 +1220,8 @@ class TrainerHomeService:
                     "points": points,
                     "risk_flags": [flag.code for flag in risk_flags],
                     "week_summary": week_summary.model_dump(mode="json"),
+                    "signal_summary_version": CHECKIN_SIGNAL_SUMMARY_VERSION,
+                    "signal_fingerprint": build_signal_fingerprint(week_summary.question_summaries),
                 },
                 generation_metadata={
                     "producer": "trainer_home_command_center",
@@ -907,6 +1256,7 @@ class TrainerHomeService:
         points: list[str] = []
         if not week_summary.checkins_completed_today:
             points.append("No check-in logged today. Start the session by confirming readiness and energy.")
+        points.extend(self._build_signal_talking_points(week_summary))
         if week_summary.avg_score_7d is not None and week_summary.avg_score_7d < 15:
             points.append("Readiness trended low this week. Prioritize recovery, sleep, and controlled intensity.")
         if week_summary.checkins_completed_7d <= 2:
@@ -963,10 +1313,14 @@ class TrainerHomeService:
         if isinstance(value, date):
             return value
         if isinstance(value, str):
+            text = value.strip()
             try:
-                return date.fromisoformat(value)
+                return date.fromisoformat(text)
             except ValueError:
-                return fallback
+                try:
+                    return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+                except ValueError:
+                    return fallback
         return fallback
 
     def _coerce_datetime(self, value: Any) -> datetime | None:

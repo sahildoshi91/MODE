@@ -8,7 +8,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
 
-from app.ai.client import OpenAIClient
+from app.ai.client import OpenAIClient, _run_with_retries
+from app.core.config import settings
 
 
 class FakeOpenAIResponse:
@@ -69,6 +70,25 @@ class OpenAIClientTests(unittest.TestCase):
             )
 
         self.assertEqual(text, '{"title":"Builder"}')
+
+    def test_run_with_retries_retries_timeout_once(self):
+        original_max_retries = settings.ai_max_retries
+        settings.ai_max_retries = 2
+        calls = []
+
+        def flaky_call():
+            calls.append("call")
+            if len(calls) == 1:
+                raise TimeoutError("provider timed out")
+            return "ok"
+
+        try:
+            result = _run_with_retries("test", "model", flaky_call)
+        finally:
+            settings.ai_max_retries = original_max_retries
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(len(calls), 2)
 
 
 if __name__ == "__main__":

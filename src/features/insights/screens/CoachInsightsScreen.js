@@ -11,6 +11,8 @@ import {
   StateBadge,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import { BREATHING_TRANSITIONS_ENABLED } from '../../../config/featureFlags';
+import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/loading';
 import { getCheckinProgress } from '../../dailyCheckin/services/checkinApi';
 
 function inferPattern(payload) {
@@ -67,6 +69,7 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
   const [payload, setPayload] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState(null);
+  const breathingTransitionsEnabled = Boolean(BREATHING_TRANSITIONS_ENABLED);
 
   const loadInsights = useCallback(async () => {
     if (!accessToken) {
@@ -115,7 +118,12 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
   }, [payload]);
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen}>
+    <SafeScreen
+      includeTopInset={false}
+      style={styles.screen}
+      atmosphere="home"
+      atmosphereOverlayStrength={0.92}
+    >
       <HeaderBar
         title="Coach Insights"
         subtitle="Calm signals from your recent check-ins"
@@ -124,7 +132,7 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
       />
 
       <ScrollView contentContainerStyle={[styles.content, { paddingBottom: theme.spacing[4] + bottomInset }]}>
-        {isLoading ? (
+        {!breathingTransitionsEnabled && isLoading ? (
           <ModeCard variant="tinted" style={styles.loadingCard}>
             <ActivityIndicator size="small" color={theme.colors.brand.progressCore} />
             <ModeText variant="bodySm" tone="secondary">Generating insight cards...</ModeText>
@@ -137,7 +145,7 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
 
         {!isLoading && !error && payload ? (
           <>
-            <ModeCard variant="surface">
+            <ModeCard variant="hero">
               <ModeText variant="label" tone="tertiary">Current context</ModeText>
               <View style={styles.badgeRow}>
                 <StateBadge mode={payload.avg_mode_last_7_days || 'RECOVER'} />
@@ -168,6 +176,15 @@ export default function CoachInsightsScreen({ accessToken, onBack, bottomInset =
           />
         ) : null}
       </ScrollView>
+      {breathingTransitionsEnabled ? (
+        <BreathingTransitionOverlay
+          active={isLoading}
+          context={BREATHING_CONTEXT.INSIGHTS_LOAD}
+          variant="overlay"
+          progressLabel="Generating insight cards..."
+          testID="coach-insights-breathing-loader"
+        />
+      ) : null}
     </SafeScreen>
   );
 }

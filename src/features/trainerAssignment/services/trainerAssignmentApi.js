@@ -68,3 +68,11 @@ export function assignTrainer({ accessToken, trainerId }) {
     body: { trainer_id: trainerId },
   });
 }
+
+export function assignTrainerByInvite({ accessToken, inviteCode }) {
+  return requestTrainerAssignment('/api/v1/trainer-assignment/assign-by-invite', {
+    accessToken,
+    method: 'POST',
+    body: { invite_code: inviteCode },
+  });
+}

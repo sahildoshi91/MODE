@@ -57,4 +57,28 @@ describe('apiNetworkError', () => {
     expect(error.message).toContain('timed out');
     expect(error.message).toContain('Tried: http://192.168.0.10:8000');
   });
+
+  it('treats timeout attempts as timeout errors even when final cause is not timeout', () => {
+    const wrappedError = {
+      cause: new Error('connect ECONNREFUSED'),
+      attemptedBaseUrls: ['http://192.168.0.10:8000', 'http://192.168.0.22:8000'],
+      attemptedErrors: [
+        {
+          base_url: 'http://192.168.0.10:8000',
+          message: 'Request timed out after 8000ms',
+          is_timeout: true,
+        },
+        {
+          base_url: 'http://192.168.0.22:8000',
+          message: 'connect ECONNREFUSED',
+          is_timeout: false,
+        },
+      ],
+    };
+
+    const error = buildApiNetworkError(wrappedError, '/api/v1/trainer-assignment/status');
+
+    expect(error.message).toContain('timed out');
+    expect(error.attempt_errors).toEqual(wrappedError.attemptedErrors);
+  });
 });

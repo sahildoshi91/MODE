@@ -292,6 +292,21 @@ class ChatApiStagingIntegrationTests(unittest.TestCase):
             [],
         )
 
+    def test_deleted_user_cannot_access_chat_api(self):
+        temp_email = f"mode-staging-deleted+{uuid4().hex}@example.com"
+        temp_user = self._create_auth_user(temp_email)
+        temp_token = self._sign_in_and_get_access_token(temp_email)
+        self.admin.auth.admin.delete_user(temp_user["id"])
+
+        response = self._chat(
+            temp_token,
+            {
+                "message": "Can I still access the chat route after deletion?",
+                "client_context": {"platform": "staging-test"},
+            },
+        )
+        self.assertEqual(response.status_code, 401, response.text)
+
 
 if __name__ == "__main__":
     unittest.main()
