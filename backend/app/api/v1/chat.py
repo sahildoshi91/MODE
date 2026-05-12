@@ -27,7 +27,7 @@ from app.modules.conversation.streaming import (
     message_delta_event,
     status_event,
 )
-from app.modules.conversation.trace import ChatTraceAccumulator, strip_private_trace
+from app.modules.conversation.trace import ChatTraceAccumulator, emit_chat_trace, strip_private_trace
 
 
 router = APIRouter()
@@ -53,6 +53,11 @@ def _trace_metadata_from_response(response: ChatResponse) -> dict[str, object]:
             "model_used": "unknown",
             "fallback_used": bool(response.fallback_triggered),
             "escalation_triggered": False,
+            "worker_job_id": None,
+            "prompt_version": "inline_legacy",
+            "model_fallback_chain": [],
+            "tokens_cost_usd": None,
+            "queue_enqueue_latency_ms": None,
         }
     return {
         "route": route_debug.intent_route or route_debug.flow,
@@ -67,6 +72,11 @@ def _trace_metadata_from_response(response: ChatResponse) -> dict[str, object]:
             or route_debug.flow == "safety_escalation"
             or route_debug.response_mode == "safe_interim_escalation"
         ),
+        "worker_job_id": None,
+        "prompt_version": route_debug.prompt_version or "inline_legacy",
+        "model_fallback_chain": route_debug.model_fallback_chain or [route_debug.execution_model or route_debug.selected_model],
+        "tokens_cost_usd": route_debug.tokens_cost_usd,
+        "queue_enqueue_latency_ms": None,
     }
 
 
@@ -155,10 +165,12 @@ async def chat(
         user_id=user.id,
         trainer_id=str(trainer_context.trainer_id or ""),
     )
+    trace_conversation_id = str(request.conversation_id or "").strip() or None
     try:
         response = service.handle_chat(user.id, trainer_context, request)
         if response.request_id:
             trace.request_id = response.request_id
+        trace_conversation_id = str(response.conversation_id or trace_conversation_id or "").strip() or None
         trace.observe_payload(message_delta_event(response.assistant_message or ""))
         trace.observe_payload(done_event(
             token_usage=response.token_usage.model_dump(),
@@ -191,7 +203,12 @@ async def chat(
             request=request,
         )
     finally:
-        trace.build().log()
+        emit_chat_trace(
+            trace.build(),
+            trainer_id=str(trainer_context.trainer_id or ""),
+            client_id=str(trainer_context.client_id or ""),
+            conversation_id=trace_conversation_id,
+        )
 
 
 @router.get("/history", response_model=ChatHistoryResponse)
@@ -337,10 +354,13 @@ async def chat_stream(
             user_id=user.id,
             trainer_id=str(trainer_context.trainer_id or ""),
         )
+        stream_conversation_id = str(request.conversation_id or "").strip() or None
 
         def maybe_attach_request_record(payload: dict[str, object]) -> None:
-            nonlocal request_id, request_record_created
+            nonlocal request_id, request_record_created, stream_conversation_id
             conversation_id = str(payload.get("conversation_id") or "").strip()
+            if conversation_id:
+                stream_conversation_id = conversation_id
             if request_record_created or not conversation_id or not callable(create_ai_request_record):
                 return
             request_record_created = True
@@ -439,7 +459,12 @@ async def chat_stream(
             )
         finally:
             trace.request_id = request_id
-            trace.build().log()
+            emit_chat_trace(
+                trace.build(),
+                trainer_id=str(trainer_context.trainer_id or ""),
+                client_id=str(trainer_context.client_id or ""),
+                conversation_id=stream_conversation_id,
+            )
 
     return StreamingResponse(
         event_stream(),

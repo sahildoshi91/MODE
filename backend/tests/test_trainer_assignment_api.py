@@ -2,7 +2,6 @@ import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -14,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.core.auth import AuthenticatedUser, require_user
 from app.core.config import settings
-from app.core.dependencies import get_onboarding_service, get_trainer_context
+from app.core.dependencies import get_onboarding_service, get_request_scoped_supabase_client, get_trainer_context
 from app.core.rate_limit import _rate_limiter
 from app.core.tenancy import TrainerContext
 from app.main import app
@@ -107,12 +106,12 @@ class TrainerAssignmentApiTests(unittest.TestCase):
                 {"id": "trainer-2", "tenant_id": "tenant-2", "display_name": "Coach Alex", "is_active": True},
             ]
         )
+        app.dependency_overrides[get_request_scoped_supabase_client] = lambda: fake_admin_client
 
-        with patch("app.api.v1.trainer_assignment.get_supabase_client", return_value=fake_admin_client):
-            response = self.client.get(
-                "/api/v1/trainer-assignment/status",
-                headers={"Authorization": "Bearer ignored-by-override"},
-            )
+        response = self.client.get(
+            "/api/v1/trainer-assignment/status",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["needs_assignment"])
@@ -141,12 +140,11 @@ class TrainerAssignmentApiTests(unittest.TestCase):
             ]
         )
 
-        with patch("app.api.v1.trainer_assignment.get_supabase_client", return_value=fake_admin_client):
-            response = self.client.post(
-                "/api/v1/trainer-assignment/assign",
-                json={"trainer_id": "trainer-1"},
-                headers={"Authorization": "Bearer ignored-by-override"},
-            )
+        response = self.client.post(
+            "/api/v1/trainer-assignment/assign",
+            json={"trainer_id": "trainer-1"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(
@@ -168,12 +166,12 @@ class TrainerAssignmentApiTests(unittest.TestCase):
                 {"id": "trainer-2", "tenant_id": "tenant-2", "display_name": "Coach Alex", "is_active": True},
             ]
         )
+        app.dependency_overrides[get_request_scoped_supabase_client] = lambda: fake_admin_client
 
-        with patch("app.api.v1.trainer_assignment.get_supabase_client", return_value=fake_admin_client):
-            response = self.client.get(
-                "/api/v1/trainer-assignment/status",
-                headers={"Authorization": "Bearer ignored-by-override"},
-            )
+        response = self.client.get(
+            "/api/v1/trainer-assignment/status",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["needs_assignment"])
@@ -196,12 +194,12 @@ class TrainerAssignmentApiTests(unittest.TestCase):
                 {"id": "trainer-1", "tenant_id": "tenant-1", "display_name": "Coach Maya", "is_active": True},
             ]
         )
+        app.dependency_overrides[get_request_scoped_supabase_client] = lambda: fake_admin_client
 
-        with patch("app.api.v1.trainer_assignment.get_supabase_client", return_value=fake_admin_client):
-            response = self.client.get(
-                "/api/v1/trainer-assignment/status",
-                headers={"Authorization": "Bearer ignored-by-override"},
-            )
+        response = self.client.get(
+            "/api/v1/trainer-assignment/status",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["needs_assignment"])
@@ -221,11 +219,10 @@ class TrainerAssignmentApiTests(unittest.TestCase):
         )
         fake_admin_client = FakeAdminClient()
 
-        with patch("app.api.v1.trainer_assignment.get_supabase_client", return_value=fake_admin_client):
-            response = self.client.get(
-                "/api/v1/trainer-assignment/status",
-                headers={"Authorization": "Bearer ignored-by-override"},
-            )
+        response = self.client.get(
+            "/api/v1/trainer-assignment/status",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["needs_assignment"])
@@ -252,12 +249,11 @@ class TrainerAssignmentApiTests(unittest.TestCase):
             ],
         )
 
-        with patch("app.api.v1.trainer_assignment.get_supabase_client", return_value=fake_admin_client):
-            response = self.client.post(
-                "/api/v1/trainer-assignment/assign",
-                json={"trainer_id": "trainer-1"},
-                headers={"Authorization": "Bearer ignored-by-override"},
-            )
+        response = self.client.post(
+            "/api/v1/trainer-assignment/assign",
+            json={"trainer_id": "trainer-1"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(
@@ -283,12 +279,11 @@ class TrainerAssignmentApiTests(unittest.TestCase):
             ],
         )
 
-        with patch("app.api.v1.trainer_assignment.get_supabase_client", return_value=fake_admin_client):
-            response = self.client.post(
-                "/api/v1/trainer-assignment/assign",
-                json={"trainer_id": "trainer-1"},
-                headers={"Authorization": "Bearer ignored-by-override"},
-            )
+        response = self.client.post(
+            "/api/v1/trainer-assignment/assign",
+            json={"trainer_id": "trainer-1"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(
@@ -313,12 +308,11 @@ class TrainerAssignmentApiTests(unittest.TestCase):
             ],
         )
 
-        with patch("app.api.v1.trainer_assignment.get_supabase_client", return_value=fake_admin_client):
-            response = self.client.post(
-                "/api/v1/trainer-assignment/assign",
-                json={"trainer_id": "trainer-2"},
-                headers={"Authorization": "Bearer ignored-by-override"},
-            )
+        response = self.client.post(
+            "/api/v1/trainer-assignment/assign",
+            json={"trainer_id": "trainer-2"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
 
         self.assertEqual(response.status_code, 403)
         self.assertEqual(

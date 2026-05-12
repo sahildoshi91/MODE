@@ -73,6 +73,9 @@ class RouteDebug(BaseModel):
     router_confidence: float | None = None
     risk_flags: list[str] = Field(default_factory=list)
     user_status_message: str | None = None
+    prompt_version: str | None = None
+    model_fallback_chain: list[str] = Field(default_factory=list)
+    tokens_cost_usd: float | None = None
 
 
 class ConversationUsage(BaseModel):

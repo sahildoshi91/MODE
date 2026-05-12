@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from fastapi import Depends, Header, HTTPException, status
 
-from app.db.client import get_supabase_admin_client
+from app.db.client import get_supabase_user_client
 
 
 @dataclass
@@ -67,7 +67,7 @@ def _is_disabled_user(user: object) -> bool:
 
 def require_user(authorization: str | None = Header(default=None)) -> AuthenticatedUser:
     token = _extract_bearer_token(authorization)
-    auth_client = get_supabase_admin_client().auth
+    auth_client = get_supabase_user_client(token).auth
 
     try:
         user_response = auth_client.get_user(token)

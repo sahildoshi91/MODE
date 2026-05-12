@@ -54,6 +54,10 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = 60
     rate_limit_default_per_window: int = 90
     rate_limit_chat_per_window: int = 30
+    rate_limit_chat_client_per_window: int = 20
+    rate_limit_chat_trainer_per_window: int = 200
+    rate_limit_chat_ip_per_window: int = 500
+    rate_limit_ip_per_window: int = 1000
     rate_limit_trainer_assistant_per_window: int = 20
     rate_limit_onboarding_per_window: int = 20
     rate_limit_mobile_events_per_window: int = 120

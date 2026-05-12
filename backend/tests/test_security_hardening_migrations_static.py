@@ -68,3 +68,14 @@ def test_storage_cleanup_heartbeat_table_is_service_scoped() -> None:
     assert "REVOKE ALL ON public.storage_cleanup_job_heartbeats FROM anon" in source
     assert "ALTER TABLE public.storage_cleanup_job_heartbeats ENABLE ROW LEVEL SECURITY" in source
     assert "GRANT SELECT, INSERT ON public.storage_cleanup_job_heartbeats TO service_role" in source
+
+
+def test_service_role_retirement_migration_adds_authenticated_storage_and_deletion_rls() -> None:
+    source = _read_sql("20260511f_retire_service_role_request_paths.sql")
+    assert "CREATE TABLE IF NOT EXISTS public.account_deletion_requests" in source
+    assert "ALTER TABLE public.account_deletion_requests FORCE ROW LEVEL SECURITY" in source
+    assert "user_id = auth.uid()" in source
+    assert "storage.buckets" not in source
+    assert "storage.objects" not in source
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON public.storage_upload_grants TO authenticated" in source
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON public.storage_object_ownership TO authenticated" in source

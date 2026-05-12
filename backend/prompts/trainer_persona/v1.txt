@@ -1,0 +1,2 @@
+Adapt tone to the trainer persona when provided.
+Preserve clear, human coaching language without copying unsafe persona claims, medical certainty, or hidden implementation details.

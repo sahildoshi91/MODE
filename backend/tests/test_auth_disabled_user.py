@@ -40,7 +40,7 @@ class AuthDisabledUserTests(unittest.TestCase):
             app_metadata={},
             user_metadata={},
         )
-        with patch("app.core.auth.get_supabase_admin_client", return_value=_FakeSupabase(user)):
+        with patch("app.core.auth.get_supabase_user_client", return_value=_FakeSupabase(user)):
             with self.assertRaises(HTTPException) as raised:
                 require_user("Bearer token-123")
         self.assertEqual(raised.exception.status_code, 401)
@@ -54,7 +54,7 @@ class AuthDisabledUserTests(unittest.TestCase):
             app_metadata={},
             user_metadata={},
         )
-        with patch("app.core.auth.get_supabase_admin_client", return_value=_FakeSupabase(user)):
+        with patch("app.core.auth.get_supabase_user_client", return_value=_FakeSupabase(user)):
             with self.assertRaises(HTTPException) as raised:
                 require_user("Bearer token-123")
         self.assertEqual(raised.exception.status_code, 401)
@@ -68,7 +68,7 @@ class AuthDisabledUserTests(unittest.TestCase):
             app_metadata={"disabled": True},
             user_metadata={},
         )
-        with patch("app.core.auth.get_supabase_admin_client", return_value=_FakeSupabase(user)):
+        with patch("app.core.auth.get_supabase_user_client", return_value=_FakeSupabase(user)):
             with self.assertRaises(HTTPException) as raised:
                 require_user("Bearer token-123")
         self.assertEqual(raised.exception.status_code, 401)
@@ -82,7 +82,7 @@ class AuthDisabledUserTests(unittest.TestCase):
             app_metadata={},
             user_metadata={"account_deleted": True},
         )
-        with patch("app.core.auth.get_supabase_admin_client", return_value=_FakeSupabase(user)):
+        with patch("app.core.auth.get_supabase_user_client", return_value=_FakeSupabase(user)):
             with self.assertRaises(HTTPException) as raised:
                 require_user("Bearer token-123")
         self.assertEqual(raised.exception.status_code, 401)
@@ -96,7 +96,7 @@ class AuthDisabledUserTests(unittest.TestCase):
             app_metadata={},
             user_metadata={},
         )
-        with patch("app.core.auth.get_supabase_admin_client", return_value=_FakeSupabase(user)):
+        with patch("app.core.auth.get_supabase_user_client", return_value=_FakeSupabase(user)):
             resolved = require_user("Bearer token-123")
         self.assertEqual(resolved.id, "user-1")
         self.assertEqual(resolved.access_token, "token-123")

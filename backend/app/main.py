@@ -5,6 +5,7 @@ from app.api.v1 import api_router
 from app.api.v1.workouts import router as workout_router
 from app.core.config import settings
 from app.core.startup_guards import run_startup_guards
+from app.modules.observability.health import build_healthz_payload
 
 run_startup_guards()
 
@@ -34,4 +35,4 @@ async def root():
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True}
+    return await build_healthz_payload()

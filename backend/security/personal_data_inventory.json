@@ -258,6 +258,30 @@
     },
     {
       "schema": "public",
+      "table": "intelligence_jobs",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 914,
+        "description": "Durable intelligence jobs are tenant scoped and may include user message hashes, queue payloads, or review metadata."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "worker_job_traces",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "trainer_ids",
+        "column": "trainer_id",
+        "execution_order": 913,
+        "description": "Worker traces are operational telemetry linked to trainer/client scoped jobs."
+      }
+    },
+    {
+      "schema": "public",
       "table": "trainer_assistant_router_events",
       "classification": "derived",
       "deletion_policy": {
@@ -314,6 +338,18 @@
         "column": "client_id",
         "execution_order": 890,
         "description": "Assignments map identifiable client-trainer relationships."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "client_trainer_connection_requests",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "client_ids",
+        "column": "client_id",
+        "execution_order": 889,
+        "description": "Connection requests map identifiable clients to prospective trainer relationships."
       }
     },
     {
@@ -678,6 +714,16 @@
         "action": "retention_ttl",
         "execution_order": 40,
         "description": "Rate-limit windows are operational telemetry with bounded retention."
+      }
+    },
+    {
+      "schema": "public",
+      "table": "account_deletion_requests",
+      "classification": "derived",
+      "deletion_policy": {
+        "action": "retention_ttl",
+        "execution_order": 35,
+        "description": "Deletion request state is retained as bounded operational/compliance evidence and stores IDs/status only."
       }
     },
     {

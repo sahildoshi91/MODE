@@ -9,7 +9,6 @@ from fastapi import HTTPException, Request, status
 
 from app.core.auth import AuthenticatedUser
 from app.core.config import settings
-from app.db.client import get_supabase_admin_client
 
 
 @dataclass
@@ -62,27 +61,45 @@ class _PostgresRateLimiter:
         window_seconds: int,
         now: datetime | None = None,
     ) -> tuple[bool, int]:
-        if limit <= 0 or window_seconds <= 0:
+        del key, limit, window_seconds, now
+        raise RuntimeError("postgres_rate_limiter_deprecated")
+
+
+class _RedisRateLimiter:
+    def check(
+        self,
+        *,
+        key: str,
+        limit: int,
+        window_seconds: int,
+        now: datetime | None = None,
+    ) -> tuple[bool, int]:
+        if limit <= 0:
             return True, 0
-        payload = {
-            "p_rate_key": key,
-            "p_limit": int(limit),
-            "p_window_seconds": int(window_seconds),
-            "p_now": (now or datetime.now(timezone.utc)).isoformat(),
-        }
-        response = (
-            get_supabase_admin_client()
-            .rpc("security_enforce_rate_limit", payload)
-            .execute()
+        if window_seconds <= 0:
+            return True, 0
+        if not settings.redis_url:
+            raise RuntimeError("redis_url_missing")
+
+        import redis  # type: ignore[import-not-found]
+
+        timeout_seconds = max(0.001, settings.chat_cache_timeout_ms / 1000)
+        client = redis.Redis.from_url(
+            str(settings.redis_url),
+            socket_timeout=timeout_seconds,
+            socket_connect_timeout=timeout_seconds,
+            decode_responses=True,
         )
-        data = response.data
-        if isinstance(data, list):
-            data = data[0] if data and isinstance(data[0], dict) else {}
-        if not isinstance(data, dict):
-            raise RuntimeError("Invalid rate-limit RPC response")
-        allowed = bool(data.get("allowed"))
-        retry_after = int(data.get("retry_after_seconds") or 1)
-        return allowed, max(1, retry_after)
+        current_time = now or datetime.now(timezone.utc)
+        bucket = int(current_time.timestamp() // window_seconds)
+        redis_key = f"rate_limit:{key}:{bucket}"
+        count = int(client.incr(redis_key))
+        if count == 1:
+            client.expire(redis_key, window_seconds)
+        if count <= limit:
+            return True, 0
+        retry_after = window_seconds - int(current_time.timestamp() % window_seconds)
+        return False, max(1, retry_after)
 
 
 _LIMITS_BY_GROUP = {
@@ -101,6 +118,7 @@ _LIMITS_BY_GROUP = {
 
 _rate_limiter = _InMemoryRateLimiter()
 _postgres_rate_limiter = _PostgresRateLimiter()
+_redis_rate_limiter = _RedisRateLimiter()
 
 
 def _request_scope_keys(user: AuthenticatedUser, request: Request, group: str, context_key: str) -> list[str]:
@@ -137,6 +155,65 @@ def _request_scope_keys(user: AuthenticatedUser, request: Request, group: str, c
     return unique_keys
 
 
+def _context_map(context_key: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for item in context_key.split("|"):
+        if "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key and value:
+            values[key] = value
+    return values
+
+
+def _client_ip(request: Request) -> str:
+    return str(request.client.host if request.client else "unknown").strip() or "unknown"
+
+
+def _rate_limit_checks(
+    *,
+    group: str,
+    user: AuthenticatedUser,
+    request: Request,
+    context_key: str,
+    default_limit: int,
+) -> list[tuple[str, int]]:
+    if group != "chat":
+        checks = [(key, default_limit) for key in _request_scope_keys(user, request, group, context_key)]
+        checks.append((f"any|scope:ip:{_client_ip(request)}", int(settings.rate_limit_ip_per_window)))
+        return _dedupe_checks(checks)
+
+    context = _context_map(context_key)
+    checks: list[tuple[str, int]] = []
+    user_id = str(getattr(user, "id", "") or "").strip()
+    client_id = context.get("client_id")
+    trainer_id = context.get("trainer_id")
+    client_ip = _client_ip(request)
+
+    if client_id:
+        checks.append((f"chat|scope:client:{client_id}", int(settings.rate_limit_chat_client_per_window)))
+    if user_id:
+        checks.append((f"chat|scope:user:{user_id}|{context_key}", int(settings.rate_limit_chat_per_window)))
+    if trainer_id:
+        checks.append((f"chat|scope:trainer:{trainer_id}", int(settings.rate_limit_chat_trainer_per_window)))
+    checks.append((f"chat|scope:ip:{client_ip}", int(settings.rate_limit_chat_ip_per_window)))
+    checks.append((f"any|scope:ip:{client_ip}", int(settings.rate_limit_ip_per_window)))
+    return _dedupe_checks(checks)
+
+
+def _dedupe_checks(checks: list[tuple[str, int]]) -> list[tuple[str, int]]:
+    deduped: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for key, limit in checks:
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append((key, limit))
+    return deduped
+
+
 def enforce_rate_limit(
     *,
     group: str,
@@ -161,20 +238,33 @@ def enforce_rate_limit(
             if value:
                 context_bits.append(f"{key}={value}")
     context_key = "|".join(context_bits)
-    keys = _request_scope_keys(user, request, group, context_key)
+    checks = _rate_limit_checks(
+        group=group,
+        user=user,
+        request=request,
+        context_key=context_key,
+        default_limit=limit,
+    )
 
     backend = str(settings.rate_limit_backend or "memory").strip().lower()
-    limiter = _postgres_rate_limiter if backend == "postgres" else _rate_limiter
+    if backend == "redis":
+        limiter = _redis_rate_limiter
+    elif backend == "postgres":
+        limiter = _postgres_rate_limiter
+    else:
+        limiter = _rate_limiter
     retry_after_seconds = 1
-    for key in keys:
+    checked_keys = []
+    for key, scoped_limit in checks:
+        checked_keys.append(key)
         try:
             allowed, retry_after_seconds = limiter.check(
                 key=key,
-                limit=limit,
+                limit=scoped_limit,
                 window_seconds=window_seconds,
             )
         except Exception as exc:
-            if backend == "postgres":
+            if backend in {"postgres", "redis"}:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail={"detail": "Rate limiter unavailable", "group": group},
@@ -190,7 +280,7 @@ def enforce_rate_limit(
         detail={
             "detail": "Rate limit exceeded",
             "group": group,
-            "scopes_checked": keys,
+            "scopes_checked": checked_keys,
             "retry_after_seconds": retry_after_seconds,
         },
         headers={"Retry-After": str(retry_after_seconds)},

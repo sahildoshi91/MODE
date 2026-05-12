@@ -389,3 +389,93 @@ class AccountDeletionRepository:
         except TypeError:
             pass
         admin_api.delete_user(user_id)
+
+
+class AccountDeletionRequestRepository:
+    TABLE = "account_deletion_requests"
+
+    def __init__(self, supabase: Client):
+        self.supabase = supabase
+
+    def create_request(
+        self,
+        *,
+        request_id: str,
+        user_id: str,
+        job_id: str,
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat()
+        response = (
+            self.supabase
+            .table(self.TABLE)
+            .insert(
+                {
+                    "request_id": request_id,
+                    "user_id": user_id,
+                    "job_id": job_id,
+                    "status": "queued",
+                    "queued_at": now,
+                    "updated_at": now,
+                }
+            )
+            .execute()
+        )
+        return (response.data or [None])[0] or {}
+
+    def mark_enqueue_failed(self, *, request_id: str, error_category: str) -> None:
+        self._update(
+            request_id,
+            {
+                "status": "failed",
+                "error_category": error_category,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+    def mark_running(self, *, request_id: str) -> None:
+        self._update(
+            request_id,
+            {
+                "status": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+    def mark_succeeded(
+        self,
+        *,
+        request_id: str,
+        deletion_request_id: str,
+        actor_role: str,
+        deleted_record_counts: dict[str, Any],
+    ) -> None:
+        self._update(
+            request_id,
+            {
+                "status": "succeeded",
+                "deletion_request_id": deletion_request_id,
+                "actor_role": actor_role,
+                "deleted_record_counts": deleted_record_counts,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "error_category": None,
+            },
+        )
+
+    def mark_failed(self, *, request_id: str, error_category: str) -> None:
+        self._update(
+            request_id,
+            {
+                "status": "failed",
+                "error_category": error_category,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+
+    def _update(self, request_id: str, payload: dict[str, Any]) -> None:
+        (
+            self.supabase
+            .table(self.TABLE)
+            .update({**payload, "updated_at": datetime.now(timezone.utc).isoformat()})
+            .eq("request_id", request_id)
+            .execute()
+        )

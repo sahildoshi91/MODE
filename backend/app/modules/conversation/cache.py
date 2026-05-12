@@ -154,3 +154,35 @@ def invalidate_chat_context(
         reason or "unspecified",
         include_trainer_persona,
     )
+
+
+def expire_chat_context_soon(
+    trainer_id: str,
+    client_id: str,
+    *,
+    reason: str | None = None,
+    include_trainer_persona: bool = False,
+    ttl_seconds: int = 5,
+) -> None:
+    keys = [
+        chat_context_key(trainer_id, client_id),
+        user_digest_key(trainer_id, client_id),
+    ]
+    if include_trainer_persona:
+        keys.append(trainer_persona_key(trainer_id))
+    cache = get_chat_cache()
+    client = cache._get_client()  # noqa: SLF001 - fallback path for failed invalidation.
+    if not client:
+        return
+    for key in keys:
+        try:
+            client.expire(key, max(1, int(ttl_seconds)))
+        except Exception:
+            logger.warning("chat_cache_expire_failed key=%s", key, exc_info=True)
+    logger.info(
+        "chat_cache_forced_short_ttl trainer_id=%s client_id=%s reason=%s ttl_seconds=%s",
+        trainer_id,
+        client_id,
+        reason or "unspecified",
+        max(1, int(ttl_seconds)),
+    )

@@ -610,34 +610,25 @@ class ConversationServiceRoutingTests(unittest.TestCase):
             client_context={},
         )
 
-        response = service.handle_chat("user-123", self.trainer_context, request)
+        with patch("app.modules.conversation.service.enqueue_post_chat_jobs", return_value=[]) as enqueue:
+            response = service.handle_chat("user-123", self.trainer_context, request)
 
         self.assertEqual(response.assistant_message, SAFETY_ESCALATION_HOLDING_RESPONSE)
         self.assertEqual(response.conversation_state.current_stage, "safety_escalation")
         self.assertFalse(response.fallback_triggered)
-        self.assertEqual(response.route_debug.selected_model, "gpt-5.4-mini")
+        self.assertEqual(response.route_debug.selected_model, "gpt-5.4")
         self.assertEqual(response.route_debug.execution_provider, "system")
         self.assertEqual(response.route_debug.execution_model, "safety-escalation-hold")
         self.assertEqual(response.conversation_usage.total_tokens, 0)
         self.assertEqual(service.openai_client.calls, [])
 
-        self.assertEqual(len(self.trainer_review_service.queued), 1)
-        queued = self.trainer_review_service.queued[0]
-        self.assertEqual(queued["conversation_id"], "convo-123")
-        self.assertEqual(queued["message_id"], "msg-1")
-
-        self.assertEqual(len(self.repository.system_events), 1)
-        event = self.repository.system_events[0]
-        self.assertEqual(event["event_type"], "safety_escalation")
-        self.assertEqual(event["severity"], "warning")
-        self.assertEqual(event["visibility"], "trainer_private")
-        self.assertEqual(event["payload"]["queue_id"], "queue-1")
-        self.assertIn("pain_language", event["payload"]["risk_flags"])
-
-        metadata = self.repository.metadata_updates[-1]["metadata"]
-        self.assertTrue(metadata["trainer_review_pending"])
-        self.assertIn("pain_language", metadata["trainer_review_risk_flags"])
-        self.assertEqual(metadata["active_safety_flags"][0]["type"], "injury")
+        self.assertEqual(self.trainer_review_service.queued, [])
+        self.assertEqual(self.repository.system_events, [])
+        self.assertEqual(self.repository.metadata_updates, [])
+        kwargs = enqueue.call_args.kwargs
+        self.assertEqual(kwargs["conversation_id"], "convo-123")
+        self.assertEqual(kwargs["user_message_id"], "msg-1")
+        self.assertTrue(kwargs["route_payload"]["needs_trainer_review"])
 
     def test_safety_escalation_tags_and_events_when_review_queue_fails(self):
         self.trainer_review_service = BrokenTrainerReviewService()
@@ -647,16 +638,13 @@ class ConversationServiceRoutingTests(unittest.TestCase):
             client_context={},
         )
 
-        response = service.handle_chat("user-123", self.trainer_context, request)
+        with patch("app.modules.conversation.service.enqueue_post_chat_jobs", return_value=[]) as enqueue:
+            response = service.handle_chat("user-123", self.trainer_context, request)
 
         self.assertEqual(response.assistant_message, SAFETY_ESCALATION_HOLDING_RESPONSE)
-        self.assertEqual(len(self.repository.system_events), 1)
-        event = self.repository.system_events[0]
-        self.assertEqual(event["event_type"], "safety_escalation")
-        self.assertIsNone(event["payload"]["queue_id"])
-        metadata = self.repository.metadata_updates[-1]["metadata"]
-        self.assertTrue(metadata["trainer_review_pending"])
-        self.assertEqual(metadata["active_safety_flags"][0]["type"], "injury")
+        self.assertEqual(self.repository.system_events, [])
+        self.assertEqual(self.repository.metadata_updates, [])
+        self.assertTrue(enqueue.call_args.kwargs["route_payload"]["needs_trainer_review"])
 
     def test_safety_escalation_derives_tenant_for_event_when_context_is_missing_it(self):
         service = self._build_service()
@@ -674,11 +662,13 @@ class ConversationServiceRoutingTests(unittest.TestCase):
             client_context={},
         )
 
-        response = service.handle_chat("user-123", trainer_context, request)
+        with patch("app.modules.conversation.service.enqueue_post_chat_jobs", return_value=[]) as enqueue:
+            response = service.handle_chat("user-123", trainer_context, request)
 
         self.assertEqual(response.assistant_message, SAFETY_ESCALATION_HOLDING_RESPONSE)
-        self.assertEqual(self.repository.system_events[0]["tenant_id"], "tenant-123")
-        self.assertTrue(self.repository.metadata_updates[-1]["metadata"]["trainer_review_pending"])
+        self.assertIsNone(enqueue.call_args.kwargs["tenant_id"])
+        self.assertEqual(self.repository.system_events, [])
+        self.assertEqual(self.repository.metadata_updates, [])
 
     def test_stream_safety_escalation_yields_before_trainer_notification(self):
         service = self._build_service()
@@ -687,22 +677,24 @@ class ConversationServiceRoutingTests(unittest.TestCase):
             client_context={},
         )
 
-        conversation_id, chunks, route_debug, result_state = service.stream_chat(
-            "user-123",
-            self.trainer_context,
-            request,
-        )
-        first_chunk = next(chunks)
+        with patch("app.modules.conversation.service.enqueue_post_chat_jobs", return_value=[]) as enqueue:
+            conversation_id, chunks, route_debug, result_state = service.stream_chat(
+                "user-123",
+                self.trainer_context,
+                request,
+            )
+            first_chunk = next(chunks)
 
-        self.assertEqual(conversation_id, "convo-123")
-        self.assertEqual(first_chunk, SAFETY_ESCALATION_HOLDING_RESPONSE)
-        self.assertEqual(route_debug.execution_provider, "system")
-        self.assertEqual(self.trainer_review_service.queued, [])
+            self.assertEqual(conversation_id, "convo-123")
+            self.assertEqual(first_chunk, SAFETY_ESCALATION_HOLDING_RESPONSE)
+            self.assertEqual(route_debug.execution_provider, "system")
+            self.assertEqual(self.trainer_review_service.queued, [])
 
-        self.assertEqual("".join(chunks), "")
-        self.assertEqual(len(self.trainer_review_service.queued), 1)
-        self.assertEqual(len(self.repository.system_events), 1)
-        self.assertTrue(self.repository.metadata_updates[-1]["metadata"]["trainer_review_pending"])
+            self.assertEqual("".join(chunks), "")
+        self.assertEqual(enqueue.call_count, 1)
+        self.assertEqual(len(self.trainer_review_service.queued), 0)
+        self.assertEqual(self.repository.system_events, [])
+        self.assertEqual(self.repository.metadata_updates, [])
         self.assertEqual(result_state.conversation_usage.total_tokens, 0)
 
     def test_generated_workout_context_is_included_in_prompt_for_adjustments(self):
@@ -741,21 +733,22 @@ class ConversationServiceRoutingTests(unittest.TestCase):
             client_context={"trainer_persona_requested": True, "retrieval_confidence": 0.3},
         )
 
-        response = service.handle_chat("user-123", self.trainer_context, request)
+        with patch("app.modules.conversation.service.enqueue_post_chat_jobs", return_value=[]):
+            response = service.handle_chat("user-123", self.trainer_context, request)
 
-        self.assertEqual(response.assistant_message, "Gemini says hello")
+        self.assertEqual(response.assistant_message, "GPT says hello")
         self.assertEqual(response.conversation_state.current_stage, "persona_coach")
         self.assertTrue(response.fallback_triggered)
-        self.assertEqual(len(self.trainer_review_service.queued), 1)
+        self.assertEqual(len(self.trainer_review_service.queued), 0)
         route_payload = self.repository.saved_messages[-1]["structured_payload"]["route"]
         self.assertEqual(route_payload["model"], "claude-sonnet-4.6")
-        self.assertEqual(route_payload["execution_model"], "gemini-2.5-flash")
+        self.assertEqual(route_payload["execution_model"], "gpt-5.4-mini")
         self.assertEqual(route_payload["fallback_reason"], "anthropic_client_not_configured")
         self.assertEqual(response.route_debug.selected_provider, "anthropic")
-        self.assertEqual(response.route_debug.execution_provider, "gemini")
-        self.assertEqual(response.conversation_usage.last_execution_provider, "gemini")
+        self.assertEqual(response.route_debug.execution_provider, "openai")
+        self.assertEqual(response.conversation_usage.last_execution_provider, "openai")
 
-    def test_low_confidence_client_question_skips_trainer_review_when_memory_theme_covered(self):
+    def test_low_confidence_client_question_defers_memory_theme_check_to_worker(self):
         intelligence_service = FakeTrainerIntelligenceService(
             covered=True,
             reason="token_overlap",
@@ -767,14 +760,15 @@ class ConversationServiceRoutingTests(unittest.TestCase):
             client_context={"trainer_persona_requested": True, "retrieval_confidence": 0.3},
         )
 
-        response = service.handle_chat("user-123", self.trainer_context, request)
+        with patch("app.modules.conversation.service.enqueue_post_chat_jobs", return_value=[]) as enqueue:
+            response = service.handle_chat("user-123", self.trainer_context, request)
 
         self.assertEqual(response.route_debug.flow, "persona_coach")
         self.assertEqual(len(self.trainer_review_service.queued), 0)
-        self.assertEqual(len(intelligence_service.calls), 1)
-        self.assertEqual(intelligence_service.calls[0]["client_id"], "client-123")
+        self.assertEqual(len(intelligence_service.calls), 0)
+        self.assertTrue(enqueue.call_args.kwargs["route_payload"]["needs_trainer_review"])
 
-    def test_low_confidence_client_question_queues_when_memory_theme_not_covered(self):
+    def test_low_confidence_client_question_enqueues_trainer_review_job(self):
         intelligence_service = FakeTrainerIntelligenceService(covered=False, reason="no_strong_match")
         service = self._build_service(trainer_intelligence_service=intelligence_service)
         request = ChatRequest(
@@ -782,11 +776,13 @@ class ConversationServiceRoutingTests(unittest.TestCase):
             client_context={"trainer_persona_requested": True, "retrieval_confidence": 0.3},
         )
 
-        response = service.handle_chat("user-123", self.trainer_context, request)
+        with patch("app.modules.conversation.service.enqueue_post_chat_jobs", return_value=[]) as enqueue:
+            response = service.handle_chat("user-123", self.trainer_context, request)
 
         self.assertEqual(response.route_debug.flow, "persona_coach")
-        self.assertEqual(len(self.trainer_review_service.queued), 1)
-        self.assertEqual(len(intelligence_service.calls), 1)
+        self.assertEqual(len(self.trainer_review_service.queued), 0)
+        self.assertEqual(len(intelligence_service.calls), 0)
+        self.assertTrue(enqueue.call_args.kwargs["route_payload"]["needs_trainer_review"])
 
     def test_trainer_only_context_does_not_queue_review_even_when_route_needs_review(self):
         intelligence_service = FakeTrainerIntelligenceService(covered=False, reason="no_strong_match")

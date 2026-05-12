@@ -38,7 +38,7 @@ from app.modules.conversation.streaming import (
     message_delta_event,
     status_event_for_intent,
 )
-from app.modules.conversation.trace import ChatTraceAccumulator, strip_private_trace
+from app.modules.conversation.trace import ChatTraceAccumulator, emit_chat_trace, strip_private_trace
 
 
 router = APIRouter()
@@ -290,6 +290,7 @@ async def stream_chat_session_message(
             user_id=user.id,
             trainer_id=str(trainer_context.trainer_id or ""),
         )
+        trace_conversation_id: str | None = None
 
         yield encoder.encode(
             status_event_for_intent(
@@ -357,6 +358,7 @@ async def stream_chat_session_message(
                 session_id=session_id,
                 request=request,
             )
+            trace_conversation_id = str(conversation_id or "").strip() or None
             assistant_message_metadata = (
                 route_debug.get("assistant_message_metadata")
                 if isinstance(route_debug, dict)
@@ -466,7 +468,12 @@ async def stream_chat_session_message(
                 error_detail=CONTROLLED_CHAT_ERROR_DETAIL,
             )
         finally:
-            trace.build().log()
+            emit_chat_trace(
+                trace.build(),
+                trainer_id=str(trainer_context.trainer_id or ""),
+                client_id=str(trainer_context.client_id or ""),
+                conversation_id=trace_conversation_id,
+            )
 
     return StreamingResponse(
         event_stream(),

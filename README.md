@@ -329,7 +329,7 @@ Core gate commands:
 cd backend
 ./venv/bin/python scripts/check_personal_data_inventory.py
 MODE_SECURITY_DATABASE_URL='postgres://...' ./venv/bin/python scripts/staging_db_security_check.py
-APP_ENV=production RATE_LIMIT_BACKEND=postgres ./venv/bin/python scripts/security_release_preflight.py --env production
+APP_ENV=production RATE_LIMIT_BACKEND=redis REDIS_URL='redis://...' ./venv/bin/python scripts/security_release_preflight.py --env production
 MODE_SECURITY_TARGET_ENV=production ./scripts/security_regression_suite.sh
 ```
 

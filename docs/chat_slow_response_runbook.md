@@ -8,9 +8,23 @@ Important fields:
 - `total_response_ms`: full chat response duration.
 - `route`: `FAST_PATH`, `DEEP_PATH`, `SAFETY_ESCALATION`, or a fallback route label.
 - `model_used`: provider model used for the answer.
+- `prompt_version`: prompt template bundle used for the request.
+- `model_fallback_chain`: ordered provider/model attempts for the request.
+- `tokens_cost_usd`: estimated request cost when provider usage is available.
 - `cache_hit`: whether digest/persona context used Redis.
 - `retrieval_latency_ms`: retrieval timing when available.
 - `error_category`: populated for failed/no-token streams.
+- `worker_job_id`: optional link to the Intelligence Lane job when emitted by the request path.
+- `queue_enqueue_latency_ms`: enqueue timing when present.
+
+Worker signal:
+- Search backend worker logs for structured events with `"event":"worker_job_trace"`.
+- Important fields: `job_id`, `job_type`, `trace_id`, `status`, `attempt_number`, `duration_ms`, `error_category`, `completed_at`.
+- Use `trace_id` to connect worker jobs back to the parent `chat_trace.request_id`.
+
+Metric signal:
+- Search backend logs for `"event":"observation_metric"`.
+- Key metric names: `chat.ttft_ms`, `chat.total_ms`, `router.latency_ms`, `db.query_latency_ms`, `worker.queue_lag_ms`, `worker.job_success_rate`, `worker.retry_rate`, `worker.dead_letter_count`, `llm.tokens_in`, `llm.tokens_out`, `llm.cost_usd`, `llm.fallback_rate`, `llm.error_rate`, `db.error_rate`, `cache.miss_rate`, `safety.escalation_rate`, `safety.injection_detected_rate`, `safety.trainer_review_pending_count`.
 
 ## SLO Targets
 - App open / context preload: p50 < 200ms, p99 < 400ms.
@@ -43,9 +57,51 @@ This is not production-promotion ready. Next triage step is Render deploy/runtim
 - If `cache_hit=false` and total latency is high, verify Redis health and `REDIS_URL`.
 - If `route=SAFETY_ESCALATION`, higher latency can be expected because trainer review tagging and safe response handling are active.
 - If `model_used` is a fallback model, inspect provider availability and API key configuration.
+- If `model_fallback_chain` contains more than one model, compare the first failure reason to provider logs before tuning routing.
+- If `tokens_cost_usd` spikes for a trainer, check whether fast-path traffic is being routed to deep-path/full-model flows.
+- If `prompt_version` is unexpected, verify the route flow and prompt template mapping in `backend/app/modules/conversation/orchestration.py`.
 - If `total_response_ms` is high but `time_to_first_token_ms` is healthy, the user saw streaming quickly; investigate provider completion length or client rendering.
+- If chat is fast but trainer review, memory, or cache changes are delayed, inspect the Intelligence Lane queue rather than the SSE path.
+- If `worker.queue_lag_ms` or the oldest queued job exceeds 30s, confirm the worker process is running and connected to the same `REDIS_URL` as the web service.
+- If `cache_invalidate` jobs fail repeatedly, verify Redis health. On final failure the worker attempts to force affected chat context keys to a 5 second TTL.
+
+## Queue Debugging
+
+Oldest queued or retrying jobs:
+
+```sql
+SELECT
+  job_type,
+  status,
+  EXTRACT(EPOCH FROM (now() - MIN(enqueued_at))) * 1000 AS oldest_lag_ms,
+  COUNT(*) AS job_count
+FROM public.intelligence_jobs
+WHERE status IN ('queued', 'retry')
+GROUP BY job_type, status
+ORDER BY oldest_lag_ms DESC;
+```
+
+Recent worker failures:
+
+```sql
+SELECT job_id, job_type, attempt_count, last_error_category, updated_at
+FROM public.intelligence_jobs
+WHERE status = 'failed'
+ORDER BY updated_at DESC
+LIMIT 50;
+```
+
+Trace a request into the worker lane:
+
+```sql
+SELECT job_id, job_type, status, attempt_count, queue_name, enqueued_at, completed_at
+FROM public.intelligence_jobs
+WHERE trace_id = '<chat_trace.request_id>'
+ORDER BY enqueued_at;
+```
 
 ## Commands
 - Backend health: `npm run backend:check`
 - Prompt-close check: `npm run codex:check`
-- Focused tests: `./backend/venv/bin/pytest -q backend/tests/test_chat_api.py backend/tests/test_chat_sessions_api.py backend/tests/test_chat_pipeline_primitives.py`
+- Worker process: `cd backend && python -m app.workers.intelligence_worker`
+- Focused tests: `./backend/venv/bin/pytest -q backend/tests/test_observability_phase_d.py backend/tests/test_llm_orchestration.py backend/tests/test_chat_api.py backend/tests/test_chat_sessions_api.py backend/tests/test_chat_pipeline_primitives.py`

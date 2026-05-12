@@ -68,8 +68,10 @@ def run_startup_guards() -> None:
     if not settings.auth_password_proxy_enabled:
         raise StartupGuardError("Production startup blocked: password auth proxy must be enabled")
 
-    if str(settings.rate_limit_backend).strip().lower() != "postgres":
-        raise StartupGuardError("Production startup blocked: rate_limit_backend must be postgres")
+    if str(settings.rate_limit_backend).strip().lower() != "redis":
+        raise StartupGuardError("Production startup blocked: rate_limit_backend must be redis")
+    if not str(settings.redis_url or "").strip():
+        raise StartupGuardError("Production startup blocked: REDIS_URL is missing")
 
     supabase_url = str(settings.supabase_url or "").strip()
     if not supabase_url:

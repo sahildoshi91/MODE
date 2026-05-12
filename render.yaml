@@ -22,6 +22,40 @@ services:
         value: "200"
       - key: CHAT_STREAM_LEGACY_ALIAS_ENABLED
         value: "true"
+      - key: REDIS_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+  - type: worker
+    runtime: python
+    name: mode-intelligence-worker-staging
+    repo: https://github.com/sahildoshi91/MODE
+    branch: pr6-ai-chat-memory-scaling
+    rootDir: backend
+    region: oregon
+    plan: starter
+    autoDeployTrigger: commit
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.workers.intelligence_worker
+    envVars:
+      - key: APP_ENV
+        value: staging
+      - key: CHAT_CACHE_ENABLED
+        value: "true"
+      - key: CHAT_CACHE_TIMEOUT_MS
+        value: "25"
+      - key: REDIS_URL
+        sync: false
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_ANON_KEY

@@ -41,6 +41,7 @@ class StartupGuardsTests(unittest.TestCase):
             "personal_data_inventory_path": settings.personal_data_inventory_path,
             "auth_password_proxy_enabled": settings.auth_password_proxy_enabled,
             "rate_limit_backend": settings.rate_limit_backend,
+            "redis_url": settings.redis_url,
             "supabase_url": settings.supabase_url,
             "supabase_service_role_key": settings.supabase_service_role_key,
             "production_required_rls_tables": settings.production_required_rls_tables,
@@ -53,7 +54,8 @@ class StartupGuardsTests(unittest.TestCase):
         settings.account_deletion_contract_enforced = True
         settings.personal_data_inventory_path = "security/personal_data_inventory.json"
         settings.auth_password_proxy_enabled = True
-        settings.rate_limit_backend = "postgres"
+        settings.rate_limit_backend = "redis"
+        settings.redis_url = "redis://localhost:6379/0"
         settings.supabase_url = "https://example.supabase.co"
         settings.supabase_service_role_key = "service-role"
         settings.production_required_rls_tables = "clients,trainers,trainer_invite_codes"
@@ -69,6 +71,7 @@ class StartupGuardsTests(unittest.TestCase):
         settings.personal_data_inventory_path = self.original["personal_data_inventory_path"]
         settings.auth_password_proxy_enabled = self.original["auth_password_proxy_enabled"]
         settings.rate_limit_backend = self.original["rate_limit_backend"]
+        settings.redis_url = self.original["redis_url"]
         settings.supabase_url = self.original["supabase_url"]
         settings.supabase_service_role_key = self.original["supabase_service_role_key"]
         settings.production_required_rls_tables = self.original["production_required_rls_tables"]
@@ -87,8 +90,13 @@ class StartupGuardsTests(unittest.TestCase):
         with self.assertRaises(StartupGuardError):
             run_startup_guards()
 
-    def test_startup_guards_fail_when_rate_limiter_is_not_postgres(self):
+    def test_startup_guards_fail_when_rate_limiter_is_not_redis(self):
         settings.rate_limit_backend = "memory"
+        with self.assertRaises(StartupGuardError):
+            run_startup_guards()
+
+    def test_startup_guards_fail_when_redis_url_is_missing(self):
+        settings.redis_url = None
         with self.assertRaises(StartupGuardError):
             run_startup_guards()
 

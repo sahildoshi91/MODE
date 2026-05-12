@@ -13,7 +13,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from fastapi.testclient import TestClient
 
 from app.core.auth import AuthenticatedUser, require_user
-from app.core.dependencies import get_onboarding_service, get_trainer_context
+from app.core.dependencies import get_onboarding_service, get_request_scoped_supabase_client, get_trainer_context
 from app.core.tenancy import TrainerContext
 from app.main import app
 from app.modules.onboarding.service import OnboardingServiceError
@@ -77,10 +77,8 @@ class TrainerAssignmentInviteApiTests(unittest.TestCase):
             client_id="client-123",
         )
 
-        with patch("app.api.v1.trainer_assignment.resolve_trainer_context", return_value=resolved_context), patch(
-            "app.api.v1.trainer_assignment.get_supabase_client",
-            return_value=object(),
-        ):
+        app.dependency_overrides[get_request_scoped_supabase_client] = lambda: object()
+        with patch("app.api.v1.trainer_assignment.resolve_trainer_context", return_value=resolved_context):
             response = self.client.post(
                 "/api/v1/trainer-assignment/assign-by-invite",
                 json={"invite_code": "MAYA2026"},
@@ -98,11 +96,9 @@ class TrainerAssignmentInviteApiTests(unittest.TestCase):
 
     def test_assign_by_invite_maps_service_error(self):
         app.dependency_overrides[get_onboarding_service] = lambda: FailingOnboardingService()
+        app.dependency_overrides[get_request_scoped_supabase_client] = lambda: object()
 
-        with patch("app.api.v1.trainer_assignment.resolve_trainer_context", return_value=TrainerContext(None, None, None, None, None)), patch(
-            "app.api.v1.trainer_assignment.get_supabase_client",
-            return_value=object(),
-        ):
+        with patch("app.api.v1.trainer_assignment.resolve_trainer_context", return_value=TrainerContext(None, None, None, None, None)):
             response = self.client.post(
                 "/api/v1/trainer-assignment/assign-by-invite",
                 json={"invite_code": "BAD"},
@@ -135,10 +131,8 @@ class TrainerAssignmentInviteApiTests(unittest.TestCase):
                         status_code,
                     )
                 )
-                with patch("app.api.v1.trainer_assignment.resolve_trainer_context", return_value=TrainerContext(None, None, None, None, None)), patch(
-                    "app.api.v1.trainer_assignment.get_supabase_client",
-                    return_value=object(),
-                ):
+                app.dependency_overrides[get_request_scoped_supabase_client] = lambda: object()
+                with patch("app.api.v1.trainer_assignment.resolve_trainer_context", return_value=TrainerContext(None, None, None, None, None)):
                     response = self.client.post(
                         "/api/v1/trainer-assignment/assign-by-invite",
                         json={"invite_code": code},

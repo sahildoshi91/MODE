@@ -19,7 +19,7 @@ class ConversationRouterTests(unittest.TestCase):
             "equipment_access": "gym",
         }
 
-    def test_routes_high_risk_to_gpt_mini_safety_flow(self):
+    def test_routes_high_risk_to_full_model_safety_flow(self):
         decision = self.router.route(
             RoutingContext(
                 message_text="I had chest pain and dizziness during my workout today.",
@@ -29,7 +29,7 @@ class ConversationRouterTests(unittest.TestCase):
         )
 
         self.assertEqual(decision.provider, "openai")
-        self.assertEqual(decision.model, "gpt-5.4-mini")
+        self.assertEqual(decision.model, "gpt-5.4")
         self.assertEqual(decision.flow, "safety_constrained")
         self.assertGreaterEqual(decision.risk_score, 5)
 
@@ -47,7 +47,7 @@ class ConversationRouterTests(unittest.TestCase):
         self.assertEqual(decision.model, "claude-sonnet-4.6")
         self.assertEqual(decision.flow, "persona_coach")
 
-    def test_routes_complex_structured_request_to_gpt_mini(self):
+    def test_routes_complex_structured_request_to_full_model(self):
         decision = self.router.route(
             RoutingContext(
                 message_text="Analyze my last 8 weeks and create next week's plan in JSON.",
@@ -57,7 +57,7 @@ class ConversationRouterTests(unittest.TestCase):
         )
 
         self.assertEqual(decision.provider, "openai")
-        self.assertEqual(decision.model, "gpt-5.4-mini")
+        self.assertEqual(decision.model, "gpt-5.4")
         self.assertEqual(decision.flow, "reasoning_structured")
         self.assertEqual(decision.response_mode, "async_report_generation")
 

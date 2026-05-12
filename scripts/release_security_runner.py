@@ -33,6 +33,7 @@ ENV_CATEGORY_GROUPS: list[tuple[str, set[str]]] = [
         {
             "APP_ENV",
             "OPENAI_API_KEY",
+            "REDIS_URL",
             "RATE_LIMIT_BACKEND",
             "STARTUP_GUARD_ENABLED",
             "AUTH_PASSWORD_PROXY_ENABLED",

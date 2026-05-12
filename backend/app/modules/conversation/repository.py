@@ -13,11 +13,6 @@ class ConversationRepository:
     def __init__(self, supabase: Client):
         self.supabase = supabase
 
-    def _admin_supabase(self) -> Client:
-        from app.db.client import get_supabase_admin_client
-
-        return get_supabase_admin_client()
-
     def get_conversation(self, conversation_id: str) -> dict[str, Any] | None:
         response = (
             self.supabase
@@ -397,16 +392,20 @@ class ConversationRepository:
         return response.data[0] if response.data else None
 
     def list_messages(self, conversation_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        normalized_limit = max(1, min(int(limit or 20), 50))
         response = (
             self.supabase
             .table('conversation_messages')
             .select('id, role, message_text, created_at')
             .eq('conversation_id', conversation_id)
-            .order('created_at', desc=False)
-            .limit(limit)
+            .order('created_at', desc=True)
+            .order('id', desc=True)
+            .limit(normalized_limit)
             .execute()
         )
-        return response.data or []
+        rows = response.data or []
+        rows.reverse()
+        return rows
 
     def list_messages_with_payload(
         self,
@@ -415,6 +414,7 @@ class ConversationRepository:
         *,
         before_created_at: str | None = None,
     ) -> list[dict[str, Any]]:
+        normalized_limit = max(1, min(int(limit or 80), 200))
         query = (
             self.supabase
             .table('conversation_messages')
@@ -428,7 +428,7 @@ class ConversationRepository:
             query
             .order('created_at', desc=True)
             .order('id', desc=True)
-            .limit(limit)
+            .limit(normalized_limit)
             .execute()
         )
         rows = response.data or []
@@ -466,7 +466,7 @@ class ConversationRepository:
 
     def get_trainer_system_event_by_key(self, trainer_id: str, event_key: str) -> dict[str, Any] | None:
         response = (
-            self._admin_supabase()
+            self.supabase
             .table("trainer_system_events")
             .select("*")
             .eq("trainer_id", trainer_id)
@@ -477,12 +477,12 @@ class ConversationRepository:
         return response.data[0] if response.data else None
 
     def insert_trainer_system_event(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        response = self._admin_supabase().table("trainer_system_events").insert(payload).execute()
+        response = self.supabase.table("trainer_system_events").insert(payload).execute()
         return (response.data or [None])[0]
 
     def get_client_tenant_id(self, trainer_id: str, client_id: str) -> str | None:
         response = (
-            self._admin_supabase()
+            self.supabase
             .table("clients")
             .select("tenant_id")
             .eq("id", client_id)

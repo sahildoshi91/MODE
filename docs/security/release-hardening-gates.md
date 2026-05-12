@@ -7,7 +7,7 @@ This runbook documents enforceable release blockers for:
 - storage upload expiry/orphan cleanup
 - production runtime preflight
 - iOS hardening and artifact scans
-- storage deny-by-default enforcement
+- storage lifecycle RLS and bounded private signed URL exception enforcement
 
 ## Required Environment Variables
 
@@ -16,7 +16,8 @@ This runbook documents enforceable release blockers for:
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `RATE_LIMIT_BACKEND=postgres`
+- `REDIS_URL`
+- `RATE_LIMIT_BACKEND=redis`
 - `PERSONAL_DATA_INVENTORY_PATH` (optional override, defaults to `security/personal_data_inventory.json`)
 - `ACCOUNT_DELETION_CONTRACT_ENFORCED=true`
 - `ACCOUNT_DELETION_ACTIVE_SINK_CATEGORIES=file_storage,retrieval_caches,analytics_events`
@@ -55,7 +56,7 @@ cd backend
 MODE_SECURITY_DATABASE_URL='postgres://...' ./venv/bin/python scripts/staging_db_security_check.py
 ```
 
-### Storage deny-by-default codepath audit
+### Storage private-bucket codepath audit
 ```bash
 python scripts/storage_access_audit.py
 ```
@@ -78,7 +79,7 @@ cd backend
 ### Production preflight
 ```bash
 cd backend
-APP_ENV=production RATE_LIMIT_BACKEND=postgres ./venv/bin/python scripts/security_release_preflight.py --env production
+APP_ENV=production RATE_LIMIT_BACKEND=redis REDIS_URL='redis://...' ./venv/bin/python scripts/security_release_preflight.py --env production
 ```
 
 ### iOS hardening lint + artifact scan
@@ -123,10 +124,10 @@ Staging DB security check: FAILED
 - Dangerous policy detected (public.clients:clients_select_all): USING (true)
 ```
 
-### Storage policy regression
+### Storage signed URL exception regression
 ```text
 Staging DB security check: FAILED
-- storage.objects grants SELECT to authenticated; expected deny-by-default
+- public.storage_upload_grants authenticated policy storage_upload_grants_owner_select must scope to owner_user_id = auth.uid()
 ```
 
 ### Production preflight config failure

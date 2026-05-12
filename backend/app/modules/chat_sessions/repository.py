@@ -283,8 +283,17 @@ class ChatSessionRepository:
                     return existing
             raise
 
-        rows = self.list_messages(session_id, limit=500)
-        next_index = max([int(row.get("message_index", -1)) for row in rows] or [-1]) + 1
+        latest_response = (
+            self.supabase
+            .table(self._MESSAGES_TABLE)
+            .select("message_index")
+            .eq("session_id", session_id)
+            .order("message_index", desc=True)
+            .limit(1)
+            .execute()
+        )
+        latest_row = latest_response.data[0] if latest_response.data else {}
+        next_index = int(latest_row.get("message_index", -1)) + 1
         response = (
             self.supabase
             .table(self._MESSAGES_TABLE)

@@ -139,7 +139,7 @@ class ConversationRouter:
         if risk_score >= 5:
             return RoutingDecision(
                 task_type=task_type,
-                model=GPT_5_4_MINI_MODEL,
+                model=GPT_5_4_MODEL,
                 provider="openai",
                 flow="safety_constrained",
                 reason="risk",
@@ -196,7 +196,7 @@ class ConversationRouter:
         if structure_score >= 3 or complexity_score >= 4 or low_retrieval_confidence:
             return RoutingDecision(
                 task_type=task_type,
-                model=GPT_5_4_MINI_MODEL,
+                model=GPT_5_4_MODEL,
                 provider="openai",
                 flow="reasoning_structured",
                 reason="complexity_or_structure" if not low_retrieval_confidence else "low_retrieval_confidence",

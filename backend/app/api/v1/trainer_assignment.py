@@ -3,13 +3,13 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from supabase import Client
 
 from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.config import settings
-from app.core.dependencies import get_onboarding_service, get_trainer_context
+from app.core.dependencies import get_onboarding_service, get_request_scoped_supabase_client, get_trainer_context
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext, resolve_trainer_context
-from app.db.client import get_supabase_client
 from app.modules.onboarding.service import OnboardingService, OnboardingServiceError
 
 
@@ -85,11 +85,11 @@ def _resolve_viewer_display_name(
     return _email_local_part(user.email)
 
 
-def _list_active_trainers(*, tenant_id: str | None) -> list[dict]:
+def _list_active_trainers(*, supabase: Client, tenant_id: str | None) -> list[dict]:
     if not tenant_id and not settings.trainer_assignment_global_fallback_enabled:
         return []
     query = (
-        get_supabase_client()
+        supabase
         .table("trainers")
         .select("id, tenant_id, user_id, display_name, is_active")
         .eq("is_active", True)
@@ -147,6 +147,7 @@ def _build_status_response(
 async def get_assignment_status(
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
+    supabase: Client = Depends(get_request_scoped_supabase_client),
 ):
     if trainer_context.trainer_id:
         return _build_status_response(trainer_context, user)
@@ -154,7 +155,7 @@ async def get_assignment_status(
     return _build_status_response(
         trainer_context,
         user,
-        available_trainers=_list_active_trainers(tenant_id=trainer_context.tenant_id),
+        available_trainers=_list_active_trainers(supabase=supabase, tenant_id=trainer_context.tenant_id),
     )
 
 
@@ -179,6 +180,7 @@ async def assign_trainer_by_invite(
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
     onboarding_service: OnboardingService = Depends(get_onboarding_service),
+    supabase: Client = Depends(get_request_scoped_supabase_client),
 ):
     enforce_rate_limit(
         group="invite_redeem",
@@ -205,5 +207,5 @@ async def assign_trainer_by_invite(
             detail="Unable to attach trainer with invite code",
         ) from exc
 
-    updated_context = resolve_trainer_context(get_supabase_client(), user.id)
+    updated_context = resolve_trainer_context(supabase, user.id)
     return _build_status_response(updated_context, user)

@@ -296,9 +296,16 @@ class StoragePrivateApiTests(unittest.TestCase):
             client_user_id="client-user-1",
         )
         app.dependency_overrides[get_trainer_client_repository] = lambda: FakeTrainerClientRepository()
+        self.fake_supabase = FakeSupabaseAdminClient()
+        self.admin_client_patcher = patch(
+            "app.api.v1.storage_private.get_supabase_admin_client",
+            return_value=self.fake_supabase,
+        )
+        self.admin_client_patcher.start()
         self.client = TestClient(app)
 
     def tearDown(self):
+        self.admin_client_patcher.stop()
         settings.storage_private_bucket = self.original["bucket"]
         settings.storage_signed_url_ttl_seconds = self.original["ttl"]
         settings.storage_upload_window_seconds = self.original["upload_window"]
@@ -314,18 +321,16 @@ class StoragePrivateApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 401)
 
     def test_issue_private_upload_url_for_client_self(self):
-        fake_admin = FakeSupabaseAdminClient()
-        with patch("app.api.v1.storage_private.get_supabase_admin_client", return_value=fake_admin):
-            response = self.client.post(
-                "/api/v1/storage/private/upload-url",
-                json={
-                    "scope": "client_self",
-                    "filename": "progress-photo.jpg",
-                    "mime_type": "image/jpeg",
-                    "size_bytes": 12345,
-                },
-                headers={"Authorization": "Bearer ignored"},
-            )
+        response = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "client_self",
+                "filename": "progress-photo.jpg",
+                "mime_type": "image/jpeg",
+                "size_bytes": 12345,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
 
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -334,48 +339,42 @@ class StoragePrivateApiTests(unittest.TestCase):
         self.assertIn(".jpg", payload["object_path"])
         self.assertEqual(payload["expires_in"], 90)
         self.assertIn("upload-token-", payload["upload_token"])
-        self.assertEqual(len(fake_admin.tables["storage_upload_grants"]), 1)
+        self.assertEqual(len(self.fake_supabase.tables["storage_upload_grants"]), 1)
 
     def test_invalid_file_type_is_rejected(self):
-        fake_admin = FakeSupabaseAdminClient()
-        with patch("app.api.v1.storage_private.get_supabase_admin_client", return_value=fake_admin):
-            response = self.client.post(
-                "/api/v1/storage/private/upload-url",
-                json={
-                    "scope": "client_self",
-                    "filename": "payload.exe",
-                    "mime_type": "application/x-msdownload",
-                    "size_bytes": 1024,
-                },
-                headers={"Authorization": "Bearer ignored"},
-            )
+        response = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "client_self",
+                "filename": "payload.exe",
+                "mime_type": "application/x-msdownload",
+                "size_bytes": 1024,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
         self.assertEqual(response.status_code, 415)
 
     def test_oversized_file_is_rejected(self):
-        fake_admin = FakeSupabaseAdminClient()
-        with patch("app.api.v1.storage_private.get_supabase_admin_client", return_value=fake_admin):
-            response = self.client.post(
-                "/api/v1/storage/private/upload-url",
-                json={
-                    "scope": "client_self",
-                    "filename": "scan.pdf",
-                    "mime_type": "application/pdf",
-                    "size_bytes": settings.storage_max_file_size_bytes + 1,
-                },
-                headers={"Authorization": "Bearer ignored"},
-            )
+        response = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "client_self",
+                "filename": "scan.pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": settings.storage_max_file_size_bytes + 1,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
         self.assertEqual(response.status_code, 413)
 
     def test_cross_client_private_download_is_denied(self):
-        fake_admin = FakeSupabaseAdminClient()
-        with patch("app.api.v1.storage_private.get_supabase_admin_client", return_value=fake_admin):
-            response = self.client.post(
-                "/api/v1/storage/private/download-url",
-                json={
-                    "object_path": "client/client-2/4f9e5f50c46b4d4f9d87df505ec022bb_wKHkLdnWdQLN8FAS2M_aKQ.jpg",
-                },
-                headers={"Authorization": "Bearer ignored"},
-            )
+        response = self.client.post(
+            "/api/v1/storage/private/download-url",
+            json={
+                "object_path": "client/client-2/4f9e5f50c46b4d4f9d87df505ec022bb_wKHkLdnWdQLN8FAS2M_aKQ.jpg",
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
         self.assertEqual(response.status_code, 403)
 
     def test_cross_trainer_private_download_is_denied(self):
@@ -392,15 +391,13 @@ class StoragePrivateApiTests(unittest.TestCase):
             client_id=None,
             client_user_id=None,
         )
-        fake_admin = FakeSupabaseAdminClient()
-        with patch("app.api.v1.storage_private.get_supabase_admin_client", return_value=fake_admin):
-            response = self.client.post(
-                "/api/v1/storage/private/download-url",
-                json={
-                    "object_path": "trainer/trainer-2/workspace/4f9e5f50c46b4d4f9d87df505ec022bb_wKHkLdnWdQLN8FAS2M_aKQ.pdf",
-                },
-                headers={"Authorization": "Bearer ignored"},
-            )
+        response = self.client.post(
+            "/api/v1/storage/private/download-url",
+            json={
+                "object_path": "trainer/trainer-2/workspace/4f9e5f50c46b4d4f9d87df505ec022bb_wKHkLdnWdQLN8FAS2M_aKQ.pdf",
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
         self.assertEqual(response.status_code, 403)
 
     def test_signed_download_url_has_short_expiry(self):
@@ -417,195 +414,183 @@ class StoragePrivateApiTests(unittest.TestCase):
             client_id=None,
             client_user_id=None,
         )
-        fake_admin = FakeSupabaseAdminClient()
-        with patch("app.api.v1.storage_private.get_supabase_admin_client", return_value=fake_admin):
-            response = self.client.post(
-                "/api/v1/storage/private/download-url",
-                json={
-                    "object_path": "trainer/trainer-1/workspace/4f9e5f50c46b4d4f9d87df505ec022bb_wKHkLdnWdQLN8FAS2M_aKQ.pdf",
-                },
-                headers={"Authorization": "Bearer ignored"},
-            )
+        response = self.client.post(
+            "/api/v1/storage/private/download-url",
+            json={
+                "object_path": "trainer/trainer-1/workspace/4f9e5f50c46b4d4f9d87df505ec022bb_wKHkLdnWdQLN8FAS2M_aKQ.pdf",
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["expires_in"], 90)
         self.assertIn("expires_in=90", payload["signed_url"])
 
     def test_path_traversal_and_guessed_path_are_rejected(self):
-        fake_admin = FakeSupabaseAdminClient()
-        with patch("app.api.v1.storage_private.get_supabase_admin_client", return_value=fake_admin):
-            traversal = self.client.post(
-                "/api/v1/storage/private/download-url",
-                json={"object_path": "../client/client-1/file.pdf"},
-                headers={"Authorization": "Bearer ignored"},
-            )
-            guessed = self.client.post(
-                "/api/v1/storage/private/download-url",
-                json={"object_path": "client/client-1/profile.jpg"},
-                headers={"Authorization": "Bearer ignored"},
-            )
+        traversal = self.client.post(
+            "/api/v1/storage/private/download-url",
+            json={"object_path": "../client/client-1/file.pdf"},
+            headers={"Authorization": "Bearer ignored"},
+        )
+        guessed = self.client.post(
+            "/api/v1/storage/private/download-url",
+            json={"object_path": "client/client-1/profile.jpg"},
+            headers={"Authorization": "Bearer ignored"},
+        )
         self.assertEqual(traversal.status_code, 400)
         self.assertEqual(guessed.status_code, 403)
 
     def test_upload_complete_succeeds_and_creates_ownership_record(self):
-        fake_admin = FakeSupabaseAdminClient()
-        with patch("app.api.v1.storage_private.get_supabase_admin_client", return_value=fake_admin):
-            issue = self.client.post(
-                "/api/v1/storage/private/upload-url",
-                json={
-                    "scope": "client_self",
-                    "filename": "profile-image.jpg",
-                    "mime_type": "image/jpeg",
-                    "size_bytes": 1000,
-                },
-                headers={"Authorization": "Bearer ignored"},
-            )
-            self.assertEqual(issue.status_code, 200, issue.text)
-            issued = issue.json()
-            fake_admin.storage.from_(issued["bucket"]).add_object(issued["object_path"])
+        issue = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "client_self",
+                "filename": "profile-image.jpg",
+                "mime_type": "image/jpeg",
+                "size_bytes": 1000,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
+        self.assertEqual(issue.status_code, 200, issue.text)
+        issued = issue.json()
+        self.fake_supabase.storage.from_(issued["bucket"]).add_object(issued["object_path"])
 
-            complete = self.client.post(
-                "/api/v1/storage/private/upload-complete",
-                json={
-                    "upload_token": issued["upload_token"],
-                    "object_path": issued["object_path"],
-                    "bucket": issued["bucket"],
-                },
-                headers={"Authorization": "Bearer ignored"},
-            )
+        complete = self.client.post(
+            "/api/v1/storage/private/upload-complete",
+            json={
+                "upload_token": issued["upload_token"],
+                "object_path": issued["object_path"],
+                "bucket": issued["bucket"],
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
 
         self.assertEqual(complete.status_code, 200, complete.text)
         payload = complete.json()
         self.assertEqual(payload["status"], "verified")
         self.assertTrue(payload["verified"])
-        ownership_rows = fake_admin.tables["storage_object_ownership"]
+        ownership_rows = self.fake_supabase.tables["storage_object_ownership"]
         self.assertEqual(len(ownership_rows), 1)
         self.assertEqual(ownership_rows[0]["object_path"], issued["object_path"])
         self.assertTrue(ownership_rows[0]["is_active"])
 
     def test_upload_complete_after_expiry_is_rejected_and_object_is_deleted(self):
-        fake_admin = FakeSupabaseAdminClient()
-        with patch("app.api.v1.storage_private.get_supabase_admin_client", return_value=fake_admin):
-            issue = self.client.post(
-                "/api/v1/storage/private/upload-url",
-                json={
-                    "scope": "client_self",
-                    "filename": "late-upload.jpg",
-                    "mime_type": "image/jpeg",
-                    "size_bytes": 1000,
-                },
-                headers={"Authorization": "Bearer ignored"},
-            )
-            self.assertEqual(issue.status_code, 200, issue.text)
-            issued = issue.json()
+        issue = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "client_self",
+                "filename": "late-upload.jpg",
+                "mime_type": "image/jpeg",
+                "size_bytes": 1000,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
+        self.assertEqual(issue.status_code, 200, issue.text)
+        issued = issue.json()
 
-            grant = fake_admin.find_upload_grant(issued["upload_token"])
-            self.assertIsNotNone(grant)
-            grant["expires_at"] = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
-            fake_admin.storage.from_(issued["bucket"]).add_object(issued["object_path"])
+        grant = self.fake_supabase.find_upload_grant(issued["upload_token"])
+        self.assertIsNotNone(grant)
+        grant["expires_at"] = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        self.fake_supabase.storage.from_(issued["bucket"]).add_object(issued["object_path"])
 
-            complete = self.client.post(
-                "/api/v1/storage/private/upload-complete",
-                json={
-                    "upload_token": issued["upload_token"],
-                    "object_path": issued["object_path"],
-                    "bucket": issued["bucket"],
-                },
-                headers={"Authorization": "Bearer ignored"},
-            )
+        complete = self.client.post(
+            "/api/v1/storage/private/upload-complete",
+            json={
+                "upload_token": issued["upload_token"],
+                "object_path": issued["object_path"],
+                "bucket": issued["bucket"],
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
 
         self.assertEqual(complete.status_code, 410)
-        self.assertFalse(fake_admin.has_object(issued["bucket"], issued["object_path"]))
+        self.assertFalse(self.fake_supabase.has_object(issued["bucket"], issued["object_path"]))
 
     def test_upload_complete_rejects_cross_tenant_or_forged_path(self):
-        fake_admin = FakeSupabaseAdminClient()
-        with patch("app.api.v1.storage_private.get_supabase_admin_client", return_value=fake_admin):
-            issue = self.client.post(
-                "/api/v1/storage/private/upload-url",
-                json={
-                    "scope": "client_self",
-                    "filename": "client-upload.jpg",
-                    "mime_type": "image/jpeg",
-                    "size_bytes": 1000,
-                },
-                headers={"Authorization": "Bearer ignored"},
-            )
-            self.assertEqual(issue.status_code, 200, issue.text)
-            issued = issue.json()
-            fake_admin.storage.from_(issued["bucket"]).add_object(issued["object_path"])
+        issue = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "client_self",
+                "filename": "client-upload.jpg",
+                "mime_type": "image/jpeg",
+                "size_bytes": 1000,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
+        self.assertEqual(issue.status_code, 200, issue.text)
+        issued = issue.json()
+        self.fake_supabase.storage.from_(issued["bucket"]).add_object(issued["object_path"])
 
-            forged = issued["object_path"].replace("/client-1/", "/client-2/")
-            response = self.client.post(
-                "/api/v1/storage/private/upload-complete",
-                json={
-                    "upload_token": issued["upload_token"],
-                    "object_path": forged,
-                    "bucket": issued["bucket"],
-                },
-                headers={"Authorization": "Bearer ignored"},
-            )
+        forged = issued["object_path"].replace("/client-1/", "/client-2/")
+        response = self.client.post(
+            "/api/v1/storage/private/upload-complete",
+            json={
+                "upload_token": issued["upload_token"],
+                "object_path": forged,
+                "bucket": issued["bucket"],
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
 
         self.assertEqual(response.status_code, 403)
 
     def test_storage_scope_paths_cover_release_file_consumer_categories(self):
-        fake_admin = FakeSupabaseAdminClient()
-        with patch("app.api.v1.storage_private.get_supabase_admin_client", return_value=fake_admin):
-            profile_upload = self.client.post(
-                "/api/v1/storage/private/upload-url",
-                json={
-                    "scope": "client_self",
-                    "filename": "profile-image.jpg",
-                    "mime_type": "image/jpeg",
-                    "size_bytes": 1000,
-                },
-                headers={"Authorization": "Bearer ignored"},
-            ).json()
-            progress_photo_upload = self.client.post(
-                "/api/v1/storage/private/upload-url",
-                json={
-                    "scope": "client_self",
-                    "filename": "progress-photo.jpg",
-                    "mime_type": "image/jpeg",
-                    "size_bytes": 1000,
-                },
-                headers={"Authorization": "Bearer ignored"},
-            ).json()
+        profile_upload = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "client_self",
+                "filename": "profile-image.jpg",
+                "mime_type": "image/jpeg",
+                "size_bytes": 1000,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        ).json()
+        progress_photo_upload = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "client_self",
+                "filename": "progress-photo.jpg",
+                "mime_type": "image/jpeg",
+                "size_bytes": 1000,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        ).json()
 
-            app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
-                id="trainer-user-1",
-                email="trainer@example.com",
-                access_token="token-123",
-            )
-            app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
-                tenant_id="tenant-1",
-                trainer_id="trainer-1",
-                trainer_user_id="trainer-user-1",
-                trainer_display_name="Coach Maya",
-                client_id=None,
-                client_user_id=None,
-            )
+        app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
+            id="trainer-user-1",
+            email="trainer@example.com",
+            access_token="token-123",
+        )
+        app.dependency_overrides[get_trainer_context] = lambda: TrainerContext(
+            tenant_id="tenant-1",
+            trainer_id="trainer-1",
+            trainer_user_id="trainer-user-1",
+            trainer_display_name="Coach Maya",
+            client_id=None,
+            client_user_id=None,
+        )
 
-            knowledge_upload = self.client.post(
-                "/api/v1/storage/private/upload-url",
-                json={
-                    "scope": "trainer_workspace",
-                    "filename": "knowledge-doc.pdf",
-                    "mime_type": "application/pdf",
-                    "size_bytes": 4000,
-                },
-                headers={"Authorization": "Bearer ignored"},
-            ).json()
-            export_upload = self.client.post(
-                "/api/v1/storage/private/upload-url",
-                json={
-                    "scope": "trainer_client",
-                    "filename": "generated-export.csv",
-                    "mime_type": "text/csv",
-                    "size_bytes": 2000,
-                    "client_id": "client-1",
-                },
-                headers={"Authorization": "Bearer ignored"},
-            ).json()
+        knowledge_upload = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "trainer_workspace",
+                "filename": "knowledge-doc.pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 4000,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        ).json()
+        export_upload = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "trainer_client",
+                "filename": "generated-export.csv",
+                "mime_type": "text/csv",
+                "size_bytes": 2000,
+                "client_id": "client-1",
+            },
+            headers={"Authorization": "Bearer ignored"},
+        ).json()
 
         self.assertTrue(profile_upload["object_path"].startswith("client/client-1/"))
         self.assertTrue(progress_photo_upload["object_path"].startswith("client/client-1/"))

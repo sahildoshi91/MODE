@@ -22,6 +22,10 @@
       "description": "Direct Postgres URL for live security posture checks."
     },
     {
+      "name": "REDIS_URL",
+      "description": "Redis URL used by worker queues, cache, and production request rate limiting."
+    },
+    {
       "name": "EXPO_PUBLIC_API_BASE_URL",
       "must_be_https": true,
       "disallow_host_tokens": ["staging", "localhost", "127.0.0.1", "192.168.", "10.", "172.16."],
@@ -39,7 +43,7 @@
     "account_deletion_enabled=true",
     "account_deletion_contract_enforced=true",
     "auth_password_proxy_enabled=true",
-    "rate_limit_backend=postgres",
+    "rate_limit_backend=redis",
     "storage_private_bucket=<non-empty>",
     "storage_upload_window_seconds in [30,300]",
     "personal_data_inventory_path=<existing-file>",

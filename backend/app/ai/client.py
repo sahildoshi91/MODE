@@ -105,18 +105,37 @@ class OpenAIClient:
             timeout=settings.ai_request_timeout_seconds,
         )
 
-    def create_chat_completion(self, model: str, messages: list[dict[str, str]]) -> str:
-        return self.create_chat_completion_with_usage(model=model, messages=messages).text
+    def create_chat_completion(
+        self,
+        model: str,
+        messages: list[dict[str, str]],
+        *,
+        max_output_tokens: int | None = None,
+    ) -> str:
+        return self.create_chat_completion_with_usage(
+            model=model,
+            messages=messages,
+            max_output_tokens=max_output_tokens,
+        ).text
 
-    def create_chat_completion_with_usage(self, model: str, messages: list[dict[str, str]]) -> TextCompletion:
+    def create_chat_completion_with_usage(
+        self,
+        model: str,
+        messages: list[dict[str, str]],
+        *,
+        max_output_tokens: int | None = None,
+    ) -> TextCompletion:
+        request_payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "response_format": {"type": "json_object"},
+        }
+        if max_output_tokens:
+            request_payload["max_completion_tokens"] = max_output_tokens
         response = _run_with_retries(
             "openai",
             model,
-            lambda: self.client.chat.completions.create(
-                model=model,
-                messages=messages,
-                response_format={"type": "json_object"},
-            ),
+            lambda: self.client.chat.completions.create(**request_payload),
         )
         content = self._normalize_message_content(response.choices[0].message.content)
         usage = getattr(response, "usage", None)
@@ -130,15 +149,24 @@ class OpenAIClient:
             ),
         )
 
-    def stream_chat_completion(self, model: str, messages: list[dict[str, str]]) -> Iterator[str]:
+    def stream_chat_completion(
+        self,
+        model: str,
+        messages: list[dict[str, str]],
+        *,
+        max_output_tokens: int | None = None,
+    ) -> Iterator[str]:
+        request_payload: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+        }
+        if max_output_tokens:
+            request_payload["max_completion_tokens"] = max_output_tokens
         stream = _run_with_retries(
             "openai",
             model,
-            lambda: self.client.chat.completions.create(
-                model=model,
-                messages=messages,
-                stream=True,
-            ),
+            lambda: self.client.chat.completions.create(**request_payload),
         )
         try:
             for chunk in stream:
@@ -191,13 +219,20 @@ class AnthropicClient:
 
         self.client = anthropic_module.Anthropic(api_key=api_key)
 
-    def create_chat_completion(self, model: str, system_prompt: str, user_prompt: str) -> TextCompletion:
+    def create_chat_completion(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> TextCompletion:
         response = _run_with_retries(
             "anthropic",
             model,
             lambda: self.client.messages.create(
                 model=model,
-                max_tokens=1024,
+                max_tokens=max_output_tokens or 1024,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}],
             ),
@@ -220,13 +255,20 @@ class AnthropicClient:
             ),
         )
 
-    def stream_chat_completion(self, model: str, system_prompt: str, user_prompt: str) -> Iterator[str]:
+    def stream_chat_completion(
+        self,
+        model: str,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        max_output_tokens: int | None = None,
+    ) -> Iterator[str]:
         stream_context = _run_with_retries(
             "anthropic",
             model,
             lambda: self.client.messages.stream(
                 model=model,
-                max_tokens=1024,
+                max_tokens=max_output_tokens or 1024,
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt}],
             ),
@@ -253,16 +295,25 @@ class GeminiClient:
         self._types = types_module
         self.client = genai_module.Client(api_key=api_key)
 
-    def stream_chat_completion(self, prompt: str, *, model: str = GEMINI_MODEL) -> Iterator[str]:
+    def stream_chat_completion(
+        self,
+        prompt: str,
+        *,
+        model: str = GEMINI_MODEL,
+        max_output_tokens: int | None = None,
+    ) -> Iterator[str]:
+        config_kwargs: dict[str, Any] = {
+            "thinking_config": self._types.ThinkingConfig(thinking_budget=0),
+        }
+        if max_output_tokens:
+            config_kwargs["max_output_tokens"] = max_output_tokens
         stream = _run_with_retries(
             "gemini",
             model,
             lambda: self.client.models.generate_content_stream(
                 model=model,
                 contents=prompt,
-                config=self._types.GenerateContentConfig(
-                    thinking_config=self._types.ThinkingConfig(thinking_budget=0),
-                ),
+                config=self._types.GenerateContentConfig(**config_kwargs),
             ),
         )
 
@@ -271,16 +322,25 @@ class GeminiClient:
             if text:
                 yield text
 
-    def create_chat_completion(self, prompt: str, *, model: str = GEMINI_MODEL) -> GeminiCompletion:
+    def create_chat_completion(
+        self,
+        prompt: str,
+        *,
+        model: str = GEMINI_MODEL,
+        max_output_tokens: int | None = None,
+    ) -> GeminiCompletion:
+        config_kwargs: dict[str, Any] = {
+            "thinking_config": self._types.ThinkingConfig(thinking_budget=0),
+        }
+        if max_output_tokens:
+            config_kwargs["max_output_tokens"] = max_output_tokens
         response = _run_with_retries(
             "gemini",
             model,
             lambda: self.client.models.generate_content(
                 model=model,
                 contents=prompt,
-                config=self._types.GenerateContentConfig(
-                    thinking_config=self._types.ThinkingConfig(thinking_budget=0),
-                ),
+                config=self._types.GenerateContentConfig(**config_kwargs),
             ),
         )
         usage = getattr(response, "usage_metadata", None)

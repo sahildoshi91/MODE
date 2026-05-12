@@ -16,8 +16,8 @@ from app.core.config import settings
 from app.core.dependencies import get_trainer_client_repository, get_trainer_context
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
-from app.modules.trainer_clients.repository import TrainerClientRepository
 from app.db.client import get_supabase_admin_client
+from app.modules.trainer_clients.repository import TrainerClientRepository
 from app.modules.storage_lifecycle.repository import StorageLifecycleRepository
 from app.modules.storage_lifecycle.service import StorageLifecycleError, StorageLifecycleService
 
@@ -290,10 +290,10 @@ async def issue_private_upload_url(
         requested_client_id=request.client_id,
     )
 
-    admin_client = get_supabase_admin_client()
     bucket_name = str(settings.storage_private_bucket).strip()
     signed_ttl = max(30, min(int(settings.storage_signed_url_ttl_seconds), 900))
     upload_window = max(30, min(int(settings.storage_upload_window_seconds), 300))
+    admin_client = get_supabase_admin_client()
     signed_upload = admin_client.storage.from_(bucket_name).create_signed_upload_url(object_path)
 
     signed_url = (
@@ -368,7 +368,8 @@ async def issue_private_download_url(
 
     bucket_name = str(settings.storage_private_bucket).strip()
     expires_in = max(30, min(int(settings.storage_signed_url_ttl_seconds), 900))
-    signed_result = get_supabase_admin_client().storage.from_(bucket_name).create_signed_url(
+    admin_client = get_supabase_admin_client()
+    signed_result = admin_client.storage.from_(bucket_name).create_signed_url(
         object_path,
         expires_in,
     )

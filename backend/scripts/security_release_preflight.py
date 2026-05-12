@@ -101,8 +101,10 @@ def run_checks(target_env: str) -> tuple[list[str], list[str]]:
     if not settings.account_deletion_contract_enforced:
         failures.append("account_deletion_contract_enforced must be true in production.")
 
-    if str(settings.rate_limit_backend).strip().lower() != "postgres":
-        failures.append("rate_limit_backend must be postgres in production.")
+    if str(settings.rate_limit_backend).strip().lower() != "redis":
+        failures.append("rate_limit_backend must be redis in production.")
+    if not str(settings.redis_url or "").strip():
+        failures.append("REDIS_URL is required when rate_limit_backend is redis in production.")
 
     if not str(settings.supabase_service_role_key or "").strip():
         failures.append("SUPABASE_SERVICE_ROLE_KEY is required server-side in production.")

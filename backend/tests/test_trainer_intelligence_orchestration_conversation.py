@@ -131,8 +131,8 @@ class ConversationOrchestrationTests(unittest.TestCase):
             client_user_id="client-user-1",
         )
         self.request = ChatRequest(
-            message="Adjust my workout for today",
-            client_context={"entrypoint": "generated_workout"},
+            message="What should I do today?",
+            client_context={},
         )
 
     def _build_service(self, orchestration_service):

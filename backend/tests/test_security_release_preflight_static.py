@@ -15,7 +15,8 @@ def test_security_release_preflight_script_exists() -> None:
 def test_security_release_preflight_contains_required_guards() -> None:
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     assert "EXPO_PUBLIC_SUPABASE_SERVICE_ROLE_KEY" in source
-    assert "rate_limit_backend must be postgres in production" in source
+    assert "rate_limit_backend must be redis in production" in source
+    assert "REDIS_URL is required when rate_limit_backend is redis in production" in source
     assert "Plaintext AsyncStorage session persistence" in source
     assert "SUPABASE_SERVICE_ROLE_KEY is required server-side in production" in source
     assert "APP_ENV is required and must be set to production" in source

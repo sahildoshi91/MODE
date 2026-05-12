@@ -19,14 +19,18 @@ import shutil
 import subprocess
 import sys
 from collections import defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
+from uuid import uuid4
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 BACKEND_ROOT = SCRIPT_DIR.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from app.core.config import settings
+from app.db.client import get_supabase_admin_client
 from app.security.personal_data_inventory import load_personal_data_inventory
 
 
@@ -49,8 +53,23 @@ RLS_SCOPE_TOKENS = (
     "assigned_trainer_id",
 )
 
+RELATIONAL_SCOPE_TOKENS = (
+    ("exists(", "chat_sessions", "session_id"),
+)
+
 FALSE_EXPRESSIONS = {"false", ""}
 TRUE_EXPRESSIONS = {"true"}
+PSQL_COMMAND_STATUS_RE = re.compile(
+    r"^(?:SET|RESET|BEGIN|COMMIT|ROLLBACK|CREATE(?:\s+\w+)?|ALTER(?:\s+\w+)?|DROP(?:\s+\w+)?|"
+    r"GRANT|REVOKE|INSERT\s+\d+\s+\d+|UPDATE\s+\d+|DELETE\s+\d+)$",
+    re.IGNORECASE,
+)
+
+
+@dataclass
+class CrossTenantFixture:
+    user_ids: list[str] = field(default_factory=list)
+    tenant_ids: list[str] = field(default_factory=list)
 
 
 class SecurityCheckError(RuntimeError):
@@ -93,9 +112,14 @@ class PsqlRunner:
 
     def query_scalar(self, sql: str) -> str:
         rows = self.query_rows(sql)
-        if not rows:
-            return ""
-        return rows[-1][0] if rows[-1] else ""
+        for row in reversed(rows):
+            if not row:
+                continue
+            value = str(row[0] or "").strip()
+            if not value or PSQL_COMMAND_STATUS_RE.match(value):
+                continue
+            return value
+        return ""
 
 
 def _sql_text_array(values: Iterable[str]) -> str:
@@ -110,6 +134,13 @@ def _sql_quote(value: str) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def _policy_expr_sql(column: str) -> str:
+    safe_column = str(column).strip()
+    if safe_column not in {"qual", "with_check"}:
+        raise ValueError(f"unsupported policy expression column: {column}")
+    return f"regexp_replace(COALESCE({safe_column}, ''), '[[:space:]]+', ' ', 'g')"
+
+
 def _normalize_expr(expr: str) -> str:
     normalized = re.sub(r"\s+", "", str(expr or "").strip().lower())
     while normalized.startswith("(") and normalized.endswith(")") and len(normalized) >= 2:
@@ -119,6 +150,13 @@ def _normalize_expr(expr: str) -> str:
 
 def _roles_from_policy_roles(value: str) -> set[str]:
     return {token for token in re.split(r"[^a-zA-Z0-9_]+", str(value or "").lower()) if token}
+
+
+def _authenticated_policy_has_scope(combined_expr: str) -> bool:
+    normalized = _normalize_expr(combined_expr)
+    if any(token in normalized for token in RLS_SCOPE_TOKENS):
+        return True
+    return any(all(token in normalized for token in token_group) for token_group in RELATIONAL_SCOPE_TOKENS)
 
 
 def _check_privileged_rpc_grants(runner: PsqlRunner, failures: list[str]) -> None:
@@ -194,8 +232,14 @@ def _check_rls_for_personal_tables(runner: PsqlRunner, failures: list[str]) -> N
 
 def _check_dangerous_policies(runner: PsqlRunner, failures: list[str]) -> None:
     rows = runner.query_rows(
-        """
-        SELECT schemaname, tablename, policyname, COALESCE(array_to_string(roles, ','), ''), COALESCE(qual, ''), COALESCE(with_check, '')
+        f"""
+        SELECT
+          schemaname,
+          tablename,
+          policyname,
+          COALESCE(array_to_string(roles, ','), ''),
+          {_policy_expr_sql("qual")},
+          {_policy_expr_sql("with_check")}
         FROM pg_policies
         WHERE schemaname = 'public'
         ORDER BY schemaname, tablename, policyname;
@@ -223,56 +267,70 @@ def _check_dangerous_policies(runner: PsqlRunner, failures: list[str]) -> None:
             if is_deny_policy:
                 continue
             combined_expr = f"{normalized_qual} {normalized_with_check}"
-            if combined_expr.strip() and not any(token in combined_expr for token in RLS_SCOPE_TOKENS):
+            if combined_expr.strip() and not _authenticated_policy_has_scope(combined_expr):
                 failures.append(
                     f"Authenticated policy appears unscoped ({location}); expected tenant/user scoping predicate"
                 )
 
 
-def _check_storage_deny_by_default(runner: PsqlRunner, failures: list[str]) -> None:
+def _check_storage_lifecycle_exception_posture(runner: PsqlRunner, failures: list[str]) -> None:
     posture_rows = runner.query_rows(
         """
         SELECT c.relname, c.relrowsecurity::int, c.relforcerowsecurity::int
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'storage'
-          AND c.relname IN ('objects', 'buckets')
+        WHERE n.nspname = 'public'
+          AND c.relname IN ('storage_upload_grants', 'storage_object_ownership')
           AND c.relkind = 'r'
         ORDER BY c.relname;
         """
     )
     posture = {row[0]: (row[1], row[2]) for row in posture_rows if len(row) >= 3}
-    for table in ("objects", "buckets"):
+    lifecycle_tables = ("storage_upload_grants", "storage_object_ownership")
+    for table in lifecycle_tables:
         flags = posture.get(table)
         if flags is None:
-            failures.append(f"storage.{table} is missing")
+            failures.append(f"public.{table} is missing")
             continue
         if flags[0] != "1" or flags[1] != "1":
-            failures.append(f"storage.{table} must have RLS enabled and forced")
+            failures.append(f"public.{table} must have RLS enabled and forced")
 
     privilege_rows = runner.query_rows(
         """
         SELECT grantee, table_name, privilege_type
         FROM information_schema.role_table_grants
-        WHERE table_schema = 'storage'
-          AND table_name IN ('objects', 'buckets')
+        WHERE table_schema = 'public'
+          AND table_name IN ('storage_upload_grants', 'storage_object_ownership')
           AND grantee IN ('anon', 'authenticated', 'public')
         ORDER BY grantee, table_name, privilege_type;
         """
     )
+    authenticated_privileges: dict[str, set[str]] = defaultdict(set)
     for grantee, table_name, privilege_type in privilege_rows:
-        failures.append(f"storage.{table_name} grants {privilege_type} to {grantee}; expected deny-by-default")
+        if grantee in {"anon", "public"}:
+            failures.append(f"public.{table_name} grants {privilege_type} to {grantee}; expected no public access")
+            continue
+        authenticated_privileges[table_name].add(privilege_type)
+    for table in lifecycle_tables:
+        missing = {"SELECT", "INSERT", "UPDATE", "DELETE"} - authenticated_privileges.get(table, set())
+        if missing:
+            failures.append(f"public.{table} missing authenticated grants: {', '.join(sorted(missing))}")
 
     policy_rows = runner.query_rows(
-        """
-        SELECT tablename, policyname, COALESCE(array_to_string(roles, ','), ''), COALESCE(qual, ''), COALESCE(with_check, '')
+        f"""
+        SELECT
+          tablename,
+          policyname,
+          COALESCE(array_to_string(roles, ','), ''),
+          {_policy_expr_sql("qual")},
+          {_policy_expr_sql("with_check")}
         FROM pg_policies
-        WHERE schemaname = 'storage'
-          AND tablename IN ('objects', 'buckets')
+        WHERE schemaname = 'public'
+          AND tablename IN ('storage_upload_grants', 'storage_object_ownership')
         ORDER BY tablename, policyname;
         """
     )
-    seen_role_table: set[tuple[str, str]] = set()
+    authenticated_scoped_actions: dict[str, set[str]] = defaultdict(set)
     for row in policy_rows:
         if len(row) < 5:
             continue
@@ -280,23 +338,29 @@ def _check_storage_deny_by_default(runner: PsqlRunner, failures: list[str]) -> N
         roles = _roles_from_policy_roles(roles_raw)
         normalized_qual = _normalize_expr(qual_raw)
         normalized_with_check = _normalize_expr(with_check_raw)
-        for role in ("anon", "authenticated"):
-            if role not in roles:
-                continue
-            seen_role_table.add((table_name, role))
-            if normalized_qual not in FALSE_EXPRESSIONS or normalized_with_check not in FALSE_EXPRESSIONS:
-                failures.append(
-                    f"storage.{table_name} policy {policy_name} for role {role} must enforce USING/WITH CHECK false"
-                )
+        if {"anon", "public"}.intersection(roles):
+            failures.append(f"public.{table_name} policy {policy_name} exposes forbidden roles ({roles_raw})")
+        if "authenticated" not in roles:
+            continue
+        combined = f"{normalized_qual}|{normalized_with_check}"
+        if "owner_user_id=auth.uid(" not in combined:
+            failures.append(
+                f"public.{table_name} authenticated policy {policy_name} must scope to owner_user_id = auth.uid()"
+            )
+            continue
+        if "select" in policy_name:
+            authenticated_scoped_actions[table_name].add("SELECT")
+        elif "insert" in policy_name:
+            authenticated_scoped_actions[table_name].add("INSERT")
+        elif "update" in policy_name:
+            authenticated_scoped_actions[table_name].add("UPDATE")
+        elif "delete" in policy_name:
+            authenticated_scoped_actions[table_name].add("DELETE")
 
-    for table_name in ("objects", "buckets"):
-        for role in ("anon", "authenticated"):
-            if (table_name, role) not in seen_role_table:
-                failures.append(f"storage.{table_name} is missing deny policy for role {role}")
-
-    public_bucket_count = int(runner.query_scalar("SELECT COUNT(*) FROM storage.buckets WHERE public IS TRUE;") or "0")
-    if public_bucket_count > 0:
-        failures.append(f"storage.buckets has {public_bucket_count} public buckets; expected 0")
+    for table in lifecycle_tables:
+        missing = {"SELECT", "INSERT", "UPDATE", "DELETE"} - authenticated_scoped_actions.get(table, set())
+        if missing:
+            failures.append(f"public.{table} missing owner-scoped authenticated policies: {', '.join(sorted(missing))}")
 
 
 def _check_trainer_invite_codes_locked_down(runner: PsqlRunner, failures: list[str]) -> None:
@@ -335,8 +399,12 @@ def _check_trainer_invite_codes_locked_down(runner: PsqlRunner, failures: list[s
         )
 
     policy_rows = runner.query_rows(
-        """
-        SELECT policyname, COALESCE(array_to_string(roles, ','), ''), COALESCE(qual, ''), COALESCE(with_check, '')
+        f"""
+        SELECT
+          policyname,
+          COALESCE(array_to_string(roles, ','), ''),
+          {_policy_expr_sql("qual")},
+          {_policy_expr_sql("with_check")}
         FROM pg_policies
         WHERE schemaname = 'public'
           AND tablename = 'trainer_invite_codes'
@@ -374,7 +442,136 @@ def _count_as_authenticated(runner: PsqlRunner, *, subject_user_id: str, sql_cou
     return int(str(value or "0").strip())
 
 
-def _check_cross_tenant_access_denied(runner: PsqlRunner, failures: list[str]) -> None:
+def _ephemeral_fixture_guard_failures() -> list[str]:
+    failures: list[str] = []
+    if os.getenv("MODE_RUN_STAGING_SUPABASE_TESTS") != "1":
+        failures.append("MODE_RUN_STAGING_SUPABASE_TESTS=1")
+    if str(settings.app_env or "").strip().lower() != "staging":
+        failures.append("APP_ENV=staging")
+    required_env = {
+        "SUPABASE_URL": settings.supabase_url,
+        "SUPABASE_ANON_KEY": settings.supabase_anon_key,
+        "SUPABASE_SERVICE_ROLE_KEY": settings.supabase_service_role_key,
+    }
+    missing = [name for name, value in required_env.items() if not str(value or "").strip()]
+    failures.extend(missing)
+    return failures
+
+
+def _create_auth_user(admin: object, *, email: str, password: str, fixture: CrossTenantFixture) -> str:
+    response = admin.auth.admin.create_user(
+        {
+            "email": email,
+            "password": password,
+            "email_confirm": True,
+        }
+    )
+    user = response.user
+    fixture.user_ids.append(str(user.id))
+    return str(user.id)
+
+
+def _create_ephemeral_cross_tenant_fixture(fixture: CrossTenantFixture | None = None) -> CrossTenantFixture:
+    admin = get_supabase_admin_client()
+    fixture = fixture or CrossTenantFixture()
+    run_id = uuid4().hex
+    password = f"ModeStage!{run_id[:12]}"
+    prefix = f"security_gate_{run_id[:10]}"
+
+    trainer_a_user_id = _create_auth_user(
+        admin,
+        email=f"{prefix}_trainer_a@example.com",
+        password=password,
+        fixture=fixture,
+    )
+    trainer_b_user_id = _create_auth_user(
+        admin,
+        email=f"{prefix}_trainer_b@example.com",
+        password=password,
+        fixture=fixture,
+    )
+    client_b_user_id = _create_auth_user(
+        admin,
+        email=f"{prefix}_client_b@example.com",
+        password=password,
+        fixture=fixture,
+    )
+
+    tenant_a = admin.rpc(
+        "bootstrap_trainer_tenant",
+        {
+            "trainer_user_id": trainer_a_user_id,
+            "tenant_name": f"Security Gate Tenant A {run_id}",
+            "tenant_slug": f"security-gate-a-{run_id}",
+            "trainer_display_name": "Security Gate Coach A",
+            "default_persona_name": "Security Gate Persona A",
+            "tone_description": "Temporary launch-gate fixture.",
+            "coaching_philosophy": "Validate cross-tenant RLS.",
+        },
+    ).execute()
+    tenant_a_row = tenant_a.data[0]
+    fixture.tenant_ids.append(str(tenant_a_row["tenant_id"]))
+
+    tenant_b = admin.rpc(
+        "bootstrap_trainer_tenant",
+        {
+            "trainer_user_id": trainer_b_user_id,
+            "tenant_name": f"Security Gate Tenant B {run_id}",
+            "tenant_slug": f"security-gate-b-{run_id}",
+            "trainer_display_name": "Security Gate Coach B",
+            "default_persona_name": "Security Gate Persona B",
+            "tone_description": "Temporary launch-gate fixture.",
+            "coaching_philosophy": "Validate cross-tenant RLS.",
+        },
+    ).execute()
+    tenant_b_row = tenant_b.data[0]
+    fixture.tenant_ids.append(str(tenant_b_row["tenant_id"]))
+
+    admin.rpc(
+        "assign_client_to_trainer",
+        {
+            "client_user_id": client_b_user_id,
+            "trainer_record_id": str(tenant_b_row["trainer_id"]),
+        },
+    ).execute()
+    return fixture
+
+
+def _cleanup_ephemeral_cross_tenant_fixture(fixture: CrossTenantFixture, failures: list[str]) -> None:
+    admin = get_supabase_admin_client()
+    cleanup_failures: list[str] = []
+    for tenant_id in fixture.tenant_ids:
+        try:
+            admin.table("tenants").delete().eq("id", tenant_id).execute()
+        except Exception as exc:
+            cleanup_failures.append(f"tenant {tenant_id}: {exc.__class__.__name__}")
+    for user_id in fixture.user_ids:
+        try:
+            admin.auth.admin.delete_user(user_id)
+        except Exception as exc:
+            cleanup_failures.append(f"auth user {user_id}: {exc.__class__.__name__}")
+    if cleanup_failures:
+        failures.append("Ephemeral cross-tenant fixture cleanup failed: " + "; ".join(cleanup_failures))
+
+
+def _check_cross_tenant_with_ephemeral_fixture(runner: PsqlRunner, failures: list[str]) -> None:
+    fixture = CrossTenantFixture()
+    try:
+        fixture = _create_ephemeral_cross_tenant_fixture(fixture)
+        _check_cross_tenant_access_denied(runner, failures, allow_ephemeral_fixture=False)
+    except Exception as exc:
+        failures.append(f"Cross-tenant ephemeral fixture check failed: {exc.__class__.__name__}")
+    finally:
+        if fixture.user_ids or fixture.tenant_ids:
+            _cleanup_ephemeral_cross_tenant_fixture(fixture, failures)
+
+
+def _check_cross_tenant_access_denied(
+    runner: PsqlRunner,
+    failures: list[str],
+    *,
+    allow_ephemeral_fixture: bool = True,
+) -> None:
     fixture_rows = runner.query_rows(
         """
         SELECT
@@ -394,8 +591,14 @@ def _check_cross_tenant_access_denied(runner: PsqlRunner, failures: list[str]) -
         """
     )
     if not fixture_rows:
+        guard_failures = _ephemeral_fixture_guard_failures()
+        if allow_ephemeral_fixture and not guard_failures:
+            _check_cross_tenant_with_ephemeral_fixture(runner, failures)
+            return
         failures.append(
-            "Cross-tenant access check could not run: staging data must include two tenants with trainer/client records"
+            "Cross-tenant access check could not run: staging data must include two tenants with trainer/client "
+            "records, or enable ephemeral fixtures with "
+            + ", ".join(guard_failures or ["MODE_RUN_STAGING_SUPABASE_TESTS=1", "APP_ENV=staging"])
         )
         return
 
@@ -457,7 +660,7 @@ def main() -> int:
     _check_privileged_rpc_grants(runner, failures)
     _check_rls_for_personal_tables(runner, failures)
     _check_dangerous_policies(runner, failures)
-    _check_storage_deny_by_default(runner, failures)
+    _check_storage_lifecycle_exception_posture(runner, failures)
     _check_trainer_invite_codes_locked_down(runner, failures)
     _check_cross_tenant_access_denied(runner, failures)
 
@@ -468,7 +671,7 @@ def main() -> int:
         return 1
 
     print("Staging DB security check: PASSED")
-    print("Verified privileged RPC grants, RLS posture, dangerous policy guards, storage deny-by-default, and cross-tenant isolation.")
+    print("Verified privileged RPC grants, RLS posture, dangerous policy guards, storage lifecycle RLS, accepted signed-url exception, and cross-tenant isolation.")
     return 0
 
 

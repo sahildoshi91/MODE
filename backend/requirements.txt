@@ -7,3 +7,4 @@ google-genai
 pydantic
 pydantic-settings
 redis
+rq

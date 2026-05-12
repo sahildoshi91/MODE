@@ -24,10 +24,20 @@ Required fields to inspect:
 - `total_response_ms`
 - `model_used`
 - `fallback_used`
+- `prompt_version`
+- `model_fallback_chain`
+- `tokens_cost_usd`
+- `queue_enqueue_latency_ms`
 - `escalation_triggered`
 - `error_category`
 
 Do not log or search raw user message content.
+
+Each trace and worker completion also emits structured metric logs:
+
+```json
+{"event":"observation_metric","name":"chat.ttft_ms","value":42.0,"unit":"ms","tags":{"route":"FAST_PATH"}}
+```
 
 ## SLO Watch
 
@@ -40,6 +50,10 @@ Use these thresholds as rollout alerts:
 - Any route: alert if `time_to_first_token_ms=-1` for more than isolated single-request failures.
 - Any route: alert if `error_category` is non-null above 1 percent in a 10-minute window.
 - Safety route: alert if `escalation_triggered=true` but no trainer review/system event row is created.
+- Queue lag: warning if `worker.queue_lag_ms` p95 > 15s, critical if > 30s.
+- Worker dead letters: warning if `worker.dead_letter_count` > 0, critical if > 5.
+- Fallback rate: warning if `llm.fallback_rate` > 5 percent, critical if > 15 percent.
+- Prompt injection rate: warning if `safety.injection_detected_rate` > 1 percent, critical if > 3 percent.
 
 ## Log Queries
 
@@ -79,6 +93,18 @@ Find cache misses:
 
 ```text
 "event\":\"chat_trace" "cache_hit\":false
+```
+
+Find observation metrics:
+
+```text
+"event\":\"observation_metric"
+```
+
+Find worker queue lag metrics:
+
+```text
+"event\":\"observation_metric" "worker.queue_lag_ms"
 ```
 
 ## Database Verification
@@ -170,4 +196,3 @@ After 24 hours:
 - Keep Redis enabled only if cache failures remain non-blocking and SLOs improve or stay stable.
 - Keep `CHAT_STREAM_LEGACY_ALIAS_ENABLED=true` until all active clients are confirmed to consume canonical `token/content`.
 - Document actual p50/p99 values in the rollout ticket or update `docs/chat_slow_response_runbook.md` if targets need environment-specific notes.
-
