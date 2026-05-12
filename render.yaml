@@ -20,6 +20,12 @@ services:
         value: "25"
       - key: CHAT_ROUTER_TIMEOUT_MS
         value: "200"
+      - key: HEALTH_CHECK_TIMEOUT_MS
+        value: "500"
+      - key: HEALTH_CACHE_TTL_SECONDS
+        value: "5"
+      - key: HEALTH_STALE_AFTER_SECONDS
+        value: "30"
       - key: CHAT_STREAM_LEGACY_ALIAS_ENABLED
         value: "true"
       - key: REDIS_URL

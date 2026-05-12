@@ -60,7 +60,7 @@
 - [x] ChatTrace emits observation metrics for TTFT, total latency, token usage, cost, fallback rate, cache miss rate, LLM error rate, and safety rates.
 - [x] WorkerJobTrace emits observation metrics for job success, retry, dead-letter count, and queue lag.
 - [x] Router latency metric is emitted for each routed chat request.
-- [x] `/healthz` returns structured DB, Redis, and worker queue check status.
+- [x] `/healthz` returns cached structured DB, Redis, and worker queue check status with `cache_age_ms`.
 - [x] Alert thresholds are configured in `app.modules.observability.metrics.ALERT_THRESHOLDS`.
 - [ ] Staging observability backend dashboards/alerts wired to the structured `observation_metric` log stream.
 
@@ -83,7 +83,7 @@
 - [x] Launch verification runner added: `npm run launch:verify`.
 - [x] SQL validation blocks malformed JSONB casts like `DEFAULT '{}':a:jsonb`.
 - [ ] Service-role retirement migration applied successfully in staging.
-- [ ] Staging `/healthz` returns `ok=true` with p95 < 100ms.
+- [ ] Staging `/healthz` returns `ok=true` with server `duration_ms` p95 < 100ms.
 - [ ] Runtime route surface preflight passes against staging.
 - [ ] Staging DB security check passes.
 - [ ] Authenticated chat stream smoke emits `token` and `done`.

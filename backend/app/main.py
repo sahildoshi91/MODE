@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -9,9 +11,18 @@ from app.modules.observability.health import build_healthz_payload
 
 run_startup_guards()
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    del app
+    await build_healthz_payload()
+    yield
+
+
 app = FastAPI(
     title="MODE Backend",
     version="1.0.0",
+    lifespan=lifespan,
     docs_url=None if settings.is_production else "/docs",
     redoc_url=None if settings.is_production else "/redoc",
     openapi_url=None if settings.is_production else "/openapi.json",
@@ -27,6 +38,7 @@ app.add_middleware(
 
 app.include_router(workout_router, prefix="/workouts", tags=["workouts"])
 app.include_router(api_router)
+
 
 @app.get("/")
 async def root():

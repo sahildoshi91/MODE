@@ -101,6 +101,7 @@ def test_healthz_uses_server_duration_for_latency_gate(monkeypatch) -> None:
             "redis": "ok",
             "queue": "ok",
             "duration_ms": 12,
+            "cache_age_ms": 100,
             "checks": {"db": {}, "redis": {}, "queue": {}},
         }
         return 200, json.dumps(payload), 220

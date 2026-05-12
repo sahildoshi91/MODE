@@ -153,7 +153,7 @@ def _health_check(args: argparse.Namespace) -> CheckResult:
     payloads: list[dict[str, Any]] = []
     failures: list[str] = []
     client_latency_notes: list[str] = []
-    required_fields = {"status", "ok", "db", "redis", "queue", "duration_ms", "checks"}
+    required_fields = {"status", "ok", "db", "redis", "queue", "duration_ms", "checks", "cache_age_ms"}
     for _ in range(max(1, int(args.health_probes))):
         try:
             status, body, duration_ms = _request(args.base_url, "/healthz", timeout=args.timeout_seconds)

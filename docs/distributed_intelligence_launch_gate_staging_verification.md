@@ -111,7 +111,7 @@ Skipping live DB, authenticated chat, storage, account deletion, or load checks 
 
 ## Next Required Evidence
 - Service-role retirement migration applied in staging with the storage signed URL exception documented.
-- `/healthz` returns `ok=true` and p95 < 100ms.
+- `/healthz` returns `ok=true`, includes `cache_age_ms`, and reports server `duration_ms` p95 < 100ms.
 - Runtime route surface preflight passes against staging.
 - Static service-role audit passes with `backend/app/api/v1/storage_private.py` as the only API-handler exception.
 - Staging DB security check passes with mixed-tenant RLS posture.

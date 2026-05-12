@@ -79,12 +79,16 @@ Phases A-E: Worker Queue Migration, Database Hardening, LLM Orchestration, Obser
 
 ## New Env Vars
 - `REDIS_URL`
+- `HEALTH_CHECK_TIMEOUT_MS`
+- `HEALTH_CACHE_TTL_SECONDS`
+- `HEALTH_STALE_AFTER_SECONDS`
 - `RATE_LIMIT_CHAT_CLIENT_PER_WINDOW`
 - `RATE_LIMIT_CHAT_TRAINER_PER_WINDOW`
 - `RATE_LIMIT_CHAT_IP_PER_WINDOW`
 - `RATE_LIMIT_IP_PER_WINDOW`
 
 `REDIS_URL` already existed in app settings for the Redis read-through cache; Phase A makes it required for production worker queue durability.
+The health variables tune cached dependency probes so `/healthz` can stay fast while still reporting DB, Redis, and queue status.
 The rate-limit variables have safe defaults in code and allow staging/production overrides without code changes. Production release gates now require `RATE_LIMIT_BACKEND=redis` with `REDIS_URL`.
 
 ## Migration Steps

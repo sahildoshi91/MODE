@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     chat_cache_enabled: bool = True
     chat_cache_timeout_ms: int = Field(default=25, ge=1, le=500)
     chat_router_timeout_ms: int = Field(default=200, ge=1, le=1000)
+    health_check_timeout_ms: int = Field(default=500, ge=50, le=5000)
+    health_cache_ttl_seconds: float = Field(default=5.0, ge=0.1, le=60.0)
+    health_stale_after_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
     chat_stream_legacy_alias_enabled: bool = True
     chat_staging_openai_only: bool = True
     atlas_enabled: bool = True
