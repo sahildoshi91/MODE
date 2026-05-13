@@ -256,6 +256,18 @@ def _ownership_from_authorized_path(
     raise HTTPException(status_code=403, detail="Forbidden file path")
 
 
+def _signed_upload_value(signed_upload: object, *keys: str) -> str:
+    for key in keys:
+        if isinstance(signed_upload, dict):
+            value = signed_upload.get(key)
+        else:
+            value = getattr(signed_upload, key, None)
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized
+    return ""
+
+
 @router.post("/private/upload-url", response_model=PrivateUploadUrlResponse)
 async def issue_private_upload_url(
     request: PrivateUploadUrlRequest,
@@ -291,17 +303,44 @@ async def issue_private_upload_url(
     )
 
     bucket_name = str(settings.storage_private_bucket).strip()
+    if not bucket_name:
+        logger.error(
+            "storage_upload_url_config_missing scope=%s tenant_id=%s trainer_id=%s client_id=%s",
+            request.scope,
+            trainer_context.tenant_id,
+            trainer_context.trainer_id,
+            trainer_context.client_id,
+        )
+        raise HTTPException(status_code=500, detail="Storage bucket is not configured")
+
     signed_ttl = max(30, min(int(settings.storage_signed_url_ttl_seconds), 900))
     upload_window = max(30, min(int(settings.storage_upload_window_seconds), 300))
     admin_client = get_supabase_admin_client()
-    signed_upload = admin_client.storage.from_(bucket_name).create_signed_upload_url(object_path)
+    try:
+        signed_upload = admin_client.storage.from_(bucket_name).create_signed_upload_url(object_path)
+    except Exception as exc:
+        logger.exception(
+            "storage_signed_upload_url_failed error_category=%s bucket=%s scope=%s tenant_id=%s trainer_id=%s client_id=%s",
+            exc.__class__.__name__,
+            bucket_name,
+            request.scope,
+            trainer_context.tenant_id,
+            owner_trainer_id,
+            owner_client_id,
+        )
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Unable to issue upload URL") from exc
 
-    signed_url = (
-        str(getattr(signed_upload, "signed_url", "") or "").strip()
-        or str(getattr(signed_upload, "signedUrl", "") or "").strip()
-    )
-    token = str(getattr(signed_upload, "token", "") or "").strip()
+    signed_url = _signed_upload_value(signed_upload, "signed_url", "signedUrl", "signedURL")
+    token = _signed_upload_value(signed_upload, "token")
     if not signed_url or not token:
+        logger.warning(
+            "storage_signed_upload_url_incomplete bucket=%s scope=%s tenant_id=%s trainer_id=%s client_id=%s",
+            bucket_name,
+            request.scope,
+            trainer_context.tenant_id,
+            owner_trainer_id,
+            owner_client_id,
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Unable to issue upload URL",

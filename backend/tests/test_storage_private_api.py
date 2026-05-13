@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from app.core.auth import AuthenticatedUser, require_user
 from app.core.config import settings
 from app.core.dependencies import get_trainer_client_repository, get_trainer_context
+from app.core.rate_limit import _rate_limiter
 from app.core.tenancy import TrainerContext
 from app.main import app
 
@@ -59,6 +60,7 @@ class _FakeTableQuery:
         self._limit = None
         self._order = None
         self._upsert_conflict = None
+        self.insert_errors: set[str] = set()
 
     def select(self, _columns: str):
         self.operation = "select"
@@ -119,6 +121,8 @@ class _FakeTableQuery:
             return True
 
         if self.operation == "insert":
+            if self.table_name in self.insert_errors:
+                raise RuntimeError(f"insert failed for {self.table_name}")
             payload = dict(self.payload or {})
             payload.setdefault("id", str(uuid4()))
             rows.append(payload)
@@ -177,8 +181,15 @@ class FakeStorageBucketClient:
         self._token_counter = 0
 
     def create_signed_upload_url(self, path: str):
+        if self._storage_backend.upload_error:
+            raise self._storage_backend.upload_error
         self._token_counter += 1
         token = f"upload-token-{self._token_counter:04d}"
+        if self._storage_backend.upload_response_mode == "dict":
+            return {
+                "signedUrl": f"https://files.example/upload/{path}",
+                "token": token,
+            }
         return _SignedUploadResult(
             signed_url=f"https://files.example/upload/{path}",
             token=token,
@@ -230,6 +241,8 @@ class FakeStorageClient:
     def __init__(self):
         self.bucket_objects: dict[str, set[str]] = {}
         self._bucket_clients: dict[str, FakeStorageBucketClient] = {}
+        self.upload_error: Exception | None = None
+        self.upload_response_mode = "object"
 
     def from_(self, bucket: str):
         bucket_name = str(bucket or "").strip()
@@ -241,6 +254,7 @@ class FakeStorageClient:
 class FakeSupabaseAdminClient:
     def __init__(self):
         self.storage = FakeStorageClient()
+        self.table_insert_errors: set[str] = set()
         self.tables: dict[str, list[dict]] = {
             "storage_upload_grants": [],
             "storage_object_ownership": [],
@@ -248,7 +262,9 @@ class FakeSupabaseAdminClient:
         }
 
     def table(self, table_name: str):
-        return _FakeTableQuery(table_name, self.tables)
+        query = _FakeTableQuery(table_name, self.tables)
+        query.insert_errors = self.table_insert_errors
+        return query
 
     def find_upload_grant(self, upload_token: str) -> dict | None:
         for row in self.tables["storage_upload_grants"]:
@@ -271,6 +287,7 @@ class StoragePrivateApiTests(unittest.TestCase):
             "allowed_ext": settings.storage_allowed_extensions,
             "allowed_mime": settings.storage_allowed_mime_types,
         }
+        _rate_limiter._windows.clear()
 
         settings.storage_private_bucket = "private-user-files"
         settings.storage_signed_url_ttl_seconds = 90
@@ -314,6 +331,7 @@ class StoragePrivateApiTests(unittest.TestCase):
         settings.storage_allowed_extensions = self.original["allowed_ext"]
         settings.storage_allowed_mime_types = self.original["allowed_mime"]
         app.dependency_overrides.clear()
+        _rate_limiter._windows.clear()
 
     def test_anonymous_private_storage_route_is_denied(self):
         app.dependency_overrides.pop(require_user, None)
@@ -340,6 +358,76 @@ class StoragePrivateApiTests(unittest.TestCase):
         self.assertEqual(payload["expires_in"], 90)
         self.assertIn("upload-token-", payload["upload_token"])
         self.assertEqual(len(self.fake_supabase.tables["storage_upload_grants"]), 1)
+
+    def test_issue_private_upload_url_accepts_dict_signed_upload_response(self):
+        self.fake_supabase.storage.upload_response_mode = "dict"
+
+        response = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "client_self",
+                "filename": "notes.txt",
+                "mime_type": "text/plain",
+                "size_bytes": 12,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertTrue(payload["signed_upload_url"].startswith("https://files.example/upload/"))
+        self.assertIn("upload-token-", payload["upload_token"])
+
+    def test_signed_upload_storage_exception_returns_502(self):
+        self.fake_supabase.storage.upload_error = RuntimeError("bucket not found")
+
+        response = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "client_self",
+                "filename": "notes.txt",
+                "mime_type": "text/plain",
+                "size_bytes": 12,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"], "Unable to issue upload URL")
+
+    def test_missing_storage_bucket_returns_controlled_error(self):
+        settings.storage_private_bucket = " "
+
+        response = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "client_self",
+                "filename": "notes.txt",
+                "mime_type": "text/plain",
+                "size_bytes": 12,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["detail"], "Storage bucket is not configured")
+
+    def test_upload_grant_persistence_failure_returns_controlled_500(self):
+        self.fake_supabase.table_insert_errors.add("storage_upload_grants")
+
+        response = self.client.post(
+            "/api/v1/storage/private/upload-url",
+            json={
+                "scope": "client_self",
+                "filename": "notes.txt",
+                "mime_type": "text/plain",
+                "size_bytes": 12,
+            },
+            headers={"Authorization": "Bearer ignored"},
+        )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response.json()["detail"], "Upload lifecycle storage unavailable")
 
     def test_invalid_file_type_is_rejected(self):
         response = self.client.post(
