@@ -94,6 +94,8 @@ Optional storage signed URL smoke:
 MODE_STAGING_AUTH_TOKEN='<test_user_token>' \
 npm run launch:verify -- \
   --base-url https://mode-backend-staging.onrender.com \
+  --timeout-seconds 30 \
+  --skip-chat-smoke \
   --run-storage-smoke \
   --storage-scope client_self
 ```

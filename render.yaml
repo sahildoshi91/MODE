@@ -21,7 +21,7 @@ services:
       - key: CHAT_ROUTER_TIMEOUT_MS
         value: "200"
       - key: HEALTH_CHECK_TIMEOUT_MS
-        value: "500"
+        value: "5000"
       - key: HEALTH_CACHE_TTL_SECONDS
         value: "5"
       - key: HEALTH_STALE_AFTER_SECONDS
