@@ -73,6 +73,21 @@ MODE_STAGING_AUTH_TOKEN='<sacrificial_or_test_user_token>' \
 npm run launch:verify -- --base-url https://mode-backend-staging.onrender.com
 ```
 
+Generate a disposable client token for chat/storage smoke:
+
+```bash
+APP_ENV=staging \
+MODE_RUN_STAGING_SUPABASE_TESTS=1 \
+./backend/venv/bin/python backend/scripts/staging_auth_smoke_token.py create-token
+```
+
+Validate the token before rerunning the authenticated gate:
+
+```bash
+APP_ENV=staging \
+./backend/venv/bin/python backend/scripts/staging_auth_smoke_token.py validate-token
+```
+
 Optional storage signed URL smoke:
 
 ```bash
