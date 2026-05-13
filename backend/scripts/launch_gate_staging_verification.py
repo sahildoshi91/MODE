@@ -11,6 +11,7 @@ import argparse
 import json
 import math
 import os
+import socket
 import subprocess
 import sys
 import time
@@ -115,7 +116,7 @@ def _request(
     except HTTPError as exc:
         payload = exc.read().decode("utf-8", errors="replace")
         return int(exc.code), payload, int((time.perf_counter() - started) * 1000)
-    except URLError as exc:
+    except (TimeoutError, socket.timeout, URLError, OSError) as exc:
         raise RuntimeError(str(exc)) from exc
 
 

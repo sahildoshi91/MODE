@@ -94,6 +94,37 @@ def test_healthz_rejects_legacy_payload(monkeypatch) -> None:
     assert "stale or legacy payload" in result.detail
 
 
+def test_healthz_reports_timeout_without_raising(monkeypatch) -> None:
+    module = _load_launch_verify_module()
+
+    def fake_request(*_args, **_kwargs):
+        raise RuntimeError("The read operation timed out")
+
+    monkeypatch.setattr(module, "_request", fake_request)
+
+    result = module._health_check(_health_args())
+
+    assert result.status == "FAIL"
+    assert "The read operation timed out" in result.detail
+    assert result.metrics["probe_count"] == 0
+
+
+def test_request_converts_raw_timeout_to_runtime_error(monkeypatch) -> None:
+    module = _load_launch_verify_module()
+
+    def fake_urlopen(*_args, **_kwargs):
+        raise TimeoutError("The read operation timed out")
+
+    monkeypatch.setattr(module, "urlopen", fake_urlopen)
+
+    try:
+        module._request("https://mode-backend-staging.onrender.com", "/healthz", timeout=0.01)
+    except RuntimeError as exc:
+        assert "The read operation timed out" in str(exc)
+    else:
+        raise AssertionError("Expected raw TimeoutError to be converted to RuntimeError")
+
+
 def test_healthz_uses_server_duration_for_latency_gate(monkeypatch) -> None:
     module = _load_launch_verify_module()
 
