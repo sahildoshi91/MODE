@@ -79,3 +79,16 @@ def test_service_role_retirement_migration_adds_authenticated_storage_and_deleti
     assert "storage.objects" not in source
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON public.storage_upload_grants TO authenticated" in source
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON public.storage_object_ownership TO authenticated" in source
+
+
+def test_health_ping_rpc_is_public_but_data_free() -> None:
+    source = _read_sql("20260512a_add_health_ping_rpc.sql")
+    assert "CREATE OR REPLACE FUNCTION public.mode_health_ping()" in source
+    assert "RETURNS JSONB" in source
+    assert "jsonb_build_object" in source
+    assert "GRANT EXECUTE ON FUNCTION public.mode_health_ping() TO anon" in source
+    assert "GRANT EXECUTE ON FUNCTION public.mode_health_ping() TO authenticated" in source
+    assert "GRANT EXECUTE ON FUNCTION public.mode_health_ping() TO service_role" in source
+    assert "FROM public.trainers" not in source
+    assert "FROM public.clients" not in source
+    assert "NOTIFY pgrst, 'reload schema'" in source

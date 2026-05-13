@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SQL_DIR = REPO_ROOT / "sql"
 ALLOWLIST_MIGRATION = SQL_DIR / "20260426e_add_distributed_rate_limits_and_rpc_execute_allowlist.sql"
 REPORT_PATH = REPO_ROOT / "security" / "rpc_permissions_report.json"
+PUBLIC_ANON_ALLOWLIST = {"mode_health_ping"}
 
 AUTH_ARRAY_PATTERN = re.compile(
     r"authenticated_allowlist\s+TEXT\[\]\s*:=\s*ARRAY\[(?P<body>.*?)\];",
@@ -70,6 +71,15 @@ def _build_rows(
     service_allow = set(service_role_only_allowlist)
 
     for name in discovered_functions:
+        if name in PUBLIC_ANON_ALLOWLIST:
+            rows.append(
+                PermissionRow(
+                    function_name=name,
+                    grants_to=("anon", "authenticated", "service_role"),
+                    category="public_data_free_health_check",
+                )
+            )
+            continue
         if name in auth_allow:
             rows.append(PermissionRow(function_name=name, grants_to=("authenticated", "service_role"), category="safe_allowlist"))
             continue
@@ -116,6 +126,7 @@ def _build_report() -> dict:
 
     return {
         "source_migration": ALLOWLIST_MIGRATION.relative_to(REPO_ROOT).as_posix(),
+        "public_anon_allowlist": sorted(PUBLIC_ANON_ALLOWLIST),
         "authenticated_allowlist": authenticated_allowlist,
         "service_role_only_allowlist": service_role_only_allowlist,
         "functions_discovered_count": len(discovered_functions),

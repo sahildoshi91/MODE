@@ -154,6 +154,24 @@ class ObservabilityPhaseDTests(unittest.TestCase):
         self.assertEqual(warmed["status"], "ok")
         self.assertEqual(len(calls), 3)
 
+    def test_healthz_db_check_uses_rls_safe_ping_rpc(self):
+        class FakeClient:
+            def __init__(self):
+                self.rpc_name = None
+
+            def rpc(self, name):
+                self.rpc_name = name
+                return self
+
+            def execute(self):
+                return {"ok": True}
+
+        fake_client = FakeClient()
+        with patch("app.modules.observability.health.get_supabase_public_client", return_value=fake_client):
+            health_module._check_db_sync()
+
+        self.assertEqual(fake_client.rpc_name, "mode_health_ping")
+
     def test_chat_trace_includes_prompt_version_and_cost_metrics(self):
         trace = ChatTrace(
             request_id="req-1",

@@ -37,14 +37,18 @@ def test_launch_gate_migration_helper_applies_storage_lifecycle_before_service_r
     source = APPLY_SCRIPT.read_text(encoding="utf-8")
     storage_lifecycle = "20260426h_add_storage_upload_lifecycle_and_security_catalog_rpc.sql"
     service_role_retirement = "20260511f_retire_service_role_request_paths.sql"
+    health_ping = "20260512a_add_health_ping_rpc.sql"
     assert "20260426e_add_distributed_rate_limits_and_rpc_execute_allowlist.sql" in source
     assert "20260426f_lockdown_storage_objects_service_signed_urls_only.sql" not in source
     assert "20260426g_add_account_deletion_audit_log.sql" in source
     assert storage_lifecycle in source
     assert "20260426i_add_storage_cleanup_job_heartbeats.sql" in source
+    assert health_ping in source
     assert source.index(storage_lifecycle) < source.index(service_role_retirement)
+    assert source.index(service_role_retirement) < source.index(health_ping)
     assert "must be applied before" in source
     assert "public.storage_upload_grants" in source
+    assert "mode_health_ping" in source
 
 
 def test_launch_gate_verification_runner_covers_required_smokes() -> None:

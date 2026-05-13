@@ -202,13 +202,7 @@ async def _run_check(name: str, fn: Callable[[], None], *, timeout_ms: int) -> H
 
 def _check_db_sync() -> None:
     client = get_supabase_public_client()
-    (
-        client
-        .table("trainers")
-        .select("id")
-        .limit(1)
-        .execute()
-    )
+    client.rpc("mode_health_ping").execute()
 
 
 def _check_redis_sync() -> None:

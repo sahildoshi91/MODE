@@ -26,6 +26,7 @@ DEFAULT_SQL_FILES = (
     BACKEND_ROOT / "sql" / "20260511c_database_hardening_indexes.sql",
     BACKEND_ROOT / "sql" / "20260511e_drop_redundant_conversation_message_index.sql",
     BACKEND_ROOT / "sql" / "20260511f_retire_service_role_request_paths.sql",
+    BACKEND_ROOT / "sql" / "20260512a_add_health_ping_rpc.sql",
 )
 
 STORAGE_LIFECYCLE_MIGRATION = "20260426h_add_storage_upload_lifecycle_and_security_catalog_rpc.sql"
@@ -57,6 +58,14 @@ def _validate_sql(path: Path, source: str) -> list[str]:
         failures.append(f"{path.name}: invalid JSONB cast; use ::jsonb")
     if path.name == "20260511f_retire_service_role_request_paths.sql":
         for required in ("DEFAULT '{}'::jsonb", "CREATE TABLE IF NOT EXISTS public.account_deletion_requests"):
+            if required not in source:
+                failures.append(f"{path.name}: missing required SQL fragment: {required}")
+    if path.name == "20260512a_add_health_ping_rpc.sql":
+        for required in (
+            "CREATE OR REPLACE FUNCTION public.mode_health_ping()",
+            "GRANT EXECUTE ON FUNCTION public.mode_health_ping() TO anon",
+            "NOTIFY pgrst, 'reload schema'",
+        ):
             if required not in source:
                 failures.append(f"{path.name}: missing required SQL fragment: {required}")
     return failures

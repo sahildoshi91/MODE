@@ -10,8 +10,11 @@
     "trainer_coach_approve_output"
   ],
   "dangerous_grant_findings": [],
-  "functions_discovered_count": 15,
+  "functions_discovered_count": 16,
   "ok": true,
+  "public_anon_allowlist": [
+    "mode_health_ping"
+  ],
   "rows": [
     {
       "category": "revoked_all_non_owner",
@@ -85,6 +88,15 @@
       "category": "privileged_service_only",
       "function_name": "bootstrap_trainer_tenant",
       "grants_to": [
+        "service_role"
+      ]
+    },
+    {
+      "category": "public_data_free_health_check",
+      "function_name": "mode_health_ping",
+      "grants_to": [
+        "anon",
+        "authenticated",
         "service_role"
       ]
     },

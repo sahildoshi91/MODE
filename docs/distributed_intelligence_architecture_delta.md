@@ -93,7 +93,7 @@ The rate-limit variables have safe defaults in code and allow staging/production
 
 ## Migration Steps
 1. Apply launch migrations with `MODE_SECURITY_DATABASE_URL='postgres://...' npm run launch:apply-migrations`.
-2. Confirm the helper applies `20260426h_add_storage_upload_lifecycle_and_security_catalog_rpc.sql` before `20260511f_retire_service_role_request_paths.sql` and skips hosted-Supabase-owned `storage.*` policy DDL.
+2. Confirm the helper applies `20260426h_add_storage_upload_lifecycle_and_security_catalog_rpc.sql` before `20260511f_retire_service_role_request_paths.sql`, then applies `20260512a_add_health_ping_rpc.sql`, and skips hosted-Supabase-owned `storage.*` policy DDL.
 3. Run `NOTIFY pgrst, 'reload schema';` if PostgREST schema cache is active.
 4. Configure `REDIS_URL` on the web service and worker service.
 5. Deploy the web service and the worker service together.
@@ -104,6 +104,7 @@ The rate-limit variables have safe defaults in code and allow staging/production
 2. Revert the application deployment to the previous release.
 3. Optional database rollback:
    - Drop policies and table added in `backend/sql/20260511f_retire_service_role_request_paths.sql` using the rollback block comments in that file.
+   - `DROP FUNCTION IF EXISTS public.mode_health_ping();`
    - `DROP TABLE IF EXISTS public.worker_job_traces;`
    - `DROP TABLE IF EXISTS public.intelligence_jobs;`
 

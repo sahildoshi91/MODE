@@ -23,6 +23,8 @@ def test_rpc_permissions_report_file_exists_and_is_safe() -> None:
     assert rows["bootstrap_trainer_tenant"]["grants_to"] == ["service_role"]
     assert rows["security_enforce_rate_limit"]["grants_to"] == ["service_role"]
     assert rows["security_assert_rls_enabled"]["grants_to"] == ["service_role"]
+    assert rows["mode_health_ping"]["grants_to"] == ["anon", "authenticated", "service_role"]
+    assert rows["mode_health_ping"]["category"] == "public_data_free_health_check"
     assert "authenticated" in rows["auth_is_trainer_user"]["grants_to"]
 
 
