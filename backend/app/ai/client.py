@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, Iterator
@@ -13,6 +14,7 @@ GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_FLASH_LITE_MODEL = "gemini-2.5-flash-lite"
 GPT_5_4_MINI_MODEL = "gpt-5.4-mini"
 ANTHROPIC_SONNET_MODEL = "claude-sonnet-4-20250514"
+StreamTimingObserver = Callable[[str, int], None]
 
 OpenAI = None
 anthropic = None
@@ -97,6 +99,19 @@ def _run_with_retries(provider: str, model: str, fn):
                 raise
 
 
+def _observe_stream_timing(
+    observer: StreamTimingObserver | None,
+    phase: str,
+    duration_ms: int | float,
+) -> None:
+    if observer is None:
+        return
+    try:
+        observer(phase, int(duration_ms))
+    except Exception:
+        logger.debug("stream_timing_observer_failed phase=%s", phase, exc_info=True)
+
+
 class OpenAIClient:
     def __init__(self) -> None:
         openai_class = _load_openai_class()
@@ -155,6 +170,7 @@ class OpenAIClient:
         messages: list[dict[str, str]],
         *,
         max_output_tokens: int | None = None,
+        stream_timing_observer: StreamTimingObserver | None = None,
     ) -> Iterator[str]:
         request_payload: dict[str, Any] = {
             "model": model,
@@ -163,11 +179,19 @@ class OpenAIClient:
         }
         if max_output_tokens:
             request_payload["max_completion_tokens"] = max_output_tokens
+        provider_started_at = time.perf_counter()
         stream = _run_with_retries(
             "openai",
             model,
             lambda: self.client.chat.completions.create(**request_payload),
         )
+        stream_opened_at = time.perf_counter()
+        _observe_stream_timing(
+            stream_timing_observer,
+            "provider_stream_open_ms",
+            (stream_opened_at - provider_started_at) * 1000,
+        )
+        first_chunk_seen = False
         try:
             for chunk in stream:
                 choices = getattr(chunk, "choices", None) or []
@@ -176,6 +200,19 @@ class OpenAIClient:
                 delta = getattr(choices[0], "delta", None)
                 content = getattr(delta, "content", None) if delta is not None else None
                 if content:
+                    if not first_chunk_seen:
+                        first_chunk_seen = True
+                        chunk_seen_at = time.perf_counter()
+                        _observe_stream_timing(
+                            stream_timing_observer,
+                            "provider_first_chunk_ms",
+                            (chunk_seen_at - stream_opened_at) * 1000,
+                        )
+                        _observe_stream_timing(
+                            stream_timing_observer,
+                            "provider_first_chunk_total_ms",
+                            (chunk_seen_at - provider_started_at) * 1000,
+                        )
                     yield str(content)
         finally:
             close = getattr(stream, "close", None)
@@ -262,7 +299,9 @@ class AnthropicClient:
         user_prompt: str,
         *,
         max_output_tokens: int | None = None,
+        stream_timing_observer: StreamTimingObserver | None = None,
     ) -> Iterator[str]:
+        provider_started_at = time.perf_counter()
         stream_context = _run_with_retries(
             "anthropic",
             model,
@@ -274,8 +313,28 @@ class AnthropicClient:
             ),
         )
         with stream_context as stream:
+            stream_opened_at = time.perf_counter()
+            _observe_stream_timing(
+                stream_timing_observer,
+                "provider_stream_open_ms",
+                (stream_opened_at - provider_started_at) * 1000,
+            )
+            first_chunk_seen = False
             for text in stream.text_stream:
                 if text:
+                    if not first_chunk_seen:
+                        first_chunk_seen = True
+                        chunk_seen_at = time.perf_counter()
+                        _observe_stream_timing(
+                            stream_timing_observer,
+                            "provider_first_chunk_ms",
+                            (chunk_seen_at - stream_opened_at) * 1000,
+                        )
+                        _observe_stream_timing(
+                            stream_timing_observer,
+                            "provider_first_chunk_total_ms",
+                            (chunk_seen_at - provider_started_at) * 1000,
+                        )
                     yield text
 
 
@@ -301,12 +360,14 @@ class GeminiClient:
         *,
         model: str = GEMINI_MODEL,
         max_output_tokens: int | None = None,
+        stream_timing_observer: StreamTimingObserver | None = None,
     ) -> Iterator[str]:
         config_kwargs: dict[str, Any] = {
             "thinking_config": self._types.ThinkingConfig(thinking_budget=0),
         }
         if max_output_tokens:
             config_kwargs["max_output_tokens"] = max_output_tokens
+        provider_started_at = time.perf_counter()
         stream = _run_with_retries(
             "gemini",
             model,
@@ -316,10 +377,30 @@ class GeminiClient:
                 config=self._types.GenerateContentConfig(**config_kwargs),
             ),
         )
+        stream_opened_at = time.perf_counter()
+        _observe_stream_timing(
+            stream_timing_observer,
+            "provider_stream_open_ms",
+            (stream_opened_at - provider_started_at) * 1000,
+        )
 
+        first_chunk_seen = False
         for chunk in stream:
             text = getattr(chunk, "text", None)
             if text:
+                if not first_chunk_seen:
+                    first_chunk_seen = True
+                    chunk_seen_at = time.perf_counter()
+                    _observe_stream_timing(
+                        stream_timing_observer,
+                        "provider_first_chunk_ms",
+                        (chunk_seen_at - stream_opened_at) * 1000,
+                    )
+                    _observe_stream_timing(
+                        stream_timing_observer,
+                        "provider_first_chunk_total_ms",
+                        (chunk_seen_at - provider_started_at) * 1000,
+                    )
                 yield text
 
     def create_chat_completion(

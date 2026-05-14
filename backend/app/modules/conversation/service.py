@@ -174,12 +174,113 @@ class PromptPackage:
 
 
 @dataclass
+class ChatStreamTiming:
+    started_at: float = field(default_factory=time.perf_counter)
+    tenant_id: str | None = None
+    trainer_id: str | None = None
+    client_id: str | None = None
+    conversation_id: str | None = None
+    route: str = "unknown"
+    route_flow: str = "unknown"
+    route_reason: str = "unknown"
+    provider: str = "unknown"
+    model: str = "unknown"
+    fallback_used: bool = False
+    phase_timings: dict[str, int] = field(default_factory=dict)
+    first_client_token_ms: int | None = None
+    total_stream_ms: int | None = None
+    _provider_iteration_started_at: float | None = field(default=None, repr=False)
+    _logged: bool = field(default=False, repr=False)
+
+    def set_context(self, *, trainer_context: TrainerContext, conversation_id: str | None = None) -> None:
+        self.tenant_id = str(trainer_context.tenant_id or "") or None
+        self.trainer_id = str(trainer_context.trainer_id or "") or None
+        self.client_id = str(trainer_context.client_id or "") or None
+        if conversation_id:
+            self.conversation_id = str(conversation_id)
+
+    def set_route(self, route: RoutingDecision) -> None:
+        intent = route.intent_route if isinstance(route.intent_route, dict) else {}
+        self.route = str(intent.get("route") or route.flow or "unknown")
+        self.route_flow = str(route.flow or "unknown")
+        self.route_reason = str(route.reason or "unknown")
+        self.provider = str(route.provider or self.provider)
+        self.model = str(route.model or self.model)
+
+    def set_execution(self, provider: str, model: str, *, fallback_used: bool = False) -> None:
+        self.provider = str(provider or self.provider)
+        self.model = str(model or self.model)
+        self.fallback_used = bool(fallback_used)
+
+    def record_elapsed(self, phase: str, started_at: float) -> None:
+        self.record_phase(phase, (time.perf_counter() - started_at) * 1000)
+
+    def record_phase(self, phase: str, duration_ms: int | float) -> None:
+        if not phase:
+            return
+        self.phase_timings[str(phase)] = max(int(duration_ms), 0)
+
+    def record_provider_phase(self, phase: str, duration_ms: int | float) -> None:
+        if phase in self.phase_timings:
+            return
+        self.record_phase(phase, duration_ms)
+
+    def mark_provider_iteration_started(self) -> None:
+        if self._provider_iteration_started_at is None:
+            self._provider_iteration_started_at = time.perf_counter()
+
+    def mark_provider_text_received(self) -> None:
+        if "provider_first_chunk_total_ms" in self.phase_timings:
+            return
+        started_at = self._provider_iteration_started_at or self.started_at
+        self.record_phase("provider_first_chunk_total_ms", (time.perf_counter() - started_at) * 1000)
+
+    def mark_first_client_token(self) -> None:
+        if self.first_client_token_ms is None:
+            self.first_client_token_ms = max(int((time.perf_counter() - self.started_at) * 1000), 0)
+
+    def mark_total(self) -> None:
+        self.total_stream_ms = max(int((time.perf_counter() - self.started_at) * 1000), 0)
+
+    def log(self, *, error_category: str | None = None) -> None:
+        if self._logged:
+            return
+        self._logged = True
+        self.mark_total()
+        payload = {
+            "event": "chat_stream_timing",
+            "tenant_id": self.tenant_id,
+            "trainer_id": self.trainer_id,
+            "client_id": self.client_id,
+            "conversation_id": self.conversation_id,
+            "route": self.route,
+            "route_flow": self.route_flow,
+            "route_reason": self.route_reason,
+            "provider": self.provider,
+            "model": self.model,
+            "fallback_used": self.fallback_used,
+            "route_prepare_ms": self.phase_timings.get("route_prepare_ms"),
+            "prompt_build_ms": self.phase_timings.get("prompt_build_ms"),
+            "user_message_persist_ms": self.phase_timings.get("user_message_persist_ms"),
+            "memory_suggestion_ms": self.phase_timings.get("memory_suggestion_ms"),
+            "provider_stream_open_ms": self.phase_timings.get("provider_stream_open_ms"),
+            "provider_first_chunk_ms": self.phase_timings.get("provider_first_chunk_ms"),
+            "provider_first_chunk_total_ms": self.phase_timings.get("provider_first_chunk_total_ms"),
+            "first_client_token_ms": self.first_client_token_ms,
+            "total_stream_ms": self.total_stream_ms,
+            "error_category": error_category,
+        }
+        logger.info(json.dumps(payload, default=str))
+
+
+@dataclass
 class StreamResultState:
     conversation_usage: ConversationUsage | None = None
     token_usage: TokenUsage = field(default_factory=TokenUsage)
     assistant_message_id: str | None = None
     memory_suggestions: list[dict[str, Any]] = field(default_factory=list)
     trace_metadata: dict[str, Any] = field(default_factory=dict)
+    stream_timing: ChatStreamTiming | None = None
 
 
 class ConversationProcessingError(RuntimeError):
@@ -2509,7 +2610,12 @@ class ConversationService:
         trainer_context: TrainerContext,
         request: ChatRequest,
     ) -> Iterator[dict[str, Any]]:
+        stream_timing = ChatStreamTiming()
+        stream_timing.set_context(trainer_context=trainer_context, conversation_id=request.conversation_id)
+        stream_error_category: str | None = None
+        intent_started_at = time.perf_counter()
         intent_preview = self.intent_router.classify_with_fallback(request.message)
+        stream_timing.record_elapsed("intent_preview_ms", intent_started_at)
         yield status_event_for_intent(
             STATUS_READING_USER_MESSAGE,
             routed_intent=intent_preview,
@@ -2599,7 +2705,9 @@ class ConversationService:
                 user_id,
                 trainer_context,
                 request,
+                stream_timing=stream_timing,
             )
+            stream_timing.set_context(trainer_context=trainer_context, conversation_id=conversation_id)
             yield status_event_for_intent(
                 STATUS_WRITING_FINAL_COACH_RESPONSE,
                 routed_intent=intent_preview,
@@ -2613,6 +2721,7 @@ class ConversationService:
                 if not text_chunk:
                     continue
                 assistant_chunks.append(text_chunk)
+                stream_timing.mark_first_client_token()
                 yield message_delta_event(
                     text_chunk,
                     conversation_id=conversation_id,
@@ -2644,9 +2753,11 @@ class ConversationService:
                 user_message_id=None,
             )
         except ValueError:
+            stream_error_category = "value_error"
             raise
         except ConversationProcessingError as exc:
             if self._is_timeout_exception(exc):
+                stream_error_category = "postgres_timeout"
                 logger.warning(
                     "Chat stream using minimal safe fallback after timeout trainer_id=%s client_id=%s conversation_id=%s",
                     trainer_context.trainer_id,
@@ -2656,8 +2767,10 @@ class ConversationService:
                 )
                 yield from self._minimal_safe_stream_events(request=request, reason="postgres_timeout")
                 return
+            stream_error_category = "conversation_processing_error"
             yield error_event(str(exc) or "Chat response could not be completed")
         except Exception as exc:
+            stream_error_category = "unexpected_error"
             logger.exception(
                 "Unexpected chat event stream failure trainer_id=%s client_id=%s conversation_id=%s",
                 trainer_context.trainer_id,
@@ -2666,17 +2779,35 @@ class ConversationService:
                 exc_info=exc,
             )
             if self._is_timeout_exception(exc):
+                stream_error_category = "postgres_timeout"
                 yield from self._minimal_safe_stream_events(request=request, reason="postgres_timeout")
                 return
             yield error_event("Chat response could not be completed")
+        finally:
+            stream_timing.log(error_category=stream_error_category)
+
+    def _iter_observed_provider_stream(
+        self,
+        stream: Iterator[str],
+        timing: ChatStreamTiming,
+    ) -> Iterator[str]:
+        timing.mark_provider_iteration_started()
+        for text in stream:
+            if text:
+                timing.mark_provider_text_received()
+            yield text
 
     def stream_chat(
         self,
         user_id: str,
         trainer_context: TrainerContext,
         request: ChatRequest,
+        *,
+        stream_timing: ChatStreamTiming | None = None,
     ) -> tuple[str, Iterator[str], RouteDebug, StreamResultState]:
         del user_id
+        timing = stream_timing or ChatStreamTiming()
+        timing.set_context(trainer_context=trainer_context, conversation_id=request.conversation_id)
         if not trainer_context.trainer_id:
             if request.conversation_id:
                 raise ValueError("Conversation not found")
@@ -2697,6 +2828,7 @@ class ConversationService:
             result_state = StreamResultState(
                 conversation_usage=response.conversation_usage,
                 token_usage=response.token_usage,
+                stream_timing=timing,
                 trace_metadata={
                     "route": "trainer_onboarding",
                     "router_confidence": 1.0,
@@ -2728,6 +2860,7 @@ class ConversationService:
                 StreamResultState(
                     conversation_usage=response.conversation_usage,
                     token_usage=response.token_usage,
+                    stream_timing=timing,
                     trace_metadata={
                         "route": "prompt_injection_blocked",
                         "router_confidence": 1.0,
@@ -2741,11 +2874,17 @@ class ConversationService:
                 ),
             )
 
+        route_started_at = time.perf_counter()
         route, conversation, profile = self._prepare_route_and_conversation(trainer_context, request)
+        timing.record_elapsed("route_prepare_ms", route_started_at)
+        timing.set_context(trainer_context=trainer_context, conversation_id=conversation.get("id"))
+        timing.set_route(route)
         prompt: PromptPackage | None = None
         if not self._is_safety_escalation_route(route):
             try:
+                prompt_started_at = time.perf_counter()
                 prompt = self._build_prompt(trainer_context, conversation, request, route, profile)
+                timing.record_elapsed("prompt_build_ms", prompt_started_at)
             except ValueError:
                 raise
             except Exception as exc:
@@ -2761,19 +2900,23 @@ class ConversationService:
 
         route_metadata = route.as_dict()
         try:
+            user_message_started_at = time.perf_counter()
             user_message = self._save_user_message(
                 conversation_id=conversation["id"],
                 request=request,
                 route_metadata=route_metadata,
             )
+            timing.record_elapsed("user_message_persist_ms", user_message_started_at)
         except Exception as exc:
             self._mark_conversation_failed(conversation["id"])
             raise ConversationProcessingError("Chat response could not be completed") from exc
+        memory_started_at = time.perf_counter()
         memory_suggestions = self._detect_memory_suggestions(
             message_text=request.message,
             source_message_id=str(user_message.get("id") or "") or None,
             source_role="user",
         )
+        timing.record_elapsed("memory_suggestion_ms", memory_started_at)
 
         if self._is_safety_escalation_route(route):
             safety_orchestration_metadata = {
@@ -2788,7 +2931,9 @@ class ConversationService:
                 None,
                 safety_orchestration_metadata,
             )
+            timing.set_execution("system", "safety-escalation-hold")
             result_state = StreamResultState()
+            result_state.stream_timing = timing
             result_state.trace_metadata = self._build_trace_metadata(
                 route=route,
                 execution_model="safety-escalation-hold",
@@ -2858,7 +3003,9 @@ class ConversationService:
                     "model_fallback_chain": prompt.orchestration_metadata.get("model_fallback_chain") or [f"anthropic:{ANTHROPIC_SONNET_MODEL}"],
                 },
             )
+            timing.set_execution("anthropic", ANTHROPIC_SONNET_MODEL)
             result_state = StreamResultState()
+            result_state.stream_timing = timing
             result_state.trace_metadata = self._build_trace_metadata(
                 route=route,
                 execution_model=ANTHROPIC_SONNET_MODEL,
@@ -2874,6 +3021,7 @@ class ConversationService:
                             system_prompt=prompt.system_prompt,
                             user_prompt=prompt.user_prompt,
                             max_output_tokens=self._max_output_tokens_for_prompt(prompt),
+                            stream_timing_observer=timing.record_provider_phase,
                         )
                     except TypeError:
                         stream = anthropic_client.stream_chat_completion(
@@ -2881,7 +3029,7 @@ class ConversationService:
                             system_prompt=prompt.system_prompt,
                             user_prompt=prompt.user_prompt,
                         )
-                    for text in stream:
+                    for text in self._iter_observed_provider_stream(stream, timing):
                         safe_text = self._validate_assistant_output(
                             text,
                             trainer_context=trainer_context,
@@ -2960,7 +3108,9 @@ class ConversationService:
                     "model_fallback_chain": prompt.orchestration_metadata.get("model_fallback_chain") or [f"openai:{route.model}"],
                 },
             )
+            timing.set_execution("openai", route.model)
             result_state = StreamResultState()
+            result_state.stream_timing = timing
             result_state.trace_metadata = self._build_trace_metadata(
                 route=route,
                 execution_model=route.model,
@@ -2979,10 +3129,11 @@ class ConversationService:
                             model=route.model,
                             messages=messages,
                             max_output_tokens=self._max_output_tokens_for_prompt(prompt),
+                            stream_timing_observer=timing.record_provider_phase,
                         )
                     except TypeError:
                         stream = openai_client.stream_chat_completion(model=route.model, messages=messages)
-                    for text in stream:
+                    for text in self._iter_observed_provider_stream(stream, timing):
                         safe_text = self._validate_assistant_output(
                             text,
                             trainer_context=trainer_context,
@@ -3058,11 +3209,14 @@ class ConversationService:
                 None,
                 prompt.orchestration_metadata,
             )
-            result_state = StreamResultState()
+            result_state = StreamResultState(stream_timing=timing)
 
             def fallback_iterator() -> Iterator[str]:
                 try:
+                    provider_started_at = time.perf_counter()
                     completion, execution_provider, execution_model, fallback_reason = self._execute_route(route, prompt)
+                    timing.record_elapsed("provider_first_chunk_total_ms", provider_started_at)
+                    timing.set_execution(execution_provider, execution_model, fallback_used=bool(fallback_reason))
                     nonlocal route_debug
                     route_debug = self._route_debug_from_metadata(
                         route,
@@ -3152,7 +3306,8 @@ class ConversationService:
                 "model_fallback_chain": prompt.orchestration_metadata.get("model_fallback_chain") or [f"gemini:{gemini_model}"],
             },
         )
-        result_state = StreamResultState()
+        timing.set_execution("gemini", gemini_model)
+        result_state = StreamResultState(stream_timing=timing)
         result_state.trace_metadata = self._build_trace_metadata(
             route=route,
             execution_model=gemini_model,
@@ -3167,10 +3322,11 @@ class ConversationService:
                         combined_prompt,
                         model=gemini_model,
                         max_output_tokens=self._max_output_tokens_for_prompt(prompt),
+                        stream_timing_observer=timing.record_provider_phase,
                     )
                 except TypeError:
                     stream = gemini_client.stream_chat_completion(combined_prompt)
-                for text in stream:
+                for text in self._iter_observed_provider_stream(stream, timing):
                     safe_text = self._validate_assistant_output(
                         text,
                         trainer_context=trainer_context,

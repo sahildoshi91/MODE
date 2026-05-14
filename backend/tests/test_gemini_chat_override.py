@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -420,8 +421,20 @@ class FakeGeminiClient:
             ),
         )
 
-    def stream_chat_completion(self, prompt):
+    def stream_chat_completion(
+        self,
+        prompt,
+        *,
+        model=None,
+        max_output_tokens=None,
+        stream_timing_observer=None,
+    ):
+        del model, max_output_tokens
         self.prompts.append(prompt)
+        if callable(stream_timing_observer):
+            stream_timing_observer("provider_stream_open_ms", 3)
+            stream_timing_observer("provider_first_chunk_ms", 4)
+            stream_timing_observer("provider_first_chunk_total_ms", 7)
         yield "Gemini "
         yield "stream"
 
@@ -466,7 +479,16 @@ class FakeAnthropicClient:
             ),
         )
 
-    def stream_chat_completion(self, model, system_prompt, user_prompt):
+    def stream_chat_completion(
+        self,
+        model,
+        system_prompt,
+        user_prompt,
+        *,
+        max_output_tokens=None,
+        stream_timing_observer=None,
+    ):
+        del max_output_tokens
         self.stream_calls.append(
             {
                 "model": model,
@@ -474,6 +496,10 @@ class FakeAnthropicClient:
                 "user_prompt": user_prompt,
             }
         )
+        if callable(stream_timing_observer):
+            stream_timing_observer("provider_stream_open_ms", 5)
+            stream_timing_observer("provider_first_chunk_ms", 6)
+            stream_timing_observer("provider_first_chunk_total_ms", 11)
         yield "Claude "
         yield "stream"
 
@@ -589,6 +615,39 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertEqual(result_state.conversation_usage.total_tokens, 0)
         self.assertEqual(self.repository.saved_messages[-1]["message_text"], "Gemini stream")
         self.assertEqual(self.repository.updated_states[-1]["stage"], "default_fast")
+
+    def test_stream_chat_events_logs_sanitized_phase_timing(self):
+        service = self._build_service()
+
+        with patch("app.modules.conversation.service.enqueue_post_chat_jobs", return_value=[]):
+            with self.assertLogs("app.modules.conversation.service", level="INFO") as logs:
+                events = list(service.stream_chat_events("user-123", self.trainer_context, self.request))
+
+        timing_lines = [line for line in logs.output if '"event": "chat_stream_timing"' in line]
+        self.assertEqual(len(timing_lines), 1)
+        payload = json.loads(timing_lines[0].split(":", 2)[2])
+        self.assertEqual(payload["event"], "chat_stream_timing")
+        self.assertEqual(payload["tenant_id"], "tenant-123")
+        self.assertEqual(payload["trainer_id"], "trainer-123")
+        self.assertEqual(payload["client_id"], "client-123")
+        self.assertEqual(payload["conversation_id"], "convo-123")
+        self.assertEqual(payload["provider"], "gemini")
+        self.assertEqual(payload["model"], "gemini-2.5-flash-lite")
+        self.assertEqual(payload["route"], "FAST_PATH")
+        self.assertEqual(payload["route_flow"], "default_fast")
+        self.assertFalse(payload["fallback_used"])
+        self.assertIsInstance(payload["route_prepare_ms"], int)
+        self.assertIsInstance(payload["prompt_build_ms"], int)
+        self.assertIsInstance(payload["user_message_persist_ms"], int)
+        self.assertEqual(payload["provider_stream_open_ms"], 3)
+        self.assertEqual(payload["provider_first_chunk_ms"], 4)
+        self.assertEqual(payload["provider_first_chunk_total_ms"], 7)
+        self.assertIsInstance(payload["first_client_token_ms"], int)
+        self.assertIsInstance(payload["total_stream_ms"], int)
+        joined_logs = "\n".join(logs.output)
+        self.assertNotIn(self.request.message, joined_logs)
+        self.assertNotIn("Gemini stream", joined_logs)
+        self.assertTrue(any(event.get("type") == "done" for event in events))
 
     def test_handle_chat_succeeds_when_usage_analytics_are_unavailable(self):
         repository = BrokenUsageConversationRepository()
