@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import unittest
@@ -166,6 +167,7 @@ class RecordingStreamPersistenceService:
             "_trace": {
                 "route": "FAST_PATH",
                 "model_used": "gemini-2.5-flash-lite",
+                "fallback_used": False,
             },
         }
 
@@ -358,6 +360,48 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn("status:streaming", service.calls)
         self.assertIn("append:done", service.calls)
         self.assertIn("status:completed", service.calls)
+
+    def test_stream_emits_sanitized_api_timing_diagnostics(self):
+        service = RecordingStreamPersistenceService()
+        app.dependency_overrides[get_conversation_service] = lambda: service
+
+        with self.assertLogs("app.api.v1.chat", level="WARNING") as logs:
+            response = self.client.post(
+                "/api/v1/chat/stream",
+                json={"message": "Hello sensitive text"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"content": "first token"', response.text)
+        timing_lines = [line for line in logs.output if '"event": "chat_stream_api_timing"' in line]
+        self.assertEqual(len(timing_lines), 1)
+        payload = json.loads(timing_lines[0].split(":", 2)[2])
+        self.assertEqual(payload["event"], "chat_stream_api_timing")
+        self.assertEqual(payload["tenant_id"], "tenant-123")
+        self.assertEqual(payload["trainer_id"], "trainer-123")
+        self.assertEqual(payload["client_id"], "client-123")
+        self.assertEqual(payload["conversation_id"], "convo-123")
+        self.assertEqual(payload["route"], "FAST_PATH")
+        self.assertEqual(payload["provider"], "gemini")
+        self.assertEqual(payload["model"], "gemini-2.5-flash-lite")
+        self.assertFalse(payload["fallback_used"])
+        self.assertIsInstance(payload["request_to_endpoint_ms"], int)
+        self.assertIsInstance(payload["endpoint_to_response_ms"], int)
+        self.assertIsInstance(payload["request_to_generator_start_ms"], int)
+        self.assertIsInstance(payload["first_event_encoded_ms"], int)
+        self.assertIsInstance(payload["first_token_encoded_ms"], int)
+        self.assertIsInstance(payload["first_token_yielded_ms"], int)
+        self.assertIsInstance(payload["first_token_resume_ms"], int)
+        self.assertIsInstance(payload["endpoint_to_first_token_yielded_ms"], int)
+        self.assertIsInstance(payload["total_stream_ms"], int)
+        self.assertGreaterEqual(payload["event_count"], 3)
+        self.assertGreaterEqual(payload["token_event_count"], 1)
+        self.assertTrue(payload["done_seen"])
+        self.assertFalse(payload["error_seen"])
+        joined_logs = "\n".join(logs.output)
+        self.assertNotIn("Hello sensitive text", joined_logs)
+        self.assertNotIn("first token", joined_logs)
 
     def test_chat_maps_unexpected_failure_to_controlled_502(self):
         app.dependency_overrides[get_conversation_service] = lambda: UnexpectedExplodingConversationService()

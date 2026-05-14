@@ -1,4 +1,6 @@
+import json
 import logging
+import time
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -33,6 +35,24 @@ from app.modules.conversation.trace import ChatTraceAccumulator, emit_chat_trace
 router = APIRouter()
 logger = logging.getLogger(__name__)
 CONTROLLED_CHAT_ERROR_DETAIL = "Chat response could not be completed"
+
+
+def _elapsed_ms(started_at: float, ended_at: float | None = None) -> int:
+    ended_at = time.perf_counter() if ended_at is None else ended_at
+    return max(int((ended_at - started_at) * 1000), 0)
+
+
+def _provider_from_model(model: object) -> str | None:
+    model_text = str(model or "").strip().lower()
+    if not model_text:
+        return None
+    if model_text.startswith("gemini"):
+        return "gemini"
+    if model_text.startswith("claude"):
+        return "anthropic"
+    if model_text.startswith(("gpt-", "o1", "o3", "o4")):
+        return "openai"
+    return None
 
 
 def _public_chat_response(response: ChatResponse) -> ChatResponse:
@@ -329,6 +349,8 @@ async def chat_stream(
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: ConversationService = Depends(get_conversation_service),
 ):
+    endpoint_entered_at = time.perf_counter()
+    request_started_at = getattr(http_request.state, "chat_stream_request_started_at", endpoint_entered_at)
     require_client_or_trainer_actor(user, trainer_context)
     enforce_rate_limit(
         group="chat",
@@ -348,6 +370,7 @@ async def chat_stream(
 
     async def event_stream():
         nonlocal request_id
+        generator_started_at = time.perf_counter()
         encoder = ChatStreamSseEncoder(request_id=request_id)
         request_record_created = False
         trace = ChatTraceAccumulator(
@@ -357,6 +380,69 @@ async def chat_stream(
         )
         stream_conversation_id = str(request.conversation_id or "").strip() or None
         first_token_sent = False
+        first_event_encoded_ms: int | None = None
+        first_token_encoded_ms: int | None = None
+        first_token_yielded_ms: int | None = None
+        first_token_resume_ms: int | None = None
+        event_count = 0
+        token_event_count = 0
+        done_seen = False
+        error_seen = False
+        error_category: str | None = None
+        route_name: str | None = None
+        model_name: str | None = None
+        provider_name: str | None = None
+        fallback_used: bool | None = None
+
+        def capture_trace_metadata(payload: dict[str, object]) -> None:
+            nonlocal route_name, model_name, provider_name, fallback_used
+            trace_metadata = payload.get("_trace")
+            if not isinstance(trace_metadata, dict):
+                return
+            route_value = trace_metadata.get("route")
+            model_value = trace_metadata.get("model_used")
+            if route_value:
+                route_name = str(route_value)
+            if model_value:
+                model_name = str(model_value)
+                provider_name = provider_name or _provider_from_model(model_name)
+            if isinstance(trace_metadata.get("fallback_used"), bool):
+                fallback_used = bool(trace_metadata.get("fallback_used"))
+
+        def emit_api_timing() -> None:
+            timing_payload = {
+                "event": "chat_stream_api_timing",
+                "request_id": request_id,
+                "tenant_id": str(trainer_context.tenant_id or ""),
+                "trainer_id": str(trainer_context.trainer_id or ""),
+                "client_id": str(trainer_context.client_id or ""),
+                "conversation_id": stream_conversation_id,
+                "route": route_name,
+                "provider": provider_name,
+                "model": model_name,
+                "fallback_used": fallback_used,
+                "request_to_endpoint_ms": _elapsed_ms(request_started_at, endpoint_entered_at),
+                "endpoint_to_response_ms": _elapsed_ms(endpoint_entered_at, streaming_response_created_at),
+                "request_to_generator_start_ms": _elapsed_ms(request_started_at, generator_started_at),
+                "first_event_encoded_ms": first_event_encoded_ms,
+                "first_token_encoded_ms": first_token_encoded_ms,
+                "first_token_yielded_ms": first_token_yielded_ms,
+                "first_token_resume_ms": first_token_resume_ms,
+                "endpoint_to_first_token_yielded_ms": (
+                    _elapsed_ms(endpoint_entered_at, first_token_yielded_at)
+                    if first_token_yielded_at is not None
+                    else None
+                ),
+                "total_stream_ms": _elapsed_ms(request_started_at),
+                "event_count": event_count,
+                "token_event_count": token_event_count,
+                "done_seen": done_seen,
+                "error_seen": error_seen,
+                "error_category": error_category,
+            }
+            logger.warning(json.dumps(timing_payload, default=str))
+
+        first_token_yielded_at: float | None = None
 
         def maybe_attach_request_record(payload: dict[str, object]) -> None:
             nonlocal request_id, request_record_created, stream_conversation_id
@@ -413,10 +499,30 @@ async def chat_stream(
                     break
                 trace.observe_payload(payload)
                 payload_type = str(payload.get("type") or "")
+                capture_trace_metadata(payload)
                 client_payload = strip_private_trace(payload)
                 request_status = request_status_for(payload)
                 error_detail = str(payload.get("detail") or "") if payload_type == "error" else None
-                yield encoder.encode(client_payload, persist=False)
+                event_count += 1
+                if payload_type in {"token", "message_delta"}:
+                    token_event_count += 1
+                if payload_type == "done":
+                    done_seen = True
+                if payload_type == "error":
+                    error_seen = True
+                    error_category = error_detail or CONTROLLED_CHAT_ERROR_DETAIL
+                encoded = encoder.encode(client_payload, persist=False)
+                encoded_at = time.perf_counter()
+                if first_event_encoded_ms is None:
+                    first_event_encoded_ms = _elapsed_ms(request_started_at, encoded_at)
+                is_first_token_payload = payload_type in {"token", "message_delta"} and first_token_encoded_ms is None
+                if is_first_token_payload:
+                    first_token_encoded_ms = _elapsed_ms(request_started_at, encoded_at)
+                    first_token_yielded_ms = first_token_encoded_ms
+                    first_token_yielded_at = encoded_at
+                yield encoded
+                if is_first_token_payload and first_token_resume_ms is None:
+                    first_token_resume_ms = _elapsed_ms(request_started_at)
                 if payload.get("conversation_id"):
                     stream_conversation_id = str(payload.get("conversation_id") or "").strip() or stream_conversation_id
                 if payload_type in {"token", "message_delta"}:
@@ -434,7 +540,13 @@ async def chat_stream(
         except ValueError as exc:
             payload = error_event(str(exc) or CONTROLLED_CHAT_ERROR_DETAIL)
             trace.observe_payload(payload)
-            yield encoder.encode(payload, persist=False)
+            event_count += 1
+            error_seen = True
+            error_category = str(payload.get("detail") or CONTROLLED_CHAT_ERROR_DETAIL)
+            encoded = encoder.encode(payload, persist=False)
+            if first_event_encoded_ms is None:
+                first_event_encoded_ms = _elapsed_ms(request_started_at)
+            yield encoded
             encoder.record_encoded_event(
                 payload,
                 request_status="failed",
@@ -444,7 +556,13 @@ async def chat_stream(
             detail = str(exc) or CONTROLLED_CHAT_ERROR_DETAIL
             payload = error_event(detail)
             trace.observe_payload(payload)
-            yield encoder.encode(payload, persist=False)
+            event_count += 1
+            error_seen = True
+            error_category = detail
+            encoded = encoder.encode(payload, persist=False)
+            if first_event_encoded_ms is None:
+                first_event_encoded_ms = _elapsed_ms(request_started_at)
+            yield encoded
             encoder.record_encoded_event(
                 payload,
                 request_status="failed",
@@ -460,13 +578,20 @@ async def chat_stream(
             )
             payload = error_event(CONTROLLED_CHAT_ERROR_DETAIL)
             trace.observe_payload(payload)
-            yield encoder.encode(payload, persist=False)
+            event_count += 1
+            error_seen = True
+            error_category = CONTROLLED_CHAT_ERROR_DETAIL
+            encoded = encoder.encode(payload, persist=False)
+            if first_event_encoded_ms is None:
+                first_event_encoded_ms = _elapsed_ms(request_started_at)
+            yield encoded
             encoder.record_encoded_event(
                 payload,
                 request_status="failed",
                 error_detail=CONTROLLED_CHAT_ERROR_DETAIL,
             )
         finally:
+            emit_api_timing()
             trace.request_id = request_id
             emit_chat_trace(
                 trace.build(),
@@ -475,6 +600,7 @@ async def chat_stream(
                 conversation_id=stream_conversation_id,
             )
 
+    streaming_response_created_at = time.perf_counter()
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",

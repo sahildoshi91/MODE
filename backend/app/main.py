@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
+import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1 import api_router
@@ -35,6 +36,13 @@ app.add_middleware(
     allow_methods=settings.cors_allow_methods_list,
     allow_headers=settings.cors_allow_headers_list,
 )
+
+
+@app.middleware("http")
+async def capture_chat_stream_request_start(request: Request, call_next):
+    if request.url.path == "/api/v1/chat/stream":
+        request.state.chat_stream_request_started_at = time.perf_counter()
+    return await call_next(request)
 
 app.include_router(workout_router, prefix="/workouts", tags=["workouts"])
 app.include_router(api_router)

@@ -270,20 +270,34 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
         "message": message,
         "client_context": {"launch_gate_smoke": True},
     }
+    request_id = str(body["request_id"])
     url = urljoin(f"{base_url.rstrip('/')}/", CHAT_STREAM_PATH.lstrip("/"))
     started = time.perf_counter()
+    headers_ms: int | None = None
+    first_event_ms: int | None = None
+    first_event: str | None = None
     first_token_ms: int | None = None
     event_name = ""
+    event_count = 0
+    data_line_count = 0
+    line_count = 0
     done_seen = False
     req = Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
     try:
         with urlopen(req, timeout=timeout) as response:
+            headers_ms = int((time.perf_counter() - started) * 1000)
             status = int(response.getcode())
             for raw_line in response:
+                line_count += 1
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if line.startswith("event:"):
                     event_name = line.split(":", 1)[1].strip()
+                    event_count += 1
+                    if first_event_ms is None:
+                        first_event_ms = int((time.perf_counter() - started) * 1000)
+                        first_event = event_name
                 elif line.startswith("data:"):
+                    data_line_count += 1
                     data = line.split(":", 1)[1].strip()
                     if event_name == "token" and first_token_ms is None and data and data != "{}":
                         first_token_ms = int((time.perf_counter() - started) * 1000)
@@ -293,14 +307,34 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
             return {
                 "ok": status == 200 and first_token_ms is not None and done_seen,
                 "status": status,
+                "request_id": request_id,
+                "headers_ms": headers_ms,
+                "first_event": first_event,
+                "first_event_ms": first_event_ms,
+                "first_token_ms": first_token_ms,
                 "ttft_ms": first_token_ms,
                 "total_ms": int((time.perf_counter() - started) * 1000),
+                "event_count": event_count,
+                "data_line_count": data_line_count,
+                "line_count": line_count,
                 "done_seen": done_seen,
             }
     except HTTPError as exc:
-        return {"ok": False, "status": int(exc.code), "error": exc.read().decode("utf-8", errors="replace")[:500]}
+        return {
+            "ok": False,
+            "status": int(exc.code),
+            "request_id": request_id,
+            "total_ms": int((time.perf_counter() - started) * 1000),
+            "error": exc.read().decode("utf-8", errors="replace")[:500],
+        }
     except Exception as exc:
-        return {"ok": False, "status": None, "error": str(exc)}
+        return {
+            "ok": False,
+            "status": None,
+            "request_id": request_id,
+            "total_ms": int((time.perf_counter() - started) * 1000),
+            "error": str(exc),
+        }
 
 
 def _load_tokens(args: argparse.Namespace) -> list[str]:
@@ -373,13 +407,13 @@ def _chat_load(args: argparse.Namespace) -> CheckResult:
             "chat_ttft_load",
             "FAIL",
             f"TTFT p95 {p95}ms exceeds target {args.ttft_target_ms}ms.",
-            {"p95_ms": p95, "request_count": request_count, "concurrency": concurrency},
+            {"p95_ms": p95, "request_count": request_count, "concurrency": concurrency, "results": results},
         )
     return CheckResult(
         "chat_ttft_load",
         "PASS",
         "Chat TTFT load target passed.",
-        {"p95_ms": p95, "request_count": request_count, "concurrency": concurrency},
+        {"p95_ms": p95, "request_count": request_count, "concurrency": concurrency, "results": results},
     )
 
 

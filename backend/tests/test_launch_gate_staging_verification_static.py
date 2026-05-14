@@ -133,6 +133,49 @@ def test_request_converts_raw_timeout_to_runtime_error(monkeypatch) -> None:
         raise AssertionError("Expected raw TimeoutError to be converted to RuntimeError")
 
 
+def test_chat_stream_once_records_stream_timing_diagnostics(monkeypatch) -> None:
+    module = _load_launch_verify_module()
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def getcode(self):
+            return 200
+
+        def __iter__(self):
+            return iter(
+                [
+                    b"event: status\n",
+                    b"data: {}\n",
+                    b"event: token\n",
+                    b'data: {"content":"hello"}\n',
+                    b"event: done\n",
+                    b"data: {}\n",
+                ]
+            )
+
+    monkeypatch.setattr(module, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+
+    result = module._chat_stream_once("https://mode-backend-staging.onrender.com", "token", 1.0, "hello")
+
+    assert result["ok"] is True
+    assert result["status"] == 200
+    assert result["request_id"]
+    assert isinstance(result["headers_ms"], int)
+    assert result["first_event"] == "status"
+    assert isinstance(result["first_event_ms"], int)
+    assert result["first_token_ms"] == result["ttft_ms"]
+    assert isinstance(result["total_ms"], int)
+    assert result["event_count"] == 3
+    assert result["data_line_count"] == 3
+    assert result["line_count"] == 6
+    assert result["done_seen"] is True
+
+
 def test_healthz_uses_server_duration_for_latency_gate(monkeypatch) -> None:
     module = _load_launch_verify_module()
 
