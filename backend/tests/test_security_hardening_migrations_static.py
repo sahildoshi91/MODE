@@ -92,3 +92,12 @@ def test_health_ping_rpc_is_public_but_data_free() -> None:
     assert "FROM public.trainers" not in source
     assert "FROM public.clients" not in source
     assert "NOTIFY pgrst, 'reload schema'" in source
+
+
+def test_account_deletion_job_type_is_allowed_in_intelligence_jobs() -> None:
+    source = _read_sql("20260514a_allow_account_deletion_intelligence_jobs.sql")
+    assert "DROP CONSTRAINT IF EXISTS intelligence_jobs_job_type_check" in source
+    assert "ADD CONSTRAINT intelligence_jobs_job_type_check" in source
+    assert "'account_deletion'" in source
+    assert "'memory_write'" in source
+    assert "'safety_flag_persistence'" in source

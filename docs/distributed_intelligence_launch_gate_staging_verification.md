@@ -44,6 +44,7 @@ the storage table owner.
 20260511e_drop_redundant_conversation_message_index.sql
 20260511f_retire_service_role_request_paths.sql
 20260512a_add_health_ping_rpc.sql
+20260514a_allow_account_deletion_intelligence_jobs.sql
 ```
 
 Dry-run validation only:
@@ -54,7 +55,7 @@ cd backend
 ```
 
 If using the Supabase SQL editor manually, run `20260426e`, `20260426g`, `20260426h`, and
-`20260426i` first, then rerun `20260511f`, then `20260512a`. Do not run `20260511f` alone on a
+`20260426i` first, then rerun `20260511f`, then `20260512a`, then `20260514a`. Do not run `20260511f` alone on a
 database where `20260426h` has not already been applied. Do not run `20260426f` on hosted Supabase
 unless Supabase provides an owner-supported workflow for managing `storage.*` table policies.
 
