@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     health_cache_ttl_seconds: float = Field(default=5.0, ge=0.1, le=60.0)
     health_stale_after_seconds: float = Field(default=30.0, ge=1.0, le=300.0)
     chat_stream_legacy_alias_enabled: bool = True
-    chat_staging_openai_only: bool = True
+    chat_staging_openai_only: bool = False
     atlas_enabled: bool = True
     atlas_background_learning_enabled: bool = True
     atlas_review_required: bool = True

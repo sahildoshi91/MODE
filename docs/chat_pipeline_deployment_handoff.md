@@ -53,7 +53,7 @@ Recommended first rollout values:
 - `CHAT_CACHE_TIMEOUT_MS=25`.
 - `CHAT_ROUTER_TIMEOUT_MS=200`.
 - `CHAT_STREAM_LEGACY_ALIAS_ENABLED=true` until every deployed client handles canonical `token/content` events.
-- `CHAT_STAGING_OPENAI_ONLY=true` on Render free-tier staging to keep the 512 MB instance on one provider SDK stack during trace baselines. Leave this unset/false outside staging unless intentionally load-testing a single-provider path.
+- `CHAT_STAGING_OPENAI_ONLY=true` can be used on Render free-tier staging to debug a single-provider OpenAI path. Keep it unset/false for launch TTFT/load evidence so staging exercises normal multi-provider routing.
 - Leave `TRAINER_INTELLIGENCE_ORCHESTRATION_ENABLED` at the current environment value; this deployment does not require changing that flag.
 
 ## Staging Apply Order
