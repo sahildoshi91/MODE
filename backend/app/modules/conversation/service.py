@@ -234,7 +234,14 @@ class ChatStreamTiming:
         if self._provider_iteration_started_at is None:
             now = time.perf_counter()
             self._provider_iteration_started_at = now
-            self.record_phase("provider_iteration_start_ms", (now - self.started_at) * 1000)
+            provider_iteration_start_ms = (now - self.started_at) * 1000
+            self.record_phase("provider_iteration_start_ms", provider_iteration_start_ms)
+            stream_chat_return_ms = self.phase_timings.get("stream_chat_return_ms")
+            if stream_chat_return_ms is not None:
+                self.record_phase_once(
+                    "pre_provider_iteration_gap_ms",
+                    provider_iteration_start_ms - stream_chat_return_ms,
+                )
 
     def mark_provider_text_received(self) -> None:
         now = time.perf_counter()
@@ -274,10 +281,19 @@ class ChatStreamTiming:
             "model": self.model,
             "fallback_used": self.fallback_used,
             "intent_preview_ms": self.phase_timings.get("intent_preview_ms"),
+            "stream_chat_call_start_ms": self.phase_timings.get("stream_chat_call_start_ms"),
+            "stream_chat_return_ms": self.phase_timings.get("stream_chat_return_ms"),
+            "stream_chat_call_duration_ms": self.phase_timings.get("stream_chat_call_duration_ms"),
+            "writing_status_ready_ms": self.phase_timings.get("writing_status_ready_ms"),
+            "pre_provider_iteration_gap_ms": self.phase_timings.get("pre_provider_iteration_gap_ms"),
             "route_prepare_ms": self.phase_timings.get("route_prepare_ms"),
             "prompt_build_ms": self.phase_timings.get("prompt_build_ms"),
             "user_message_persist_ms": self.phase_timings.get("user_message_persist_ms"),
             "memory_suggestion_ms": self.phase_timings.get("memory_suggestion_ms"),
+            "post_memory_setup_start_ms": self.phase_timings.get("post_memory_setup_start_ms"),
+            "route_provider_branch_setup_ms": self.phase_timings.get("route_provider_branch_setup_ms"),
+            "provider_iterator_ready_ms": self.phase_timings.get("provider_iterator_ready_ms"),
+            "stream_chat_return_ready_ms": self.phase_timings.get("stream_chat_return_ready_ms"),
             "provider_iteration_start_ms": self.phase_timings.get("provider_iteration_start_ms"),
             "provider_stream_open_ms": self.phase_timings.get("provider_stream_open_ms"),
             "provider_first_chunk_ms": self.phase_timings.get("provider_first_chunk_ms"),
@@ -2747,13 +2763,27 @@ class ConversationService:
                 intent_route=intent_preview.route.value,
             )
 
+            stream_chat_call_started_at = time.perf_counter()
+            stream_timing.record_phase(
+                "stream_chat_call_start_ms",
+                (stream_chat_call_started_at - stream_timing.started_at) * 1000,
+            )
             conversation_id, chunks, route_debug, result_state = self.stream_chat(
                 user_id,
                 trainer_context,
                 request,
                 stream_timing=stream_timing,
             )
+            stream_timing.record_phase(
+                "stream_chat_return_ms",
+                (time.perf_counter() - stream_timing.started_at) * 1000,
+            )
+            stream_timing.record_elapsed("stream_chat_call_duration_ms", stream_chat_call_started_at)
             stream_timing.set_context(trainer_context=trainer_context, conversation_id=conversation_id)
+            stream_timing.record_phase(
+                "writing_status_ready_ms",
+                (time.perf_counter() - stream_timing.started_at) * 1000,
+            )
             yield status_event_for_intent(
                 STATUS_WRITING_FINAL_COACH_RESPONSE,
                 routed_intent=intent_preview,
@@ -2846,6 +2876,13 @@ class ConversationService:
             if text:
                 timing.mark_provider_text_received()
             yield text
+
+    def _record_stream_chat_return_ready(self, timing: ChatStreamTiming, branch_started_at: float) -> None:
+        now = time.perf_counter()
+        timing.record_phase_once("route_provider_branch_setup_ms", (now - branch_started_at) * 1000)
+        ready_ms = (now - timing.started_at) * 1000
+        timing.record_phase_once("provider_iterator_ready_ms", ready_ms)
+        timing.record_phase_once("stream_chat_return_ready_ms", ready_ms)
 
     def stream_chat(
         self,
@@ -2967,6 +3004,11 @@ class ConversationService:
             source_role="user",
         )
         timing.record_elapsed("memory_suggestion_ms", memory_started_at)
+        post_memory_setup_started_at = time.perf_counter()
+        timing.record_phase(
+            "post_memory_setup_start_ms",
+            (post_memory_setup_started_at - timing.started_at) * 1000,
+        )
 
         if self._is_safety_escalation_route(route):
             safety_orchestration_metadata = {
@@ -3036,6 +3078,7 @@ class ConversationService:
                     include_memory=False,
                 )
 
+            self._record_stream_chat_return_ready(timing, post_memory_setup_started_at)
             return conversation["id"], safety_iterator(), route_debug, result_state
 
         if prompt is None:
@@ -3146,6 +3189,7 @@ class ConversationService:
                     self._mark_conversation_failed(conversation["id"])
                     raise ConversationProcessingError("Chat response could not be completed") from exc
 
+            self._record_stream_chat_return_ready(timing, post_memory_setup_started_at)
             return conversation["id"], anthropic_iterator(), route_debug, result_state
 
         openai_client = self.openai_client
@@ -3252,6 +3296,7 @@ class ConversationService:
                     self._mark_conversation_failed(conversation["id"])
                     raise ConversationProcessingError("Chat response could not be completed") from exc
 
+            self._record_stream_chat_return_ready(timing, post_memory_setup_started_at)
             return conversation["id"], openai_iterator(), route_debug, result_state
 
         gemini_client = self.gemini_client
@@ -3346,6 +3391,7 @@ class ConversationService:
                     self._mark_conversation_failed(conversation["id"])
                     raise ConversationProcessingError("Chat response could not be completed") from exc
 
+            self._record_stream_chat_return_ready(timing, post_memory_setup_started_at)
             return conversation["id"], fallback_iterator(), route_debug, result_state
 
         combined_prompt = f"{prompt.system_prompt}\n\n{prompt.user_prompt}"
@@ -3450,6 +3496,7 @@ class ConversationService:
                 self._mark_conversation_failed(conversation["id"])
                 raise ConversationProcessingError("Chat response could not be completed") from exc
 
+        self._record_stream_chat_return_ready(timing, post_memory_setup_started_at)
         return conversation["id"], chunk_iterator(), route_debug, result_state
 
     def handle_chat(self, user_id: str, trainer_context: TrainerContext, request: ChatRequest) -> ChatResponse:
