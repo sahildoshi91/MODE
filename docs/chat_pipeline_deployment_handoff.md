@@ -152,6 +152,10 @@ Supabase ref `ssizauuehaggsovmlpqk`, `CHAT_STAGING_OPENAI_ONLY=true`):
 - Cleanup completed for disposable `smoke_test_20260511193408_094d8d96` tenant and auth users.
 - Latency is above target on free-tier staging; treat this as a documented staging capacity/SLO gap, not production readiness evidence for latency.
 
+For launch TTFT/load evidence, do not leave staging in the old OpenAI-only baseline mode.
+Set `CHAT_STAGING_OPENAI_ONLY=false` so the 50-concurrent gate exercises the normal
+multi-provider routing path.
+
 ## Production Rollout
 
 1. Apply the same migration to production.

@@ -75,6 +75,11 @@ MODE_STAGING_AUTH_TOKEN='<sacrificial_or_test_user_token>' \
 npm run launch:verify -- --base-url https://mode-backend-staging.onrender.com
 ```
 
+For TTFT/load evidence, staging should use the normal multi-provider router. Keep
+`CHAT_STAGING_OPENAI_ONLY=false` on `mode-backend-staging` while running launch load tests;
+the old OpenAI-only staging mode is useful for single-provider debugging but is not valid
+for the 50-concurrent launch latency gate.
+
 Generate a disposable client token for chat/storage smoke:
 
 ```bash
