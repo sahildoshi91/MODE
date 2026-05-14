@@ -1,4 +1,6 @@
-from fastapi import Depends
+import time
+
+from fastapi import Depends, Request
 from supabase import Client
 
 from app.core.auth import AuthenticatedUser, require_user
@@ -53,6 +55,27 @@ from app.modules.trainer_settings.repository import TrainerSettingsRepository
 from app.modules.trainer_settings.service import TrainerSettingsService
 from app.modules.workout.repository import WorkoutRepository
 from app.modules.workout.service import WorkoutService
+
+_TRAINER_CONTEXT_CACHE_TTL_SECONDS = 15
+_trainer_context_cache: dict[str, tuple[float, TrainerContext]] = {}
+
+
+def _get_cached_trainer_context(user_id: str) -> TrainerContext | None:
+    cached = _trainer_context_cache.get(user_id)
+    if not cached:
+        return None
+    expires_at, context = cached
+    if expires_at <= time.monotonic():
+        _trainer_context_cache.pop(user_id, None)
+        return None
+    return context
+
+
+def _set_cached_trainer_context(user_id: str, context: TrainerContext) -> None:
+    _trainer_context_cache[user_id] = (
+        time.monotonic() + _TRAINER_CONTEXT_CACHE_TTL_SECONDS,
+        context,
+    )
 
 
 def get_request_scoped_supabase_client(
@@ -129,10 +152,21 @@ def get_workout_service(
 
 
 def get_trainer_context(
+    request: Request,
     user: AuthenticatedUser = Depends(require_user),
     supabase: Client = Depends(get_request_scoped_supabase_client),
 ) -> TrainerContext:
-    return resolve_trainer_context(supabase, user.id)
+    started_at = time.perf_counter()
+    cached = _get_cached_trainer_context(user.id)
+    if cached is not None:
+        request.state.trainer_context_cache_hit = True
+        request.state.trainer_context_resolve_ms = max(int((time.perf_counter() - started_at) * 1000), 0)
+        return cached
+    context = resolve_trainer_context(supabase, user.id)
+    _set_cached_trainer_context(user.id, context)
+    request.state.trainer_context_cache_hit = False
+    request.state.trainer_context_resolve_ms = max(int((time.perf_counter() - started_at) * 1000), 0)
+    return context
 
 
 def get_profile_repository(

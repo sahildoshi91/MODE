@@ -42,6 +42,16 @@ def _elapsed_ms(started_at: float, ended_at: float | None = None) -> int:
     return max(int((ended_at - started_at) * 1000), 0)
 
 
+def _request_state_int(http_request: Request, name: str) -> int | None:
+    value = getattr(http_request.state, name, None)
+    if value is None:
+        return None
+    try:
+        return max(int(value), 0)
+    except (TypeError, ValueError):
+        return None
+
+
 def _provider_from_model(model: object) -> str | None:
     model_text = str(model or "").strip().lower()
     if not model_text:
@@ -352,6 +362,7 @@ async def chat_stream(
     endpoint_entered_at = time.perf_counter()
     request_started_at = getattr(http_request.state, "chat_stream_request_started_at", endpoint_entered_at)
     require_client_or_trainer_actor(user, trainer_context)
+    rate_limit_started_at = time.perf_counter()
     enforce_rate_limit(
         group="chat",
         user=user,
@@ -362,11 +373,16 @@ async def chat_stream(
             "client_id": trainer_context.client_id,
         },
     )
+    rate_limit_ms = _elapsed_ms(rate_limit_started_at)
     request_id = str(request.request_id) if request.request_id else str(uuid4())
     stream_request = request.model_copy(update={"request_id": request_id})
     create_ai_request_record = getattr(service, "create_ai_request_record", None)
     append_ai_request_event = getattr(service, "append_ai_request_event", None)
     update_ai_request_status = getattr(service, "update_ai_request_status", None)
+    endpoint_preflight_ms = _elapsed_ms(endpoint_entered_at)
+    auth_get_user_ms = _request_state_int(http_request, "auth_get_user_ms")
+    trainer_context_resolve_ms = _request_state_int(http_request, "trainer_context_resolve_ms")
+    trainer_context_cache_hit = bool(getattr(http_request.state, "trainer_context_cache_hit", False))
 
     async def event_stream():
         nonlocal request_id
@@ -414,6 +430,10 @@ async def chat_stream(
                 fallback_used = bool(trace_metadata.get("fallback_used"))
 
         def emit_api_timing() -> None:
+            request_to_endpoint_ms = _elapsed_ms(request_started_at, endpoint_entered_at)
+            attributed_pre_endpoint_ms = sum(
+                value for value in (auth_get_user_ms, trainer_context_resolve_ms) if value is not None
+            )
             timing_payload = {
                 "event": "chat_stream_api_timing",
                 "request_id": request_id,
@@ -425,7 +445,16 @@ async def chat_stream(
                 "provider": provider_name,
                 "model": model_name,
                 "fallback_used": fallback_used,
-                "request_to_endpoint_ms": _elapsed_ms(request_started_at, endpoint_entered_at),
+                "auth_get_user_ms": auth_get_user_ms,
+                "trainer_context_resolve_ms": trainer_context_resolve_ms,
+                "trainer_context_cache_hit": trainer_context_cache_hit,
+                "rate_limit_ms": rate_limit_ms,
+                "endpoint_preflight_ms": endpoint_preflight_ms,
+                "request_to_endpoint_unattributed_ms": max(
+                    request_to_endpoint_ms - attributed_pre_endpoint_ms,
+                    0,
+                ),
+                "request_to_endpoint_ms": request_to_endpoint_ms,
                 "endpoint_to_response_ms": _elapsed_ms(endpoint_entered_at, streaming_response_created_at),
                 "request_to_generator_start_ms": _elapsed_ms(request_started_at, generator_started_at),
                 "first_event_encoded_ms": first_event_encoded_ms,

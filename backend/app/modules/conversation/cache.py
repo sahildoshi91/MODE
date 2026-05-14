@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 CHAT_CONTEXT_TTL_SECONDS = 60
 USER_DIGEST_TTL_SECONDS = 300
 TRAINER_PERSONA_TTL_SECONDS = 600
+ROUTING_PROFILE_TTL_SECONDS = 30
 SEMANTIC_CACHE_TTL_SECONDS = 3600
 
 
@@ -24,6 +25,10 @@ def chat_context_key(trainer_id: str, client_id: str) -> str:
 
 def user_digest_key(trainer_id: str, client_id: str) -> str:
     return f"mode:user_digest:{trainer_id}:{client_id}"
+
+
+def routing_profile_key(trainer_id: str, client_id: str) -> str:
+    return f"mode:routing_profile:{trainer_id}:{client_id}"
 
 
 def trainer_persona_key(trainer_id: str) -> str:
@@ -142,6 +147,7 @@ def invalidate_chat_context(
 ) -> None:
     keys = [
         chat_context_key(trainer_id, client_id),
+        routing_profile_key(trainer_id, client_id),
         user_digest_key(trainer_id, client_id),
     ]
     if include_trainer_persona:
@@ -166,6 +172,7 @@ def expire_chat_context_soon(
 ) -> None:
     keys = [
         chat_context_key(trainer_id, client_id),
+        routing_profile_key(trainer_id, client_id),
         user_digest_key(trainer_id, client_id),
     ]
     if include_trainer_persona:

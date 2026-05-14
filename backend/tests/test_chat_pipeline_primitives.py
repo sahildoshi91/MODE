@@ -15,6 +15,7 @@ from app.modules.conversation.cache import (
     chat_context_key,
     invalidate_chat_context,
     invalidate_trainer_persona,
+    routing_profile_key,
     semantic_cache_key,
     trainer_persona_key,
     user_digest_key,
@@ -350,6 +351,7 @@ class ChatPipelinePrimitiveTests(unittest.TestCase):
             fake_cache.deletes,
             [(
                 chat_context_key("trainer-1", "client-1"),
+                routing_profile_key("trainer-1", "client-1"),
                 user_digest_key("trainer-1", "client-1"),
             )],
         )
@@ -377,6 +379,7 @@ class ChatPipelinePrimitiveTests(unittest.TestCase):
             fake_cache.deletes,
             [(
                 chat_context_key("trainer-1", "client-1"),
+                routing_profile_key("trainer-1", "client-1"),
                 user_digest_key("trainer-1", "client-1"),
                 trainer_persona_key("trainer-1"),
             )],

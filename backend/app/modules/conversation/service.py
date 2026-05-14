@@ -26,10 +26,12 @@ from app.core.config import settings
 from app.core.tenancy import TrainerContext
 from app.modules.ai_feedback.service import AIFeedbackService
 from app.modules.conversation.cache import (
+    ROUTING_PROFILE_TTL_SECONDS,
     TRAINER_PERSONA_TTL_SECONDS,
     USER_DIGEST_TTL_SECONDS,
     get_chat_cache,
     invalidate_chat_context,
+    routing_profile_key,
     trainer_persona_key,
     user_digest_key,
 )
@@ -287,8 +289,16 @@ class ChatStreamTiming:
             "writing_status_ready_ms": self.phase_timings.get("writing_status_ready_ms"),
             "pre_provider_iteration_gap_ms": self.phase_timings.get("pre_provider_iteration_gap_ms"),
             "route_prepare_ms": self.phase_timings.get("route_prepare_ms"),
+            "routing_profile_ms": self.phase_timings.get("routing_profile_ms"),
+            "routing_profile_cache_hit": bool(self.phase_timings.get("routing_profile_cache_hit", 0)),
+            "intent_classify_ms": self.phase_timings.get("intent_classify_ms"),
+            "route_decision_ms": self.phase_timings.get("route_decision_ms"),
+            "conversation_lookup_ms": self.phase_timings.get("conversation_lookup_ms"),
+            "conversation_create_ms": self.phase_timings.get("conversation_create_ms"),
             "prompt_build_ms": self.phase_timings.get("prompt_build_ms"),
             "user_message_persist_ms": self.phase_timings.get("user_message_persist_ms"),
+            "user_message_persist_deferred": bool(self.phase_timings.get("user_message_persist_deferred", 0)),
+            "deferred_user_message_persist_ms": self.phase_timings.get("deferred_user_message_persist_ms"),
             "memory_suggestion_ms": self.phase_timings.get("memory_suggestion_ms"),
             "post_memory_setup_start_ms": self.phase_timings.get("post_memory_setup_start_ms"),
             "route_provider_branch_setup_ms": self.phase_timings.get("route_provider_branch_setup_ms"),
@@ -443,7 +453,13 @@ class ConversationService:
             exc_info=exc,
         )
 
-    def _get_or_create_conversation(self, trainer_context: TrainerContext, request: ChatRequest) -> dict:
+    def _get_or_create_conversation(
+        self,
+        trainer_context: TrainerContext,
+        request: ChatRequest,
+        *,
+        timing: ChatStreamTiming | None = None,
+    ) -> dict:
         should_run_onboarding = self._should_run_trainer_onboarding(trainer_context, request)
         preferred_types = [
             "onboarding" if should_run_onboarding else self.DEFAULT_CONVERSATION_TYPE,
@@ -452,9 +468,14 @@ class ConversationService:
         fallback_to_any = not self._is_trainer_only_context(trainer_context)
         conversation = None
         if request.conversation_id:
+            lookup_started_at = time.perf_counter()
             try:
                 conversation = self.repository.get_conversation(str(request.conversation_id))
+                if timing is not None:
+                    timing.record_elapsed("conversation_lookup_ms", lookup_started_at)
             except Exception as exc:
+                if timing is not None:
+                    timing.record_elapsed("conversation_lookup_ms", lookup_started_at)
                 self._log_preparation_failure(
                     stage="conversation_lookup",
                     exc=exc,
@@ -470,6 +491,7 @@ class ConversationService:
             ):
                 raise ValueError("Conversation does not belong to the active trainer context")
         if not conversation:
+            lookup_started_at = time.perf_counter()
             try:
                 conversation = self.repository.find_active_conversation(
                     trainer_context.client_id,
@@ -477,13 +499,19 @@ class ConversationService:
                     preferred_types=preferred_types,
                     fallback_to_any=fallback_to_any,
                 )
+                if timing is not None:
+                    timing.record_elapsed("conversation_lookup_ms", lookup_started_at)
             except TypeError:
                 # Backward compatibility for test fakes that do not support the new signature.
                 conversation = self.repository.find_active_conversation(
                     trainer_context.client_id,
                     trainer_context.trainer_id,
                 )
+                if timing is not None:
+                    timing.record_elapsed("conversation_lookup_ms", lookup_started_at)
             except Exception as exc:
+                if timing is not None:
+                    timing.record_elapsed("conversation_lookup_ms", lookup_started_at)
                 self._log_preparation_failure(
                     stage="conversation_lookup",
                     exc=exc,
@@ -492,6 +520,7 @@ class ConversationService:
                 )
                 raise
         if not conversation:
+            create_started_at = time.perf_counter()
             try:
                 conversation = self.repository.create_conversation(
                     trainer_context.trainer_id,
@@ -499,7 +528,11 @@ class ConversationService:
                     "onboarding" if should_run_onboarding else self.DEFAULT_CONVERSATION_TYPE,
                     self._initial_conversation_stage(trainer_context, request),
                 )
+                if timing is not None:
+                    timing.record_elapsed("conversation_create_ms", create_started_at)
             except Exception as exc:
+                if timing is not None:
+                    timing.record_elapsed("conversation_create_ms", create_started_at)
                 self._log_preparation_failure(
                     stage="conversation_create",
                     exc=exc,
@@ -507,6 +540,8 @@ class ConversationService:
                     request=request,
                 )
                 raise
+        elif timing is not None:
+            timing.record_phase_once("conversation_create_ms", 0)
         return conversation
 
     def _initial_conversation_stage(self, trainer_context: TrainerContext, request: ChatRequest) -> str:
@@ -885,10 +920,19 @@ class ConversationService:
         self,
         trainer_context: TrainerContext,
         request: ChatRequest,
+        *,
+        timing: ChatStreamTiming | None = None,
     ) -> tuple[RoutingDecision, dict[str, Any]]:
         started_at = time.perf_counter()
-        profile = self._get_routing_profile(trainer_context)
+        routing_profile_started_at = time.perf_counter()
+        profile = self._get_routing_profile(trainer_context, timing=timing)
+        if timing is not None:
+            timing.record_elapsed("routing_profile_ms", routing_profile_started_at)
+        intent_started_at = time.perf_counter()
         intent_route = self.intent_router.classify_with_fallback(request.message, user_digest=profile)
+        if timing is not None:
+            timing.record_elapsed("intent_classify_ms", intent_started_at)
+        route_decision_started_at = time.perf_counter()
         route = self.router.route(
             RoutingContext(
                 message_text=request.message,
@@ -899,6 +943,8 @@ class ConversationService:
         )
         routed = self._apply_intent_route(route, intent_route)
         constrained = self._apply_runtime_provider_constraints(routed)
+        if timing is not None:
+            timing.record_elapsed("route_decision_ms", route_decision_started_at)
         emit_metric(
             "router.latency_ms",
             int((time.perf_counter() - started_at) * 1000),
@@ -1092,9 +1138,28 @@ class ConversationService:
             memory_suggestions=[],
         )
 
-    def _get_routing_profile(self, trainer_context: TrainerContext) -> dict[str, Any]:
+    def _get_routing_profile(
+        self,
+        trainer_context: TrainerContext,
+        *,
+        timing: ChatStreamTiming | None = None,
+    ) -> dict[str, Any]:
         if trainer_context.client_id:
-            return self.profile_service.get_or_create_profile(trainer_context.client_id)
+            trainer_id = str(trainer_context.trainer_id or "").strip()
+            client_id = str(trainer_context.client_id or "").strip()
+            cache_key = routing_profile_key(trainer_id, client_id) if trainer_id and client_id else None
+            if cache_key:
+                cached = self.chat_cache.get_json(cache_key)
+                if isinstance(cached, dict):
+                    if timing is not None:
+                        timing.record_phase("routing_profile_cache_hit", 1)
+                    return cached
+            profile = self.profile_service.get_or_create_profile(trainer_context.client_id)
+            if cache_key:
+                self.chat_cache.set_json(cache_key, profile, ROUTING_PROFILE_TTL_SECONDS)
+            if timing is not None:
+                timing.record_phase("routing_profile_cache_hit", 0)
+            return profile
         return {
             "context_type": "trainer_admin",
             "trainer_display_name": trainer_context.trainer_display_name,
@@ -1105,9 +1170,11 @@ class ConversationService:
         self,
         trainer_context: TrainerContext,
         request: ChatRequest,
+        *,
+        timing: ChatStreamTiming | None = None,
     ) -> tuple[RoutingDecision, dict[str, Any], dict[str, Any]]:
         try:
-            route, profile = self._route_request(trainer_context, request)
+            route, profile = self._route_request(trainer_context, request, timing=timing)
         except ValueError:
             raise
         except Exception as exc:
@@ -1120,7 +1187,7 @@ class ConversationService:
             raise ConversationProcessingError("Chat response could not be completed") from exc
 
         try:
-            conversation = self._get_or_create_conversation(trainer_context, request)
+            conversation = self._get_or_create_conversation(trainer_context, request, timing=timing)
         except ValueError:
             raise
         except Exception as exc:
@@ -2773,6 +2840,7 @@ class ConversationService:
                 trainer_context,
                 request,
                 stream_timing=stream_timing,
+                defer_user_message_persist=True,
             )
             stream_timing.record_phase(
                 "stream_chat_return_ms",
@@ -2891,6 +2959,7 @@ class ConversationService:
         request: ChatRequest,
         *,
         stream_timing: ChatStreamTiming | None = None,
+        defer_user_message_persist: bool = False,
     ) -> tuple[str, Iterator[str], RouteDebug, StreamResultState]:
         del user_id
         timing = stream_timing or ChatStreamTiming()
@@ -2962,7 +3031,11 @@ class ConversationService:
             )
 
         route_started_at = time.perf_counter()
-        route, conversation, profile = self._prepare_route_and_conversation(trainer_context, request)
+        route, conversation, profile = self._prepare_route_and_conversation(
+            trainer_context,
+            request,
+            timing=timing,
+        )
         timing.record_elapsed("route_prepare_ms", route_started_at)
         timing.set_context(trainer_context=trainer_context, conversation_id=conversation.get("id"))
         timing.set_route(route)
@@ -2986,24 +3059,48 @@ class ConversationService:
                 raise ConversationProcessingError("Chat response could not be completed") from exc
 
         route_metadata = route.as_dict()
-        try:
-            user_message_started_at = time.perf_counter()
-            user_message = self._save_user_message(
-                conversation_id=conversation["id"],
-                request=request,
-                route_metadata=route_metadata,
+        user_message: dict[str, Any] | None = None
+        memory_suggestions: list[dict[str, Any]] = []
+
+        def persist_user_message_for_stream() -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+            nonlocal user_message, memory_suggestions
+            if user_message is not None:
+                return user_message, memory_suggestions
+            try:
+                user_message_started_at = time.perf_counter()
+                user_message = self._save_user_message(
+                    conversation_id=conversation["id"],
+                    request=request,
+                    route_metadata=route_metadata,
+                )
+                if defer_user_message_persist:
+                    timing.record_elapsed("deferred_user_message_persist_ms", user_message_started_at)
+                else:
+                    timing.record_elapsed("user_message_persist_ms", user_message_started_at)
+            except Exception as exc:
+                self._mark_conversation_failed(conversation["id"])
+                raise ConversationProcessingError("Chat response could not be completed") from exc
+
+            memory_started_at = time.perf_counter()
+            memory_suggestions = self._detect_memory_suggestions(
+                message_text=request.message,
+                source_message_id=str(user_message.get("id") or "") or None,
+                source_role="user",
             )
-            timing.record_elapsed("user_message_persist_ms", user_message_started_at)
-        except Exception as exc:
-            self._mark_conversation_failed(conversation["id"])
-            raise ConversationProcessingError("Chat response could not be completed") from exc
-        memory_started_at = time.perf_counter()
-        memory_suggestions = self._detect_memory_suggestions(
-            message_text=request.message,
-            source_message_id=str(user_message.get("id") or "") or None,
-            source_role="user",
-        )
-        timing.record_elapsed("memory_suggestion_ms", memory_started_at)
+            timing.record_elapsed("memory_suggestion_ms", memory_started_at)
+            return user_message, memory_suggestions
+
+        def persisted_user_message_id(message: dict[str, Any] | None) -> str | None:
+            if not isinstance(message, dict):
+                return None
+            return str(message.get("id") or "") or None
+
+        if defer_user_message_persist:
+            timing.record_phase("user_message_persist_deferred", 1)
+            timing.record_phase("user_message_persist_ms", 0)
+            timing.record_phase("memory_suggestion_ms", 0)
+        else:
+            persist_user_message_for_stream()
         post_memory_setup_started_at = time.perf_counter()
         timing.record_phase(
             "post_memory_setup_start_ms",
@@ -3041,6 +3138,7 @@ class ConversationService:
                 )
                 yield assistant_message
                 completion = TextCompletion(text=assistant_message, token_usage=AIClientTokenUsage())
+                saved_user_message, saved_memory_suggestions = persist_user_message_for_stream()
                 _, conversation_usage, saved_assistant_message = self._persist_assistant_message(
                     conversation["id"],
                     assistant_message,
@@ -3050,11 +3148,11 @@ class ConversationService:
                     completion,
                     orchestration_metadata=safety_orchestration_metadata,
                     source_request_id=self._request_id_text(request),
-                    memory_suggestions=memory_suggestions,
+                    memory_suggestions=saved_memory_suggestions,
                 )
                 result_state.conversation_usage = conversation_usage
                 result_state.assistant_message_id = str(saved_assistant_message.get("id") or "") or None
-                result_state.memory_suggestions = memory_suggestions
+                result_state.memory_suggestions = saved_memory_suggestions
                 self._log_generated_chat_output_safely(
                     trainer_context=trainer_context,
                     conversation_id=conversation["id"],
@@ -3074,7 +3172,7 @@ class ConversationService:
                     conversation_id=conversation["id"],
                     route=route,
                     assistant_message=assistant_message,
-                    user_message_id=user_message.get("id"),
+                    user_message_id=persisted_user_message_id(saved_user_message),
                     include_memory=False,
                 )
 
@@ -3149,6 +3247,7 @@ class ConversationService:
                         text=assistant_message,
                         token_usage=AIClientTokenUsage(),
                     )
+                    saved_user_message, saved_memory_suggestions = persist_user_message_for_stream()
                     _, conversation_usage, saved_assistant_message = self._persist_assistant_message(
                         conversation["id"],
                         assistant_message,
@@ -3158,11 +3257,11 @@ class ConversationService:
                         completion,
                         orchestration_metadata=prompt.orchestration_metadata,
                         source_request_id=self._request_id_text(request),
-                        memory_suggestions=memory_suggestions,
+                        memory_suggestions=saved_memory_suggestions,
                     )
                     result_state.conversation_usage = conversation_usage
                     result_state.assistant_message_id = str(saved_assistant_message.get("id") or "") or None
-                    result_state.memory_suggestions = memory_suggestions
+                    result_state.memory_suggestions = saved_memory_suggestions
                     self._log_generated_chat_output_safely(
                         trainer_context=trainer_context,
                         conversation_id=conversation["id"],
@@ -3182,7 +3281,7 @@ class ConversationService:
                         conversation_id=conversation["id"],
                         route=route,
                         assistant_message=assistant_message,
-                        user_message_id=user_message.get("id"),
+                        user_message_id=persisted_user_message_id(saved_user_message),
                         include_memory=False,
                     )
                 except Exception as exc:
@@ -3256,6 +3355,7 @@ class ConversationService:
                         text=assistant_message,
                         token_usage=AIClientTokenUsage(),
                     )
+                    saved_user_message, saved_memory_suggestions = persist_user_message_for_stream()
                     _, conversation_usage, saved_assistant_message = self._persist_assistant_message(
                         conversation["id"],
                         assistant_message,
@@ -3265,11 +3365,11 @@ class ConversationService:
                         completion,
                         orchestration_metadata=prompt.orchestration_metadata,
                         source_request_id=self._request_id_text(request),
-                        memory_suggestions=memory_suggestions,
+                        memory_suggestions=saved_memory_suggestions,
                     )
                     result_state.conversation_usage = conversation_usage
                     result_state.assistant_message_id = str(saved_assistant_message.get("id") or "") or None
-                    result_state.memory_suggestions = memory_suggestions
+                    result_state.memory_suggestions = saved_memory_suggestions
                     self._log_generated_chat_output_safely(
                         trainer_context=trainer_context,
                         conversation_id=conversation["id"],
@@ -3289,7 +3389,7 @@ class ConversationService:
                         conversation_id=conversation["id"],
                         route=route,
                         assistant_message=assistant_message,
-                        user_message_id=user_message.get("id"),
+                        user_message_id=persisted_user_message_id(saved_user_message),
                         include_memory=False,
                     )
                 except Exception as exc:
@@ -3347,6 +3447,7 @@ class ConversationService:
                     )
                     completion = TextCompletion(text=assistant_message, token_usage=completion.token_usage)
                     yield assistant_message
+                    saved_user_message, saved_memory_suggestions = persist_user_message_for_stream()
                     _, conversation_usage, saved_assistant_message = self._persist_assistant_message(
                         conversation["id"],
                         assistant_message,
@@ -3357,11 +3458,11 @@ class ConversationService:
                         fallback_reason,
                         orchestration_metadata=prompt.orchestration_metadata,
                         source_request_id=self._request_id_text(request),
-                        memory_suggestions=memory_suggestions,
+                        memory_suggestions=saved_memory_suggestions,
                     )
                     result_state.conversation_usage = conversation_usage
                     result_state.assistant_message_id = str(saved_assistant_message.get("id") or "") or None
-                    result_state.memory_suggestions = memory_suggestions
+                    result_state.memory_suggestions = saved_memory_suggestions
                     self._log_generated_chat_output_safely(
                         trainer_context=trainer_context,
                         conversation_id=conversation["id"],
@@ -3381,7 +3482,7 @@ class ConversationService:
                         conversation_id=conversation["id"],
                         route=route,
                         assistant_message=assistant_message,
-                        user_message_id=user_message.get("id"),
+                        user_message_id=persisted_user_message_id(saved_user_message),
                         include_memory=False,
                     )
                 except ConversationProcessingError:
@@ -3453,6 +3554,7 @@ class ConversationService:
                     text=assistant_message,
                     token_usage=AIClientTokenUsage(),
                 )
+                saved_user_message, saved_memory_suggestions = persist_user_message_for_stream()
                 _, conversation_usage, saved_assistant_message = self._persist_assistant_message(
                     conversation["id"],
                     assistant_message,
@@ -3462,11 +3564,11 @@ class ConversationService:
                     completion,
                     orchestration_metadata=prompt.orchestration_metadata,
                     source_request_id=self._request_id_text(request),
-                    memory_suggestions=memory_suggestions,
+                    memory_suggestions=saved_memory_suggestions,
                 )
                 result_state.conversation_usage = conversation_usage
                 result_state.assistant_message_id = str(saved_assistant_message.get("id") or "") or None
-                result_state.memory_suggestions = memory_suggestions
+                result_state.memory_suggestions = saved_memory_suggestions
                 self._log_generated_chat_output_safely(
                     trainer_context=trainer_context,
                     conversation_id=conversation["id"],
@@ -3486,7 +3588,7 @@ class ConversationService:
                     conversation_id=conversation["id"],
                     route=route,
                     assistant_message=assistant_message,
-                    user_message_id=user_message.get("id"),
+                    user_message_id=persisted_user_message_id(saved_user_message),
                     include_memory=False,
                 )
             except ConversationProcessingError:

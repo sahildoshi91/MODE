@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 from dataclasses import dataclass
+import time
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 
 from app.db.client import get_supabase_user_client
 
@@ -65,13 +66,23 @@ def _is_disabled_user(user: object) -> bool:
     return False
 
 
-def require_user(authorization: str | None = Header(default=None)) -> AuthenticatedUser:
-    token = _extract_bearer_token(authorization)
+def require_user(
+    request: Request = None,
+    authorization: str | None = Header(default=None),
+) -> AuthenticatedUser:
+    request_obj = request if isinstance(request, Request) else None
+    authorization_value = request if isinstance(request, str) else authorization
+    token = _extract_bearer_token(authorization_value)
     auth_client = get_supabase_user_client(token).auth
 
     try:
+        auth_started_at = time.perf_counter()
         user_response = auth_client.get_user(token)
+        if request_obj is not None:
+            request_obj.state.auth_get_user_ms = max(int((time.perf_counter() - auth_started_at) * 1000), 0)
     except Exception as exc:
+        if request_obj is not None:
+            request_obj.state.auth_get_user_ms = max(int((time.perf_counter() - auth_started_at) * 1000), 0)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired session",
