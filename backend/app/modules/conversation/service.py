@@ -270,7 +270,7 @@ class ChatStreamTiming:
             "total_stream_ms": self.total_stream_ms,
             "error_category": error_category,
         }
-        logger.info(json.dumps(payload, default=str))
+        logger.warning(json.dumps(payload, default=str))
 
 
 @dataclass
