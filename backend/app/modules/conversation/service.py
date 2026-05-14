@@ -259,6 +259,7 @@ class ChatStreamTiming:
             "provider": self.provider,
             "model": self.model,
             "fallback_used": self.fallback_used,
+            "intent_preview_ms": self.phase_timings.get("intent_preview_ms"),
             "route_prepare_ms": self.phase_timings.get("route_prepare_ms"),
             "prompt_build_ms": self.phase_timings.get("prompt_build_ms"),
             "user_message_persist_ms": self.phase_timings.get("user_message_persist_ms"),

@@ -144,7 +144,20 @@ class RecordingStreamPersistenceService:
     def stream_chat_events(self, user_id, trainer_context, request):
         del user_id, trainer_context
         self.stream_request_id = str(request.request_id)
-        self.calls.append("yield_status_with_conversation")
+        self.calls.append("yield_status_without_conversation")
+        yield {
+            "type": "status",
+            "stage": "reading_user_message",
+            "message": "Reading...",
+        }
+        self.calls.append("yield_status_loading_with_conversation")
+        yield {
+            "type": "status",
+            "stage": "loading_client_profile",
+            "message": "Loading...",
+            "conversation_id": "convo-123",
+        }
+        self.calls.append("yield_status_writing_with_conversation")
         yield {
             "type": "status",
             "stage": "writing_final_coach_response",
@@ -327,6 +340,7 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         event_types = _sse_event_types(response.text)
         self.assertEqual(event_types[0], "status")
+        self.assertEqual(event_types.count("status"), 1)
         self.assertIn("token", event_types)
         self.assertIn("message_delta", event_types)
         self.assertIn("done", event_types)
@@ -349,6 +363,10 @@ class ChatApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('"content": "first token"', response.text)
+        event_types = _sse_event_types(response.text)
+        self.assertEqual(event_types.count("status"), 1)
+        self.assertLess(event_types.index("status"), event_types.index("token"))
+        self.assertLess(event_types.index("token"), event_types.index("done"))
         self.assertEqual(service.stream_request_id, service.created_request_id)
         self.assertGreater(
             service.calls.index("create_ai_request_record"),
@@ -397,6 +415,10 @@ class ChatApiTests(unittest.TestCase):
         self.assertIsInstance(payload["total_stream_ms"], int)
         self.assertGreaterEqual(payload["event_count"], 3)
         self.assertGreaterEqual(payload["token_event_count"], 1)
+        self.assertEqual(payload["pre_token_status_sent_count"], 1)
+        self.assertEqual(payload["pre_token_status_suppressed_count"], 2)
+        self.assertIsInstance(payload["first_status_resume_ms"], int)
+        self.assertIsInstance(payload["max_pre_token_resume_gap_ms"], int)
         self.assertTrue(payload["done_seen"])
         self.assertFalse(payload["error_seen"])
         joined_logs = "\n".join(logs.output)
@@ -447,6 +469,7 @@ class ChatApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(_sse_event_types(response.text)[0], "status")
+        self.assertEqual(_sse_event_types(response.text).count("status"), 1)
         self.assertIn('"type": "error"', response.text)
         self.assertIn('"detail": "Chat response could not be completed"', response.text)
 

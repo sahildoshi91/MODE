@@ -636,6 +636,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertEqual(payload["route"], "FAST_PATH")
         self.assertEqual(payload["route_flow"], "default_fast")
         self.assertFalse(payload["fallback_used"])
+        self.assertIsInstance(payload["intent_preview_ms"], int)
         self.assertIsInstance(payload["route_prepare_ms"], int)
         self.assertIsInstance(payload["prompt_build_ms"], int)
         self.assertIsInstance(payload["user_message_persist_ms"], int)

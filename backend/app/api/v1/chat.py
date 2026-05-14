@@ -386,6 +386,10 @@ async def chat_stream(
         first_token_resume_ms: int | None = None
         event_count = 0
         token_event_count = 0
+        pre_token_status_sent_count = 0
+        pre_token_status_suppressed_count = 0
+        first_status_resume_ms: int | None = None
+        max_pre_token_resume_gap_ms: int | None = None
         done_seen = False
         error_seen = False
         error_category: str | None = None
@@ -436,6 +440,10 @@ async def chat_stream(
                 "total_stream_ms": _elapsed_ms(request_started_at),
                 "event_count": event_count,
                 "token_event_count": token_event_count,
+                "pre_token_status_sent_count": pre_token_status_sent_count,
+                "pre_token_status_suppressed_count": pre_token_status_suppressed_count,
+                "first_status_resume_ms": first_status_resume_ms,
+                "max_pre_token_resume_gap_ms": max_pre_token_resume_gap_ms,
                 "done_seen": done_seen,
                 "error_seen": error_seen,
                 "error_category": error_category,
@@ -500,10 +508,16 @@ async def chat_stream(
                 trace.observe_payload(payload)
                 payload_type = str(payload.get("type") or "")
                 capture_trace_metadata(payload)
+                if payload.get("conversation_id"):
+                    stream_conversation_id = str(payload.get("conversation_id") or "").strip() or stream_conversation_id
+                if payload_type == "status" and not first_token_sent and pre_token_status_sent_count >= 1:
+                    pre_token_status_suppressed_count += 1
+                    continue
                 client_payload = strip_private_trace(payload)
                 request_status = request_status_for(payload)
                 error_detail = str(payload.get("detail") or "") if payload_type == "error" else None
                 event_count += 1
+                is_pre_token_status_payload = payload_type == "status" and not first_token_sent
                 if payload_type in {"token", "message_delta"}:
                     token_event_count += 1
                 if payload_type == "done":
@@ -520,11 +534,19 @@ async def chat_stream(
                     first_token_encoded_ms = _elapsed_ms(request_started_at, encoded_at)
                     first_token_yielded_ms = first_token_encoded_ms
                     first_token_yielded_at = encoded_at
+                if is_pre_token_status_payload:
+                    pre_token_status_sent_count += 1
                 yield encoded
+                if is_pre_token_status_payload:
+                    resumed_at = time.perf_counter()
+                    resume_gap_ms = _elapsed_ms(encoded_at, resumed_at)
+                    first_status_resume_ms = first_status_resume_ms or _elapsed_ms(request_started_at, resumed_at)
+                    max_pre_token_resume_gap_ms = max(
+                        resume_gap_ms,
+                        max_pre_token_resume_gap_ms or 0,
+                    )
                 if is_first_token_payload and first_token_resume_ms is None:
                     first_token_resume_ms = _elapsed_ms(request_started_at)
-                if payload.get("conversation_id"):
-                    stream_conversation_id = str(payload.get("conversation_id") or "").strip() or stream_conversation_id
                 if payload_type in {"token", "message_delta"}:
                     first_token_sent = True
                 if first_token_sent or payload_type in {"done", "error"}:
