@@ -45,6 +45,7 @@ the storage table owner.
 20260511f_retire_service_role_request_paths.sql
 20260512a_add_health_ping_rpc.sql
 20260514a_allow_account_deletion_intelligence_jobs.sql
+20260514b_grant_service_role_worker_job_tables.sql
 ```
 
 Dry-run validation only:

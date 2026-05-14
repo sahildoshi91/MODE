@@ -101,3 +101,14 @@ def test_account_deletion_job_type_is_allowed_in_intelligence_jobs() -> None:
     assert "'account_deletion'" in source
     assert "'memory_write'" in source
     assert "'safety_flag_persistence'" in source
+
+
+def test_worker_job_tables_grant_minimal_service_role_access() -> None:
+    source = _read_sql("20260514b_grant_service_role_worker_job_tables.sql")
+    assert "IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'service_role')" in source
+    assert "GRANT SELECT, INSERT, UPDATE ON public.intelligence_jobs TO service_role" in source
+    assert "GRANT SELECT, INSERT ON public.worker_job_traces TO service_role" in source
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON public.intelligence_jobs" not in source
+    assert "GRANT SELECT, INSERT, UPDATE ON public.worker_job_traces" not in source
+    assert "TO anon" not in source
+    assert "TO authenticated" not in source

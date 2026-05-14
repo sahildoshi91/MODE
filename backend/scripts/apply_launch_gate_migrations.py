@@ -28,6 +28,7 @@ DEFAULT_SQL_FILES = (
     BACKEND_ROOT / "sql" / "20260511f_retire_service_role_request_paths.sql",
     BACKEND_ROOT / "sql" / "20260512a_add_health_ping_rpc.sql",
     BACKEND_ROOT / "sql" / "20260514a_allow_account_deletion_intelligence_jobs.sql",
+    BACKEND_ROOT / "sql" / "20260514b_grant_service_role_worker_job_tables.sql",
 )
 
 STORAGE_LIFECYCLE_MIGRATION = "20260426h_add_storage_upload_lifecycle_and_security_catalog_rpc.sql"
@@ -74,6 +75,13 @@ def _validate_sql(path: Path, source: str) -> list[str]:
             "DROP CONSTRAINT IF EXISTS intelligence_jobs_job_type_check",
             "'account_deletion'",
             "ADD CONSTRAINT intelligence_jobs_job_type_check",
+        ):
+            if required not in source:
+                failures.append(f"{path.name}: missing required SQL fragment: {required}")
+    if path.name == "20260514b_grant_service_role_worker_job_tables.sql":
+        for required in (
+            "GRANT SELECT, INSERT, UPDATE ON public.intelligence_jobs TO service_role",
+            "GRANT SELECT, INSERT ON public.worker_job_traces TO service_role",
         ):
             if required not in source:
                 failures.append(f"{path.name}: missing required SQL fragment: {required}")

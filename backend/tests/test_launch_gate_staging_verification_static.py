@@ -39,6 +39,7 @@ def test_launch_gate_migration_helper_applies_storage_lifecycle_before_service_r
     service_role_retirement = "20260511f_retire_service_role_request_paths.sql"
     health_ping = "20260512a_add_health_ping_rpc.sql"
     account_deletion_job_type = "20260514a_allow_account_deletion_intelligence_jobs.sql"
+    worker_job_grants = "20260514b_grant_service_role_worker_job_tables.sql"
     assert "20260426e_add_distributed_rate_limits_and_rpc_execute_allowlist.sql" in source
     assert "20260426f_lockdown_storage_objects_service_signed_urls_only.sql" not in source
     assert "20260426g_add_account_deletion_audit_log.sql" in source
@@ -46,13 +47,16 @@ def test_launch_gate_migration_helper_applies_storage_lifecycle_before_service_r
     assert "20260426i_add_storage_cleanup_job_heartbeats.sql" in source
     assert health_ping in source
     assert account_deletion_job_type in source
+    assert worker_job_grants in source
     assert source.index(storage_lifecycle) < source.index(service_role_retirement)
     assert source.index(service_role_retirement) < source.index(health_ping)
     assert source.index(health_ping) < source.index(account_deletion_job_type)
+    assert source.index(account_deletion_job_type) < source.index(worker_job_grants)
     assert "must be applied before" in source
     assert "public.storage_upload_grants" in source
     assert "mode_health_ping" in source
     assert "account_deletion" in source
+    assert "public.worker_job_traces" in source
 
 
 def test_launch_gate_verification_runner_covers_required_smokes() -> None:
