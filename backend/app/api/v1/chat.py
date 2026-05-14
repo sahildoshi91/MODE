@@ -341,6 +341,7 @@ async def chat_stream(
         },
     )
     request_id = str(request.request_id) if request.request_id else str(uuid4())
+    stream_request = request.model_copy(update={"request_id": request_id})
     create_ai_request_record = getattr(service, "create_ai_request_record", None)
     append_ai_request_event = getattr(service, "append_ai_request_event", None)
     update_ai_request_status = getattr(service, "update_ai_request_status", None)
@@ -355,6 +356,7 @@ async def chat_stream(
             trainer_id=str(trainer_context.trainer_id or ""),
         )
         stream_conversation_id = str(request.conversation_id or "").strip() or None
+        first_token_sent = False
 
         def maybe_attach_request_record(payload: dict[str, object]) -> None:
             nonlocal request_id, request_record_created, stream_conversation_id
@@ -368,7 +370,7 @@ async def chat_stream(
                 ai_request_row = create_ai_request_record(
                     conversation_id=conversation_id,
                     trainer_context=trainer_context,
-                    request=request,
+                    request=stream_request,
                     metadata={
                         "endpoint": "/api/v1/chat/stream",
                     },
@@ -402,9 +404,9 @@ async def chat_stream(
         try:
             stream_events = getattr(service, "stream_chat_events", None)
             event_iterator = (
-                stream_events(user.id, trainer_context, request)
+                stream_events(user.id, trainer_context, stream_request)
                 if callable(stream_events)
-                else _legacy_stream_chat_events(service, user.id, trainer_context, request)
+                else _legacy_stream_chat_events(service, user.id, trainer_context, stream_request)
             )
             for payload in event_iterator:
                 if await http_request.is_disconnected():
@@ -415,10 +417,17 @@ async def chat_stream(
                 request_status = request_status_for(payload)
                 error_detail = str(payload.get("detail") or "") if payload_type == "error" else None
                 yield encoder.encode(client_payload, persist=False)
-                maybe_attach_request_record(payload)
+                if payload.get("conversation_id"):
+                    stream_conversation_id = str(payload.get("conversation_id") or "").strip() or stream_conversation_id
+                if payload_type in {"token", "message_delta"}:
+                    first_token_sent = True
+                if first_token_sent or payload_type in {"done", "error"}:
+                    maybe_attach_request_record(payload)
                 encoder.record_encoded_event(
                     client_payload,
-                    persist=payload_type not in {"token", "message_delta"},
+                    persist=(
+                        first_token_sent or payload_type in {"done", "error"}
+                    ) and payload_type not in {"token", "message_delta"},
                     request_status=request_status,
                     error_detail=error_detail,
                 )

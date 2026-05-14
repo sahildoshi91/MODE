@@ -132,6 +132,85 @@ class UnexpectedExplodingConversationService(FakeConversationService):
         raise RuntimeError("Unexpected stream backend failure")
 
 
+class RecordingStreamPersistenceService:
+    def __init__(self):
+        self.calls = []
+        self.appended_events = []
+        self.status_updates = []
+        self.stream_request_id = None
+        self.created_request_id = None
+
+    def stream_chat_events(self, user_id, trainer_context, request):
+        del user_id, trainer_context
+        self.stream_request_id = str(request.request_id)
+        self.calls.append("yield_status_with_conversation")
+        yield {
+            "type": "status",
+            "stage": "writing_final_coach_response",
+            "message": "Writing...",
+            "conversation_id": "convo-123",
+        }
+        self.calls.append("yield_token_payload")
+        yield {
+            "type": "token",
+            "content": "first token",
+            "conversation_id": "convo-123",
+        }
+        self.calls.append("yield_done_payload")
+        yield {
+            "type": "done",
+            "conversation_id": "convo-123",
+            "assistant_message": "first token",
+            "token_usage": {},
+            "conversation_usage": None,
+            "_trace": {
+                "route": "FAST_PATH",
+                "model_used": "gemini-2.5-flash-lite",
+            },
+        }
+
+    def create_ai_request_record(self, *, conversation_id, trainer_context, request, metadata=None):
+        del trainer_context, metadata
+        self.calls.append("create_ai_request_record")
+        self.created_request_id = str(request.request_id)
+        return {
+            "id": self.created_request_id,
+            "conversation_id": conversation_id,
+        }
+
+    def append_ai_request_event(self, *, request_id, seq, event_type, stage=None, payload=None):
+        self.calls.append(f"append:{event_type}")
+        self.appended_events.append(
+            {
+                "request_id": request_id,
+                "seq": seq,
+                "event_type": event_type,
+                "stage": stage,
+                "payload": payload or {},
+            }
+        )
+
+    def update_ai_request_status(
+        self,
+        *,
+        request_id,
+        status,
+        latest_event_seq=None,
+        completed_message_id=None,
+        error_detail=None,
+    ):
+        self.calls.append(f"status:{status}")
+        self.status_updates.append(
+            {
+                "request_id": request_id,
+                "status": status,
+                "latest_event_seq": latest_event_seq,
+                "completed_message_id": completed_message_id,
+                "error_detail": error_detail,
+            }
+        )
+
+
 class ChatApiTests(unittest.TestCase):
     def setUp(self):
         self._original_rate_limit_enabled = settings.rate_limit_enabled
@@ -255,6 +334,30 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn('"content": "hello"', response.text)
         self.assertIn('"delta": "hello"', response.text)
         self.assertIn('"assistant_message": "hello"', response.text)
+
+    def test_stream_defers_request_persistence_until_after_first_token(self):
+        service = RecordingStreamPersistenceService()
+        app.dependency_overrides[get_conversation_service] = lambda: service
+
+        response = self.client.post(
+            "/api/v1/chat/stream",
+            json={"message": "Hello"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"content": "first token"', response.text)
+        self.assertEqual(service.stream_request_id, service.created_request_id)
+        self.assertGreater(
+            service.calls.index("create_ai_request_record"),
+            service.calls.index("yield_token_payload"),
+        )
+        self.assertNotIn("append:status", service.calls)
+        self.assertNotIn("append:token", service.calls)
+        self.assertNotIn("append:message_delta", service.calls)
+        self.assertIn("status:streaming", service.calls)
+        self.assertIn("append:done", service.calls)
+        self.assertIn("status:completed", service.calls)
 
     def test_chat_maps_unexpected_failure_to_controlled_502(self):
         app.dependency_overrides[get_conversation_service] = lambda: UnexpectedExplodingConversationService()
