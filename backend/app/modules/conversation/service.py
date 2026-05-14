@@ -220,6 +220,11 @@ class ChatStreamTiming:
             return
         self.phase_timings[str(phase)] = max(int(duration_ms), 0)
 
+    def record_phase_once(self, phase: str, duration_ms: int | float) -> None:
+        if phase in self.phase_timings:
+            return
+        self.record_phase(phase, duration_ms)
+
     def record_provider_phase(self, phase: str, duration_ms: int | float) -> None:
         if phase in self.phase_timings:
             return
@@ -227,13 +232,22 @@ class ChatStreamTiming:
 
     def mark_provider_iteration_started(self) -> None:
         if self._provider_iteration_started_at is None:
-            self._provider_iteration_started_at = time.perf_counter()
+            now = time.perf_counter()
+            self._provider_iteration_started_at = now
+            self.record_phase("provider_iteration_start_ms", (now - self.started_at) * 1000)
 
     def mark_provider_text_received(self) -> None:
+        now = time.perf_counter()
+        self.record_phase_once("service_provider_text_received_ms", (now - self.started_at) * 1000)
+        if self._provider_iteration_started_at is not None:
+            self.record_phase_once(
+                "provider_iteration_to_text_ms",
+                (now - self._provider_iteration_started_at) * 1000,
+            )
         if "provider_first_chunk_total_ms" in self.phase_timings:
             return
         started_at = self._provider_iteration_started_at or self.started_at
-        self.record_phase("provider_first_chunk_total_ms", (time.perf_counter() - started_at) * 1000)
+        self.record_phase("provider_first_chunk_total_ms", (now - started_at) * 1000)
 
     def mark_first_client_token(self) -> None:
         if self.first_client_token_ms is None:
@@ -264,9 +278,16 @@ class ChatStreamTiming:
             "prompt_build_ms": self.phase_timings.get("prompt_build_ms"),
             "user_message_persist_ms": self.phase_timings.get("user_message_persist_ms"),
             "memory_suggestion_ms": self.phase_timings.get("memory_suggestion_ms"),
+            "provider_iteration_start_ms": self.phase_timings.get("provider_iteration_start_ms"),
             "provider_stream_open_ms": self.phase_timings.get("provider_stream_open_ms"),
             "provider_first_chunk_ms": self.phase_timings.get("provider_first_chunk_ms"),
             "provider_first_chunk_total_ms": self.phase_timings.get("provider_first_chunk_total_ms"),
+            "service_provider_text_received_ms": self.phase_timings.get("service_provider_text_received_ms"),
+            "provider_iteration_to_text_ms": self.phase_timings.get("provider_iteration_to_text_ms"),
+            "first_chunk_validation_ms": self.phase_timings.get("first_chunk_validation_ms"),
+            "first_safe_chunk_ready_ms": self.phase_timings.get("first_safe_chunk_ready_ms"),
+            "first_provider_chunk_yield_attempt_ms": self.phase_timings.get("first_provider_chunk_yield_attempt_ms"),
+            "stream_events_first_chunk_ms": self.phase_timings.get("stream_events_first_chunk_ms"),
             "first_client_token_ms": self.first_client_token_ms,
             "total_stream_ms": self.total_stream_ms,
             "error_category": error_category,
@@ -1432,6 +1453,30 @@ class ConversationService:
             len(str(text or "")),
         )
         return safe_text
+
+    def _validate_stream_chunk_for_yield(
+        self,
+        text: str,
+        *,
+        trainer_context: TrainerContext,
+        conversation_id: str | None,
+        orchestration_metadata: dict[str, Any] | None,
+        timing: ChatStreamTiming,
+    ) -> str:
+        validation_started_at = time.perf_counter()
+        safe_text = self._validate_assistant_output(
+            text,
+            trainer_context=trainer_context,
+            conversation_id=conversation_id,
+            orchestration_metadata=orchestration_metadata,
+        )
+        timing.record_phase_once("first_chunk_validation_ms", (time.perf_counter() - validation_started_at) * 1000)
+        if safe_text:
+            timing.record_phase_once("first_safe_chunk_ready_ms", (time.perf_counter() - timing.started_at) * 1000)
+        return safe_text
+
+    def _mark_stream_chunk_yield_attempt(self, timing: ChatStreamTiming) -> None:
+        timing.record_phase_once("first_provider_chunk_yield_attempt_ms", (time.perf_counter() - timing.started_at) * 1000)
 
     def _gemini_text_completion(self, prompt: PromptPackage, *, model: str = GEMINI_MODEL) -> TextCompletion:
         gemini_client = self.gemini_client
@@ -2721,6 +2766,10 @@ class ConversationService:
                 text_chunk = str(chunk or "")
                 if not text_chunk:
                     continue
+                stream_timing.record_phase_once(
+                    "stream_events_first_chunk_ms",
+                    (time.perf_counter() - stream_timing.started_at) * 1000,
+                )
                 assistant_chunks.append(text_chunk)
                 stream_timing.mark_first_client_token()
                 yield message_delta_event(
@@ -3031,14 +3080,16 @@ class ConversationService:
                             user_prompt=prompt.user_prompt,
                         )
                     for text in self._iter_observed_provider_stream(stream, timing):
-                        safe_text = self._validate_assistant_output(
+                        safe_text = self._validate_stream_chunk_for_yield(
                             text,
                             trainer_context=trainer_context,
                             conversation_id=conversation["id"],
                             orchestration_metadata=prompt.orchestration_metadata,
+                            timing=timing,
                         )
                         full_response.append(safe_text)
                         if safe_text:
+                            self._mark_stream_chunk_yield_attempt(timing)
                             yield safe_text
 
                     assistant_message = "".join(full_response).strip()
@@ -3135,14 +3186,16 @@ class ConversationService:
                     except TypeError:
                         stream = openai_client.stream_chat_completion(model=route.model, messages=messages)
                     for text in self._iter_observed_provider_stream(stream, timing):
-                        safe_text = self._validate_assistant_output(
+                        safe_text = self._validate_stream_chunk_for_yield(
                             text,
                             trainer_context=trainer_context,
                             conversation_id=conversation["id"],
                             orchestration_metadata=prompt.orchestration_metadata,
+                            timing=timing,
                         )
                         full_response.append(safe_text)
                         if safe_text:
+                            self._mark_stream_chunk_yield_attempt(timing)
                             yield safe_text
 
                     assistant_message = "".join(full_response).strip()
@@ -3328,14 +3381,16 @@ class ConversationService:
                 except TypeError:
                     stream = gemini_client.stream_chat_completion(combined_prompt)
                 for text in self._iter_observed_provider_stream(stream, timing):
-                    safe_text = self._validate_assistant_output(
+                    safe_text = self._validate_stream_chunk_for_yield(
                         text,
                         trainer_context=trainer_context,
                         conversation_id=conversation["id"],
                         orchestration_metadata=prompt.orchestration_metadata,
+                        timing=timing,
                     )
                     full_response.append(safe_text)
                     if safe_text:
+                        self._mark_stream_chunk_yield_attempt(timing)
                         yield safe_text
 
                 assistant_message = "".join(full_response).strip()
