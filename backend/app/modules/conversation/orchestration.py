@@ -9,6 +9,7 @@ from typing import Literal
 from app.modules.conversation.routing import (
     CLAUDE_SONNET_4_6_MODEL,
     GEMINI_FLASH_MODEL,
+    GEMINI_FLASH_LITE_MODEL,
     GPT_5_4_MINI_MODEL,
     GPT_5_4_MODEL,
     RoutingDecision,
@@ -39,7 +40,7 @@ TOKEN_BUDGETS_DEEP = {
 }
 
 MODEL_ROUTING = {
-    "FAST_PATH": {"provider": "gemini", "model": GEMINI_FLASH_MODEL, "tier": "fast"},
+    "FAST_PATH": {"provider": "gemini", "model": GEMINI_FLASH_LITE_MODEL, "tier": "fast"},
     "DEEP_PATH": {"provider": "openai", "model": GPT_5_4_MODEL, "tier": "full"},
     "SAFETY_ESCALATION": {"provider": "openai", "model": GPT_5_4_MODEL, "tier": "full"},
     "intent_classification": {"provider": "system", "model": "deterministic-sentry-router", "tier": "fast"},
@@ -50,6 +51,7 @@ MODEL_ROUTING = {
 
 CostModel = Literal[
     "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
     "gpt-5.4-mini",
     "gpt-5.4",
     "claude-sonnet-4.6",
@@ -58,6 +60,7 @@ CostModel = Literal[
 
 MODEL_COST_PER_1K: dict[str, tuple[float, float]] = {
     GEMINI_FLASH_MODEL: (0.000075, 0.00030),
+    GEMINI_FLASH_LITE_MODEL: (0.00008, 0.00030),
     GPT_5_4_MINI_MODEL: (0.00015, 0.00060),
     GPT_5_4_MODEL: (0.00250, 0.01000),
     CLAUDE_SONNET_4_6_MODEL: (0.00300, 0.01500),

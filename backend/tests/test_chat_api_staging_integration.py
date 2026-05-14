@@ -205,7 +205,7 @@ class ChatApiStagingIntegrationTests(unittest.TestCase):
         self.assertEqual(payload["conversation_usage"]["usage_event_count"], 1)
         self.assertEqual(payload["conversation_usage"]["total_tokens"], 42)
         self.assertEqual(payload["conversation_usage"]["last_execution_provider"], "gemini")
-        self.assertEqual(payload["conversation_usage"]["last_execution_model"], "gemini-2.5-flash")
+        self.assertEqual(payload["conversation_usage"]["last_execution_model"], "gemini-2.5-flash-lite")
 
         user_client = get_supabase_user_client(self.client_access_token)
         conversation_rows = (
@@ -239,7 +239,7 @@ class ChatApiStagingIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(len(usage_rows), 1)
         self.assertEqual(usage_rows[0]["provider"], "gemini")
-        self.assertEqual(usage_rows[0]["model"], "gemini-2.5-flash")
+        self.assertEqual(usage_rows[0]["model"], "gemini-2.5-flash-lite")
         self.assertEqual(usage_rows[0]["total_tokens"], 42)
 
         summary_rows = (

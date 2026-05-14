@@ -5,6 +5,7 @@ from typing import Any
 
 
 GEMINI_FLASH_MODEL = "gemini-2.5-flash"
+GEMINI_FLASH_LITE_MODEL = "gemini-2.5-flash-lite"
 GEMINI_PRO_MODEL = "gemini-2.5-pro"
 GPT_5_4_MINI_MODEL = "gpt-5.4-mini"
 GPT_5_4_MODEL = "gpt-5.4"
@@ -214,7 +215,7 @@ class ConversationRouter:
 
         return RoutingDecision(
             task_type=task_type,
-            model=GEMINI_FLASH_MODEL,
+            model=GEMINI_FLASH_LITE_MODEL,
             provider="gemini",
             flow="default_fast",
             reason="default",

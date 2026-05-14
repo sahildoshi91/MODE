@@ -61,7 +61,7 @@ class ConversationRouterTests(unittest.TestCase):
         self.assertEqual(decision.flow, "reasoning_structured")
         self.assertEqual(decision.response_mode, "async_report_generation")
 
-    def test_routes_simple_message_to_gemini_flash(self):
+    def test_routes_simple_message_to_gemini_flash_lite(self):
         decision = self.router.route(
             RoutingContext(
                 message_text="What should I do today?",
@@ -71,7 +71,7 @@ class ConversationRouterTests(unittest.TestCase):
         )
 
         self.assertEqual(decision.provider, "gemini")
-        self.assertEqual(decision.model, "gemini-2.5-flash")
+        self.assertEqual(decision.model, "gemini-2.5-flash-lite")
         self.assertEqual(decision.flow, "default_fast")
 
     def test_routes_generic_post_checkin_prompts_to_followup_task(self):

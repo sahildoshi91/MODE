@@ -3141,20 +3141,21 @@ class ConversationService:
             return conversation["id"], fallback_iterator(), route_debug, result_state
 
         combined_prompt = f"{prompt.system_prompt}\n\n{prompt.user_prompt}"
+        gemini_model = route.model or GEMINI_MODEL
         route_debug = self._route_debug_from_metadata(
             route,
             "gemini",
-            GEMINI_MODEL,
+            gemini_model,
             None,
             {
                 **prompt.orchestration_metadata,
-                "model_fallback_chain": prompt.orchestration_metadata.get("model_fallback_chain") or [f"gemini:{GEMINI_MODEL}"],
+                "model_fallback_chain": prompt.orchestration_metadata.get("model_fallback_chain") or [f"gemini:{gemini_model}"],
             },
         )
         result_state = StreamResultState()
         result_state.trace_metadata = self._build_trace_metadata(
             route=route,
-            execution_model=GEMINI_MODEL,
+            execution_model=gemini_model,
             orchestration_metadata=prompt.orchestration_metadata,
         )
 
@@ -3164,7 +3165,7 @@ class ConversationService:
                 try:
                     stream = gemini_client.stream_chat_completion(
                         combined_prompt,
-                        model=GEMINI_MODEL,
+                        model=gemini_model,
                         max_output_tokens=self._max_output_tokens_for_prompt(prompt),
                     )
                 except TypeError:
@@ -3199,7 +3200,7 @@ class ConversationService:
                     assistant_message,
                     route,
                     "gemini",
-                    GEMINI_MODEL,
+                    gemini_model,
                     completion,
                     orchestration_metadata=prompt.orchestration_metadata,
                     source_request_id=self._request_id_text(request),
@@ -3216,7 +3217,7 @@ class ConversationService:
                     route=route,
                     completion=completion,
                     execution_provider="gemini",
-                    execution_model=GEMINI_MODEL,
+                    execution_model=gemini_model,
                     fallback_reason=None,
                     orchestration_metadata=prompt.orchestration_metadata,
                     request=request,

@@ -540,13 +540,13 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertEqual(response.token_usage.prompt_tokens, 123)
         self.assertEqual(len(self.repository.saved_messages), 2)
         route_payload = self.repository.saved_messages[1]["structured_payload"]["route"]
-        self.assertEqual(route_payload["model"], "gemini-2.5-flash")
+        self.assertEqual(route_payload["model"], "gemini-2.5-flash-lite")
         self.assertEqual(route_payload["execution_provider"], "gemini")
         self.assertEqual(route_payload["task_type"], "qa_quick")
         self.assertEqual(response.route_debug.selected_provider, "gemini")
-        self.assertEqual(response.route_debug.execution_model, "gemini-2.5-flash")
+        self.assertEqual(response.route_debug.execution_model, "gemini-2.5-flash-lite")
         self.assertEqual(response.conversation_usage.total_tokens, 144)
-        self.assertEqual(response.conversation_usage.last_execution_model, "gemini-2.5-flash")
+        self.assertEqual(response.conversation_usage.last_execution_model, "gemini-2.5-flash-lite")
         self.assertEqual(self.repository.created_conversation["type"], "chat")
         prompt = service.gemini_client.prompts[0]
         self.assertIn("Coach Alex", prompt)

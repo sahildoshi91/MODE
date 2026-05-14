@@ -40,9 +40,9 @@ class FakeConversationService:
             token_usage=TokenUsage(total_tokens=12, prompt_tokens=8, completion_tokens=4),
             route_debug=RouteDebug(
                 selected_provider="gemini",
-                selected_model="gemini-2.5-flash",
+                selected_model="gemini-2.5-flash-lite",
                 execution_provider="gemini",
-                execution_model="gemini-2.5-flash",
+                execution_model="gemini-2.5-flash-lite",
                 flow="default_fast",
                 reason="default",
                 task_type="qa_quick",
@@ -53,7 +53,7 @@ class FakeConversationService:
                 total_tokens=12,
                 usage_event_count=1,
                 last_execution_provider="gemini",
-                last_execution_model="gemini-2.5-flash",
+                last_execution_model="gemini-2.5-flash-lite",
             ),
         )
 
@@ -68,9 +68,9 @@ class FakeConversationService:
             iterator(),
             RouteDebug(
                 selected_provider="gemini",
-                selected_model="gemini-2.5-flash",
+                selected_model="gemini-2.5-flash-lite",
                 execution_provider="gemini",
-                execution_model="gemini-2.5-flash",
+                execution_model="gemini-2.5-flash-lite",
                 flow="default_fast",
                 reason="default",
                 task_type="qa_quick",
@@ -86,7 +86,7 @@ class FakeConversationService:
                         total_tokens=12,
                         usage_event_count=1,
                         last_execution_provider="gemini",
-                        last_execution_model="gemini-2.5-flash",
+                        last_execution_model="gemini-2.5-flash-lite",
                     ),
                 },
             )(),
@@ -110,9 +110,9 @@ class ExplodingConversationService(FakeConversationService):
             iterator(),
             RouteDebug(
                 selected_provider="gemini",
-                selected_model="gemini-2.5-flash",
+                selected_model="gemini-2.5-flash-lite",
                 execution_provider="gemini",
-                execution_model="gemini-2.5-flash",
+                execution_model="gemini-2.5-flash-lite",
                 flow="default_fast",
                 reason="default",
                 task_type="qa_quick",
@@ -216,7 +216,7 @@ class ChatApiTests(unittest.TestCase):
         joined = "\n".join(logs.output)
         self.assertIn('"event": "chat_trace"', joined)
         self.assertIn('"time_to_first_token_ms"', joined)
-        self.assertIn('"model_used": "gemini-2.5-flash"', joined)
+        self.assertIn('"model_used": "gemini-2.5-flash-lite"', joined)
 
     def test_stream_hides_route_debug_and_emits_error_event(self):
         app.dependency_overrides[get_conversation_service] = lambda: ExplodingConversationService()
