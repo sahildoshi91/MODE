@@ -50,7 +50,7 @@ Set names only; values must come from the approved secret manager.
 Recommended first rollout values:
 
 - `CHAT_CACHE_ENABLED=true` when Redis is available.
-- `CHAT_CACHE_TIMEOUT_MS=25`.
+- `CHAT_CACHE_TIMEOUT_MS=150` on staging when using managed Redis with p95 latency above the old 25ms cache timeout.
 - `CHAT_ROUTER_TIMEOUT_MS=200`.
 - `CHAT_STREAM_LEGACY_ALIAS_ENABLED=true` until every deployed client handles canonical `token/content` events.
 - `CHAT_STAGING_OPENAI_ONLY=true` can be used on Render free-tier staging to debug a single-provider OpenAI path. Keep it unset/false for launch TTFT/load evidence so staging exercises normal multi-provider routing.

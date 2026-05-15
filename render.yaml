@@ -17,7 +17,7 @@ services:
       - key: CHAT_CACHE_ENABLED
         value: "true"
       - key: CHAT_CACHE_TIMEOUT_MS
-        value: "25"
+        value: "150"
       - key: CHAT_ROUTER_TIMEOUT_MS
         value: "200"
       - key: CHAT_STAGING_OPENAI_ONLY
@@ -61,7 +61,7 @@ services:
       - key: CHAT_CACHE_ENABLED
         value: "true"
       - key: CHAT_CACHE_TIMEOUT_MS
-        value: "25"
+        value: "150"
       - key: REDIS_URL
         sync: false
       - key: SUPABASE_URL
