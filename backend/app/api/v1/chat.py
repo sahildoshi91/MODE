@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import time
@@ -578,6 +579,8 @@ async def chat_stream(
                     )
                 if is_first_token_payload and first_token_resume_ms is None:
                     first_token_resume_ms = _elapsed_ms(request_started_at)
+                if is_first_token_payload:
+                    await asyncio.sleep(0)
                 if payload_type in {"token", "message_delta"}:
                     first_token_sent = True
                 if first_token_sent or payload_type in {"done", "error"}:
