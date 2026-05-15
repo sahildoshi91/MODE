@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.tenancy import TrainerContext
 from app.modules.conversation.schemas import ChatRequest
 from app.modules.conversation.service import (
+    DEFAULT_FAST_DEADLINE_PREFIX,
     SAFETY_ESCALATION_HOLDING_RESPONSE,
     ConversationProcessingError,
     ConversationService,
@@ -644,6 +645,13 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         timing_lines = [line for line in logs.output if '"event": "chat_stream_timing"' in line]
         self.assertEqual(len(timing_lines), 1)
         payload = json.loads(timing_lines[0].split(":", 2)[2])
+        self.assertEqual(events[0]["type"], "status")
+        self.assertEqual(events[1]["type"], "token")
+        self.assertEqual(events[1]["content"], DEFAULT_FAST_DEADLINE_PREFIX)
+        self.assertEqual(
+            self.repository.saved_messages[-1]["message_text"],
+            f"{DEFAULT_FAST_DEADLINE_PREFIX}GPT stream",
+        )
         self.assertEqual(payload["event"], "chat_stream_timing")
         self.assertEqual(payload["tenant_id"], "tenant-123")
         self.assertEqual(payload["trainer_id"], "trainer-123")
@@ -682,6 +690,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertIsInstance(payload["provider_iteration_start_ms"], int)
         self.assertIsInstance(payload["service_provider_text_received_ms"], int)
         self.assertIsInstance(payload["provider_iteration_to_text_ms"], int)
+        self.assertIsInstance(payload["first_chunk_deadline_prefix_ms"], int)
         self.assertIsInstance(payload["first_chunk_validation_ms"], int)
         self.assertIsInstance(payload["first_safe_chunk_ready_ms"], int)
         self.assertIsInstance(payload["first_provider_chunk_yield_attempt_ms"], int)

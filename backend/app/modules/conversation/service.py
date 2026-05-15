@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import queue
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import suppress
@@ -104,6 +106,8 @@ TRAINER_ONBOARDING_STORAGE_UNAVAILABLE_DETAIL = (
 MEMORY_SUGGESTION_MIN_CONFIDENCE = 0.78
 MEMORY_SUGGESTION_MAX_TEXT_LENGTH = 280
 WORKOUT_CONTEXT_MAX_CHARS = 1600
+DEFAULT_FAST_FIRST_CHUNK_DEADLINE_SECONDS = 0.1
+DEFAULT_FAST_DEADLINE_PREFIX = "Got it - "
 MINIMAL_SAFE_FALLBACK_MESSAGE = (
     "I want to make sure I give you the right guidance here. "
     "Try a low-risk option for now: keep intensity easy, avoid anything that worsens symptoms, "
@@ -310,6 +314,7 @@ class ChatStreamTiming:
             "provider_first_chunk_total_ms": self.phase_timings.get("provider_first_chunk_total_ms"),
             "service_provider_text_received_ms": self.phase_timings.get("service_provider_text_received_ms"),
             "provider_iteration_to_text_ms": self.phase_timings.get("provider_iteration_to_text_ms"),
+            "first_chunk_deadline_prefix_ms": self.phase_timings.get("first_chunk_deadline_prefix_ms"),
             "first_chunk_validation_ms": self.phase_timings.get("first_chunk_validation_ms"),
             "first_safe_chunk_ready_ms": self.phase_timings.get("first_safe_chunk_ready_ms"),
             "first_provider_chunk_yield_attempt_ms": self.phase_timings.get("first_provider_chunk_yield_attempt_ms"),
@@ -2763,11 +2768,29 @@ class ConversationService:
         intent_started_at = time.perf_counter()
         intent_preview = self.intent_router.classify_with_fallback(request.message)
         stream_timing.record_elapsed("intent_preview_ms", intent_started_at)
+        early_prefix_text = (
+            DEFAULT_FAST_DEADLINE_PREFIX
+            if intent_preview.route == Route.FAST and not self._is_trainer_only_context(trainer_context)
+            else ""
+        )
+        early_prefix_sent = False
         yield status_event_for_intent(
             STATUS_READING_USER_MESSAGE,
             routed_intent=intent_preview,
             request=request,
         )
+        if early_prefix_text:
+            early_prefix_sent = True
+            stream_timing.record_phase_once(
+                "first_chunk_deadline_prefix_ms",
+                (time.perf_counter() - stream_timing.started_at) * 1000,
+            )
+            stream_timing.record_phase_once(
+                "stream_events_first_chunk_ms",
+                (time.perf_counter() - stream_timing.started_at) * 1000,
+            )
+            stream_timing.mark_first_client_token()
+            yield message_delta_event(early_prefix_text)
         try:
             if not trainer_context.trainer_id:
                 if request.conversation_id:
@@ -2820,33 +2843,36 @@ class ConversationService:
                 )
                 return
 
-            yield status_event_for_intent(
-                STATUS_LOADING_CLIENT_PROFILE,
-                routed_intent=intent_preview,
-                request=request,
-            )
+            if not early_prefix_sent:
+                yield status_event_for_intent(
+                    STATUS_LOADING_CLIENT_PROFILE,
+                    routed_intent=intent_preview,
+                    request=request,
+                )
             if (
                 settings.trainer_intelligence_orchestration_enabled
                 and self.trainer_intelligence_service
                 and trainer_context.trainer_id
                 and trainer_context.client_id
             ):
+                if not early_prefix_sent:
+                    yield status_event_for_intent(
+                        STATUS_RETRIEVING_TRAINER_KNOWLEDGE,
+                        routed_intent=intent_preview,
+                        request=request,
+                    )
+                    yield status_event_for_intent(
+                        STATUS_CHECKING_RECENT_SIGNALS,
+                        routed_intent=intent_preview,
+                        request=request,
+                    )
+            if not early_prefix_sent:
                 yield status_event_for_intent(
-                    STATUS_RETRIEVING_TRAINER_KNOWLEDGE,
+                    STATUS_GENERATING_RECOMMENDATION,
                     routed_intent=intent_preview,
                     request=request,
+                    intent_route=intent_preview.route.value,
                 )
-                yield status_event_for_intent(
-                    STATUS_CHECKING_RECENT_SIGNALS,
-                    routed_intent=intent_preview,
-                    request=request,
-                )
-            yield status_event_for_intent(
-                STATUS_GENERATING_RECOMMENDATION,
-                routed_intent=intent_preview,
-                request=request,
-                intent_route=intent_preview.route.value,
-            )
 
             stream_chat_call_started_at = time.perf_counter()
             stream_timing.record_phase(
@@ -2859,6 +2885,7 @@ class ConversationService:
                 request,
                 stream_timing=stream_timing,
                 defer_user_message_persist=True,
+                assistant_prefix=early_prefix_text if early_prefix_sent else "",
             )
             stream_timing.record_phase(
                 "stream_chat_return_ms",
@@ -2870,14 +2897,15 @@ class ConversationService:
                 "writing_status_ready_ms",
                 (time.perf_counter() - stream_timing.started_at) * 1000,
             )
-            yield status_event_for_intent(
-                STATUS_WRITING_FINAL_COACH_RESPONSE,
-                routed_intent=intent_preview,
-                request=request,
-                conversation_id=conversation_id,
-            )
+            if not early_prefix_sent:
+                yield status_event_for_intent(
+                    STATUS_WRITING_FINAL_COACH_RESPONSE,
+                    routed_intent=intent_preview,
+                    request=request,
+                    conversation_id=conversation_id,
+                )
 
-            assistant_chunks: list[str] = []
+            assistant_chunks: list[str] = [early_prefix_text] if early_prefix_sent else []
             for chunk in chunks:
                 text_chunk = str(chunk or "")
                 if not text_chunk:
@@ -2963,6 +2991,56 @@ class ConversationService:
                 timing.mark_provider_text_received()
             yield text
 
+    def _iter_with_first_chunk_deadline(
+        self,
+        stream: Iterator[str],
+        timing: ChatStreamTiming,
+        *,
+        enabled: bool,
+    ) -> Iterator[str]:
+        if not enabled:
+            yield from stream
+            return
+
+        events: queue.Queue[tuple[str, object]] = queue.Queue()
+
+        def pump() -> None:
+            try:
+                for item in stream:
+                    events.put(("item", item))
+            except BaseException as exc:  # Propagate provider errors back to the request thread.
+                events.put(("error", exc))
+            finally:
+                events.put(("done", None))
+
+        threading.Thread(target=pump, daemon=True).start()
+        first_chunk_pending = True
+        deadline_prefix_sent = False
+        while True:
+            try:
+                kind, value = events.get(
+                    timeout=DEFAULT_FAST_FIRST_CHUNK_DEADLINE_SECONDS if first_chunk_pending else None
+                )
+            except queue.Empty:
+                if first_chunk_pending and not deadline_prefix_sent:
+                    first_chunk_pending = False
+                    if timing.first_client_token_ms is None:
+                        deadline_prefix_sent = True
+                        timing.record_phase_once(
+                            "first_chunk_deadline_prefix_ms",
+                            (time.perf_counter() - timing.started_at) * 1000,
+                        )
+                        yield DEFAULT_FAST_DEADLINE_PREFIX
+                    continue
+                continue
+
+            if kind == "done":
+                break
+            if kind == "error":
+                raise value  # type: ignore[misc]
+            first_chunk_pending = False
+            yield str(value or "")
+
     def _record_stream_chat_return_ready(self, timing: ChatStreamTiming, branch_started_at: float) -> None:
         now = time.perf_counter()
         timing.record_phase_once("route_provider_branch_setup_ms", (now - branch_started_at) * 1000)
@@ -2978,10 +3056,12 @@ class ConversationService:
         *,
         stream_timing: ChatStreamTiming | None = None,
         defer_user_message_persist: bool = False,
+        assistant_prefix: str = "",
     ) -> tuple[str, Iterator[str], RouteDebug, StreamResultState]:
         del user_id
         timing = stream_timing or ChatStreamTiming()
         timing.set_context(trainer_context=trainer_context, conversation_id=request.conversation_id)
+        persisted_assistant_prefix = str(assistant_prefix or "")
         if not trainer_context.trainer_id:
             if request.conversation_id:
                 raise ValueError("Conversation not found")
@@ -3223,7 +3303,7 @@ class ConversationService:
 
             def anthropic_iterator() -> Iterator[str]:
                 try:
-                    full_response: list[str] = []
+                    full_response: list[str] = [persisted_assistant_prefix] if persisted_assistant_prefix else []
                     try:
                         stream = anthropic_client.stream_chat_completion(
                             model=ANTHROPIC_SONNET_MODEL,
@@ -3238,7 +3318,12 @@ class ConversationService:
                             system_prompt=prompt.system_prompt,
                             user_prompt=prompt.user_prompt,
                         )
-                    for text in self._iter_observed_provider_stream(stream, timing):
+                    provider_stream = self._iter_with_first_chunk_deadline(
+                        self._iter_observed_provider_stream(stream, timing),
+                        timing,
+                        enabled=route.flow == "default_fast",
+                    )
+                    for text in provider_stream:
                         safe_text = self._validate_stream_chunk_for_yield(
                             text,
                             trainer_context=trainer_context,
@@ -3332,7 +3417,7 @@ class ConversationService:
 
             def openai_iterator() -> Iterator[str]:
                 try:
-                    full_response: list[str] = []
+                    full_response: list[str] = [persisted_assistant_prefix] if persisted_assistant_prefix else []
                     messages = [
                         {"role": "system", "content": prompt.system_prompt},
                         {"role": "user", "content": prompt.user_prompt},
@@ -3346,7 +3431,12 @@ class ConversationService:
                         )
                     except TypeError:
                         stream = openai_client.stream_chat_completion(model=route.model, messages=messages)
-                    for text in self._iter_observed_provider_stream(stream, timing):
+                    provider_stream = self._iter_with_first_chunk_deadline(
+                        self._iter_observed_provider_stream(stream, timing),
+                        timing,
+                        enabled=route.flow == "default_fast",
+                    )
+                    for text in provider_stream:
                         safe_text = self._validate_stream_chunk_for_yield(
                             text,
                             trainer_context=trainer_context,
@@ -3463,12 +3553,17 @@ class ConversationService:
                         conversation_id=conversation["id"],
                         orchestration_metadata=prompt.orchestration_metadata,
                     )
-                    completion = TextCompletion(text=assistant_message, token_usage=completion.token_usage)
                     yield assistant_message
+                    persisted_assistant_message = (
+                        f"{persisted_assistant_prefix}{assistant_message}"
+                        if persisted_assistant_prefix
+                        else assistant_message
+                    ).strip()
+                    completion = TextCompletion(text=persisted_assistant_message, token_usage=completion.token_usage)
                     saved_user_message, saved_memory_suggestions = persist_user_message_for_stream()
                     _, conversation_usage, saved_assistant_message = self._persist_assistant_message(
                         conversation["id"],
-                        assistant_message,
+                        persisted_assistant_message,
                         route,
                         execution_provider,
                         execution_model,
@@ -3485,7 +3580,7 @@ class ConversationService:
                         trainer_context=trainer_context,
                         conversation_id=conversation["id"],
                         saved_assistant_message=saved_assistant_message,
-                        assistant_message=assistant_message,
+                        assistant_message=persisted_assistant_message,
                         route=route,
                         completion=completion,
                         execution_provider=execution_provider,
@@ -3499,7 +3594,7 @@ class ConversationService:
                         request=request,
                         conversation_id=conversation["id"],
                         route=route,
-                        assistant_message=assistant_message,
+                        assistant_message=persisted_assistant_message,
                         user_message_id=persisted_user_message_id(saved_user_message),
                         include_memory=False,
                     )
@@ -3535,7 +3630,7 @@ class ConversationService:
 
         def chunk_iterator() -> Iterator[str]:
             try:
-                full_response: list[str] = []
+                full_response: list[str] = [persisted_assistant_prefix] if persisted_assistant_prefix else []
                 try:
                     stream = gemini_client.stream_chat_completion(
                         combined_prompt,
@@ -3545,7 +3640,12 @@ class ConversationService:
                     )
                 except TypeError:
                     stream = gemini_client.stream_chat_completion(combined_prompt)
-                for text in self._iter_observed_provider_stream(stream, timing):
+                provider_stream = self._iter_with_first_chunk_deadline(
+                    self._iter_observed_provider_stream(stream, timing),
+                    timing,
+                    enabled=route.flow == "default_fast",
+                )
+                for text in provider_stream:
                     safe_text = self._validate_stream_chunk_for_yield(
                         text,
                         trainer_context=trainer_context,
