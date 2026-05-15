@@ -10,7 +10,7 @@ services:
     autoDeployTrigger: commit
     healthCheckPath: /healthz
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: python -m uvicorn main:app --host 0.0.0.0 --port $PORT --workers 4
     envVars:
       - key: APP_ENV
         value: staging
