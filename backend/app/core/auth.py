@@ -1,11 +1,15 @@
 from datetime import datetime, timezone
 from dataclasses import dataclass
 import hashlib
+import logging
 import time
 
 from fastapi import Depends, Header, HTTPException, Request, status
 
 from app.db.client import get_supabase_user_client
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -15,7 +19,7 @@ class AuthenticatedUser:
     access_token: str | None = None
 
 
-_AUTH_USER_CACHE_TTL_SECONDS = 15
+_AUTH_USER_CACHE_TTL_SECONDS = 60
 _auth_user_cache: dict[str, tuple[float, AuthenticatedUser]] = {}
 
 
@@ -39,6 +43,43 @@ def _set_cached_user(token: str, user: AuthenticatedUser) -> None:
         time.monotonic() + _AUTH_USER_CACHE_TTL_SECONDS,
         user,
     )
+
+
+def _shared_auth_cache_key(token: str) -> str:
+    return f"mode:auth_user:{_auth_cache_key(token)}"
+
+
+def _get_shared_cached_user(token: str) -> AuthenticatedUser | None:
+    try:
+        from app.modules.conversation.cache import get_chat_cache
+
+        cached = get_chat_cache().get_json(_shared_auth_cache_key(token))
+    except Exception:
+        logger.debug("auth_shared_cache_get_failed", exc_info=True)
+        return None
+    if not isinstance(cached, dict):
+        return None
+    user_id = str(cached.get("id") or "").strip()
+    if not user_id:
+        return None
+    return AuthenticatedUser(
+        id=user_id,
+        email=str(cached.get("email") or "").strip() or None,
+        access_token=token,
+    )
+
+
+def _set_shared_cached_user(token: str, user: AuthenticatedUser) -> None:
+    try:
+        from app.modules.conversation.cache import get_chat_cache
+
+        get_chat_cache().set_json(
+            _shared_auth_cache_key(token),
+            {"id": user.id, "email": user.email},
+            _AUTH_USER_CACHE_TTL_SECONDS,
+        )
+    except Exception:
+        logger.debug("auth_shared_cache_set_failed", exc_info=True)
 
 
 def clear_auth_user_cache() -> None:
@@ -110,6 +151,13 @@ def require_user(
             request_obj.state.auth_get_user_ms = 0
             request_obj.state.auth_cache_hit = True
         return cached_user
+    shared_cached_user = _get_shared_cached_user(token)
+    if shared_cached_user is not None:
+        _set_cached_user(token, shared_cached_user)
+        if request_obj is not None:
+            request_obj.state.auth_get_user_ms = 0
+            request_obj.state.auth_cache_hit = True
+        return shared_cached_user
     auth_client = get_supabase_user_client(token).auth
 
     try:
@@ -144,6 +192,7 @@ def require_user(
         access_token=token,
     )
     _set_cached_user(token, authenticated_user)
+    _set_shared_cached_user(token, authenticated_user)
     return authenticated_user
 
 

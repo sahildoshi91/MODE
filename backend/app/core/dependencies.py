@@ -1,4 +1,5 @@
 import time
+from dataclasses import asdict
 
 from fastapi import Depends, Request
 from supabase import Client
@@ -76,6 +77,44 @@ def _set_cached_trainer_context(user_id: str, context: TrainerContext) -> None:
         time.monotonic() + _TRAINER_CONTEXT_CACHE_TTL_SECONDS,
         context,
     )
+
+
+def _trainer_context_shared_cache_key(user_id: str) -> str:
+    return f"mode:trainer_context:{user_id}"
+
+
+def _coerce_cached_trainer_context(payload: object) -> TrainerContext | None:
+    if not isinstance(payload, dict):
+        return None
+    allowed_keys = set(TrainerContext.__dataclass_fields__.keys())
+    values = {key: payload.get(key) for key in allowed_keys if key in payload}
+    try:
+        return TrainerContext(**values)
+    except TypeError:
+        return None
+
+
+def _get_shared_cached_trainer_context(user_id: str) -> TrainerContext | None:
+    try:
+        from app.modules.conversation.cache import get_chat_cache
+
+        cached = get_chat_cache().get_json(_trainer_context_shared_cache_key(user_id))
+    except Exception:
+        return None
+    return _coerce_cached_trainer_context(cached)
+
+
+def _set_shared_cached_trainer_context(user_id: str, context: TrainerContext) -> None:
+    try:
+        from app.modules.conversation.cache import get_chat_cache
+
+        get_chat_cache().set_json(
+            _trainer_context_shared_cache_key(user_id),
+            asdict(context),
+            _TRAINER_CONTEXT_CACHE_TTL_SECONDS,
+        )
+    except Exception:
+        return
 
 
 def get_request_scoped_supabase_client(
@@ -162,8 +201,15 @@ def get_trainer_context(
         request.state.trainer_context_cache_hit = True
         request.state.trainer_context_resolve_ms = max(int((time.perf_counter() - started_at) * 1000), 0)
         return cached
+    shared_cached = _get_shared_cached_trainer_context(user.id)
+    if shared_cached is not None:
+        _set_cached_trainer_context(user.id, shared_cached)
+        request.state.trainer_context_cache_hit = True
+        request.state.trainer_context_resolve_ms = max(int((time.perf_counter() - started_at) * 1000), 0)
+        return shared_cached
     context = resolve_trainer_context(supabase, user.id)
     _set_cached_trainer_context(user.id, context)
+    _set_shared_cached_trainer_context(user.id, context)
     request.state.trainer_context_cache_hit = False
     request.state.trainer_context_resolve_ms = max(int((time.perf_counter() - started_at) * 1000), 0)
     return context
