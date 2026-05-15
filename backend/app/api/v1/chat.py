@@ -534,7 +534,12 @@ async def chat_stream(
                 if callable(stream_events)
                 else _legacy_stream_chat_events(service, user.id, trainer_context, stream_request)
             )
-            for payload in event_iterator:
+            event_iterator = iter(event_iterator)
+            stream_done = object()
+            while True:
+                payload = await asyncio.to_thread(next, event_iterator, stream_done)
+                if payload is stream_done:
+                    break
                 if await http_request.is_disconnected():
                     break
                 trace.observe_payload(payload)
