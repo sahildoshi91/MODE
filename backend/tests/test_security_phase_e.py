@@ -18,7 +18,7 @@ from starlette.requests import Request
 from app.core.auth import AuthenticatedUser, require_user
 from app.core.config import settings
 from app.core.dependencies import get_conversation_service, get_trainer_context
-from app.core.rate_limit import _rate_limiter, enforce_rate_limit
+from app.core.rate_limit import _rate_limiter, _redis_rate_limiter, enforce_rate_limit
 from app.core.tenancy import TrainerContext
 from app.main import app
 from app.modules.conversation.security import redact_log_payload, validate_llm_output
@@ -63,6 +63,9 @@ class _FakeRedisClient:
 class SecurityPhaseETests(unittest.TestCase):
     def tearDown(self):
         _rate_limiter._windows.clear()
+        _redis_rate_limiter._client = None
+        _redis_rate_limiter._client_url = None
+        _redis_rate_limiter._client_timeout_seconds = None
         app.dependency_overrides.clear()
 
     def test_llm_output_schema_leakage_redacted(self):
@@ -209,6 +212,7 @@ class SecurityPhaseETests(unittest.TestCase):
         ]
         original_settings = {name: getattr(settings, name) for name in setting_names}
         fake_redis = _FakeRedisClient()
+        redis_from_url_calls = []
         user = AuthenticatedUser(id="user-sec", email="user@example.com", access_token="token-sec")
         request = _request_from_ip("203.0.113.81")
 
@@ -224,7 +228,11 @@ class SecurityPhaseETests(unittest.TestCase):
             settings.rate_limit_chat_ip_per_window = 100
             settings.rate_limit_ip_per_window = 100
 
-            redis_module = SimpleNamespace(Redis=SimpleNamespace(from_url=lambda *args, **kwargs: fake_redis))
+            def fake_from_url(*args, **kwargs):
+                redis_from_url_calls.append((args, kwargs))
+                return fake_redis
+
+            redis_module = SimpleNamespace(Redis=SimpleNamespace(from_url=fake_from_url))
             with patch.dict(sys.modules, {"redis": redis_module}):
                 enforce_rate_limit(
                     group="chat",
@@ -245,6 +253,7 @@ class SecurityPhaseETests(unittest.TestCase):
 
         self.assertEqual(exc.exception.status_code, 429)
         self.assertIn("chat|scope:client:client-sec", exc.exception.detail["scopes_checked"])
+        self.assertEqual(len(redis_from_url_calls), 1)
 
     def test_redis_rate_limit_unavailable_fails_closed(self):
         setting_names = [

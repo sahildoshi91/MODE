@@ -66,6 +66,45 @@ class _PostgresRateLimiter:
 
 
 class _RedisRateLimiter:
+    def __init__(self) -> None:
+        self._client: Any | None = None
+        self._client_url: str | None = None
+        self._client_timeout_seconds: float | None = None
+        self._client_lock = Lock()
+
+    def _get_client(self) -> Any:
+        if not settings.redis_url:
+            raise RuntimeError("redis_url_missing")
+
+        timeout_seconds = max(0.001, settings.chat_cache_timeout_ms / 1000)
+        redis_url = str(settings.redis_url)
+        if (
+            self._client is not None
+            and self._client_url == redis_url
+            and self._client_timeout_seconds == timeout_seconds
+        ):
+            return self._client
+
+        with self._client_lock:
+            if (
+                self._client is not None
+                and self._client_url == redis_url
+                and self._client_timeout_seconds == timeout_seconds
+            ):
+                return self._client
+
+            import redis  # type: ignore[import-not-found]
+
+            self._client = redis.Redis.from_url(
+                redis_url,
+                socket_timeout=timeout_seconds,
+                socket_connect_timeout=timeout_seconds,
+                decode_responses=True,
+            )
+            self._client_url = redis_url
+            self._client_timeout_seconds = timeout_seconds
+            return self._client
+
     def check(
         self,
         *,
@@ -78,18 +117,8 @@ class _RedisRateLimiter:
             return True, 0
         if window_seconds <= 0:
             return True, 0
-        if not settings.redis_url:
-            raise RuntimeError("redis_url_missing")
 
-        import redis  # type: ignore[import-not-found]
-
-        timeout_seconds = max(0.001, settings.chat_cache_timeout_ms / 1000)
-        client = redis.Redis.from_url(
-            str(settings.redis_url),
-            socket_timeout=timeout_seconds,
-            socket_connect_timeout=timeout_seconds,
-            decode_responses=True,
-        )
+        client = self._get_client()
         current_time = now or datetime.now(timezone.utc)
         bucket = int(current_time.timestamp() // window_seconds)
         redis_key = f"rate_limit:{key}:{bucket}"
