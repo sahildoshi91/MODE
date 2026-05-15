@@ -529,15 +529,21 @@ async def chat_stream(
 
         try:
             stream_events = getattr(service, "stream_chat_events", None)
+            has_stream_events = callable(stream_events)
             event_iterator = (
                 stream_events(user.id, trainer_context, stream_request)
-                if callable(stream_events)
+                if has_stream_events
                 else _legacy_stream_chat_events(service, user.id, trainer_context, stream_request)
             )
             event_iterator = iter(event_iterator)
             stream_done = object()
+            direct_pre_token_nexts_remaining = 2 if has_stream_events else 1
             while True:
-                payload = await asyncio.to_thread(next, event_iterator, stream_done)
+                if not first_token_sent and direct_pre_token_nexts_remaining > 0:
+                    direct_pre_token_nexts_remaining -= 1
+                    payload = next(event_iterator, stream_done)
+                else:
+                    payload = await asyncio.to_thread(next, event_iterator, stream_done)
                 if payload is stream_done:
                     break
                 if await http_request.is_disconnected():
