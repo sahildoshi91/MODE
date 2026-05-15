@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     atlas_trainer_ai_manager_enabled: bool = True
     trainer_ai_learning_enabled: bool = True
     trainer_ai_review_required: bool = True
+    intelligence_worker_concurrency: int = Field(default=1, ge=1, le=16)
     atlas_runtime_enabled: bool = False
     atlas_generic_coach_enabled: bool = False
     atlas_admin_email_allowlist: str = ""

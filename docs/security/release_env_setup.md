@@ -36,6 +36,7 @@ Use this guide to prepare safe local env files for release security checks witho
 | `MODE_IOS_IPA_PATH` | Path to release IPA for artifact scan gate. | CI artifact output or local build path. | local optional in `--local`; staging optional; prod required in release mode. | No | No | `<build/ios/release.ipa>` |
 | `MODE_IOS_INFO_PLIST_PATH` | Optional Info.plist override for iOS hardening lint. | iOS project tree. | local optional; staging optional; prod optional (used when override needed). | No | No | `<ios/YourApp/Info.plist>` |
 | `RATE_LIMIT_BACKEND` | Enforces backend limiter backend policy. | Backend runtime config. | local often `memory`; staging/prod expected `redis` for release checks. | No | No | `<redis>` |
+| `INTELLIGENCE_WORKER_CONCURRENCY` | Number of RQ worker processes started by the intelligence worker service. | Worker runtime config. | local/prod default `1`; staging launch gate uses `4` for burst drain evidence. | No | No | `<4>` |
 | `STARTUP_GUARD_ENABLED` | Ensures startup guard protections are enabled. | Backend runtime config. | local optional; staging/prod expected `true`. | No | No | `<true>` |
 | `AUTH_PASSWORD_PROXY_ENABLED` | Ensures password auth proxy hardening is enabled. | Backend runtime config. | local optional; staging/prod expected `true`. | No | No | `<true>` |
 | `ACCOUNT_DELETION_ENABLED` | Enables account deletion pipeline checks. | Backend runtime config. | local optional; staging/prod expected `true`. | No | No | `<true>` |

@@ -54,6 +54,8 @@ python -m app.workers.intelligence_worker
 ```
 
 Render starts the worker with the same command in `render.yaml`.
+Set `INTELLIGENCE_WORKER_CONCURRENCY` to run multiple RQ worker processes in one worker service.
+Staging uses `4` so burst tests can drain post-chat jobs without a long single-worker backlog.
 
 ## How To Monitor
 Queue lag:

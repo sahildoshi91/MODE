@@ -62,6 +62,8 @@ services:
         value: "true"
       - key: CHAT_CACHE_TIMEOUT_MS
         value: "150"
+      - key: INTELLIGENCE_WORKER_CONCURRENCY
+        value: "4"
       - key: REDIS_URL
         sync: false
       - key: SUPABASE_URL
