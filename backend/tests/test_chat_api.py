@@ -405,6 +405,7 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(payload["model"], "gemini-2.5-flash-lite")
         self.assertFalse(payload["fallback_used"])
         self.assertIsNone(payload["auth_get_user_ms"])
+        self.assertFalse(payload["auth_cache_hit"])
         self.assertIsNone(payload["trainer_context_resolve_ms"])
         self.assertFalse(payload["trainer_context_cache_hit"])
         self.assertIsInstance(payload["rate_limit_ms"], int)

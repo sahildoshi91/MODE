@@ -56,7 +56,7 @@ from app.modules.trainer_settings.service import TrainerSettingsService
 from app.modules.workout.repository import WorkoutRepository
 from app.modules.workout.service import WorkoutService
 
-_TRAINER_CONTEXT_CACHE_TTL_SECONDS = 15
+_TRAINER_CONTEXT_CACHE_TTL_SECONDS = 60
 _trainer_context_cache: dict[str, tuple[float, TrainerContext]] = {}
 
 

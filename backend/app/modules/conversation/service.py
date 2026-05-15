@@ -591,6 +591,7 @@ class ConversationService:
             trainer_context=trainer_context,
             conversation=conversation,
             request=request,
+            route=route,
             profile=profile,
             sanitized_message=sanitized_message,
         )
@@ -722,6 +723,7 @@ class ConversationService:
         request: ChatRequest,
         profile: dict[str, Any],
         sanitized_message: str,
+        route: RoutingDecision | None = None,
     ) -> ChatContext:
         del sanitized_message
         trainer_id = str(trainer_context.trainer_id or "")
@@ -770,11 +772,27 @@ class ConversationService:
             if trainer_id:
                 self.chat_cache.set_json(trainer_persona_key(trainer_id), persona_payload, TRAINER_PERSONA_TTL_SECONDS)
 
+        route_flow = str(getattr(route, "flow", "") or "")
+        retrieval_required = bool(getattr(route, "retrieval_required", False))
+        needs_deeper_context = bool(
+            retrieval_required
+            or getattr(route, "needs_trainer_review", False)
+            or route_flow in {"deep_path", "reasoning_structured", "safety_constrained", "safety_escalation", "persona_coach"}
+        )
+        recent_message_limit = 4 if route_flow == "default_fast" and not needs_deeper_context else 10
         try:
-            recent_messages = self.repository.list_messages(str(conversation["id"]), limit=10)[-10:]
+            recent_messages = self.repository.list_messages(str(conversation["id"]), limit=recent_message_limit)[
+                -recent_message_limit:
+            ]
         except Exception:
             logger.exception("Failed to load bounded recent messages conversation_id=%s", conversation.get("id"))
             recent_messages = []
+
+        retrieved_memory = (
+            self._load_retrieved_memory_chunks(trainer_id, client_id)
+            if route is None or needs_deeper_context
+            else []
+        )
 
         return ChatContext(
             user_digest=build_user_digest(
@@ -801,8 +819,8 @@ class ConversationService:
                 trainer_review_pending=bool(digest_payload.get("trainer_review_pending")) or trainer_review_pending,
             ),
             trainer_persona=persona_payload,
-            retrieved_memory=self._load_retrieved_memory_chunks(trainer_id, client_id),
-            recent_messages=recent_messages[-10:],
+            retrieved_memory=retrieved_memory,
+            recent_messages=recent_messages[-recent_message_limit:],
             cache_hit=cache_hit,
         )
 

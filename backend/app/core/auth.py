@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from dataclasses import dataclass
+import hashlib
 import time
 
 from fastapi import Depends, Header, HTTPException, Request, status
@@ -12,6 +13,36 @@ class AuthenticatedUser:
     id: str
     email: str | None = None
     access_token: str | None = None
+
+
+_AUTH_USER_CACHE_TTL_SECONDS = 15
+_auth_user_cache: dict[str, tuple[float, AuthenticatedUser]] = {}
+
+
+def _auth_cache_key(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _get_cached_user(token: str) -> AuthenticatedUser | None:
+    cached = _auth_user_cache.get(_auth_cache_key(token))
+    if not cached:
+        return None
+    expires_at, user = cached
+    if expires_at <= time.monotonic():
+        _auth_user_cache.pop(_auth_cache_key(token), None)
+        return None
+    return user
+
+
+def _set_cached_user(token: str, user: AuthenticatedUser) -> None:
+    _auth_user_cache[_auth_cache_key(token)] = (
+        time.monotonic() + _AUTH_USER_CACHE_TTL_SECONDS,
+        user,
+    )
+
+
+def clear_auth_user_cache() -> None:
+    _auth_user_cache.clear()
 
 
 def _extract_bearer_token(authorization: str | None) -> str:
@@ -73,6 +104,12 @@ def require_user(
     request_obj = request if isinstance(request, Request) else None
     authorization_value = request if isinstance(request, str) else authorization
     token = _extract_bearer_token(authorization_value)
+    cached_user = _get_cached_user(token)
+    if cached_user is not None:
+        if request_obj is not None:
+            request_obj.state.auth_get_user_ms = 0
+            request_obj.state.auth_cache_hit = True
+        return cached_user
     auth_client = get_supabase_user_client(token).auth
 
     try:
@@ -80,6 +117,7 @@ def require_user(
         user_response = auth_client.get_user(token)
         if request_obj is not None:
             request_obj.state.auth_get_user_ms = max(int((time.perf_counter() - auth_started_at) * 1000), 0)
+            request_obj.state.auth_cache_hit = False
     except Exception as exc:
         if request_obj is not None:
             request_obj.state.auth_get_user_ms = max(int((time.perf_counter() - auth_started_at) * 1000), 0)
@@ -100,11 +138,13 @@ def require_user(
             detail="User account is disabled",
         )
 
-    return AuthenticatedUser(
+    authenticated_user = AuthenticatedUser(
         id=user.id,
         email=getattr(user, "email", None),
         access_token=token,
     )
+    _set_cached_user(token, authenticated_user)
+    return authenticated_user
 
 
 CurrentUser = Depends(require_user)

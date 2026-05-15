@@ -381,6 +381,7 @@ async def chat_stream(
     update_ai_request_status = getattr(service, "update_ai_request_status", None)
     endpoint_preflight_ms = _elapsed_ms(endpoint_entered_at)
     auth_get_user_ms = _request_state_int(http_request, "auth_get_user_ms")
+    auth_cache_hit = bool(getattr(http_request.state, "auth_cache_hit", False))
     trainer_context_resolve_ms = _request_state_int(http_request, "trainer_context_resolve_ms")
     trainer_context_cache_hit = bool(getattr(http_request.state, "trainer_context_cache_hit", False))
 
@@ -446,6 +447,7 @@ async def chat_stream(
                 "model": model_name,
                 "fallback_used": fallback_used,
                 "auth_get_user_ms": auth_get_user_ms,
+                "auth_cache_hit": auth_cache_hit,
                 "trainer_context_resolve_ms": trainer_context_resolve_ms,
                 "trainer_context_cache_hit": trainer_context_cache_hit,
                 "rate_limit_ms": rate_limit_ms,

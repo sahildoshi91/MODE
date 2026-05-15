@@ -14,14 +14,16 @@ os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
-from app.core.auth import require_user
+from app.core.auth import clear_auth_user_cache, require_user
 
 
 class _FakeAuth:
     def __init__(self, user):
         self._user = user
+        self.calls = 0
 
     def get_user(self, _token):
+        self.calls += 1
         return SimpleNamespace(user=self._user)
 
 
@@ -31,6 +33,12 @@ class _FakeSupabase:
 
 
 class AuthDisabledUserTests(unittest.TestCase):
+    def setUp(self):
+        clear_auth_user_cache()
+
+    def tearDown(self):
+        clear_auth_user_cache()
+
     def test_deleted_user_is_rejected(self):
         user = SimpleNamespace(
             id="user-1",
@@ -100,6 +108,24 @@ class AuthDisabledUserTests(unittest.TestCase):
             resolved = require_user("Bearer token-123")
         self.assertEqual(resolved.id, "user-1")
         self.assertEqual(resolved.access_token, "token-123")
+
+    def test_active_user_is_cached_briefly(self):
+        user = SimpleNamespace(
+            id="user-1",
+            email="user@example.com",
+            deleted_at=None,
+            banned_until=None,
+            app_metadata={},
+            user_metadata={},
+        )
+        fake_supabase = _FakeSupabase(user)
+        with patch("app.core.auth.get_supabase_user_client", return_value=fake_supabase):
+            first = require_user("Bearer token-123")
+            second = require_user("Bearer token-123")
+
+        self.assertEqual(first.id, "user-1")
+        self.assertEqual(second.id, "user-1")
+        self.assertEqual(fake_supabase.auth.calls, 1)
 
 
 if __name__ == "__main__":
