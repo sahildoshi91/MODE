@@ -66,6 +66,24 @@ class _PostgresRateLimiter:
 
 
 class _RedisRateLimiter:
+    _CHECK_MANY_SCRIPT = """
+local window_seconds = tonumber(ARGV[1])
+local failed_index = 0
+for index, key in ipairs(KEYS) do
+  local limit = tonumber(ARGV[index + 1])
+  if limit > 0 and window_seconds > 0 then
+    local count = redis.call("INCR", key)
+    if count == 1 then
+      redis.call("EXPIRE", key, window_seconds)
+    end
+    if failed_index == 0 and count > limit then
+      failed_index = index
+    end
+  end
+end
+return failed_index
+"""
+
     def __init__(self) -> None:
         self._client: Any | None = None
         self._client_url: str | None = None
@@ -105,6 +123,11 @@ class _RedisRateLimiter:
             self._client_timeout_seconds = timeout_seconds
             return self._client
 
+    @staticmethod
+    def _bucket_key(key: str, *, now: datetime, window_seconds: int) -> str:
+        bucket = int(now.timestamp() // window_seconds)
+        return f"rate_limit:{key}:{bucket}"
+
     def check(
         self,
         *,
@@ -120,8 +143,7 @@ class _RedisRateLimiter:
 
         client = self._get_client()
         current_time = now or datetime.now(timezone.utc)
-        bucket = int(current_time.timestamp() // window_seconds)
-        redis_key = f"rate_limit:{key}:{bucket}"
+        redis_key = self._bucket_key(key, now=current_time, window_seconds=window_seconds)
         count = int(client.incr(redis_key))
         if count == 1:
             client.expire(redis_key, window_seconds)
@@ -129,6 +151,54 @@ class _RedisRateLimiter:
             return True, 0
         retry_after = window_seconds - int(current_time.timestamp() % window_seconds)
         return False, max(1, retry_after)
+
+    def check_many(
+        self,
+        *,
+        checks: list[tuple[str, int]],
+        window_seconds: int,
+        now: datetime | None = None,
+    ) -> tuple[bool, int, str | None]:
+        if window_seconds <= 0:
+            return True, 0, None
+        active_checks = [(key, limit) for key, limit in checks if key and int(limit) > 0]
+        if not active_checks:
+            return True, 0, None
+
+        client = self._get_client()
+        current_time = now or datetime.now(timezone.utc)
+        eval_script = getattr(client, "eval", None)
+        if not callable(eval_script):
+            for key, limit in active_checks:
+                allowed, retry_after = self.check(
+                    key=key,
+                    limit=limit,
+                    window_seconds=window_seconds,
+                    now=current_time,
+                )
+                if not allowed:
+                    return False, retry_after, key
+            return True, 0, None
+
+        redis_keys = [
+            self._bucket_key(key, now=current_time, window_seconds=window_seconds)
+            for key, _ in active_checks
+        ]
+        limits = [str(int(limit)) for _, limit in active_checks]
+        failed_index = int(
+            eval_script(
+                self._CHECK_MANY_SCRIPT,
+                len(redis_keys),
+                *redis_keys,
+                str(int(window_seconds)),
+                *limits,
+            )
+        )
+        if failed_index <= 0:
+            return True, 0, None
+        failed_key = active_checks[failed_index - 1][0]
+        retry_after = window_seconds - int(current_time.timestamp() % window_seconds)
+        return False, max(1, retry_after), failed_key
 
 
 _LIMITS_BY_GROUP = {
@@ -277,32 +347,42 @@ def enforce_rate_limit(
 
     backend = str(settings.rate_limit_backend or "memory").strip().lower()
     if backend == "redis":
-        limiter = _redis_rate_limiter
-    elif backend == "postgres":
-        limiter = _postgres_rate_limiter
-    else:
-        limiter = _rate_limiter
-    retry_after_seconds = 1
-    checked_keys = []
-    for key, scoped_limit in checks:
-        checked_keys.append(key)
+        checked_keys = [key for key, _ in checks]
         try:
-            allowed, retry_after_seconds = limiter.check(
-                key=key,
-                limit=scoped_limit,
+            allowed, retry_after_seconds, _failed_key = _redis_rate_limiter.check_many(
+                checks=checks,
                 window_seconds=window_seconds,
             )
         except Exception as exc:
-            if backend in {"postgres", "redis"}:
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail={"detail": "Rate limiter unavailable", "group": group},
-                ) from exc
-            raise
-        if not allowed:
-            break
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"detail": "Rate limiter unavailable", "group": group},
+            ) from exc
+        if allowed:
+            return
     else:
-        return
+        limiter = _postgres_rate_limiter if backend == "postgres" else _rate_limiter
+        retry_after_seconds = 1
+        checked_keys = []
+        for key, scoped_limit in checks:
+            checked_keys.append(key)
+            try:
+                allowed, retry_after_seconds = limiter.check(
+                    key=key,
+                    limit=scoped_limit,
+                    window_seconds=window_seconds,
+                )
+            except Exception as exc:
+                if backend == "postgres":
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={"detail": "Rate limiter unavailable", "group": group},
+                    ) from exc
+                raise
+            if not allowed:
+                break
+        else:
+            return
 
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
