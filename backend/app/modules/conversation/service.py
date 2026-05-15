@@ -108,6 +108,7 @@ MEMORY_SUGGESTION_MAX_TEXT_LENGTH = 280
 WORKOUT_CONTEXT_MAX_CHARS = 1600
 DEFAULT_FAST_FIRST_CHUNK_DEADLINE_SECONDS = 0.1
 DEFAULT_FAST_DEADLINE_PREFIX = "Got it - "
+DEFAULT_FAST_FLUSH_PADDING = " " * 4096
 MINIMAL_SAFE_FALLBACK_MESSAGE = (
     "I want to make sure I give you the right guidance here. "
     "Try a low-risk option for now: keep intensity easy, avoid anything that worsens symptoms, "
@@ -2774,11 +2775,14 @@ class ConversationService:
             else ""
         )
         early_prefix_sent = False
-        yield status_event_for_intent(
+        initial_status_event = status_event_for_intent(
             STATUS_READING_USER_MESSAGE,
             routed_intent=intent_preview,
             request=request,
         )
+        if early_prefix_text:
+            initial_status_event["flush_padding"] = DEFAULT_FAST_FLUSH_PADDING
+        yield initial_status_event
         if early_prefix_text:
             early_prefix_sent = True
             stream_timing.record_phase_once(
