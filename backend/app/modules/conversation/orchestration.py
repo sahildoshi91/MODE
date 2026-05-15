@@ -34,13 +34,19 @@ TOKEN_BUDGETS = {
     "max_output": 1500,
 }
 
+TOKEN_BUDGETS_FAST = {
+    **TOKEN_BUDGETS,
+    "recent_chat": 400,
+    "max_output": 512,
+}
+
 TOKEN_BUDGETS_DEEP = {
     **TOKEN_BUDGETS,
     "max_output": 2500,
 }
 
 MODEL_ROUTING = {
-    "FAST_PATH": {"provider": "gemini", "model": GEMINI_FLASH_LITE_MODEL, "tier": "fast"},
+    "FAST_PATH": {"provider": "openai", "model": GPT_5_4_MINI_MODEL, "tier": "fast"},
     "DEEP_PATH": {"provider": "openai", "model": GPT_5_4_MODEL, "tier": "full"},
     "SAFETY_ESCALATION": {"provider": "openai", "model": GPT_5_4_MODEL, "tier": "full"},
     "intent_classification": {"provider": "system", "model": "deterministic-sentry-router", "tier": "fast"},
@@ -84,6 +90,8 @@ def prompt_budgets_for_route(route: RoutingDecision) -> dict[str, int]:
     flow = str(getattr(route, "flow", "") or "")
     if intent.get("route") == "DEEP_PATH" or flow in {"deep_path", "reasoning_structured", "safety_escalation"}:
         return TOKEN_BUDGETS_DEEP
+    if flow == "default_fast":
+        return TOKEN_BUDGETS_FAST
     return TOKEN_BUDGETS
 
 

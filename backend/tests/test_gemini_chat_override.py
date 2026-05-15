@@ -442,6 +442,7 @@ class FakeGeminiClient:
 class FakeOpenAIClient:
     def __init__(self):
         self.calls = []
+        self.stream_calls = []
 
     def create_chat_completion_with_usage(self, model, messages):
         self.calls.append({"model": model, "messages": messages})
@@ -454,6 +455,23 @@ class FakeOpenAIClient:
                 thoughts_tokens=0,
             ),
         )
+
+    def stream_chat_completion(
+        self,
+        *,
+        model,
+        messages,
+        max_output_tokens=None,
+        stream_timing_observer=None,
+    ):
+        del max_output_tokens
+        self.stream_calls.append({"model": model, "messages": messages})
+        if callable(stream_timing_observer):
+            stream_timing_observer("provider_stream_open_ms", 2)
+            stream_timing_observer("provider_first_chunk_ms", 3)
+            stream_timing_observer("provider_first_chunk_total_ms", 5)
+        yield "GPT "
+        yield "stream"
 
 
 class FakeAnthropicClient:
@@ -554,27 +572,27 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         service.anthropic_client = FakeAnthropicClient() if anthropic_enabled else None
         return service
 
-    def test_handle_chat_uses_default_fast_route_with_gemini(self):
+    def test_handle_chat_uses_default_fast_route_with_openai_mini(self):
         service = self._build_service()
 
         response = service.handle_chat("user-123", self.trainer_context, self.request)
 
-        self.assertEqual(response.assistant_message, "Gemini says hello")
+        self.assertEqual(response.assistant_message, "GPT says hello")
         self.assertEqual(response.conversation_id, "convo-123")
         self.assertEqual(response.conversation_state.current_stage, "default_fast")
         self.assertFalse(response.fallback_triggered)
-        self.assertEqual(response.token_usage.prompt_tokens, 123)
+        self.assertEqual(response.token_usage.prompt_tokens, 90)
         self.assertEqual(len(self.repository.saved_messages), 2)
         route_payload = self.repository.saved_messages[1]["structured_payload"]["route"]
-        self.assertEqual(route_payload["model"], "gemini-2.5-flash-lite")
-        self.assertEqual(route_payload["execution_provider"], "gemini")
+        self.assertEqual(route_payload["model"], "gpt-5.4-mini")
+        self.assertEqual(route_payload["execution_provider"], "openai")
         self.assertEqual(route_payload["task_type"], "qa_quick")
-        self.assertEqual(response.route_debug.selected_provider, "gemini")
-        self.assertEqual(response.route_debug.execution_model, "gemini-2.5-flash-lite")
-        self.assertEqual(response.conversation_usage.total_tokens, 144)
-        self.assertEqual(response.conversation_usage.last_execution_model, "gemini-2.5-flash-lite")
+        self.assertEqual(response.route_debug.selected_provider, "openai")
+        self.assertEqual(response.route_debug.execution_model, "gpt-5.4-mini")
+        self.assertEqual(response.conversation_usage.total_tokens, 105)
+        self.assertEqual(response.conversation_usage.last_execution_model, "gpt-5.4-mini")
         self.assertEqual(self.repository.created_conversation["type"], "chat")
-        prompt = service.gemini_client.prompts[0]
+        prompt = "\n".join(message["content"] for message in service.openai_client.calls[0]["messages"])
         self.assertIn("Coach Alex", prompt)
         self.assertIn("Strength Coach", prompt)
         self.assertIn("I can train four days a week.", prompt)
@@ -608,12 +626,12 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         streamed = first_chunk + "".join(chunks)
 
         self.assertEqual(conversation_id, "convo-123")
-        self.assertEqual(first_chunk, "Gemini ")
+        self.assertEqual(first_chunk, "GPT ")
         self.assertLess(first_token_ms, 500)
-        self.assertEqual(streamed, "Gemini stream")
-        self.assertEqual(route_debug.execution_provider, "gemini")
+        self.assertEqual(streamed, "GPT stream")
+        self.assertEqual(route_debug.execution_provider, "openai")
         self.assertEqual(result_state.conversation_usage.total_tokens, 0)
-        self.assertEqual(self.repository.saved_messages[-1]["message_text"], "Gemini stream")
+        self.assertEqual(self.repository.saved_messages[-1]["message_text"], "GPT stream")
         self.assertEqual(self.repository.updated_states[-1]["stage"], "default_fast")
 
     def test_stream_chat_events_logs_sanitized_phase_timing(self):
@@ -631,8 +649,8 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertEqual(payload["trainer_id"], "trainer-123")
         self.assertEqual(payload["client_id"], "client-123")
         self.assertEqual(payload["conversation_id"], "convo-123")
-        self.assertEqual(payload["provider"], "gemini")
-        self.assertEqual(payload["model"], "gemini-2.5-flash-lite")
+        self.assertEqual(payload["provider"], "openai")
+        self.assertEqual(payload["model"], "gpt-5.4-mini")
         self.assertEqual(payload["route"], "FAST_PATH")
         self.assertEqual(payload["route_flow"], "default_fast")
         self.assertFalse(payload["fallback_used"])
@@ -658,9 +676,9 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertIsInstance(payload["route_provider_branch_setup_ms"], int)
         self.assertIsInstance(payload["provider_iterator_ready_ms"], int)
         self.assertIsInstance(payload["stream_chat_return_ready_ms"], int)
-        self.assertEqual(payload["provider_stream_open_ms"], 3)
-        self.assertEqual(payload["provider_first_chunk_ms"], 4)
-        self.assertEqual(payload["provider_first_chunk_total_ms"], 7)
+        self.assertEqual(payload["provider_stream_open_ms"], 2)
+        self.assertEqual(payload["provider_first_chunk_ms"], 3)
+        self.assertEqual(payload["provider_first_chunk_total_ms"], 5)
         self.assertIsInstance(payload["provider_iteration_start_ms"], int)
         self.assertIsInstance(payload["service_provider_text_received_ms"], int)
         self.assertIsInstance(payload["provider_iteration_to_text_ms"], int)
@@ -672,7 +690,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertIsInstance(payload["total_stream_ms"], int)
         joined_logs = "\n".join(logs.output)
         self.assertNotIn(self.request.message, joined_logs)
-        self.assertNotIn("Gemini stream", joined_logs)
+        self.assertNotIn("GPT stream", joined_logs)
         self.assertTrue(any(event.get("type") == "done" for event in events))
 
     def test_handle_chat_succeeds_when_usage_analytics_are_unavailable(self):
@@ -681,11 +699,11 @@ class ConversationServiceRoutingTests(unittest.TestCase):
 
         response = service.handle_chat("user-123", self.trainer_context, self.request)
 
-        self.assertEqual(response.assistant_message, "Gemini says hello")
+        self.assertEqual(response.assistant_message, "GPT says hello")
         self.assertEqual(response.conversation_id, "convo-123")
         self.assertEqual(response.conversation_usage.total_tokens, 0)
         self.assertEqual(response.conversation_usage.usage_event_count, 0)
-        self.assertEqual(repository.saved_messages[-1]["message_text"], "Gemini says hello")
+        self.assertEqual(repository.saved_messages[-1]["message_text"], "GPT says hello")
         self.assertEqual(repository.updated_states[-1]["stage"], "default_fast")
 
     def test_safety_escalation_uses_holding_response_and_notifies_trainer(self):

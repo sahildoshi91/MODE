@@ -182,9 +182,9 @@ class ObservabilityPhaseDTests(unittest.TestCase):
             total_response_ms=100,
             tokens_in=10,
             tokens_out=5,
-            model_used="gemini-2.5-flash-lite",
+            model_used="gpt-5.4-mini",
             prompt_version="system_v1+trainer_persona_v1+safety_rules_v1",
-            model_fallback_chain=["gemini:gemini-2.5-flash-lite"],
+            model_fallback_chain=["openai:gpt-5.4-mini"],
             tokens_cost_usd=0.001,
         )
 
@@ -194,7 +194,7 @@ class ObservabilityPhaseDTests(unittest.TestCase):
         joined = "\n".join(logs.output)
         self.assertIn('"name": "chat.ttft_ms"', joined)
         self.assertIn('"name": "llm.cost_usd"', joined)
-        self.assertIn('"model": "gemini-2.5-flash-lite"', joined)
+        self.assertIn('"model": "gpt-5.4-mini"', joined)
         self.assertEqual(trace.prompt_version, "system_v1+trainer_persona_v1+safety_rules_v1")
         self.assertEqual(trace.tokens_cost_usd, 0.001)
 

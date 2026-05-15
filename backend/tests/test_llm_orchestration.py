@@ -77,8 +77,8 @@ class LLMOrchestrationTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(decision.provider, "gemini")
-        self.assertEqual(decision.model, "gemini-2.5-flash-lite")
+        self.assertEqual(decision.provider, "openai")
+        self.assertEqual(decision.model, "gpt-5.4-mini")
         self.assertEqual(decision.flow, "default_fast")
 
     def test_token_budget_truncates_overflow(self):

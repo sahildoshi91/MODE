@@ -40,10 +40,10 @@ class FakeConversationService:
             conversation_state=ConversationState(current_stage="default_fast", onboarding_complete=False),
             token_usage=TokenUsage(total_tokens=12, prompt_tokens=8, completion_tokens=4),
             route_debug=RouteDebug(
-                selected_provider="gemini",
-                selected_model="gemini-2.5-flash-lite",
-                execution_provider="gemini",
-                execution_model="gemini-2.5-flash-lite",
+                selected_provider="openai",
+                selected_model="gpt-5.4-mini",
+                execution_provider="openai",
+                execution_model="gpt-5.4-mini",
                 flow="default_fast",
                 reason="default",
                 task_type="qa_quick",
@@ -53,8 +53,8 @@ class FakeConversationService:
                 conversation_id="convo-123",
                 total_tokens=12,
                 usage_event_count=1,
-                last_execution_provider="gemini",
-                last_execution_model="gemini-2.5-flash-lite",
+                last_execution_provider="openai",
+                last_execution_model="gpt-5.4-mini",
             ),
         )
 
@@ -68,10 +68,10 @@ class FakeConversationService:
             "convo-123",
             iterator(),
             RouteDebug(
-                selected_provider="gemini",
-                selected_model="gemini-2.5-flash-lite",
-                execution_provider="gemini",
-                execution_model="gemini-2.5-flash-lite",
+                selected_provider="openai",
+                selected_model="gpt-5.4-mini",
+                execution_provider="openai",
+                execution_model="gpt-5.4-mini",
                 flow="default_fast",
                 reason="default",
                 task_type="qa_quick",
@@ -86,8 +86,8 @@ class FakeConversationService:
                         conversation_id="convo-123",
                         total_tokens=12,
                         usage_event_count=1,
-                        last_execution_provider="gemini",
-                        last_execution_model="gemini-2.5-flash-lite",
+                        last_execution_provider="openai",
+                        last_execution_model="gpt-5.4-mini",
                     ),
                 },
             )(),
@@ -110,10 +110,10 @@ class ExplodingConversationService(FakeConversationService):
             "convo-123",
             iterator(),
             RouteDebug(
-                selected_provider="gemini",
-                selected_model="gemini-2.5-flash-lite",
-                execution_provider="gemini",
-                execution_model="gemini-2.5-flash-lite",
+                selected_provider="openai",
+                selected_model="gpt-5.4-mini",
+                execution_provider="openai",
+                execution_model="gpt-5.4-mini",
                 flow="default_fast",
                 reason="default",
                 task_type="qa_quick",
@@ -179,7 +179,7 @@ class RecordingStreamPersistenceService:
             "conversation_usage": None,
             "_trace": {
                 "route": "FAST_PATH",
-                "model_used": "gemini-2.5-flash-lite",
+                "model_used": "gpt-5.4-mini",
                 "fallback_used": False,
             },
         }
@@ -282,7 +282,7 @@ class ChatApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["route_debug"]["selected_provider"], "gemini")
+        self.assertEqual(response.json()["route_debug"]["selected_provider"], "openai")
 
     def test_chat_returns_502_on_processing_error(self):
         app.dependency_overrides[get_conversation_service] = lambda: ExplodingConversationService()
@@ -310,7 +310,7 @@ class ChatApiTests(unittest.TestCase):
         joined = "\n".join(logs.output)
         self.assertIn('"event": "chat_trace"', joined)
         self.assertIn('"time_to_first_token_ms"', joined)
-        self.assertIn('"model_used": "gemini-2.5-flash-lite"', joined)
+        self.assertIn('"model_used": "gpt-5.4-mini"', joined)
 
     def test_stream_hides_route_debug_and_emits_error_event(self):
         app.dependency_overrides[get_conversation_service] = lambda: ExplodingConversationService()
@@ -401,8 +401,8 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(payload["client_id"], "client-123")
         self.assertEqual(payload["conversation_id"], "convo-123")
         self.assertEqual(payload["route"], "FAST_PATH")
-        self.assertEqual(payload["provider"], "gemini")
-        self.assertEqual(payload["model"], "gemini-2.5-flash-lite")
+        self.assertEqual(payload["provider"], "openai")
+        self.assertEqual(payload["model"], "gpt-5.4-mini")
         self.assertFalse(payload["fallback_used"])
         self.assertIsNone(payload["auth_get_user_ms"])
         self.assertFalse(payload["auth_cache_hit"])

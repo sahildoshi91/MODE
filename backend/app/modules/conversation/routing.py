@@ -215,8 +215,8 @@ class ConversationRouter:
 
         return RoutingDecision(
             task_type=task_type,
-            model=GEMINI_FLASH_LITE_MODEL,
-            provider="gemini",
+            model=GPT_5_4_MINI_MODEL,
+            provider="openai",
             flow="default_fast",
             reason="default",
             response_mode=response_mode,

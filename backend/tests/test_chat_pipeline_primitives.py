@@ -446,7 +446,7 @@ class ChatPipelinePrimitiveTests(unittest.TestCase):
                 "router_confidence": 0.9,
                 "risk_flags": [],
                 "cache_hit": True,
-                "model_used": "gemini-2.5-flash-lite",
+                "model_used": "gpt-5.4-mini",
             },
         })
 
