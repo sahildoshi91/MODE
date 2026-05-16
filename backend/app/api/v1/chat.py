@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.api.v1.trainer_auth import require_client_or_trainer_actor
 from app.core.auth import AuthenticatedUser, CurrentUser
@@ -375,7 +376,8 @@ async def chat_stream(
     try:
         require_client_or_trainer_actor(user, trainer_context)
         rate_limit_started_at = time.perf_counter()
-        enforce_rate_limit(
+        await run_in_threadpool(
+            enforce_rate_limit,
             group="chat",
             user=user,
             request=http_request,

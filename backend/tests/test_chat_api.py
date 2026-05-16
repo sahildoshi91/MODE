@@ -355,6 +355,24 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn('"delta": "hello"', response.text)
         self.assertIn('"assistant_message": "hello"', response.text)
 
+    def test_stream_offloads_rate_limit_to_threadpool(self):
+        self._override_conversation_service(FakeConversationService())
+        calls = []
+
+        async def recording_threadpool(fn, *args, **kwargs):
+            calls.append(getattr(fn, "__name__", "unknown"))
+            return fn(*args, **kwargs)
+
+        with patch("app.api.v1.chat.run_in_threadpool", recording_threadpool):
+            response = self.client.post(
+                "/api/v1/chat/stream",
+                json={"message": "Hello"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("enforce_rate_limit", calls)
+
     def test_stream_defers_request_persistence_until_after_first_token(self):
         service = RecordingStreamPersistenceService()
         self._override_conversation_service(service)
