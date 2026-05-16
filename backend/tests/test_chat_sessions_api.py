@@ -171,6 +171,11 @@ class ChatSessionsApiTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers.get("x-mode-request-id"))
+        self.assertIsNotNone(response.headers.get("x-mode-preflight-total-ms"))
+        self.assertIsNotNone(response.headers.get("x-mode-redis-rate-limit-ms"))
+        self.assertIsNotNone(response.headers.get("x-mode-session-fetch-ms"))
+        self.assertEqual(response.headers.get("x-mode-tenant-rpc-used"), "false")
         timing_lines = [line for line in logs.output if '"event": "authenticated_preflight_timing"' in line]
         self.assertEqual(len(timing_lines), 1)
         import json

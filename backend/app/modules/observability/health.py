@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import logging
+import os
 import time
 from dataclasses import asdict, dataclass
 from typing import Any, Callable
@@ -69,6 +70,11 @@ async def build_healthz_payload(
 
     payload["duration_ms"] = int((time.perf_counter() - response_started_at) * 1000)
     payload["cache_age_ms"] = cache_age_ms
+    payload["build"] = {
+        "commit": str(os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "").strip() or None,
+        "branch": str(os.getenv("RENDER_GIT_BRANCH") or os.getenv("GIT_BRANCH") or "").strip() or None,
+        "service": str(os.getenv("RENDER_SERVICE_NAME") or "").strip() or None,
+    }
     status = str(payload.get("status") or "degraded")
     emit_metric("healthz.duration_ms", payload["duration_ms"], unit="ms", tags={"status": status})
     return payload

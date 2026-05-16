@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -58,6 +59,16 @@ CHAT_SESSION_STORAGE_OBJECTS = {
     "chat_messages",
     "append_chat_message",
 }
+
+
+def _revision_marker() -> str:
+    return str(os.getenv("RENDER_GIT_COMMIT") or os.getenv("GIT_COMMIT") or "").strip()
+
+
+def _set_timing_header(response: Response, name: str, value: object) -> None:
+    if value is None:
+        return
+    response.headers[name] = str(value)
 
 
 def _rate_limit_chat(http_request: Request, user: AuthenticatedUser, trainer_context: TrainerContext) -> int:
@@ -177,6 +188,7 @@ async def get_today_chat_session(
 @router.get("", response_model=ChatSessionListResponse)
 async def list_chat_sessions(
     http_request: Request,
+    response: Response,
     role: str = Query(...),
     session_type: str | None = Query(default=None),
     limit: int = Query(default=80, ge=1, le=200),
@@ -229,6 +241,30 @@ async def list_chat_sessions(
             client_id=trainer_context.client_id,
         )
     finally:
+        total_preflight_ms = elapsed_ms(
+            getattr(http_request.state, "authenticated_preflight_request_started_at", endpoint_entered_at)
+        )
+        revision = _revision_marker()
+        if revision:
+            response.headers["X-Mode-Revision"] = revision[:12]
+        response.headers["X-Mode-Request-Id"] = request_id
+        _set_timing_header(response, "X-Mode-Preflight-Total-Ms", total_preflight_ms)
+        _set_timing_header(response, "X-Mode-Auth-Decode-Ms", getattr(http_request.state, "auth_decode_ms", None))
+        _set_timing_header(
+            response,
+            "X-Mode-Supabase-User-Lookup-Ms",
+            getattr(http_request.state, "supabase_user_lookup_ms", None),
+        )
+        _set_timing_header(
+            response,
+            "X-Mode-Tenant-Membership-Ms",
+            getattr(http_request.state, "tenant_membership_ms", None),
+        )
+        _set_timing_header(response, "X-Mode-Redis-Rate-Limit-Ms", rate_limit_ms)
+        _set_timing_header(response, "X-Mode-Session-Fetch-Ms", session_fetch_or_create_ms)
+        response.headers["X-Mode-Tenant-Rpc-Used"] = str(
+            bool(getattr(http_request.state, "tenant_context_rpc_used", False))
+        ).lower()
         emit_authenticated_preflight_timing(
             logger,
             request=http_request,
@@ -237,9 +273,7 @@ async def list_chat_sessions(
             trainer_context=trainer_context,
             redis_rate_limit_ms=rate_limit_ms,
             session_fetch_or_create_ms=session_fetch_or_create_ms,
-            total_preflight_ms=elapsed_ms(
-                getattr(http_request.state, "authenticated_preflight_request_started_at", endpoint_entered_at)
-            ),
+            total_preflight_ms=total_preflight_ms,
             error_category=error_category,
         )
 
