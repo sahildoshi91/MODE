@@ -13,7 +13,7 @@ from app.core.config import settings
 _CLIENT_CACHE_LOCK = threading.Lock()
 _ADMIN_CLIENT_CACHE: dict[tuple[str, str], Client] = {}
 _PUBLIC_CLIENT_CACHE: dict[tuple[str, str], Client] = {}
-_USER_CLIENT_CACHE: dict[tuple[str, str, str], tuple[float, Client]] = {}
+_USER_CLIENT_CACHE: dict[tuple[str, str, str, int], tuple[float, Client]] = {}
 _USER_CLIENT_TTL_SECONDS = 120
 
 
@@ -51,7 +51,7 @@ def get_supabase_admin_client() -> Client:
 def get_supabase_user_client(access_token: str) -> Client:
     url = _require_setting(settings.supabase_url, "SUPABASE_URL")
     key = _require_setting(settings.supabase_anon_key, "SUPABASE_ANON_KEY")
-    cache_key = (url, key, _token_hash(access_token))
+    cache_key = (url, key, _token_hash(access_token), threading.get_ident())
     now = time.monotonic()
     with _CLIENT_CACHE_LOCK:
         cached = _USER_CLIENT_CACHE.get(cache_key)
