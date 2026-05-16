@@ -185,6 +185,23 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertIsInstance(payload["total_preflight_ms"], int)
         self.assertIsNone(payload["error_category"])
 
+    def test_history_offloads_blocking_preflight_work_to_threadpool(self):
+        calls = []
+
+        async def recording_threadpool(fn, *args, **kwargs):
+            calls.append(getattr(fn, "__name__", "unknown"))
+            return fn(*args, **kwargs)
+
+        with patch("app.api.v1.chat_sessions.run_in_threadpool", recording_threadpool):
+            response = self.client.get(
+                "/api/v1/chat/sessions?role=client&session_type=client_chat&limit=1",
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("_rate_limit_chat", calls)
+        self.assertIn("list_history", calls)
+
     def test_history_endpoint_accepts_trailing_slash(self):
         response = self.client.get(
             "/api/v1/chat/sessions/?role=client&session_type=client_chat&limit=1",

@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
 from app.api.v1.chat import CONTROLLED_CHAT_ERROR_DETAIL
 from app.api.v1.trainer_auth import require_client_or_trainer_actor
@@ -192,14 +193,15 @@ async def list_chat_sessions(
     try:
         try:
             require_client_or_trainer_actor(user, trainer_context)
-            rate_limit_ms = _rate_limit_chat(http_request, user, trainer_context)
+            rate_limit_ms = await run_in_threadpool(_rate_limit_chat, http_request, user, trainer_context)
         except Exception as exc:
             error_category = exc.__class__.__name__
             raise
 
         session_started_at = time.perf_counter()
         try:
-            return service.list_history(
+            return await run_in_threadpool(
+                service.list_history,
                 user_id=user.id,
                 trainer_context=trainer_context,
                 role=role,
