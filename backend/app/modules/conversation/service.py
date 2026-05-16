@@ -2766,24 +2766,31 @@ class ConversationService:
         stream_timing = ChatStreamTiming()
         stream_timing.set_context(trainer_context=trainer_context, conversation_id=request.conversation_id)
         stream_error_category: str | None = None
+        client_context = request.client_context if isinstance(request.client_context, dict) else {}
+        route_level_early_prefix_emitted = bool(client_context.get("route_level_early_prefix_emitted"))
+        if route_level_early_prefix_emitted:
+            stream_timing.mark_first_client_token()
         intent_started_at = time.perf_counter()
         intent_preview = self.intent_router.classify_with_fallback(request.message)
         stream_timing.record_elapsed("intent_preview_ms", intent_started_at)
         early_prefix_text = (
             DEFAULT_FAST_DEADLINE_PREFIX
-            if intent_preview.route == Route.FAST and not self._is_trainer_only_context(trainer_context)
+            if (
+                route_level_early_prefix_emitted
+                or (intent_preview.route == Route.FAST and not self._is_trainer_only_context(trainer_context))
+            )
             else ""
         )
-        early_prefix_sent = False
+        early_prefix_sent = route_level_early_prefix_emitted
         initial_status_event = status_event_for_intent(
             STATUS_READING_USER_MESSAGE,
             routed_intent=intent_preview,
             request=request,
         )
-        if early_prefix_text:
+        if early_prefix_text and not route_level_early_prefix_emitted:
             initial_status_event["flush_padding"] = DEFAULT_FAST_FLUSH_PADDING
         yield initial_status_event
-        if early_prefix_text:
+        if early_prefix_text and not route_level_early_prefix_emitted:
             early_prefix_sent = True
             stream_timing.record_phase_once(
                 "first_chunk_deadline_prefix_ms",

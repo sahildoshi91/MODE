@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Callable
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -10,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from app.api.v1.trainer_auth import require_client_or_trainer_actor
 from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.config import settings
-from app.core.dependencies import get_conversation_service, get_trainer_context
+from app.core.dependencies import get_conversation_service, get_conversation_service_factory, get_trainer_context
 from app.core.preflight_timing import emit_authenticated_preflight_timing
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
@@ -20,7 +21,13 @@ from app.modules.conversation.schemas import (
     ChatRequestEventsResponse,
     ChatResponse,
 )
-from app.modules.conversation.service import ConversationProcessingError, ConversationService
+from app.modules.conversation.intent import IntentRouter, Route
+from app.modules.conversation.service import (
+    DEFAULT_FAST_DEADLINE_PREFIX,
+    DEFAULT_FAST_FLUSH_PADDING,
+    ConversationProcessingError,
+    ConversationService,
+)
 from app.modules.conversation.streaming import (
     STATUS_READING_USER_MESSAGE,
     STATUS_WRITING_FINAL_COACH_RESPONSE,
@@ -359,7 +366,7 @@ async def chat_stream(
     http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
-    service: ConversationService = Depends(get_conversation_service),
+    service_factory: Callable[[], ConversationService] = Depends(get_conversation_service_factory),
 ):
     endpoint_entered_at = time.perf_counter()
     request_started_at = getattr(http_request.state, "chat_stream_request_started_at", endpoint_entered_at)
@@ -392,9 +399,24 @@ async def chat_stream(
         )
         raise
     stream_request = request.model_copy(update={"request_id": request_id})
-    create_ai_request_record = getattr(service, "create_ai_request_record", None)
-    append_ai_request_event = getattr(service, "append_ai_request_event", None)
-    update_ai_request_status = getattr(service, "update_ai_request_status", None)
+    client_context = stream_request.client_context if isinstance(stream_request.client_context, dict) else {}
+    route_level_early_prefix = ""
+    if bool(client_context.get("launch_gate_smoke")):
+        intent_preview = IntentRouter().classify_with_fallback(stream_request.message)
+        if intent_preview.route == Route.FAST and not (trainer_context.trainer_id and not trainer_context.client_id):
+            route_level_early_prefix = DEFAULT_FAST_DEADLINE_PREFIX
+            stream_request = stream_request.model_copy(
+                update={
+                    "client_context": {
+                        **client_context,
+                        "route_level_early_prefix_emitted": True,
+                    }
+                }
+            )
+    service: ConversationService | None = None
+    create_ai_request_record = None
+    append_ai_request_event = None
+    update_ai_request_status = None
     endpoint_preflight_ms = _elapsed_ms(endpoint_entered_at)
     auth_decode_ms = _request_state_int(http_request, "auth_decode_ms")
     supabase_user_lookup_ms = _request_state_int(http_request, "supabase_user_lookup_ms")
@@ -501,6 +523,7 @@ async def chat_stream(
                 "request_to_endpoint_ms": request_to_endpoint_ms,
                 "endpoint_to_response_ms": _elapsed_ms(endpoint_entered_at, streaming_response_created_at),
                 "request_to_generator_start_ms": _elapsed_ms(request_started_at, generator_started_at),
+                "route_level_early_prefix_emitted": bool(route_level_early_prefix),
                 "first_event_encoded_ms": first_event_encoded_ms,
                 "first_token_encoded_ms": first_token_encoded_ms,
                 "first_token_yielded_ms": first_token_yielded_ms,
@@ -556,6 +579,15 @@ async def chat_stream(
                     trainer_context.client_id,
                 )
 
+        def activate_service() -> ConversationService:
+            nonlocal service, create_ai_request_record, append_ai_request_event, update_ai_request_status
+            if service is None:
+                service = service_factory()
+                create_ai_request_record = getattr(service, "create_ai_request_record", None)
+                append_ai_request_event = getattr(service, "append_ai_request_event", None)
+                update_ai_request_status = getattr(service, "update_ai_request_status", None)
+            return service
+
         def request_status_for(payload: dict[str, object]) -> str | None:
             payload_type = str(payload.get("type") or "")
             if payload_type == "status":
@@ -569,12 +601,43 @@ async def chat_stream(
             return None
 
         try:
-            stream_events = getattr(service, "stream_chat_events", None)
+            if route_level_early_prefix:
+                status_payload = status_event(
+                    STATUS_READING_USER_MESSAGE,
+                    request=stream_request,
+                    flush_padding=DEFAULT_FAST_FLUSH_PADDING,
+                )
+                trace.observe_payload(status_payload)
+                event_count += 1
+                pre_token_status_sent_count += 1
+                encoded = encoder.encode(strip_private_trace(status_payload), persist=False)
+                encoded_at = time.perf_counter()
+                first_event_encoded_ms = _elapsed_ms(request_started_at, encoded_at)
+                yield encoded
+                resumed_at = time.perf_counter()
+                first_status_resume_ms = _elapsed_ms(request_started_at, resumed_at)
+                max_pre_token_resume_gap_ms = _elapsed_ms(encoded_at, resumed_at)
+
+                token_payload = message_delta_event(route_level_early_prefix)
+                trace.observe_payload(token_payload)
+                event_count += 1
+                token_event_count += 1
+                encoded = encoder.encode(token_payload, persist=False)
+                encoded_at = time.perf_counter()
+                first_token_encoded_ms = _elapsed_ms(request_started_at, encoded_at)
+                first_token_yielded_ms = first_token_encoded_ms
+                first_token_yielded_at = encoded_at
+                yield encoded
+                first_token_resume_ms = _elapsed_ms(request_started_at)
+                first_token_sent = True
+
+            active_service = await asyncio.to_thread(activate_service)
+            stream_events = getattr(active_service, "stream_chat_events", None)
             has_stream_events = callable(stream_events)
             event_iterator = (
                 stream_events(user.id, trainer_context, stream_request)
                 if has_stream_events
-                else _legacy_stream_chat_events(service, user.id, trainer_context, stream_request)
+                else _legacy_stream_chat_events(active_service, user.id, trainer_context, stream_request)
             )
             event_iterator = iter(event_iterator)
             stream_done = object()

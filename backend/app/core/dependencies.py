@@ -1,4 +1,5 @@
 import time
+from collections.abc import Callable
 from dataclasses import asdict
 import threading
 
@@ -558,6 +559,52 @@ def get_conversation_service(
         ai_feedback_logger_service=ai_feedback_logger_service,
         trainer_intelligence_service=trainer_intelligence_service,
     )
+
+
+def _build_conversation_service_for_request(request: Request, user: AuthenticatedUser) -> ConversationService:
+    supabase = get_request_scoped_supabase_client(request, user)
+    profile_repository = ProfileRepository(supabase)
+    profile_service = ProfileService(profile_repository, delete_repository=profile_repository)
+    atlas_repository = AtlasRepository(supabase)
+    atlas_observer_service = AtlasObserverService(atlas_repository)
+    ai_feedback_repository = AIFeedbackRepository(supabase)
+    ai_feedback_service = AIFeedbackService(
+        ai_feedback_repository,
+        atlas_observer_service=atlas_observer_service,
+    )
+    trainer_persona_repository = TrainerPersonaRepository(supabase)
+    trainer_onboarding_service = TrainerOnboardingService(
+        repository=TrainerOnboardingRepository(supabase),
+        trainer_persona_repository=trainer_persona_repository,
+    )
+    return ConversationService(
+        ConversationRepository(supabase),
+        profile_service,
+        TrainerReviewService(
+            TrainerReviewRepository(supabase),
+            ai_feedback_logger_service=ai_feedback_service,
+            atlas_observer_service=atlas_observer_service,
+        ),
+        trainer_persona_repository,
+        trainer_onboarding_service=trainer_onboarding_service,
+        ai_feedback_logger_service=ai_feedback_service,
+        trainer_intelligence_service=TrainerIntelligenceService(TrainerIntelligenceRepository(supabase)),
+    )
+
+
+def get_conversation_service_factory(
+    request: Request,
+    user: AuthenticatedUser = Depends(require_user),
+) -> Callable[[], ConversationService]:
+    service: ConversationService | None = None
+
+    def factory() -> ConversationService:
+        nonlocal service
+        if service is None:
+            service = _build_conversation_service_for_request(request, user)
+        return service
+
+    return factory
 
 
 def get_chat_session_repository(

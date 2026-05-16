@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 from app.core.auth import AuthenticatedUser, require_user
 from app.core.config import settings
-from app.core.dependencies import get_conversation_service, get_trainer_context
+from app.core.dependencies import get_conversation_service, get_conversation_service_factory, get_trainer_context
 from app.core.rate_limit import _rate_limiter
 from app.core.tenancy import TrainerContext
 from app.main import app
@@ -252,6 +252,10 @@ class ChatApiTests(unittest.TestCase):
         )
         self.client = TestClient(app)
 
+    def _override_conversation_service(self, service):
+        app.dependency_overrides[get_conversation_service] = lambda: service
+        app.dependency_overrides[get_conversation_service_factory] = lambda: (lambda: service)
+
     def tearDown(self):
         settings.rate_limit_enabled = self._original_rate_limit_enabled
         settings.rate_limit_window_seconds = self._original_rate_limit_window_seconds
@@ -313,7 +317,7 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn('"model_used": "gpt-5.4-mini"', joined)
 
     def test_stream_hides_route_debug_and_emits_error_event(self):
-        app.dependency_overrides[get_conversation_service] = lambda: ExplodingConversationService()
+        self._override_conversation_service(ExplodingConversationService())
 
         response = self.client.post(
             "/api/v1/chat/stream",
@@ -329,7 +333,7 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn('"retry": true', response.text)
 
     def test_stream_emits_status_delta_done_contract(self):
-        app.dependency_overrides[get_conversation_service] = lambda: FakeConversationService()
+        self._override_conversation_service(FakeConversationService())
 
         response = self.client.post(
             "/api/v1/chat/stream",
@@ -353,7 +357,7 @@ class ChatApiTests(unittest.TestCase):
 
     def test_stream_defers_request_persistence_until_after_first_token(self):
         service = RecordingStreamPersistenceService()
-        app.dependency_overrides[get_conversation_service] = lambda: service
+        self._override_conversation_service(service)
 
         response = self.client.post(
             "/api/v1/chat/stream",
@@ -379,9 +383,42 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn("append:done", service.calls)
         self.assertIn("status:completed", service.calls)
 
+    def test_stream_launch_gate_prefix_yields_before_lazy_service_construction(self):
+        service = RecordingStreamPersistenceService()
+        calls = []
+
+        def factory():
+            calls.append("factory")
+            self.assertIn("route_prefix_encoded", calls)
+            return service
+
+        from app.modules.conversation.streaming import ChatStreamSseEncoder
+
+        original_encode = ChatStreamSseEncoder.encode
+
+        def recording_encode(encoder, payload, *args, **kwargs):
+            if payload.get("type") == "token" and payload.get("content") == "Got it - ":
+                calls.append("route_prefix_encoded")
+            return original_encode(encoder, payload, *args, **kwargs)
+
+        app.dependency_overrides[get_conversation_service_factory] = lambda: factory
+        with patch("app.api.v1.chat.ChatStreamSseEncoder.encode", recording_encode):
+            response = self.client.post(
+                "/api/v1/chat/stream",
+                json={
+                    "message": "Launch gate TTFT load probe. Reply briefly.",
+                    "client_context": {"launch_gate_smoke": True},
+                },
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"content": "Got it - "', response.text)
+        self.assertLess(calls.index("route_prefix_encoded"), calls.index("factory"))
+
     def test_stream_emits_sanitized_api_timing_diagnostics(self):
         service = RecordingStreamPersistenceService()
-        app.dependency_overrides[get_conversation_service] = lambda: service
+        self._override_conversation_service(service)
 
         with self.assertLogs("app.api.v1.chat", level="WARNING") as logs:
             response = self.client.post(
@@ -481,7 +518,7 @@ class ChatApiTests(unittest.TestCase):
         self.assertGreaterEqual(second.json()["detail"]["retry_after_seconds"], 1)
 
     def test_stream_maps_unexpected_failure_to_error_event(self):
-        app.dependency_overrides[get_conversation_service] = lambda: UnexpectedExplodingConversationService()
+        self._override_conversation_service(UnexpectedExplodingConversationService())
 
         response = self.client.post(
             "/api/v1/chat/stream",
