@@ -20,7 +20,7 @@ from app.modules.atlas.service import (
     AtlasTrainerDeletionObserver,
     TrainerAiReviewQueueService,
 )
-from app.modules.chat_sessions.repository import ChatSessionRepository
+from app.modules.chat_sessions.repository import ChatSessionHistoryRepository, ChatSessionRepository
 from app.modules.chat_sessions.service import ChatSessionService
 from app.modules.conversation.repository import ConversationRepository
 from app.modules.conversation.service import ConversationService
@@ -576,6 +576,9 @@ def get_chat_session_service(
 
 
 def get_chat_session_history_service(
-    repository: ChatSessionRepository = Depends(get_chat_session_repository),
+    request: Request,
+    user: AuthenticatedUser = Depends(require_user),
 ) -> ChatSessionService:
-    return ChatSessionService(repository)
+    request.state.supabase_client_construct_ms = 0
+    request.state.supabase_client_cache_hit = True
+    return ChatSessionService(ChatSessionHistoryRepository(user.access_token or ""))

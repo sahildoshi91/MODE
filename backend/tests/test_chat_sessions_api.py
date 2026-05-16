@@ -231,6 +231,39 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["sessions"][0]["id"], "session-1")
 
+    def test_history_dependency_bypasses_supabase_sdk_user_client(self):
+        app.dependency_overrides.pop(get_chat_session_history_service, None)
+        calls = []
+
+        def fake_postgrest_get(table, *, access_token, params):
+            calls.append((table, access_token, params))
+            if table == "chat_sessions":
+                return [_session_payload()]
+            if table == "clients":
+                return [{"id": "client-123", "client_name": "Taylor"}]
+            return []
+
+        with (
+            patch(
+                "app.core.dependencies.get_supabase_user_client",
+                side_effect=AssertionError("history should not construct a Supabase SDK user client"),
+            ),
+            patch(
+                "app.modules.chat_sessions.repository.authenticated_postgrest_get",
+                side_effect=fake_postgrest_get,
+            ),
+        ):
+            response = self.client.get(
+                "/api/v1/chat/sessions?role=client&session_type=client_chat&limit=1",
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers.get("x-mode-supabase-client-ms"), "0")
+        self.assertEqual(response.json()["sessions"][0]["id"], "session-1")
+        self.assertEqual([call[0] for call in calls], ["chat_sessions", "clients"])
+        self.assertEqual({call[1] for call in calls}, {"token-123"})
+
     def test_today_maps_missing_chat_session_storage_to_structured_503(self):
         app.dependency_overrides[get_chat_session_service] = lambda: MissingChatSessionStorageService()
 

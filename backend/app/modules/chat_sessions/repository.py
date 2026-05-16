@@ -5,6 +5,8 @@ from typing import Any
 
 from supabase import Client
 
+from app.db.postgrest import authenticated_postgrest_get
+
 
 class ChatSessionRepository:
     _SESSIONS_TABLE = "chat_sessions"
@@ -422,6 +424,7 @@ class ChatSessionRepository:
         )
         return response.data[0] if response.data else None
 
+
     def get_checkin_by_date(self, client_id: str, session_date: date) -> dict[str, Any] | None:
         response = (
             self.supabase
@@ -482,3 +485,75 @@ class ChatSessionRepository:
             .execute()
         )
         return len(response.data or [])
+
+
+class ChatSessionHistoryRepository:
+    _SESSIONS_TABLE = "chat_sessions"
+    _CLIENTS_TABLE = "clients"
+
+    def __init__(self, access_token: str):
+        self.access_token = access_token
+
+    def list_sessions(
+        self,
+        *,
+        user_id: str,
+        trainer_id: str | None,
+        role: str,
+        session_type: str | None = None,
+        limit: int = 80,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        normalized_limit = max(1, min(int(limit), 200))
+        normalized_offset = max(0, int(offset))
+        params: list[tuple[str, str]] = [
+            ("select", "*"),
+            ("user_id", f"eq.{user_id}"),
+            ("role", f"eq.{role}"),
+            ("order", "session_date.desc,last_message_at.desc.nullslast,created_at.desc"),
+            ("limit", str(normalized_limit)),
+            ("offset", str(normalized_offset)),
+        ]
+        if trainer_id:
+            params.append(("trainer_id", f"eq.{trainer_id}"))
+        else:
+            params.append(("trainer_id", "is.null"))
+        if session_type:
+            params.append(("session_type", f"eq.{session_type}"))
+
+        rows = authenticated_postgrest_get(
+            self._SESSIONS_TABLE,
+            access_token=self.access_token,
+            params=params,
+        )
+        client_ids = sorted({str(row.get("client_id")) for row in rows if row.get("client_id")})
+        if not client_ids:
+            return rows
+        names = self.get_client_names(trainer_id=trainer_id, client_ids=client_ids)
+        return [
+            {
+                **row,
+                "client_name": names.get(str(row.get("client_id"))) if row.get("client_id") else None,
+            }
+            for row in rows
+        ]
+
+    def get_client_names(self, *, trainer_id: str | None, client_ids: list[str]) -> dict[str, str]:
+        if not client_ids:
+            return {}
+        params: list[tuple[str, str]] = [
+            ("select", "id,client_name"),
+            ("id", f"in.({','.join(client_ids)})"),
+        ]
+        if trainer_id:
+            params.append(("assigned_trainer_id", f"eq.{trainer_id}"))
+        rows = authenticated_postgrest_get(
+            self._CLIENTS_TABLE,
+            access_token=self.access_token,
+            params=params,
+        )
+        return {
+            str(row.get("id")): str(row.get("client_name") or "").strip()
+            for row in rows
+            if row.get("id")
+        }
