@@ -276,15 +276,41 @@ class TrainerContextResolutionTests(unittest.TestCase):
             client_user_id="user-cache",
         )
 
-        with patch("app.core.dependencies.resolve_trainer_context_bootstrap", return_value=(context, True)) as resolver:
-            first = get_trainer_context(request, user=user, supabase=object())
-            second = get_trainer_context(second_request, user=user, supabase=object())
+        with patch("app.core.dependencies.resolve_trainer_context_bootstrap_token", return_value=(context, True)) as resolver:
+            first = get_trainer_context(request, user=user)
+            second = get_trainer_context(second_request, user=user)
 
         self.assertEqual(first, context)
         self.assertEqual(second, context)
         self.assertEqual(resolver.call_count, 1)
         self.assertFalse(request.state.tenant_context_cache_hit)
         self.assertTrue(second_request.state.tenant_context_cache_hit)
+
+    def test_trainer_context_uses_direct_bootstrap_without_supabase_sdk_client(self):
+        clear_trainer_context_cache()
+        request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+        user = AuthenticatedUser(id="user-direct", email="direct@example.com", access_token="token-direct")
+        context = TrainerContext(
+            tenant_id="tenant-direct",
+            trainer_id="trainer-direct",
+            trainer_user_id="trainer-user-direct",
+            trainer_display_name="Coach Direct",
+            client_id="client-direct",
+            client_user_id="user-direct",
+        )
+
+        with (
+            patch("app.core.dependencies.resolve_trainer_context_bootstrap_token", return_value=(context, True)),
+            patch(
+                "app.core.dependencies.get_request_scoped_supabase_client",
+                side_effect=AssertionError("direct bootstrap should not build a Supabase SDK client"),
+            ),
+        ):
+            resolved = get_trainer_context(request, user=user)
+
+        self.assertEqual(resolved, context)
+        self.assertFalse(request.state.tenant_context_cache_hit)
+        self.assertTrue(request.state.tenant_context_rpc_used)
 
 
 class ChatRequestValidationTests(unittest.TestCase):

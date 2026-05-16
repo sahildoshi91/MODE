@@ -7,7 +7,7 @@ from supabase import Client
 
 from app.core.auth import AuthenticatedUser, require_user
 from app.core.config import settings
-from app.core.tenancy import TrainerContext, resolve_trainer_context_bootstrap
+from app.core.tenancy import TrainerContext, resolve_trainer_context_bootstrap, resolve_trainer_context_bootstrap_token
 from app.db.client import get_supabase_admin_client, get_supabase_user_client
 from app.modules.ai_feedback.repository import AIFeedbackRepository
 from app.modules.ai_feedback.service import AIFeedbackService
@@ -226,7 +226,6 @@ def get_workout_service(
 def get_trainer_context(
     request: Request,
     user: AuthenticatedUser = Depends(require_user),
-    supabase: Client = Depends(get_request_scoped_supabase_client),
 ) -> TrainerContext:
     started_at = time.perf_counter()
     cached = _get_cached_trainer_context(user.id)
@@ -276,7 +275,11 @@ def get_trainer_context(
             request.state.tenant_membership_ms = request.state.trainer_context_resolve_ms
             return shared_cached
 
-        context, rpc_used = resolve_trainer_context_bootstrap(supabase, user.id)
+        try:
+            context, rpc_used = resolve_trainer_context_bootstrap_token(user.access_token or "", user.id)
+        except Exception:
+            supabase_client = get_request_scoped_supabase_client(request, user)
+            context, rpc_used = resolve_trainer_context_bootstrap(supabase_client, user.id)
         _set_cached_trainer_context(user.id, context)
         _set_shared_cached_trainer_context(user.id, context)
         request.state.trainer_context_cache_hit = False

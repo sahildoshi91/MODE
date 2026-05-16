@@ -4,6 +4,8 @@ from typing import Any
 
 from supabase import Client
 
+from app.db.postgrest import authenticated_postgrest_rpc
+
 
 logger = logging.getLogger(__name__)
 
@@ -176,6 +178,18 @@ def resolve_trainer_context_bootstrap(supabase: Client, user_id: str) -> tuple[T
         logger.warning("chat_bootstrap_context_rpc_fallback user_id=%s", user_id, exc_info=True)
 
     return resolve_trainer_context(supabase, user_id), False
+
+
+def resolve_trainer_context_bootstrap_token(access_token: str, user_id: str) -> tuple[TrainerContext, bool]:
+    rows = authenticated_postgrest_rpc(
+        "chat_bootstrap_context",
+        access_token=access_token,
+        payload={},
+    )
+    row = rows[0] if rows else None
+    if not isinstance(row, dict):
+        raise RuntimeError("chat_bootstrap_context returned no rows")
+    return _context_from_bootstrap_row(row), True
 
 
 def resolve_trainer_context(supabase: Client, user_id: str) -> TrainerContext:

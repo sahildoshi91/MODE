@@ -66,3 +66,34 @@ def authenticated_postgrest_get(
     if isinstance(payload, dict):
         return [payload]
     return []
+
+
+def authenticated_postgrest_rpc(
+    function_name: str,
+    *,
+    access_token: str,
+    payload: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    supabase_url = _require_setting(settings.supabase_url, "SUPABASE_URL").rstrip("/")
+    anon_key = _require_setting(settings.supabase_anon_key, "SUPABASE_ANON_KEY")
+    token = str(access_token or "").strip()
+    if not token:
+        raise ValueError("Authenticated PostgREST RPC requires an access token")
+
+    response = _get_postgrest_client().post(
+        f"{supabase_url}/rest/v1/rpc/{function_name}",
+        json=payload or {},
+        headers={
+            "apikey": anon_key,
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+    )
+    response.raise_for_status()
+    data = response.json()
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+    if isinstance(data, dict):
+        return [data]
+    return []
