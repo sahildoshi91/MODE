@@ -68,6 +68,8 @@ def emit_authenticated_preflight_timing(
         "auth_get_user_ms": request_state_int(request, "auth_get_user_ms"),
         "tenant_membership_ms": tenant_membership_ms,
         "trainer_context_resolve_ms": request_state_int(request, "trainer_context_resolve_ms"),
+        "supabase_client_construct_ms": request_state_int(request, "supabase_client_construct_ms"),
+        "supabase_client_cache_hit": request_state_bool(request, "supabase_client_cache_hit"),
         "session_fetch_or_create_ms": session_fetch_or_create_ms,
         "profile_context_ms": profile_context_ms,
         "redis_rate_limit_ms": redis_rate_limit_ms,

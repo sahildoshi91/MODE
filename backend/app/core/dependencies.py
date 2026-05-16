@@ -147,8 +147,13 @@ def get_request_scoped_supabase_client(
         raise ValueError("Authenticated user is missing access token")
     cached = getattr(request.state, "supabase_user_client", None)
     if cached is not None:
+        request.state.supabase_client_construct_ms = 0
+        request.state.supabase_client_cache_hit = True
         return cached
+    started_at = time.perf_counter()
     client = get_supabase_user_client(user.access_token)
+    request.state.supabase_client_construct_ms = max(int((time.perf_counter() - started_at) * 1000), 0)
+    request.state.supabase_client_cache_hit = False
     request.state.supabase_user_client = client
     return client
 

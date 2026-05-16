@@ -260,8 +260,16 @@ async def list_chat_sessions(
             "X-Mode-Tenant-Membership-Ms",
             getattr(http_request.state, "tenant_membership_ms", None),
         )
+        _set_timing_header(
+            response,
+            "X-Mode-Supabase-Client-Ms",
+            getattr(http_request.state, "supabase_client_construct_ms", None),
+        )
         _set_timing_header(response, "X-Mode-Redis-Rate-Limit-Ms", rate_limit_ms)
         _set_timing_header(response, "X-Mode-Session-Fetch-Ms", session_fetch_or_create_ms)
+        response.headers["X-Mode-Supabase-Client-Cache-Hit"] = str(
+            bool(getattr(http_request.state, "supabase_client_cache_hit", False))
+        ).lower()
         response.headers["X-Mode-Tenant-Rpc-Used"] = str(
             bool(getattr(http_request.state, "tenant_context_rpc_used", False))
         ).lower()

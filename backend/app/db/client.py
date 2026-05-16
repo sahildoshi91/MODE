@@ -60,18 +60,24 @@ def get_supabase_user_client(access_token: str) -> Client:
             if expires_at > now:
                 return client
             _USER_CLIENT_CACHE.pop(cache_key, None)
-        client = create_client(
-            url,
-            key,
-            options=SyncClientOptions(
-                auto_refresh_token=False,
-                persist_session=False,
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                },
-            ),
-        )
-        _USER_CLIENT_CACHE[cache_key] = (now + _USER_CLIENT_TTL_SECONDS, client)
+    client = create_client(
+        url,
+        key,
+        options=SyncClientOptions(
+            auto_refresh_token=False,
+            persist_session=False,
+            headers={
+                "Authorization": f"Bearer {access_token}",
+            },
+        ),
+    )
+    with _CLIENT_CACHE_LOCK:
+        cached = _USER_CLIENT_CACHE.get(cache_key)
+        if cached is not None:
+            expires_at, cached_client = cached
+            if expires_at > now:
+                return cached_client
+        _USER_CLIENT_CACHE[cache_key] = (time.monotonic() + _USER_CLIENT_TTL_SECONDS, client)
         return client
 
 
