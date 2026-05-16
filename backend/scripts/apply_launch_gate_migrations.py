@@ -29,6 +29,7 @@ DEFAULT_SQL_FILES = (
     BACKEND_ROOT / "sql" / "20260512a_add_health_ping_rpc.sql",
     BACKEND_ROOT / "sql" / "20260514a_allow_account_deletion_intelligence_jobs.sql",
     BACKEND_ROOT / "sql" / "20260514b_grant_service_role_worker_job_tables.sql",
+    BACKEND_ROOT / "sql" / "20260515a_add_chat_bootstrap_context_rpc.sql",
 )
 
 STORAGE_LIFECYCLE_MIGRATION = "20260426h_add_storage_upload_lifecycle_and_security_catalog_rpc.sql"
@@ -82,6 +83,15 @@ def _validate_sql(path: Path, source: str) -> list[str]:
         for required in (
             "GRANT SELECT, INSERT, UPDATE ON public.intelligence_jobs TO service_role",
             "GRANT SELECT, INSERT ON public.worker_job_traces TO service_role",
+        ):
+            if required not in source:
+                failures.append(f"{path.name}: missing required SQL fragment: {required}")
+    if path.name == "20260515a_add_chat_bootstrap_context_rpc.sql":
+        for required in (
+            "CREATE OR REPLACE FUNCTION public.chat_bootstrap_context()",
+            "SECURITY INVOKER",
+            "GRANT EXECUTE ON FUNCTION public.chat_bootstrap_context() TO authenticated",
+            "GRANT EXECUTE ON FUNCTION public.chat_bootstrap_context() TO service_role",
         ):
             if required not in source:
                 failures.append(f"{path.name}: missing required SQL fragment: {required}")

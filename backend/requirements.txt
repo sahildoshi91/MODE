@@ -6,5 +6,6 @@ anthropic
 google-genai
 pydantic
 pydantic-settings
+PyJWT[crypto]
 redis
 rq

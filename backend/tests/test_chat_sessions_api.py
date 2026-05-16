@@ -84,6 +84,7 @@ class FakeChatSessionApiService:
 
     def prepare_stream(self, **kwargs):
         del kwargs
+        self.event_order.append("prepare_stream")
 
         def chunks():
             yield "Good "
@@ -162,6 +163,28 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["sessions"][0]["id"], "session-1")
 
+    def test_history_emits_authenticated_preflight_timing(self):
+        with self.assertLogs("app.api.v1.chat_sessions", level="WARNING") as logs:
+            response = self.client.get(
+                "/api/v1/chat/sessions?role=client&session_type=client_chat&limit=1",
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        timing_lines = [line for line in logs.output if '"event": "authenticated_preflight_timing"' in line]
+        self.assertEqual(len(timing_lines), 1)
+        import json
+
+        payload = json.loads(timing_lines[0].split(":", 2)[2])
+        self.assertEqual(payload["endpoint"], "/api/v1/chat/sessions")
+        self.assertEqual(payload["tenant_id"], "tenant-123")
+        self.assertEqual(payload["trainer_id"], "trainer-123")
+        self.assertEqual(payload["client_id"], "client-123")
+        self.assertIsInstance(payload["redis_rate_limit_ms"], int)
+        self.assertIsInstance(payload["session_fetch_or_create_ms"], int)
+        self.assertIsInstance(payload["total_preflight_ms"], int)
+        self.assertIsNone(payload["error_category"])
+
     def test_history_endpoint_accepts_trailing_slash(self):
         response = self.client.get(
             "/api/v1/chat/sessions/?role=client&session_type=client_chat&limit=1",
@@ -223,6 +246,32 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertEqual(fake_service.post_stream_side_effects[0]["conversation_id"], "conversation-1")
         self.assertEqual(fake_service.post_stream_side_effects[0]["request"].message, "Reach step goal")
         self.assertEqual(fake_service.event_order[-2:], ["done_encoded", "post_stream_side_effects"])
+
+    def test_message_stream_yields_first_status_before_context_loading(self):
+        fake_service = FakeChatSessionApiService()
+        app.dependency_overrides[get_chat_session_service] = lambda: fake_service
+
+        from app.modules.conversation.streaming import ChatStreamSseEncoder
+
+        original_encode = ChatStreamSseEncoder.encode
+
+        def recording_encode(encoder, payload, *args, **kwargs):
+            if str(payload.get("type") or "") == "status" and "first_status_encoded" not in fake_service.event_order:
+                fake_service.event_order.append("first_status_encoded")
+            return original_encode(encoder, payload, *args, **kwargs)
+
+        with patch("app.api.v1.chat_sessions.ChatStreamSseEncoder.encode", recording_encode):
+            response = self.client.post(
+                "/api/v1/chat/sessions/session-1/messages/stream",
+                json={"message": "Reach step goal"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertLess(
+            fake_service.event_order.index("first_status_encoded"),
+            fake_service.event_order.index("prepare_stream"),
+        )
 
     def test_message_stream_uses_intent_status_copy(self):
         fake_service = FakeChatSessionApiService()

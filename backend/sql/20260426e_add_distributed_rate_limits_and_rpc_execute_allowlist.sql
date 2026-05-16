@@ -133,6 +133,7 @@ DECLARE
     'auth_can_view_trainer',
     'auth_is_tenant_member',
     'auth_can_access_conversation',
+    'chat_bootstrap_context',
     'trainer_coach_approve_output'
   ];
   service_role_only_allowlist TEXT[] := ARRAY[

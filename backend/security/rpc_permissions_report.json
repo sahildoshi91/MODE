@@ -7,10 +7,11 @@
     "auth_is_client_user",
     "auth_is_tenant_member",
     "auth_is_trainer_user",
+    "chat_bootstrap_context",
     "trainer_coach_approve_output"
   ],
   "dangerous_grant_findings": [],
-  "functions_discovered_count": 16,
+  "functions_discovered_count": 17,
   "ok": true,
   "public_anon_allowlist": [
     "mode_health_ping"
@@ -88,6 +89,14 @@
       "category": "privileged_service_only",
       "function_name": "bootstrap_trainer_tenant",
       "grants_to": [
+        "service_role"
+      ]
+    },
+    {
+      "category": "safe_allowlist",
+      "function_name": "chat_bootstrap_context",
+      "grants_to": [
+        "authenticated",
         "service_role"
       ]
     },

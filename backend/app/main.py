@@ -40,8 +40,11 @@ app.add_middleware(
 
 @app.middleware("http")
 async def capture_chat_stream_request_start(request: Request, call_next):
-    if request.url.path == "/api/v1/chat/stream":
-        request.state.chat_stream_request_started_at = time.perf_counter()
+    if request.url.path == "/api/v1/chat/stream" or request.url.path.startswith("/api/v1/chat/sessions"):
+        request_started_at = time.perf_counter()
+        request.state.authenticated_preflight_request_started_at = request_started_at
+        if request.url.path == "/api/v1/chat/stream":
+            request.state.chat_stream_request_started_at = request_started_at
     return await call_next(request)
 
 app.include_router(workout_router, prefix="/workouts", tags=["workouts"])

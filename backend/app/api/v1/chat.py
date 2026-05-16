@@ -11,6 +11,7 @@ from app.api.v1.trainer_auth import require_client_or_trainer_actor
 from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.config import settings
 from app.core.dependencies import get_conversation_service, get_trainer_context
+from app.core.preflight_timing import emit_authenticated_preflight_timing
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
 from app.modules.conversation.schemas import (
@@ -362,29 +363,59 @@ async def chat_stream(
 ):
     endpoint_entered_at = time.perf_counter()
     request_started_at = getattr(http_request.state, "chat_stream_request_started_at", endpoint_entered_at)
-    require_client_or_trainer_actor(user, trainer_context)
-    rate_limit_started_at = time.perf_counter()
-    enforce_rate_limit(
-        group="chat",
-        user=user,
-        request=http_request,
-        context={
-            "tenant_id": trainer_context.tenant_id,
-            "trainer_id": trainer_context.trainer_id,
-            "client_id": trainer_context.client_id,
-        },
-    )
-    rate_limit_ms = _elapsed_ms(rate_limit_started_at)
     request_id = str(request.request_id) if request.request_id else str(uuid4())
+    rate_limit_ms: int | None = None
+    try:
+        require_client_or_trainer_actor(user, trainer_context)
+        rate_limit_started_at = time.perf_counter()
+        enforce_rate_limit(
+            group="chat",
+            user=user,
+            request=http_request,
+            context={
+                "tenant_id": trainer_context.tenant_id,
+                "trainer_id": trainer_context.trainer_id,
+                "client_id": trainer_context.client_id,
+            },
+        )
+        rate_limit_ms = _elapsed_ms(rate_limit_started_at)
+    except Exception as exc:
+        emit_authenticated_preflight_timing(
+            logger,
+            request=http_request,
+            endpoint="/api/v1/chat/stream",
+            request_id=request_id,
+            trainer_context=trainer_context,
+            redis_rate_limit_ms=rate_limit_ms,
+            total_preflight_ms=_elapsed_ms(request_started_at),
+            error_category=exc.__class__.__name__,
+        )
+        raise
     stream_request = request.model_copy(update={"request_id": request_id})
     create_ai_request_record = getattr(service, "create_ai_request_record", None)
     append_ai_request_event = getattr(service, "append_ai_request_event", None)
     update_ai_request_status = getattr(service, "update_ai_request_status", None)
     endpoint_preflight_ms = _elapsed_ms(endpoint_entered_at)
+    auth_decode_ms = _request_state_int(http_request, "auth_decode_ms")
+    supabase_user_lookup_ms = _request_state_int(http_request, "supabase_user_lookup_ms")
     auth_get_user_ms = _request_state_int(http_request, "auth_get_user_ms")
     auth_cache_hit = bool(getattr(http_request.state, "auth_cache_hit", False))
+    auth_shared_cache_hit = bool(getattr(http_request.state, "auth_shared_cache_hit", False))
+    auth_local_jwt = bool(getattr(http_request.state, "auth_local_jwt", False))
     trainer_context_resolve_ms = _request_state_int(http_request, "trainer_context_resolve_ms")
     trainer_context_cache_hit = bool(getattr(http_request.state, "trainer_context_cache_hit", False))
+    tenant_membership_ms = _request_state_int(http_request, "tenant_membership_ms")
+    tenant_context_rpc_used = bool(getattr(http_request.state, "tenant_context_rpc_used", False))
+    tenant_context_shared_cache_hit = bool(getattr(http_request.state, "tenant_context_shared_cache_hit", False))
+    emit_authenticated_preflight_timing(
+        logger,
+        request=http_request,
+        endpoint="/api/v1/chat/stream",
+        request_id=request_id,
+        trainer_context=trainer_context,
+        redis_rate_limit_ms=rate_limit_ms,
+        total_preflight_ms=_elapsed_ms(request_started_at),
+    )
 
     async def event_stream():
         nonlocal request_id
@@ -433,8 +464,11 @@ async def chat_stream(
 
         def emit_api_timing() -> None:
             request_to_endpoint_ms = _elapsed_ms(request_started_at, endpoint_entered_at)
+            auth_timing_values = [value for value in (auth_decode_ms, supabase_user_lookup_ms) if value is not None]
+            if not auth_timing_values and auth_get_user_ms is not None:
+                auth_timing_values.append(auth_get_user_ms)
             attributed_pre_endpoint_ms = sum(
-                value for value in (auth_get_user_ms, trainer_context_resolve_ms) if value is not None
+                value for value in (*auth_timing_values, trainer_context_resolve_ms) if value is not None
             )
             timing_payload = {
                 "event": "chat_stream_api_timing",
@@ -447,10 +481,17 @@ async def chat_stream(
                 "provider": provider_name,
                 "model": model_name,
                 "fallback_used": fallback_used,
+                "auth_decode_ms": auth_decode_ms,
+                "supabase_user_lookup_ms": supabase_user_lookup_ms,
                 "auth_get_user_ms": auth_get_user_ms,
                 "auth_cache_hit": auth_cache_hit,
+                "auth_shared_cache_hit": auth_shared_cache_hit,
+                "auth_local_jwt": auth_local_jwt,
+                "tenant_membership_ms": tenant_membership_ms,
                 "trainer_context_resolve_ms": trainer_context_resolve_ms,
                 "trainer_context_cache_hit": trainer_context_cache_hit,
+                "tenant_context_shared_cache_hit": tenant_context_shared_cache_hit,
+                "tenant_context_rpc_used": tenant_context_rpc_used,
                 "rate_limit_ms": rate_limit_ms,
                 "endpoint_preflight_ms": endpoint_preflight_ms,
                 "request_to_endpoint_unattributed_ms": max(

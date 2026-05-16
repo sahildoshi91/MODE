@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -9,7 +10,11 @@ os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
-from app.core.tenancy import resolve_trainer_context
+from starlette.requests import Request
+
+from app.core.auth import AuthenticatedUser
+from app.core.dependencies import clear_trainer_context_cache, get_trainer_context
+from app.core.tenancy import TrainerContext, resolve_trainer_context, resolve_trainer_context_bootstrap
 from app.modules.conversation.schemas import ChatRequest
 
 
@@ -53,7 +58,29 @@ class FakeSupabase:
         return FakeQuery(table_name, self.tables)
 
 
+class FakeRpcCall:
+    def __init__(self, response):
+        self.response = response
+
+    def execute(self):
+        return self.response
+
+
+class FakeRpcSupabase:
+    def __init__(self, row):
+        self.row = row
+        self.rpc_calls = 0
+
+    def rpc(self, name, params):
+        self.rpc_calls += 1
+        self.last_rpc = (name, params)
+        return FakeRpcCall(FakeResponse([self.row]))
+
+
 class TrainerContextResolutionTests(unittest.TestCase):
+    def tearDown(self):
+        clear_trainer_context_cache()
+
     def test_resolve_trainer_context_for_trainer_user(self):
         supabase = FakeSupabase(
             {
@@ -204,6 +231,60 @@ class TrainerContextResolutionTests(unittest.TestCase):
 
         self.assertEqual(trainer_context.client_id, "client-attached")
         self.assertEqual(trainer_context.trainer_id, "trainer-777")
+
+    def test_bootstrap_rpc_resolves_context_in_one_call(self):
+        supabase = FakeRpcSupabase(
+            {
+                "tenant_id": "tenant-rpc",
+                "trainer_id": "trainer-rpc",
+                "trainer_user_id": "trainer-user-rpc",
+                "trainer_display_name": "Coach RPC",
+                "client_id": "client-rpc",
+                "client_user_id": "client-user-rpc",
+                "persona_id": "persona-rpc",
+                "persona_name": "Launch Coach",
+                "trainer_onboarding_completed": True,
+                "trainer_onboarding_status": "completed",
+                "trainer_onboarding_completed_steps": 8,
+                "trainer_onboarding_total_steps": 8,
+                "trainer_onboarding_last_step": "launch",
+            }
+        )
+
+        trainer_context, rpc_used = resolve_trainer_context_bootstrap(supabase, "client-user-rpc")
+
+        self.assertTrue(rpc_used)
+        self.assertEqual(supabase.rpc_calls, 1)
+        self.assertEqual(supabase.last_rpc, ("chat_bootstrap_context", {}))
+        self.assertEqual(trainer_context.tenant_id, "tenant-rpc")
+        self.assertEqual(trainer_context.trainer_id, "trainer-rpc")
+        self.assertEqual(trainer_context.client_id, "client-rpc")
+        self.assertEqual(trainer_context.persona_id, "persona-rpc")
+        self.assertTrue(trainer_context.trainer_onboarding_completed)
+
+    def test_trainer_context_cache_avoids_repeated_bootstrap_resolution(self):
+        clear_trainer_context_cache()
+        request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+        second_request = Request({"type": "http", "method": "GET", "path": "/", "headers": []})
+        user = AuthenticatedUser(id="user-cache", email="cache@example.com", access_token="token-cache")
+        context = TrainerContext(
+            tenant_id="tenant-cache",
+            trainer_id="trainer-cache",
+            trainer_user_id="trainer-user-cache",
+            trainer_display_name="Coach Cache",
+            client_id="client-cache",
+            client_user_id="user-cache",
+        )
+
+        with patch("app.core.dependencies.resolve_trainer_context_bootstrap", return_value=(context, True)) as resolver:
+            first = get_trainer_context(request, user=user, supabase=object())
+            second = get_trainer_context(second_request, user=user, supabase=object())
+
+        self.assertEqual(first, context)
+        self.assertEqual(second, context)
+        self.assertEqual(resolver.call_count, 1)
+        self.assertFalse(request.state.tenant_context_cache_hit)
+        self.assertTrue(second_request.state.tenant_context_cache_hit)
 
 
 class ChatRequestValidationTests(unittest.TestCase):

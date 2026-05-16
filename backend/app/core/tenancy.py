@@ -1,7 +1,11 @@
 from dataclasses import dataclass
+import logging
 from typing import Any
 
 from supabase import Client
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -122,6 +126,56 @@ def _pick_preferred_client_record(rows: list[dict[str, Any]]) -> dict[str, Any] 
     if assigned_rows:
         return sorted(assigned_rows, key=_sort_key, reverse=True)[0]
     return sorted(rows, key=_sort_key, reverse=True)[0]
+
+
+def _coerce_optional_text(value: Any) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _coerce_bool(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
+
+
+def _context_from_bootstrap_row(row: dict[str, Any]) -> TrainerContext:
+    return TrainerContext(
+        tenant_id=_coerce_optional_text(row.get("tenant_id")),
+        trainer_id=_coerce_optional_text(row.get("trainer_id")),
+        trainer_user_id=_coerce_optional_text(row.get("trainer_user_id")),
+        trainer_display_name=_coerce_optional_text(row.get("trainer_display_name")),
+        client_id=_coerce_optional_text(row.get("client_id")),
+        client_user_id=_coerce_optional_text(row.get("client_user_id")),
+        persona_id=_coerce_optional_text(row.get("persona_id")),
+        persona_name=_coerce_optional_text(row.get("persona_name")),
+        trainer_onboarding_completed=_coerce_bool(row.get("trainer_onboarding_completed")),
+        trainer_onboarding_status=_coerce_optional_text(row.get("trainer_onboarding_status")) or "not_started",
+        trainer_onboarding_completed_steps=_coerce_int(row.get("trainer_onboarding_completed_steps"), 0),
+        trainer_onboarding_total_steps=max(1, _coerce_int(row.get("trainer_onboarding_total_steps"), 8)),
+        trainer_onboarding_last_step=_coerce_optional_text(row.get("trainer_onboarding_last_step")),
+    )
+
+
+def resolve_trainer_context_bootstrap(supabase: Client, user_id: str) -> tuple[TrainerContext, bool]:
+    try:
+        response = supabase.rpc("chat_bootstrap_context", {}).execute()
+        data = response.data
+        row = data[0] if isinstance(data, list) and data else data if isinstance(data, dict) else None
+        if isinstance(row, dict):
+            return _context_from_bootstrap_row(row), True
+    except Exception:
+        logger.warning("chat_bootstrap_context_rpc_fallback user_id=%s", user_id, exc_info=True)
+
+    return resolve_trainer_context(supabase, user_id), False
 
 
 def resolve_trainer_context(supabase: Client, user_id: str) -> TrainerContext:

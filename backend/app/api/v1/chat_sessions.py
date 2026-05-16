@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -11,6 +12,7 @@ from app.api.v1.trainer_auth import require_client_or_trainer_actor
 from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.config import settings
 from app.core.dependencies import get_chat_session_service, get_trainer_context
+from app.core.preflight_timing import elapsed_ms, emit_authenticated_preflight_timing
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
 from app.modules.chat_sessions.schemas import (
@@ -57,7 +59,8 @@ CHAT_SESSION_STORAGE_OBJECTS = {
 }
 
 
-def _rate_limit_chat(http_request: Request, user: AuthenticatedUser, trainer_context: TrainerContext) -> None:
+def _rate_limit_chat(http_request: Request, user: AuthenticatedUser, trainer_context: TrainerContext) -> int:
+    started_at = time.perf_counter()
     enforce_rate_limit(
         group="chat",
         user=user,
@@ -68,6 +71,7 @@ def _rate_limit_chat(http_request: Request, user: AuthenticatedUser, trainer_con
             "client_id": trainer_context.client_id,
         },
     )
+    return elapsed_ms(started_at)
 
 
 def _raise_session_value_error(exc: ValueError) -> None:
@@ -180,20 +184,39 @@ async def list_chat_sessions(
     trainer_context: TrainerContext = Depends(get_trainer_context),
     service: ChatSessionService = Depends(get_chat_session_service),
 ):
-    require_client_or_trainer_actor(user, trainer_context)
-    _rate_limit_chat(http_request, user, trainer_context)
+    endpoint_entered_at = time.perf_counter()
+    request_id = str(uuid4())
+    rate_limit_ms: int | None = None
+    session_fetch_or_create_ms: int | None = None
+    error_category: str | None = None
     try:
-        return service.list_history(
-            user_id=user.id,
-            trainer_context=trainer_context,
-            role=role,
-            session_type=session_type,
-            limit=limit,
-            offset=offset,
-        )
+        try:
+            require_client_or_trainer_actor(user, trainer_context)
+            rate_limit_ms = _rate_limit_chat(http_request, user, trainer_context)
+        except Exception as exc:
+            error_category = exc.__class__.__name__
+            raise
+
+        session_started_at = time.perf_counter()
+        try:
+            return service.list_history(
+                user_id=user.id,
+                trainer_context=trainer_context,
+                role=role,
+                session_type=session_type,
+                limit=limit,
+                offset=offset,
+            )
+        finally:
+            session_fetch_or_create_ms = elapsed_ms(session_started_at)
+    except HTTPException as exc:
+        error_category = exc.__class__.__name__
+        raise
     except ValueError as exc:
+        error_category = exc.__class__.__name__
         _raise_session_value_error(exc)
     except Exception as exc:
+        error_category = exc.__class__.__name__
         _raise_unexpected_chat_session_error(
             exc,
             log_message=(
@@ -202,6 +225,20 @@ async def list_chat_sessions(
             user_id=user.id,
             trainer_id=trainer_context.trainer_id,
             client_id=trainer_context.client_id,
+        )
+    finally:
+        emit_authenticated_preflight_timing(
+            logger,
+            request=http_request,
+            endpoint="/api/v1/chat/sessions",
+            request_id=request_id,
+            trainer_context=trainer_context,
+            redis_rate_limit_ms=rate_limit_ms,
+            session_fetch_or_create_ms=session_fetch_or_create_ms,
+            total_preflight_ms=elapsed_ms(
+                getattr(http_request.state, "authenticated_preflight_request_started_at", endpoint_entered_at)
+            ),
+            error_category=error_category,
         )
 
 

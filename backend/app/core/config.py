@@ -23,6 +23,9 @@ class Settings(BaseSettings):
         "vector_indexes,embedding_stores,logs,notification_providers,email_providers,ai_memory_retrieval_systems"
     )
     auth_password_proxy_enabled: bool = True
+    auth_local_jwt_verify_enabled: bool = True
+    auth_context_cache_ttl_seconds: int = Field(default=120, ge=1, le=120)
+    tenant_context_cache_ttl_seconds: int = Field(default=90, ge=1, le=120)
     openai_api_key: str | None = None
     gemini_api_key: str | None = None
     anthropic_api_key: str | None = None

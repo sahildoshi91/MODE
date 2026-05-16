@@ -1,11 +1,13 @@
 import time
 from dataclasses import asdict
+import threading
 
 from fastapi import Depends, Request
 from supabase import Client
 
 from app.core.auth import AuthenticatedUser, require_user
-from app.core.tenancy import TrainerContext, resolve_trainer_context
+from app.core.config import settings
+from app.core.tenancy import TrainerContext, resolve_trainer_context_bootstrap
 from app.db.client import get_supabase_admin_client, get_supabase_user_client
 from app.modules.ai_feedback.repository import AIFeedbackRepository
 from app.modules.ai_feedback.service import AIFeedbackService
@@ -57,8 +59,19 @@ from app.modules.trainer_settings.service import TrainerSettingsService
 from app.modules.workout.repository import WorkoutRepository
 from app.modules.workout.service import WorkoutService
 
-_TRAINER_CONTEXT_CACHE_TTL_SECONDS = 60
 _trainer_context_cache: dict[str, tuple[float, TrainerContext]] = {}
+_trainer_context_locks: dict[str, threading.Lock] = {}
+_trainer_context_locks_guard = threading.Lock()
+
+
+def clear_trainer_context_cache() -> None:
+    _trainer_context_cache.clear()
+    with _trainer_context_locks_guard:
+        _trainer_context_locks.clear()
+
+
+def _trainer_context_cache_ttl_seconds() -> int:
+    return max(1, min(int(settings.tenant_context_cache_ttl_seconds), 120))
 
 
 def _get_cached_trainer_context(user_id: str) -> TrainerContext | None:
@@ -74,13 +87,22 @@ def _get_cached_trainer_context(user_id: str) -> TrainerContext | None:
 
 def _set_cached_trainer_context(user_id: str, context: TrainerContext) -> None:
     _trainer_context_cache[user_id] = (
-        time.monotonic() + _TRAINER_CONTEXT_CACHE_TTL_SECONDS,
+        time.monotonic() + _trainer_context_cache_ttl_seconds(),
         context,
     )
 
 
 def _trainer_context_shared_cache_key(user_id: str) -> str:
-    return f"mode:trainer_context:{user_id}"
+    return f"mode:tenant_context:{user_id}"
+
+
+def _get_trainer_context_lock(user_id: str) -> threading.Lock:
+    with _trainer_context_locks_guard:
+        lock = _trainer_context_locks.get(user_id)
+        if lock is None:
+            lock = threading.Lock()
+            _trainer_context_locks[user_id] = lock
+        return lock
 
 
 def _coerce_cached_trainer_context(payload: object) -> TrainerContext | None:
@@ -111,18 +133,24 @@ def _set_shared_cached_trainer_context(user_id: str, context: TrainerContext) ->
         get_chat_cache().set_json(
             _trainer_context_shared_cache_key(user_id),
             asdict(context),
-            _TRAINER_CONTEXT_CACHE_TTL_SECONDS,
+            _trainer_context_cache_ttl_seconds(),
         )
     except Exception:
         return
 
 
 def get_request_scoped_supabase_client(
+    request: Request,
     user: AuthenticatedUser = Depends(require_user),
 ) -> Client:
     if not user.access_token:
         raise ValueError("Authenticated user is missing access token")
-    return get_supabase_user_client(user.access_token)
+    cached = getattr(request.state, "supabase_user_client", None)
+    if cached is not None:
+        return cached
+    client = get_supabase_user_client(user.access_token)
+    request.state.supabase_user_client = client
+    return client
 
 
 def get_internal_atlas_repository() -> AtlasRepository:
@@ -199,20 +227,60 @@ def get_trainer_context(
     cached = _get_cached_trainer_context(user.id)
     if cached is not None:
         request.state.trainer_context_cache_hit = True
+        request.state.tenant_context_cache_hit = True
+        request.state.tenant_context_shared_cache_hit = False
+        request.state.tenant_context_rpc_used = False
         request.state.trainer_context_resolve_ms = max(int((time.perf_counter() - started_at) * 1000), 0)
+        request.state.tenant_membership_ms = request.state.trainer_context_resolve_ms
         return cached
     shared_cached = _get_shared_cached_trainer_context(user.id)
     if shared_cached is not None:
         _set_cached_trainer_context(user.id, shared_cached)
         request.state.trainer_context_cache_hit = True
+        request.state.tenant_context_cache_hit = True
+        request.state.tenant_context_shared_cache_hit = True
+        request.state.tenant_context_rpc_used = False
         request.state.trainer_context_resolve_ms = max(int((time.perf_counter() - started_at) * 1000), 0)
+        request.state.tenant_membership_ms = request.state.trainer_context_resolve_ms
         return shared_cached
-    context = resolve_trainer_context(supabase, user.id)
-    _set_cached_trainer_context(user.id, context)
-    _set_shared_cached_trainer_context(user.id, context)
-    request.state.trainer_context_cache_hit = False
-    request.state.trainer_context_resolve_ms = max(int((time.perf_counter() - started_at) * 1000), 0)
-    return context
+
+    lock = _get_trainer_context_lock(user.id)
+    wait_started_at = time.perf_counter()
+    with lock:
+        request.state.tenant_context_singleflight_wait_ms = max(
+            int((time.perf_counter() - wait_started_at) * 1000),
+            0,
+        )
+        cached = _get_cached_trainer_context(user.id)
+        if cached is not None:
+            request.state.trainer_context_cache_hit = True
+            request.state.tenant_context_cache_hit = True
+            request.state.tenant_context_shared_cache_hit = False
+            request.state.tenant_context_rpc_used = False
+            request.state.trainer_context_resolve_ms = max(int((time.perf_counter() - started_at) * 1000), 0)
+            request.state.tenant_membership_ms = request.state.trainer_context_resolve_ms
+            return cached
+        shared_cached = _get_shared_cached_trainer_context(user.id)
+        if shared_cached is not None:
+            _set_cached_trainer_context(user.id, shared_cached)
+            request.state.trainer_context_cache_hit = True
+            request.state.tenant_context_cache_hit = True
+            request.state.tenant_context_shared_cache_hit = True
+            request.state.tenant_context_rpc_used = False
+            request.state.trainer_context_resolve_ms = max(int((time.perf_counter() - started_at) * 1000), 0)
+            request.state.tenant_membership_ms = request.state.trainer_context_resolve_ms
+            return shared_cached
+
+        context, rpc_used = resolve_trainer_context_bootstrap(supabase, user.id)
+        _set_cached_trainer_context(user.id, context)
+        _set_shared_cached_trainer_context(user.id, context)
+        request.state.trainer_context_cache_hit = False
+        request.state.tenant_context_cache_hit = False
+        request.state.tenant_context_shared_cache_hit = False
+        request.state.tenant_context_rpc_used = bool(rpc_used)
+        request.state.trainer_context_resolve_ms = max(int((time.perf_counter() - started_at) * 1000), 0)
+        request.state.tenant_membership_ms = request.state.trainer_context_resolve_ms
+        return context
 
 
 def get_profile_repository(
