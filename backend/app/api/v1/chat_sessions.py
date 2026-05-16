@@ -13,7 +13,7 @@ from app.api.v1.chat import CONTROLLED_CHAT_ERROR_DETAIL
 from app.api.v1.trainer_auth import require_client_or_trainer_actor
 from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.config import settings
-from app.core.dependencies import get_chat_session_service, get_trainer_context
+from app.core.dependencies import get_chat_session_history_service, get_chat_session_service, get_trainer_context
 from app.core.preflight_timing import elapsed_ms, emit_authenticated_preflight_timing
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
@@ -195,7 +195,7 @@ async def list_chat_sessions(
     offset: int = Query(default=0, ge=0),
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
-    service: ChatSessionService = Depends(get_chat_session_service),
+    service: ChatSessionService = Depends(get_chat_session_history_service),
 ):
     endpoint_entered_at = time.perf_counter()
     request_id = str(uuid4())

@@ -13,7 +13,7 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from app.core.auth import AuthenticatedUser, require_user
-from app.core.dependencies import get_chat_session_service, get_trainer_context
+from app.core.dependencies import get_chat_session_history_service, get_chat_session_service, get_trainer_context
 from app.core.tenancy import TrainerContext
 from app.main import app
 from app.modules.conversation.intent import IntentRouter
@@ -149,6 +149,7 @@ class ChatSessionsApiTests(unittest.TestCase):
             client_user_id="user-123",
         )
         app.dependency_overrides[get_chat_session_service] = lambda: FakeChatSessionApiService()
+        app.dependency_overrides[get_chat_session_history_service] = lambda: FakeChatSessionApiService()
         self.client = TestClient(app, raise_server_exceptions=False)
 
     def tearDown(self):
@@ -210,6 +211,20 @@ class ChatSessionsApiTests(unittest.TestCase):
     def test_history_endpoint_accepts_trailing_slash(self):
         response = self.client.get(
             "/api/v1/chat/sessions/?role=client&session_type=client_chat&limit=1",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["sessions"][0]["id"], "session-1")
+
+    def test_history_uses_lightweight_session_service(self):
+        app.dependency_overrides[get_chat_session_service] = lambda: (_ for _ in ()).throw(
+            AssertionError("full chat session service should not be built for history")
+        )
+        app.dependency_overrides[get_chat_session_history_service] = lambda: FakeChatSessionApiService()
+
+        response = self.client.get(
+            "/api/v1/chat/sessions?role=client&session_type=client_chat&limit=1",
             headers={"Authorization": "Bearer ignored-by-override"},
         )
 

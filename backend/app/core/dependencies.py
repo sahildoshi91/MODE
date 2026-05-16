@@ -568,3 +568,9 @@ def get_chat_session_service(
         conversation_service=conversation_service,
         trainer_home_service=trainer_home_service,
     )
+
+
+def get_chat_session_history_service(
+    repository: ChatSessionRepository = Depends(get_chat_session_repository),
+) -> ChatSessionService:
+    return ChatSessionService(repository)
