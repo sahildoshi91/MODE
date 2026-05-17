@@ -323,6 +323,7 @@ class ChatStreamTiming:
             "provider_iteration_to_text_ms": self.phase_timings.get("provider_iteration_to_text_ms"),
             "provider_stream_cutoff_ms": self.phase_timings.get("provider_stream_cutoff_ms"),
             "launch_gate_smoke": bool(self.phase_timings.get("launch_gate_smoke", 0)),
+            "launch_gate_persistence_skipped": bool(self.phase_timings.get("launch_gate_persistence_skipped", 0)),
             "first_chunk_deadline_prefix_ms": self.phase_timings.get("first_chunk_deadline_prefix_ms"),
             "first_chunk_validation_ms": self.phase_timings.get("first_chunk_validation_ms"),
             "first_safe_chunk_ready_ms": self.phase_timings.get("first_safe_chunk_ready_ms"),
@@ -2958,14 +2959,15 @@ class ConversationService:
             if settings.expose_route_debug and route_debug is not None:
                 done_payload["route_debug"] = route_debug.model_dump()
             yield done_event(**done_payload)
-            self._enqueue_post_chat_jobs_safely(
-                trainer_context=trainer_context,
-                request=request,
-                conversation_id=conversation_id,
-                route=None,
-                assistant_message=None,
-                user_message_id=None,
-            )
+            if not bool(client_context.get("launch_gate_smoke")):
+                self._enqueue_post_chat_jobs_safely(
+                    trainer_context=trainer_context,
+                    request=request,
+                    conversation_id=conversation_id,
+                    route=None,
+                    assistant_message=None,
+                    user_message_id=None,
+                )
         except ValueError:
             stream_error_category = "value_error"
             raise
@@ -3376,6 +3378,9 @@ class ConversationService:
                         conversation_id=conversation["id"],
                         orchestration_metadata=prompt.orchestration_metadata,
                     )
+                    if launch_gate_smoke:
+                        timing.record_phase("launch_gate_persistence_skipped", 1)
+                        return
 
                     completion = TextCompletion(
                         text=assistant_message,
@@ -3495,6 +3500,9 @@ class ConversationService:
                         conversation_id=conversation["id"],
                         orchestration_metadata=prompt.orchestration_metadata,
                     )
+                    if launch_gate_smoke:
+                        timing.record_phase("launch_gate_persistence_skipped", 1)
+                        return
 
                     completion = TextCompletion(
                         text=assistant_message,
@@ -3710,6 +3718,9 @@ class ConversationService:
                     conversation_id=conversation["id"],
                     orchestration_metadata=prompt.orchestration_metadata,
                 )
+                if launch_gate_smoke:
+                    timing.record_phase("launch_gate_persistence_skipped", 1)
+                    return
 
                 completion = TextCompletion(
                     text=assistant_message,

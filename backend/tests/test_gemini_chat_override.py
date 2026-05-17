@@ -726,9 +726,11 @@ class ConversationServiceRoutingTests(unittest.TestCase):
 
         self.assertEqual(token_contents, [DEFAULT_FAST_DEADLINE_PREFIX, "GPT "])
         self.assertEqual(done_event["assistant_message"], "Got it - GPT")
-        self.assertEqual(self.repository.saved_messages[-1]["message_text"], "Got it - GPT")
+        self.assertIsNone(done_event["conversation_usage"])
+        self.assertEqual(self.repository.saved_messages, [])
         self.assertTrue(timing_payload["launch_gate_smoke"])
         self.assertIsInstance(timing_payload["provider_stream_cutoff_ms"], int)
+        self.assertTrue(timing_payload["launch_gate_persistence_skipped"])
 
     def test_handle_chat_succeeds_when_usage_analytics_are_unavailable(self):
         repository = BrokenUsageConversationRepository()
