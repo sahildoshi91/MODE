@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     chat_stream_legacy_alias_enabled: bool = True
     chat_staging_openai_only: bool = False
     use_fake_provider: bool = False
-    max_active_chat_streams_per_instance: int = Field(default=50, ge=1, le=500)
+    max_active_chat_streams_per_instance: int = Field(default=15, ge=1, le=500)
     atlas_enabled: bool = True
     atlas_background_learning_enabled: bool = True
     atlas_review_required: bool = True

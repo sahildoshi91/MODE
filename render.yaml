@@ -33,7 +33,7 @@ services:
       - key: USE_FAKE_PROVIDER
         value: "false"
       - key: MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE
-        value: "50"
+        value: "15"
       - key: REDIS_URL
         sync: false
       - key: SUPABASE_URL
