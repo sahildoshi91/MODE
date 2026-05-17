@@ -15,8 +15,8 @@ from app.core.tenancy import TrainerContext
 from app.modules.account_deletion.service import AccountDeletionResult
 from app.modules.conversation.schemas import ChatRequest
 from app.modules.conversation.service import ConversationService
-from app.modules.intelligence_jobs.handlers import run_intelligence_job
-from app.modules.intelligence_jobs.queue import enqueue_post_chat_jobs
+from app.modules.intelligence_jobs.handlers import _validated_conversation_summary, run_intelligence_job
+from app.modules.intelligence_jobs.queue import enqueue_intelligence_job, enqueue_post_chat_jobs, maybe_enqueue_summarization
 from app.modules.intelligence_jobs.schemas import EnqueueResult, IntelligenceJob, JOB_CONFIGS
 
 
@@ -28,10 +28,23 @@ class FakeJobRepository:
         self.success = []
         self.failed = []
         self.traces = []
+        self.queued = []
+        self.enqueue_failed = []
+        self.active_jobs = False
 
     def get_job(self, job_id):
         del job_id
         return self.existing
+
+    def ensure_queued(self, job, *, rq_job_id=None, queue_name=None):
+        self.queued.append((job.job_id, rq_job_id, queue_name))
+
+    def mark_enqueue_failed(self, job, *, error_category):
+        self.enqueue_failed.append((job.job_id, error_category))
+
+    def has_active_job(self, *, job_type, conversation_id):
+        del job_type, conversation_id
+        return self.active_jobs
 
     def mark_running(self, job, *, attempt_number):
         self.running.append((job.job_id, attempt_number))
@@ -173,6 +186,76 @@ class IntelligenceQueueTests(unittest.TestCase):
 
         self.assertTrue(results)
         self.assertTrue(all(not result.ok for result in results))
+
+    def test_job_row_exists_with_status_queued_before_rq_processes_it(self):
+        job = intelligence_job()
+        repo = FakeJobRepository()
+
+        with patch("app.modules.intelligence_jobs.queue.settings.redis_url", None):
+            result = enqueue_intelligence_job(job, repository=repo)
+
+        self.assertFalse(result.ok)
+        self.assertEqual(repo.queued, [(job.job_id, None, "mode:intelligence:normal")])
+        self.assertEqual(repo.enqueue_failed, [(job.job_id, "redis_url_missing")])
+
+    def test_stopped_worker_queue_visible_via_postgres_view(self):
+        migration = (Path(__file__).resolve().parents[1] / "sql" / "20260516a_worker_queue_lag_view.sql").read_text()
+
+        self.assertIn("CREATE OR REPLACE VIEW public.worker_queue_lag", migration)
+        self.assertIn("COUNT(*) FILTER (WHERE status = 'queued')", migration)
+        self.assertIn("MAX(\n    EXTRACT(EPOCH FROM (NOW() - enqueued_at)) * 1000", migration)
+
+    def test_summarization_enqueued_at_message_threshold(self):
+        repo = FakeJobRepository()
+        with patch("app.modules.intelligence_jobs.queue.settings.redis_url", None):
+            result = maybe_enqueue_summarization(
+                conversation_id="conversation-1",
+                trainer_id="trainer-1",
+                client_id="client-1",
+                message_count=20,
+                trace_id="trace-1",
+                job_repository=repo,
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(repo.queued[0][2], "mode:intelligence:low")
+
+    def test_summarization_not_enqueued_below_threshold(self):
+        repo = FakeJobRepository()
+
+        result = maybe_enqueue_summarization(
+            conversation_id="conversation-1",
+            trainer_id="trainer-1",
+            client_id="client-1",
+            message_count=19,
+            trace_id="trace-1",
+            job_repository=repo,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(repo.queued, [])
+
+    def test_summarization_not_double_enqueued_when_job_already_queued(self):
+        repo = FakeJobRepository()
+        repo.active_jobs = True
+
+        result = maybe_enqueue_summarization(
+            conversation_id="conversation-1",
+            trainer_id="trainer-1",
+            client_id="client-1",
+            message_count=20,
+            trace_id="trace-1",
+            job_repository=repo,
+        )
+
+        self.assertIsNone(result)
+        self.assertEqual(repo.queued, [])
+
+    def test_summarization_output_validation_rejects_malformed(self):
+        job = intelligence_job("conversation_summarization")
+        job.payload = {"summary": {"summary_text": "too short"}}
+
+        self.assertIsNone(_validated_conversation_summary(job))
 
     def test_safety_flag_job_survives_process_restart(self):
         job = intelligence_job("safety_flag_persistence")

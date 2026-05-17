@@ -76,6 +76,11 @@ class RouteDebug(BaseModel):
     prompt_version: str | None = None
     model_fallback_chain: list[str] = Field(default_factory=list)
     tokens_cost_usd: float | None = None
+    worker_job_id: str | None = None
+    queue_enqueue_latency_ms: int | None = None
+    stream_fallback_attempted: bool = False
+    mid_stream_failure: bool = False
+    providers_attempted: list[str] = Field(default_factory=list)
 
 
 class ConversationUsage(BaseModel):

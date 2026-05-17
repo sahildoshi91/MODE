@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.config import settings
+from app.modules.intelligence_jobs.repository import IntelligenceJobRepository
 from app.modules.intelligence_jobs.schemas import EnqueueResult, IntelligenceJob, JOB_CONFIGS, JobType
 
 
@@ -18,11 +19,33 @@ QUEUE_NAMES = {
 }
 
 
-def enqueue_intelligence_job(job: IntelligenceJob) -> EnqueueResult:
+SUMMARIZATION_TRIGGER = 20
+
+
+def enqueue_intelligence_job(
+    job: IntelligenceJob,
+    *,
+    repository: IntelligenceJobRepository | None = None,
+) -> EnqueueResult:
     started_at = time.perf_counter()
     config = JOB_CONFIGS[job.job_type]
     queue_name = QUEUE_NAMES[config.priority]
+    if repository is not None:
+        try:
+            repository.ensure_queued(job, queue_name=queue_name)
+        except Exception:
+            logger.exception(
+                "intelligence_job_queue_row_create_failed job_id=%s job_type=%s queue=%s",
+                job.job_id,
+                job.job_type,
+                queue_name,
+            )
     if not settings.redis_url:
+        if repository is not None:
+            try:
+                repository.mark_enqueue_failed(job, error_category="redis_url_missing")
+            except Exception:
+                logger.exception("intelligence_job_enqueue_failed_status_update_failed job_id=%s", job.job_id)
         return EnqueueResult(ok=False, job_id=job.job_id, queue_name=queue_name, error_category="redis_url_missing")
 
     try:
@@ -50,7 +73,11 @@ def enqueue_intelligence_job(job: IntelligenceJob) -> EnqueueResult:
                 "enqueued_at": job.enqueued_at,
             },
         )
-        del rq_job
+        if repository is not None:
+            try:
+                repository.update_rq_metadata(job.job_id, rq_job_id=str(rq_job.id), queue_name=queue_name)
+            except Exception:
+                logger.exception("intelligence_job_rq_metadata_update_failed job_id=%s", job.job_id)
         latency_ms = int((time.perf_counter() - started_at) * 1000)
         logger.info(
             "intelligence_job_enqueued job_id=%s job_type=%s queue=%s latency_ms=%s",
@@ -62,6 +89,11 @@ def enqueue_intelligence_job(job: IntelligenceJob) -> EnqueueResult:
         return EnqueueResult(ok=True, job_id=job.job_id, queue_name=queue_name, latency_ms=latency_ms)
     except Exception as exc:
         latency_ms = int((time.perf_counter() - started_at) * 1000)
+        if repository is not None:
+            try:
+                repository.mark_enqueue_failed(job, error_category=exc.__class__.__name__)
+            except Exception:
+                logger.exception("intelligence_job_enqueue_failed_status_update_failed job_id=%s", job.job_id)
         logger.exception(
             "intelligence_job_enqueue_failed job_id=%s job_type=%s queue=%s latency_ms=%s",
             job.job_id,
@@ -111,6 +143,7 @@ def enqueue_post_chat_jobs(
     user_message_id: str | None = None,
     tenant_id: str | None = None,
     include_memory: bool = True,
+    job_repository: IntelligenceJobRepository | None = None,
 ) -> list[EnqueueResult]:
     if not trainer_id or not client_id or not conversation_id:
         return []
@@ -129,7 +162,7 @@ def enqueue_post_chat_jobs(
                 "message_length": len(str(message_text or "")),
             },
         )
-        results.append(enqueue_intelligence_job(memory_job))
+        results.append(enqueue_intelligence_job(memory_job, repository=job_repository))
         results.append(
             enqueue_intelligence_job(
                 build_job(
@@ -139,7 +172,8 @@ def enqueue_post_chat_jobs(
                     conversation_id=conversation_id,
                     trace_id=trace_id,
                     payload={"reason": "memory_write_queued"},
-                )
+                ),
+                repository=job_repository,
             )
         )
 
@@ -164,7 +198,8 @@ def enqueue_post_chat_jobs(
                     conversation_id=conversation_id,
                     trace_id=trace_id,
                     payload=escalation_payload,
-                )
+                ),
+                repository=job_repository,
             )
         )
         results.append(
@@ -179,7 +214,8 @@ def enqueue_post_chat_jobs(
                         "reason": "trainer_review_pending",
                         "include_trainer_persona": False,
                     },
-                )
+                ),
+                repository=job_repository,
             )
         )
         if _is_safety_route(route_payload):
@@ -196,11 +232,52 @@ def enqueue_post_chat_jobs(
                             "route_reason": route_payload.get("reason"),
                             "risk_flags": _risk_flags_from_route(route_payload),
                         },
-                    )
+                    ),
+                    repository=job_repository,
                 )
             )
 
     return results
+
+
+def maybe_enqueue_summarization(
+    *,
+    conversation_id: str,
+    trainer_id: str,
+    client_id: str,
+    message_count: int,
+    trace_id: str | None,
+    job_repository: IntelligenceJobRepository | None = None,
+) -> EnqueueResult | None:
+    if not conversation_id or not trainer_id or not client_id:
+        return None
+    if int(message_count or 0) <= 0 or int(message_count or 0) % SUMMARIZATION_TRIGGER != 0:
+        return None
+    if job_repository is not None:
+        try:
+            if job_repository.has_active_job(
+                job_type="conversation_summarization",
+                conversation_id=conversation_id,
+            ):
+                return None
+        except Exception:
+            logger.exception(
+                "conversation_summarization_idempotency_check_failed conversation_id=%s",
+                conversation_id,
+            )
+            return None
+    job = build_job(
+        job_type="conversation_summarization",
+        trainer_id=trainer_id,
+        client_id=client_id,
+        conversation_id=conversation_id,
+        trace_id=trace_id,
+        payload={
+            "message_count": int(message_count or 0),
+            "trigger": SUMMARIZATION_TRIGGER,
+        },
+    )
+    return enqueue_intelligence_job(job, repository=job_repository)
 
 
 def enqueue_chat_trace_log(

@@ -19,7 +19,13 @@ from app.modules.atlas.service import AtlasTrainerDeletionObserver
 from app.modules.conversation.cache import expire_chat_context_soon, invalidate_chat_context
 from app.modules.conversation.memory import evaluate_memory_write
 from app.modules.intelligence_jobs.repository import IntelligenceJobRepository
-from app.modules.intelligence_jobs.schemas import IntelligenceJob, JOB_CONFIGS, MemoryExtract, WorkerJobTrace
+from app.modules.intelligence_jobs.schemas import (
+    ConversationSummary,
+    IntelligenceJob,
+    JOB_CONFIGS,
+    MemoryExtract,
+    WorkerJobTrace,
+)
 from app.modules.observability.metrics import emit_chat_trace_metrics, emit_worker_job_metrics
 
 
@@ -321,6 +327,16 @@ def _handle_safety_flag_persistence(job: IntelligenceJob) -> None:
 
 def _handle_conversation_summarization(job: IntelligenceJob) -> None:
     supabase = get_supabase_admin_client()
+    summary = _validated_conversation_summary(job)
+    if summary is None and isinstance(job.payload.get("summary"), dict):
+        logger.warning(
+            "conversation_summary_validation_failed job_id=%s trainer_id=%s client_id=%s conversation_id=%s",
+            job.job_id,
+            job.trainer_id,
+            job.client_id,
+            job.conversation_id,
+        )
+        return
     response = (
         supabase
         .table("conversations")
@@ -334,6 +350,19 @@ def _handle_conversation_summarization(job: IntelligenceJob) -> None:
     metadata = row.get("metadata") if isinstance(row, dict) else {}
     if not isinstance(metadata, dict):
         metadata = {}
+    if summary is not None:
+        supabase.table("conversations").update(
+            {
+                "metadata": {
+                    **metadata,
+                    "conversation_summary": summary.model_dump(mode="json"),
+                    "summary_job_status": "success",
+                    "summary_job_id": job.job_id,
+                },
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ).eq("id", job.conversation_id).execute()
+        return
     supabase.table("conversations").update(
         {
             "metadata": {
@@ -344,6 +373,23 @@ def _handle_conversation_summarization(job: IntelligenceJob) -> None:
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
     ).eq("id", job.conversation_id).execute()
+
+
+def _validated_conversation_summary(job: IntelligenceJob) -> ConversationSummary | None:
+    raw_summary = job.payload.get("summary")
+    if not isinstance(raw_summary, dict):
+        return None
+    try:
+        return ConversationSummary.model_validate(
+            {
+                **raw_summary,
+                "conversation_id": raw_summary.get("conversation_id") or job.conversation_id,
+                "trainer_id": raw_summary.get("trainer_id") or job.trainer_id,
+                "client_id": raw_summary.get("client_id") or job.client_id,
+            }
+        )
+    except ValidationError:
+        return None
 
 
 def _handle_account_deletion(job: IntelligenceJob) -> None:

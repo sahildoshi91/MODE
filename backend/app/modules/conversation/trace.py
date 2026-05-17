@@ -29,6 +29,9 @@ class ChatTrace:
     tokens_out: int = 0
     model_used: str = "unknown"
     fallback_used: bool = False
+    stream_fallback_attempted: bool = False
+    mid_stream_failure: bool = False
+    providers_attempted: list[str] = field(default_factory=list)
     escalation_triggered: bool = False
     error_category: str | None = None
     worker_job_id: str | None = None
@@ -60,6 +63,9 @@ class ChatTraceAccumulator:
         self.tokens_out = 0
         self.model_used = "unknown"
         self.fallback_used = False
+        self.stream_fallback_attempted = False
+        self.mid_stream_failure = False
+        self.providers_attempted: list[str] = []
         self.escalation_triggered = False
         self.error_category: str | None = None
         self.worker_job_id: str | None = None
@@ -89,6 +95,13 @@ class ChatTraceAccumulator:
             self.retrieval_latency_ms = _int_or_none(trace.get("retrieval_latency_ms"), self.retrieval_latency_ms)
             self.model_used = str(trace.get("model_used") or self.model_used)
             self.fallback_used = bool(trace.get("fallback_used", self.fallback_used))
+            self.stream_fallback_attempted = bool(
+                trace.get("stream_fallback_attempted", self.stream_fallback_attempted)
+            )
+            self.mid_stream_failure = bool(trace.get("mid_stream_failure", self.mid_stream_failure))
+            providers_attempted = trace.get("providers_attempted")
+            if isinstance(providers_attempted, list):
+                self.providers_attempted = [str(item) for item in providers_attempted]
             self.escalation_triggered = bool(trace.get("escalation_triggered", self.escalation_triggered))
             self.worker_job_id = str(trace.get("worker_job_id") or self.worker_job_id or "") or None
             self.prompt_version = str(trace.get("prompt_version") or self.prompt_version)
@@ -133,6 +146,9 @@ class ChatTraceAccumulator:
             tokens_out=self.tokens_out,
             model_used=self.model_used,
             fallback_used=self.fallback_used,
+            stream_fallback_attempted=self.stream_fallback_attempted,
+            mid_stream_failure=self.mid_stream_failure,
+            providers_attempted=self.providers_attempted,
             escalation_triggered=self.escalation_triggered,
             error_category=self.error_category,
             worker_job_id=self.worker_job_id,

@@ -9,6 +9,7 @@ GEMINI_FLASH_LITE_MODEL = "gemini-2.5-flash-lite"
 GEMINI_PRO_MODEL = "gemini-2.5-pro"
 GPT_5_4_MINI_MODEL = "gpt-5.4-mini"
 GPT_5_4_MODEL = "gpt-5.4"
+GPT_5_5_MODEL = "gpt-5.5"
 CLAUDE_SONNET_4_6_MODEL = "claude-sonnet-4.6"
 CLAUDE_OPUS_4_6_MODEL = "claude-opus-4.6"
 

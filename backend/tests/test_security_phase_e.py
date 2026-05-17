@@ -326,6 +326,15 @@ class SecurityPhaseETests(unittest.TestCase):
 
         self.assertEqual(exception_files, ["storage_private.py"])
 
+    def test_storage_private_service_role_exception_is_documented(self):
+        source = (Path(__file__).resolve().parents[1] / "app" / "api" / "v1" / "storage_private.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("SERVICE_ROLE_EXCEPTION", source)
+        self.assertIn("signed URL generation", source)
+        self.assertIn("auth-gated", source)
+
     def test_service_role_key_not_used_in_request_time_foundations(self):
         app_dir = Path(__file__).resolve().parents[1] / "app"
         checked_paths = [

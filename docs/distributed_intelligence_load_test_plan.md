@@ -21,6 +21,10 @@ This plan verifies the launch gates for the four-lane architecture after Phase A
 - Pass target: p95 < 2.5s.
 - Helper command:
   `npm run launch:verify -- --base-url <staging-url> --auth-token-file ./staging_tokens.txt --chat-load-requests 50 --chat-load-concurrency 50`
+- Fast-path baseline generator:
+  `cd backend && ./venv/bin/python scripts/chat_load_baseline.py --base-url <staging-url> --auth-token-file ../staging_tokens.txt --scenario fast --users 50 --duration-seconds 180 --interval-seconds 10`
+- Deep-path baseline generator:
+  `cd backend && ./venv/bin/python scripts/chat_load_baseline.py --base-url <staging-url> --auth-token-file ../staging_tokens.txt --scenario deep --users 20 --duration-seconds 180 --interval-seconds 15`
 
 ### Full Stream
 - Deploy staging with `USE_FAKE_PROVIDER=false`, one uvicorn worker, and `MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE=25`.
@@ -55,6 +59,8 @@ This plan verifies the launch gates for the four-lane architecture after Phase A
 ### RLS Under Mixed Tenants
 - Run cross-tenant read attempts while load is active.
 - Pass target: zero cross-tenant rows.
+- Mixed-tenant traffic generator:
+  `cd backend && ./venv/bin/python scripts/chat_load_baseline.py --base-url <staging-url> --auth-token-file ../staging_tokens.txt --scenario mixed --users 30 --duration-seconds 300 --interval-seconds 10`
 
 ### Rate Limits
 - Exceed chat per-client, trainer aggregate, and IP thresholds.

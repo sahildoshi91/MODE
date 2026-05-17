@@ -34,6 +34,15 @@ class HealthSnapshot:
     payload: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class QueueHealthState:
+    status: str
+    queued_count: int
+    dead_letter_count: int
+    max_lag_ms: float | None
+    error_category: str | None = None
+
+
 _health_snapshot: HealthSnapshot | None = None
 _health_refresh_task: asyncio.Task[HealthSnapshot] | None = None
 _health_refresh_lock: asyncio.Lock | None = None
@@ -97,12 +106,19 @@ def reset_health_cache_for_tests() -> None:
 
 async def _collect_health_payload(*, timeout_ms: int) -> dict[str, Any]:
     started_at = time.perf_counter()
-    db, redis, queue = await asyncio.gather(
+    db, redis, queue_redis, queue_state = await asyncio.gather(
         _run_check("db", _check_db_sync, timeout_ms=timeout_ms),
         _run_check("redis", _check_redis_sync, timeout_ms=timeout_ms),
         _run_check("queue", _check_queue_sync, timeout_ms=timeout_ms),
+        _run_queue_state_check(timeout_ms=timeout_ms),
     )
-    status = "ok" if all(item.status == "ok" for item in (db, redis, queue)) else "degraded"
+    status = (
+        "ok"
+        if all(item.status == "ok" for item in (db, redis, queue_redis)) and queue_state.status == "ok"
+        else "degraded"
+    )
+    if queue_state.status == "dead":
+        status = "dead"
     duration_ms = int((time.perf_counter() - started_at) * 1000)
     emit_metric("healthz.duration_ms", duration_ms, unit="ms", tags={"status": status})
     return {
@@ -110,13 +126,15 @@ async def _collect_health_payload(*, timeout_ms: int) -> dict[str, Any]:
         "ok": status == "ok",
         "db": db.status,
         "redis": redis.status,
-        "queue": queue.status,
+        "queue": asdict(queue_state),
+        "queue_redis": queue_redis.status,
         "duration_ms": 0,
         "dependency_duration_ms": duration_ms,
         "checks": {
             "db": asdict(db),
             "redis": asdict(redis),
-            "queue": asdict(queue),
+            "queue": asdict(queue_redis),
+            "queue_lag": asdict(queue_state),
         },
     }
 
@@ -157,18 +175,27 @@ def _get_health_refresh_lock() -> asyncio.Lock:
 
 def _initializing_payload() -> dict[str, Any]:
     unknown = HealthCheckResult(status="unknown", latency_ms=0, error_category="NoHealthSnapshot")
+    queue_unknown = QueueHealthState(
+        status="degraded",
+        queued_count=0,
+        dead_letter_count=0,
+        max_lag_ms=None,
+        error_category="NoHealthSnapshot",
+    )
     return {
         "status": "degraded",
         "ok": False,
         "db": unknown.status,
         "redis": unknown.status,
-        "queue": unknown.status,
+        "queue": asdict(queue_unknown),
+        "queue_redis": unknown.status,
         "duration_ms": 0,
         "dependency_duration_ms": None,
         "checks": {
             "db": asdict(unknown),
             "redis": asdict(unknown),
             "queue": asdict(unknown),
+            "queue_lag": asdict(queue_unknown),
         },
     }
 
@@ -206,6 +233,30 @@ async def _run_check(name: str, fn: Callable[[], None], *, timeout_ms: int) -> H
         return HealthCheckResult(status="error", latency_ms=latency_ms, error_category=exc.__class__.__name__)
 
 
+async def _run_queue_state_check(*, timeout_ms: int) -> QueueHealthState:
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_check_worker_queue_lag_sync),
+            timeout=max(0.001, timeout_ms / 1000),
+        )
+    except asyncio.TimeoutError:
+        return QueueHealthState(
+            status="degraded",
+            queued_count=0,
+            dead_letter_count=0,
+            max_lag_ms=None,
+            error_category="TimeoutError",
+        )
+    except Exception as exc:
+        return QueueHealthState(
+            status="degraded",
+            queued_count=0,
+            dead_letter_count=0,
+            max_lag_ms=None,
+            error_category=exc.__class__.__name__,
+        )
+
+
 def _check_db_sync() -> None:
     client = get_supabase_public_client()
     client.rpc("mode_health_ping").execute()
@@ -240,3 +291,47 @@ def _check_queue_sync() -> None:
     for queue_name in QUEUE_NAMES.values():
         Queue(queue_name, connection=connection)
     connection.ping()
+
+
+def _check_worker_queue_lag_sync() -> QueueHealthState:
+    client = get_supabase_public_client()
+    response = client.table("worker_queue_lag").select("*").execute()
+    rows = response.data or []
+    queued_count = 0
+    dead_letter_count = 0
+    max_lag_ms: float | None = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        queued_count += _int(row.get("queued_count"), 0)
+        dead_letter_count += _int(row.get("dead_letter_count"), 0)
+        row_lag = _float_or_none(row.get("max_lag_ms"))
+        if row_lag is not None:
+            max_lag_ms = row_lag if max_lag_ms is None else max(max_lag_ms, row_lag)
+    status = "ok"
+    if dead_letter_count > 0 or (max_lag_ms is not None and max_lag_ms > 30_000):
+        status = "dead"
+    elif queued_count > 50 or (max_lag_ms is not None and max_lag_ms > 15_000):
+        status = "degraded"
+    return QueueHealthState(
+        status=status,
+        queued_count=queued_count,
+        dead_letter_count=dead_letter_count,
+        max_lag_ms=max_lag_ms,
+    )
+
+
+def _int(value: Any, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None

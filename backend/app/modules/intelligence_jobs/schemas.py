@@ -39,6 +39,16 @@ class MemoryExtract(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
+class ConversationSummary(BaseModel):
+    conversation_id: str
+    trainer_id: str
+    client_id: str
+    summary_text: str = Field(min_length=20, max_length=2000)
+    key_insights: list[str] = Field(default_factory=list, max_length=12)
+    message_range: tuple[int, int]
+    generated_at: str
+
+
 @dataclass(frozen=True)
 class JobConfig:
     priority: JobPriority

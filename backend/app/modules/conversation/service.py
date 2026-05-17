@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import queue
+import re
 import threading
 import time
 from collections.abc import Iterator
@@ -88,7 +89,8 @@ from app.modules.conversation.streaming import (
     status_event,
     status_event_for_intent,
 )
-from app.modules.intelligence_jobs.queue import enqueue_post_chat_jobs
+from app.modules.intelligence_jobs.queue import enqueue_post_chat_jobs, maybe_enqueue_summarization
+from app.modules.intelligence_jobs.repository import IntelligenceJobRepository
 from app.modules.motivation import resolve_motivation_baseline
 from app.modules.observability.metrics import emit_metric
 from app.modules.profile.service import ProfileService
@@ -109,6 +111,8 @@ WORKOUT_CONTEXT_MAX_CHARS = 1600
 DEFAULT_FAST_FIRST_CHUNK_DEADLINE_SECONDS = 0.1
 DEFAULT_FAST_DEADLINE_PREFIX = "Got it - "
 DEFAULT_FAST_FLUSH_PADDING = " " * 4096
+STREAM_FALLBACK_STATUS_MESSAGE = "One moment..."
+STREAM_INTERRUPTED_MESSAGE = "Something interrupted my response. Please try again."
 MINIMAL_SAFE_FALLBACK_MESSAGE = (
     "I want to make sure I give you the right guidance here. "
     "Try a low-risk option for now: keep intensity easy, avoid anything that worsens symptoms, "
@@ -347,6 +351,10 @@ class StreamResultState:
 
 
 class ConversationProcessingError(RuntimeError):
+    pass
+
+
+class FirstByteStreamTimeout(TimeoutError):
     pass
 
 
@@ -1469,6 +1477,11 @@ class ConversationService:
         prompt_version: str | None = None,
         model_fallback_chain: list[str] | None = None,
         tokens_cost_usd: float | None = None,
+        worker_job_id: str | None = None,
+        queue_enqueue_latency_ms: int | None = None,
+        stream_fallback_attempted: bool = False,
+        mid_stream_failure: bool = False,
+        providers_attempted: list[str] | None = None,
     ) -> RouteDebug:
         intent = route.intent_route if isinstance(route.intent_route, dict) else {}
         return RouteDebug(
@@ -1488,6 +1501,11 @@ class ConversationService:
             prompt_version=prompt_version,
             model_fallback_chain=model_fallback_chain or [],
             tokens_cost_usd=tokens_cost_usd,
+            worker_job_id=worker_job_id,
+            queue_enqueue_latency_ms=queue_enqueue_latency_ms,
+            stream_fallback_attempted=stream_fallback_attempted,
+            mid_stream_failure=mid_stream_failure,
+            providers_attempted=providers_attempted or [],
         )
 
     def _route_debug_from_metadata(
@@ -1508,6 +1526,18 @@ class ConversationService:
             prompt_version=str(metadata.get("prompt_version") or "") or None,
             model_fallback_chain=chain if isinstance(chain, list) else [execution_model],
             tokens_cost_usd=metadata.get("tokens_cost_usd") if isinstance(metadata.get("tokens_cost_usd"), (int, float)) else None,
+            worker_job_id=str(metadata.get("worker_job_id") or "") or None,
+            queue_enqueue_latency_ms=(
+                int(metadata.get("queue_enqueue_latency_ms"))
+                if isinstance(metadata.get("queue_enqueue_latency_ms"), (int, float))
+                else None
+            ),
+            stream_fallback_attempted=bool(metadata.get("stream_fallback_attempted")),
+            mid_stream_failure=bool(metadata.get("mid_stream_failure")),
+            providers_attempted=[
+                str(item)
+                for item in metadata.get("providers_attempted", [])
+            ] if isinstance(metadata.get("providers_attempted"), list) else [],
         )
 
     def _build_trace_metadata(
@@ -1530,6 +1560,11 @@ class ConversationService:
             "retrieval_latency_ms": None,
             "model_used": execution_model,
             "fallback_used": fallback_used,
+            "stream_fallback_attempted": bool((orchestration_metadata or {}).get("stream_fallback_attempted")),
+            "mid_stream_failure": bool((orchestration_metadata or {}).get("mid_stream_failure")),
+            "providers_attempted": (orchestration_metadata or {}).get("providers_attempted") or (
+                (orchestration_metadata or {}).get("model_fallback_chain") or [execution_model]
+            ),
             "escalation_triggered": bool(intent.get("notify_trainer") or route.needs_trainer_review),
             "worker_job_id": (orchestration_metadata or {}).get("worker_job_id"),
             "prompt_version": (orchestration_metadata or {}).get("prompt_version") or "inline_legacy",
@@ -2174,8 +2209,11 @@ class ConversationService:
         assistant_message: str | None,
         user_message_id: str | None,
         include_memory: bool = True,
-    ) -> None:
+    ) -> tuple[list[Any], int | None]:
+        enqueue_started_at = time.monotonic()
+        results: list[Any] = []
         try:
+            job_repository = self._intelligence_job_repository()
             route_payload = route.as_dict() if route else {}
             results = enqueue_post_chat_jobs(
                 trainer_id=trainer_context.trainer_id,
@@ -2188,7 +2226,18 @@ class ConversationService:
                 user_message_id=user_message_id,
                 tenant_id=trainer_context.tenant_id,
                 include_memory=include_memory,
+                job_repository=job_repository,
             )
+            summary_result = self._maybe_enqueue_summarization_after_assistant(
+                trainer_context=trainer_context,
+                request=request,
+                conversation_id=conversation_id,
+                route=route,
+                assistant_message=assistant_message,
+                job_repository=job_repository,
+            )
+            if summary_result is not None:
+                results.append(summary_result)
             for result in results:
                 if not result.ok:
                     logger.warning(
@@ -2199,6 +2248,53 @@ class ConversationService:
                     )
         except Exception:
             logger.exception("Failed to enqueue post-chat intelligence jobs conversation_id=%s", conversation_id)
+        latency_ms = int((time.monotonic() - enqueue_started_at) * 1000)
+        return results, latency_ms
+
+    def _intelligence_job_repository(self) -> IntelligenceJobRepository | None:
+        supabase = getattr(getattr(self, "repository", None), "supabase", None)
+        if supabase is None:
+            return None
+        return IntelligenceJobRepository(supabase)
+
+    def _conversation_message_count(self, conversation_id: str) -> int | None:
+        count_messages = getattr(self.repository, "count_messages", None)
+        if callable(count_messages):
+            try:
+                return int(count_messages(conversation_id))
+            except Exception:
+                logger.exception("Failed to count conversation messages conversation_id=%s", conversation_id)
+                return None
+        try:
+            return len(self.repository.list_messages(conversation_id, limit=50))
+        except Exception:
+            logger.exception("Failed to estimate conversation messages conversation_id=%s", conversation_id)
+            return None
+
+    def _maybe_enqueue_summarization_after_assistant(
+        self,
+        *,
+        trainer_context: TrainerContext,
+        request: ChatRequest,
+        conversation_id: str,
+        route: RoutingDecision | None,
+        assistant_message: str | None,
+        job_repository: IntelligenceJobRepository | None,
+    ) -> Any | None:
+        del route
+        if assistant_message is None:
+            return None
+        message_count = self._conversation_message_count(conversation_id)
+        if message_count is None:
+            return None
+        return maybe_enqueue_summarization(
+            conversation_id=conversation_id,
+            trainer_id=str(trainer_context.trainer_id or ""),
+            client_id=str(trainer_context.client_id or ""),
+            message_count=message_count,
+            trace_id=self._request_id_text(request),
+            job_repository=job_repository,
+        )
 
     @staticmethod
     def _is_timeout_exception(exc: BaseException) -> bool:
@@ -2256,6 +2352,9 @@ class ConversationService:
                 "retrieval_latency_ms": None,
                 "model_used": "system-minimal-safe-response",
                 "fallback_used": True,
+                "stream_fallback_attempted": False,
+                "mid_stream_failure": False,
+                "providers_attempted": ["system:minimal-safe-response"],
                 "escalation_triggered": reason in {"postgres_timeout", "safety_uncertain"},
             },
         )
@@ -2859,6 +2958,9 @@ class ConversationService:
                         "retrieval_latency_ms": None,
                         "model_used": "trainer-onboarding-v2",
                         "fallback_used": False,
+                        "stream_fallback_attempted": False,
+                        "mid_stream_failure": False,
+                        "providers_attempted": ["system:trainer-onboarding-v2"],
                         "escalation_triggered": False,
                     },
                 )
@@ -2928,6 +3030,14 @@ class ConversationService:
 
             assistant_chunks: list[str] = [early_prefix_text] if early_prefix_sent else []
             for chunk in chunks:
+                if isinstance(chunk, dict):
+                    payload_type = str(chunk.get("type") or "")
+                    if payload_type == "error":
+                        stream_error_category = str(chunk.get("detail") or "stream_error")
+                        yield chunk
+                        return
+                    yield chunk
+                    continue
                 text_chunk = str(chunk or "")
                 if not text_chunk:
                     continue
@@ -3070,6 +3180,200 @@ class ConversationService:
         timing.record_phase_once("provider_iterator_ready_ms", ready_ms)
         timing.record_phase_once("stream_chat_return_ready_ms", ready_ms)
 
+    def _first_byte_timeout_seconds(self, route: RoutingDecision) -> float:
+        intent = route.intent_route if isinstance(route.intent_route, dict) else {}
+        route_name = str(intent.get("route") or "").upper()
+        if route_name == "SAFETY_ESCALATION" or route.flow == "safety_escalation":
+            return 6.0
+        if route_name == "DEEP_PATH" or route.flow in {"deep_path", "reasoning_structured"}:
+            return 8.0
+        if route_name == "FAST_PATH" or route.flow == "default_fast":
+            return 4.0
+        return 6.0
+
+    @staticmethod
+    def _has_semantic_commitment(text: str) -> bool:
+        return bool(re.search(r"\b[\w'-]+(?:[\s\n\r\t]|[.,!?;:])", str(text or "")))
+
+    @staticmethod
+    def _close_stream_safely(stream: Any) -> None:
+        close = getattr(stream, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+
+    def _iter_with_first_byte_timeout(
+        self,
+        stream: Iterator[str],
+        timing: ChatStreamTiming,
+        *,
+        timeout_seconds: float,
+    ) -> Iterator[str]:
+        events: queue.Queue[tuple[str, object]] = queue.Queue()
+
+        def pump() -> None:
+            try:
+                for item in stream:
+                    events.put(("item", item))
+            except BaseException as exc:
+                events.put(("error", exc))
+            finally:
+                events.put(("done", None))
+
+        threading.Thread(target=pump, daemon=True).start()
+        first_byte_pending = True
+        while True:
+            try:
+                kind, value = events.get(timeout=max(0.001, timeout_seconds) if first_byte_pending else None)
+            except queue.Empty as exc:
+                self._close_stream_safely(stream)
+                raise FirstByteStreamTimeout("stream_first_byte_timeout") from exc
+
+            if kind == "done":
+                break
+            if kind == "error":
+                raise value  # type: ignore[misc]
+            first_byte_pending = False
+            yield str(value or "")
+
+    def _open_provider_stream(
+        self,
+        attempt: ProviderAttempt,
+        prompt: PromptPackage,
+        timing: ChatStreamTiming,
+    ) -> tuple[Iterator[str], str]:
+        api_model = self._api_model_for_provider(attempt.provider, attempt.model)
+        max_output_tokens = self._max_output_tokens_for_prompt(prompt)
+        if attempt.provider == "openai":
+            openai_client = self.openai_client
+            if not settings.openai_api_key or not openai_client:
+                raise RuntimeError("openai_client_not_configured")
+            messages = [
+                {"role": "system", "content": prompt.system_prompt},
+                {"role": "user", "content": prompt.user_prompt},
+            ]
+            try:
+                return (
+                    openai_client.stream_chat_completion(
+                        model=api_model,
+                        messages=messages,
+                        max_output_tokens=max_output_tokens,
+                        stream_timing_observer=timing.record_provider_phase,
+                    ),
+                    api_model,
+                )
+            except TypeError:
+                return openai_client.stream_chat_completion(model=api_model, messages=messages), api_model
+
+        if attempt.provider == "anthropic":
+            anthropic_client = self.anthropic_client
+            if not anthropic_client:
+                raise RuntimeError("anthropic_client_not_configured")
+            try:
+                return (
+                    anthropic_client.stream_chat_completion(
+                        model=api_model,
+                        system_prompt=prompt.system_prompt,
+                        user_prompt=prompt.user_prompt,
+                        max_output_tokens=max_output_tokens,
+                        stream_timing_observer=timing.record_provider_phase,
+                    ),
+                    api_model,
+                )
+            except TypeError:
+                return (
+                    anthropic_client.stream_chat_completion(
+                        model=api_model,
+                        system_prompt=prompt.system_prompt,
+                        user_prompt=prompt.user_prompt,
+                    ),
+                    api_model,
+                )
+
+        if attempt.provider == "gemini":
+            gemini_client = self.gemini_client
+            if not gemini_client:
+                raise RuntimeError("gemini_client_not_configured")
+            combined_prompt = f"{prompt.system_prompt}\n\n{prompt.user_prompt}"
+            try:
+                return (
+                    gemini_client.stream_chat_completion(
+                        combined_prompt,
+                        model=api_model,
+                        max_output_tokens=max_output_tokens,
+                        stream_timing_observer=timing.record_provider_phase,
+                    ),
+                    api_model,
+                )
+            except TypeError:
+                return gemini_client.stream_chat_completion(combined_prompt), api_model
+
+        raise RuntimeError("provider_unavailable")
+
+    def _sync_stream_trace_metadata(
+        self,
+        *,
+        result_state: StreamResultState,
+        route: RoutingDecision,
+        execution_model: str,
+        fallback_used: bool,
+        orchestration_metadata: dict[str, Any],
+    ) -> None:
+        result_state.trace_metadata = self._build_trace_metadata(
+            route=route,
+            execution_model=execution_model,
+            fallback_used=fallback_used,
+            orchestration_metadata=orchestration_metadata,
+        )
+
+    def _mark_stream_fallback_attempted(
+        self,
+        *,
+        orchestration_metadata: dict[str, Any],
+        attempted_labels: list[str],
+    ) -> None:
+        orchestration_metadata["stream_fallback_attempted"] = True
+        orchestration_metadata["model_fallback_used"] = True
+        orchestration_metadata["model_fallback_chain"] = attempted_labels.copy()
+        orchestration_metadata["providers_attempted"] = attempted_labels.copy()
+
+    def _record_post_chat_enqueue_metadata(
+        self,
+        orchestration_metadata: dict[str, Any],
+        results: list[Any],
+        *,
+        latency_ms: int | None,
+    ) -> None:
+        if latency_ms is not None:
+            orchestration_metadata["queue_enqueue_latency_ms"] = latency_ms
+        for result in results or []:
+            job_id = getattr(result, "job_id", None)
+            if job_id:
+                orchestration_metadata["worker_job_id"] = str(job_id)
+                return
+
+    def _enqueue_safety_stream_failure_notification_safely(
+        self,
+        *,
+        trainer_context: TrainerContext,
+        request: ChatRequest,
+        conversation_id: str,
+        route: RoutingDecision,
+        assistant_message: str | None,
+        user_message_id: str | None,
+    ) -> None:
+        if not self._is_safety_escalation_route(route):
+            return
+        self._enqueue_post_chat_jobs_safely(
+            trainer_context=trainer_context,
+            request=request,
+            conversation_id=conversation_id,
+            route=route,
+            assistant_message=assistant_message,
+            user_message_id=user_message_id,
+            include_memory=False,
+        )
+
     def stream_chat(
         self,
         user_id: str,
@@ -3118,6 +3422,9 @@ class ConversationService:
                     "retrieval_latency_ms": None,
                     "model_used": "trainer-onboarding-v2",
                     "fallback_used": False,
+                    "stream_fallback_attempted": False,
+                    "mid_stream_failure": False,
+                    "providers_attempted": ["system:trainer-onboarding-v2"],
                     "escalation_triggered": False,
                 },
             )
@@ -3150,6 +3457,9 @@ class ConversationService:
                         "retrieval_latency_ms": None,
                         "model_used": "prompt-injection-guard",
                         "fallback_used": False,
+                        "stream_fallback_attempted": False,
+                        "mid_stream_failure": False,
+                        "providers_attempted": ["system:prompt-injection-guard"],
                         "escalation_triggered": True,
                     },
                 ),
@@ -3291,7 +3601,7 @@ class ConversationService:
                     orchestration_metadata=safety_orchestration_metadata,
                     request=request,
                 )
-                self._enqueue_post_chat_jobs_safely(
+                enqueue_results, enqueue_latency_ms = self._enqueue_post_chat_jobs_safely(
                     trainer_context=trainer_context,
                     request=request,
                     conversation_id=conversation["id"],
@@ -3300,12 +3610,283 @@ class ConversationService:
                     user_message_id=persisted_user_message_id(saved_user_message),
                     include_memory=False,
                 )
+                self._record_post_chat_enqueue_metadata(
+                    safety_orchestration_metadata,
+                    enqueue_results,
+                    latency_ms=enqueue_latency_ms,
+                )
+                result_state.trace_metadata = self._build_trace_metadata(
+                    route=route,
+                    execution_model="safety-escalation-hold",
+                    orchestration_metadata=safety_orchestration_metadata,
+                )
 
             self._record_stream_chat_return_ready(timing, post_memory_setup_started_at)
             return conversation["id"], safety_iterator(), route_debug, result_state
 
         if prompt is None:
             raise ConversationProcessingError("Chat response could not be completed")
+
+        route_debug = self._route_debug_from_metadata(
+            route,
+            route.provider,
+            route.model,
+            None,
+            prompt.orchestration_metadata,
+        )
+        result_state = StreamResultState(stream_timing=timing)
+
+        def provider_fallback_stream_iterator() -> Iterator[str | dict[str, Any]]:
+            attempted_labels: list[str] = []
+            fallback_reason: str | None = None
+            trainer_notified_for_stream_failure = False
+            last_execution_provider = route.provider
+            last_execution_model = route.model
+
+            for attempt_index, attempt in enumerate(provider_fallback_chain(route)):
+                attempted_labels.append(attempt.label)
+                prompt.orchestration_metadata["model_fallback_chain"] = attempted_labels.copy()
+                prompt.orchestration_metadata["providers_attempted"] = attempted_labels.copy()
+                fallback_used = attempt_index > 0 or bool(fallback_reason)
+                if attempt_index > 0:
+                    self._mark_stream_fallback_attempted(
+                        orchestration_metadata=prompt.orchestration_metadata,
+                        attempted_labels=attempted_labels,
+                    )
+                    yield status_event(
+                        STATUS_GENERATING_RECOMMENDATION,
+                        request=request,
+                        message=STREAM_FALLBACK_STATUS_MESSAGE,
+                        force_emit=True,
+                        fallback_reason=fallback_reason,
+                    )
+
+                full_response: list[str] = [persisted_assistant_prefix] if persisted_assistant_prefix else []
+                pending_uncommitted = ""
+                semantic_committed = False
+                execution_provider = attempt.provider
+                execution_model = self._api_model_for_provider(attempt.provider, attempt.model)
+                try:
+                    stream, execution_model = self._open_provider_stream(attempt, prompt, timing)
+                    last_execution_provider = execution_provider
+                    last_execution_model = execution_model
+                    timing.set_execution(execution_provider, execution_model, fallback_used=fallback_used)
+                    self._sync_stream_trace_metadata(
+                        result_state=result_state,
+                        route=route,
+                        execution_model=execution_model,
+                        fallback_used=fallback_used,
+                        orchestration_metadata=prompt.orchestration_metadata,
+                    )
+                    provider_stream = self._iter_with_first_byte_timeout(
+                        self._iter_observed_provider_stream(stream, timing),
+                        timing,
+                        timeout_seconds=self._first_byte_timeout_seconds(route),
+                    )
+                    for text in provider_stream:
+                        safe_text = self._validate_stream_chunk_for_yield(
+                            text,
+                            trainer_context=trainer_context,
+                            conversation_id=conversation["id"],
+                            orchestration_metadata=prompt.orchestration_metadata,
+                            timing=timing,
+                        )
+                        if not safe_text:
+                            continue
+                        full_response.append(safe_text)
+                        if not semantic_committed:
+                            pending_uncommitted += safe_text
+                            if not self._has_semantic_commitment(pending_uncommitted):
+                                continue
+                            semantic_committed = True
+                            self._mark_stream_chunk_yield_attempt(timing)
+                            yield pending_uncommitted
+                            pending_uncommitted = ""
+                        else:
+                            self._mark_stream_chunk_yield_attempt(timing)
+                            yield safe_text
+
+                        if launch_gate_smoke:
+                            timing.record_phase_once(
+                                "provider_stream_cutoff_ms",
+                                (time.perf_counter() - timing.started_at) * 1000,
+                            )
+                            break
+
+                    if pending_uncommitted:
+                        full_response_text = "".join(full_response).strip()
+                        if full_response_text:
+                            self._mark_stream_chunk_yield_attempt(timing)
+                            yield pending_uncommitted
+
+                    assistant_message = "".join(full_response).strip()
+                    if not assistant_message:
+                        assistant_message = "I'm here with you. Could you rephrase that and I'll try again?"
+                    assistant_message = self._validate_assistant_output(
+                        assistant_message,
+                        trainer_context=trainer_context,
+                        conversation_id=conversation["id"],
+                        orchestration_metadata=prompt.orchestration_metadata,
+                    )
+                    if launch_gate_smoke:
+                        timing.record_phase("launch_gate_persistence_skipped", 1)
+                        return
+
+                    completion = TextCompletion(
+                        text=assistant_message,
+                        token_usage=AIClientTokenUsage(),
+                    )
+                    saved_user_message, saved_memory_suggestions = persist_user_message_for_stream()
+                    _, conversation_usage, saved_assistant_message = self._persist_assistant_message(
+                        conversation["id"],
+                        assistant_message,
+                        route,
+                        execution_provider,
+                        execution_model,
+                        completion,
+                        fallback_reason,
+                        orchestration_metadata=prompt.orchestration_metadata,
+                        source_request_id=self._request_id_text(request),
+                        memory_suggestions=saved_memory_suggestions,
+                    )
+                    result_state.conversation_usage = conversation_usage
+                    result_state.assistant_message_id = str(saved_assistant_message.get("id") or "") or None
+                    result_state.memory_suggestions = saved_memory_suggestions
+                    self._log_generated_chat_output_safely(
+                        trainer_context=trainer_context,
+                        conversation_id=conversation["id"],
+                        saved_assistant_message=saved_assistant_message,
+                        assistant_message=assistant_message,
+                        route=route,
+                        completion=completion,
+                        execution_provider=execution_provider,
+                        execution_model=execution_model,
+                        fallback_reason=fallback_reason,
+                        orchestration_metadata=prompt.orchestration_metadata,
+                        request=request,
+                    )
+                    enqueue_results, enqueue_latency_ms = self._enqueue_post_chat_jobs_safely(
+                        trainer_context=trainer_context,
+                        request=request,
+                        conversation_id=conversation["id"],
+                        route=route,
+                        assistant_message=assistant_message,
+                        user_message_id=persisted_user_message_id(saved_user_message),
+                        include_memory=False,
+                    )
+                    self._record_post_chat_enqueue_metadata(
+                        prompt.orchestration_metadata,
+                        enqueue_results,
+                        latency_ms=enqueue_latency_ms,
+                    )
+                    self._sync_stream_trace_metadata(
+                        result_state=result_state,
+                        route=route,
+                        execution_model=execution_model,
+                        fallback_used=fallback_used,
+                        orchestration_metadata=prompt.orchestration_metadata,
+                    )
+                    result_state.token_usage = TokenUsage()
+                    return
+                except FirstByteStreamTimeout as exc:
+                    fallback_reason = "stream_first_byte_timeout"
+                    self._mark_stream_fallback_attempted(
+                        orchestration_metadata=prompt.orchestration_metadata,
+                        attempted_labels=attempted_labels,
+                    )
+                    logger.warning(
+                        "Streaming provider first-byte timeout provider=%s model=%s route_flow=%s timeout_seconds=%s",
+                        attempt.provider,
+                        attempt.model,
+                        route.flow,
+                        self._first_byte_timeout_seconds(route),
+                        exc_info=exc,
+                    )
+                except Exception as exc:
+                    if semantic_committed:
+                        prompt.orchestration_metadata["mid_stream_failure"] = True
+                        prompt.orchestration_metadata["providers_attempted"] = attempted_labels.copy()
+                        prompt.orchestration_metadata["model_fallback_chain"] = attempted_labels.copy()
+                        self._sync_stream_trace_metadata(
+                            result_state=result_state,
+                            route=route,
+                            execution_model=execution_model,
+                            fallback_used=fallback_used,
+                            orchestration_metadata=prompt.orchestration_metadata,
+                        )
+                        saved_user_message, _ = persist_user_message_for_stream()
+                        if self._is_safety_escalation_route(route) and not trainer_notified_for_stream_failure:
+                            trainer_notified_for_stream_failure = True
+                            self._enqueue_safety_stream_failure_notification_safely(
+                                trainer_context=trainer_context,
+                                request=request,
+                                conversation_id=conversation["id"],
+                                route=route,
+                                assistant_message="".join(full_response).strip() or None,
+                                user_message_id=persisted_user_message_id(saved_user_message),
+                            )
+                        logger.exception(
+                            "Streaming provider failed after semantic commitment provider=%s model=%s route_flow=%s",
+                            attempt.provider,
+                            attempt.model,
+                            route.flow,
+                            exc_info=exc,
+                        )
+                        yield error_event(
+                            "stream_mid_response_interrupted",
+                            message=STREAM_INTERRUPTED_MESSAGE,
+                            retry=True,
+                            _trace=result_state.trace_metadata,
+                        )
+                        return
+
+                    reason = self._provider_fallback_reason(attempt.provider, exc)
+                    fallback_reason = fallback_reason or reason
+                    self._mark_stream_fallback_attempted(
+                        orchestration_metadata=prompt.orchestration_metadata,
+                        attempted_labels=attempted_labels,
+                    )
+                    logger.exception(
+                        "Streaming provider failed before semantic commitment provider=%s model=%s route_flow=%s fallback_reason=%s",
+                        attempt.provider,
+                        attempt.model,
+                        route.flow,
+                        reason,
+                        exc_info=exc,
+                    )
+
+                if self._is_safety_escalation_route(route) and not trainer_notified_for_stream_failure:
+                    saved_user_message, _ = persist_user_message_for_stream()
+                    trainer_notified_for_stream_failure = True
+                    self._enqueue_safety_stream_failure_notification_safely(
+                        trainer_context=trainer_context,
+                        request=request,
+                        conversation_id=conversation["id"],
+                        route=route,
+                        assistant_message=None,
+                        user_message_id=persisted_user_message_id(saved_user_message),
+                    )
+
+            prompt.orchestration_metadata["stream_fallback_attempted"] = bool(attempted_labels)
+            prompt.orchestration_metadata["providers_attempted"] = attempted_labels.copy()
+            prompt.orchestration_metadata["model_fallback_chain"] = attempted_labels.copy()
+            self._sync_stream_trace_metadata(
+                result_state=result_state,
+                route=route,
+                execution_model=last_execution_model,
+                fallback_used=True,
+                orchestration_metadata=prompt.orchestration_metadata,
+            )
+            self._mark_conversation_failed(conversation["id"])
+            yield error_event(
+                "stream_providers_exhausted",
+                message=STREAM_INTERRUPTED_MESSAGE,
+                retry=True,
+                _trace=result_state.trace_metadata,
+            )
+
+        self._record_stream_chat_return_ready(timing, post_memory_setup_started_at)
+        return conversation["id"], provider_fallback_stream_iterator(), route_debug, result_state
 
         anthropic_client = self.anthropic_client
         if route.provider == "anthropic" and anthropic_client:
@@ -3894,13 +4475,25 @@ class ConversationService:
             orchestration_metadata=response_orchestration_metadata,
             request=request,
         )
-        self._enqueue_post_chat_jobs_safely(
+        enqueue_results, enqueue_latency_ms = self._enqueue_post_chat_jobs_safely(
             trainer_context=trainer_context,
             request=request,
             conversation_id=conversation["id"],
             route=route,
             assistant_message=assistant_message,
             user_message_id=user_message.get("id"),
+        )
+        self._record_post_chat_enqueue_metadata(
+            response_orchestration_metadata,
+            enqueue_results,
+            latency_ms=enqueue_latency_ms,
+        )
+        route_debug = self._route_debug_from_metadata(
+            route,
+            execution_provider,
+            execution_model,
+            fallback_reason,
+            response_orchestration_metadata,
         )
 
         return self._build_response(

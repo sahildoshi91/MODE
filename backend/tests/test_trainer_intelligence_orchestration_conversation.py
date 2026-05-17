@@ -109,6 +109,19 @@ class FakeGeminiClient:
         yield "stream"
 
 
+class FakeOpenAIClient:
+    def __init__(self):
+        self.prompts = []
+
+    def create_chat_completion_with_usage(self, model, messages, max_output_tokens=None):
+        del model, max_output_tokens
+        self.prompts.append("\n".join(message["content"] for message in messages))
+        return GeminiCompletion(
+            text="OpenAI response",
+            token_usage=TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15, thoughts_tokens=0),
+        )
+
+
 class FakeTrainerIntelligenceService:
     def assemble_prompt_context(self, **kwargs):
         del kwargs
@@ -144,6 +157,7 @@ class ConversationOrchestrationTests(unittest.TestCase):
             trainer_intelligence_service=orchestration_service,
         )
         service.gemini_client = FakeGeminiClient()
+        service.openai_client = FakeOpenAIClient()
         return service
 
     def test_orchestration_flag_off_keeps_prompt_without_layered_context(self):
@@ -151,7 +165,7 @@ class ConversationOrchestrationTests(unittest.TestCase):
         with patch("app.modules.conversation.service.settings.trainer_intelligence_orchestration_enabled", False):
             service.handle_chat("user-1", self.trainer_context, self.request)
 
-        prompt = service.gemini_client.prompts[0]
+        prompt = service.openai_client.prompts[0]
         self.assertNotIn("TRAINER_INTELLIGENCE_CONTEXT_BEGIN", prompt)
         assistant_message_payload = self.repository.saved_messages[-1]["structured_payload"]
         self.assertEqual(assistant_message_payload["orchestration"]["fallback_reason"], "flag_disabled")
@@ -161,7 +175,7 @@ class ConversationOrchestrationTests(unittest.TestCase):
         with patch("app.modules.conversation.service.settings.trainer_intelligence_orchestration_enabled", True):
             service.handle_chat("user-1", self.trainer_context, self.request)
 
-        prompt = service.gemini_client.prompts[0]
+        prompt = service.openai_client.prompts[0]
         self.assertIn("TRAINER_INTELLIGENCE_CONTEXT_BEGIN", prompt)
         assistant_message_payload = self.repository.saved_messages[-1]["structured_payload"]
         self.assertTrue(assistant_message_payload["orchestration"]["used"])

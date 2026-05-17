@@ -149,6 +149,9 @@ def _trace_metadata_from_response(response: ChatResponse) -> dict[str, object]:
             "retrieval_latency_ms": None,
             "model_used": "unknown",
             "fallback_used": bool(response.fallback_triggered),
+            "stream_fallback_attempted": False,
+            "mid_stream_failure": False,
+            "providers_attempted": [],
             "escalation_triggered": False,
             "worker_job_id": None,
             "prompt_version": "inline_legacy",
@@ -164,16 +167,19 @@ def _trace_metadata_from_response(response: ChatResponse) -> dict[str, object]:
         "retrieval_latency_ms": None,
         "model_used": route_debug.execution_model or route_debug.selected_model,
         "fallback_used": bool(response.fallback_triggered or route_debug.fallback_reason),
+        "stream_fallback_attempted": bool(getattr(route_debug, "stream_fallback_attempted", False)),
+        "mid_stream_failure": bool(getattr(route_debug, "mid_stream_failure", False)),
+        "providers_attempted": getattr(route_debug, "providers_attempted", []) or [],
         "escalation_triggered": bool(
             route_debug.intent_route == "SAFETY_ESCALATION"
             or route_debug.flow == "safety_escalation"
             or route_debug.response_mode == "safe_interim_escalation"
         ),
-        "worker_job_id": None,
+        "worker_job_id": route_debug.worker_job_id,
         "prompt_version": route_debug.prompt_version or "inline_legacy",
         "model_fallback_chain": route_debug.model_fallback_chain or [route_debug.execution_model or route_debug.selected_model],
         "tokens_cost_usd": route_debug.tokens_cost_usd,
-        "queue_enqueue_latency_ms": None,
+        "queue_enqueue_latency_ms": route_debug.queue_enqueue_latency_ms,
     }
 
 
@@ -752,6 +758,9 @@ async def chat_stream(
                             "route": Route.FAST.value,
                             "model_used": "launch-gate-ttft-only",
                             "fallback_used": False,
+                            "stream_fallback_attempted": False,
+                            "mid_stream_failure": False,
+                            "providers_attempted": ["system:launch-gate-ttft-only"],
                         },
                     )
                     trace.observe_payload(done_payload)
@@ -788,7 +797,12 @@ async def chat_stream(
                 capture_trace_metadata(payload)
                 if payload.get("conversation_id"):
                     stream_conversation_id = str(payload.get("conversation_id") or "").strip() or stream_conversation_id
-                if payload_type == "status" and not first_token_sent and pre_token_status_sent_count >= 1:
+                if (
+                    payload_type == "status"
+                    and not first_token_sent
+                    and pre_token_status_sent_count >= 1
+                    and not bool(payload.get("force_emit"))
+                ):
                     pre_token_status_suppressed_count += 1
                     continue
                 client_payload = strip_private_trace(payload)

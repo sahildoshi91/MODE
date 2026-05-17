@@ -407,6 +407,17 @@ class ConversationRepository:
         rows.reverse()
         return rows
 
+    def count_messages(self, conversation_id: str) -> int:
+        response = (
+            self.supabase
+            .table('conversation_messages')
+            .select('id', count='exact')
+            .eq('conversation_id', conversation_id)
+            .limit(1)
+            .execute()
+        )
+        return int(getattr(response, 'count', None) or 0)
+
     def list_messages_with_payload(
         self,
         conversation_id: str,

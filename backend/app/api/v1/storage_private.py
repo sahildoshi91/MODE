@@ -25,6 +25,13 @@ from app.modules.storage_lifecycle.service import StorageLifecycleError, Storage
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# SERVICE_ROLE_EXCEPTION
+# The private storage API uses service-role for signed URL generation.
+# This is intentional. Risk accepted on 2026-05-17.
+# Mitigations: endpoint is auth-gated, requests are scoped to authenticated user.
+# Re-review required if: auth middleware changes, storage handler changes.
+# Owner: MODE platform team
+
 _SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9/_\-.]+$")
 _RANDOM_BASENAME_RE = re.compile(r"[A-Za-z0-9_-]{24,}")
 _FORBIDDEN_EXTENSIONS = {

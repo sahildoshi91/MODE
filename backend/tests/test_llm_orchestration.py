@@ -156,11 +156,11 @@ class LLMOrchestrationTests(unittest.TestCase):
 
         self.assertEqual(result.text, "ok")
         self.assertEqual(provider, "openai")
-        self.assertEqual(model, "gpt-5.4-mini")
+        self.assertEqual(model, "gpt-5.4")
         self.assertEqual(fallback_reason, "openai_timeout")
         self.assertEqual(
             prompt.orchestration_metadata["model_fallback_chain"],
-            ["openai:gpt-5.4", "openai:gpt-5.4-mini"],
+            ["openai:gpt-5.5", "openai:gpt-5.4"],
         )
         self.assertTrue(prompt.orchestration_metadata["model_fallback_used"])
         self.assertIsNotNone(prompt.orchestration_metadata["tokens_cost_usd"])
@@ -179,7 +179,7 @@ class LLMOrchestrationTests(unittest.TestCase):
 
         self.assertEqual(
             prompt.orchestration_metadata["model_fallback_chain"],
-            ["openai:gpt-5.4", "openai:gpt-5.4-mini", "anthropic:claude-sonnet-4.6"],
+            ["openai:gpt-5.5", "openai:gpt-5.4", "anthropic:claude-sonnet-4.6"],
         )
         self.assertTrue(prompt.orchestration_metadata["model_fallback_used"])
 

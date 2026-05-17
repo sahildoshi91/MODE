@@ -15,6 +15,9 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from app.main import app
+from app.api.v1.chat import _trace_metadata_from_response
+from app.config.model_pricing import MODEL_PRICING, PRICING_LAST_VERIFIED, calculate_cost_usd
+from app.modules.conversation.schemas import ChatResponse, ConversationState, RouteDebug
 from app.modules.conversation.trace import ChatTrace, ChatTraceAccumulator
 from app.modules.intelligence_jobs.handlers import run_intelligence_job
 from app.modules.intelligence_jobs.schemas import IntelligenceJob
@@ -52,7 +55,8 @@ class ObservabilityPhaseDTests(unittest.TestCase):
                 "ok": True,
                 "db": "ok",
                 "redis": "ok",
-                "queue": "ok",
+                "queue": {"status": "ok", "queued_count": 0, "dead_letter_count": 0, "max_lag_ms": None},
+                "queue_redis": "ok",
                 "duration_ms": 3,
                 "cache_age_ms": 10,
                 "checks": {},
@@ -66,24 +70,31 @@ class ObservabilityPhaseDTests(unittest.TestCase):
         self.assertLess((time.perf_counter() - started_at) * 1000, 100)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
-            {key: response.json()[key] for key in ("status", "db", "redis", "queue")},
-            {"status": "ok", "db": "ok", "redis": "ok", "queue": "ok"},
+            {key: response.json()[key] for key in ("status", "db", "redis", "queue_redis")},
+            {"status": "ok", "db": "ok", "redis": "ok", "queue_redis": "ok"},
         )
 
     def test_healthz_returns_cached_structured_snapshot(self):
         with patch("app.modules.observability.health._check_db_sync") as db:
             with patch("app.modules.observability.health._check_redis_sync") as redis:
                 with patch("app.modules.observability.health._check_queue_sync") as queue:
-                    asyncio.run(health_module.refresh_health_snapshot(timeout_ms=100))
-                    payload = asyncio.run(build_healthz_payload())
+                    with patch("app.modules.observability.health._check_worker_queue_lag_sync") as queue_lag:
+                        queue_lag.return_value = health_module.QueueHealthState(
+                            status="ok",
+                            queued_count=0,
+                            dead_letter_count=0,
+                            max_lag_ms=None,
+                        )
+                        asyncio.run(health_module.refresh_health_snapshot(timeout_ms=100))
+                        payload = asyncio.run(build_healthz_payload())
 
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["db"], "ok")
         self.assertEqual(payload["redis"], "ok")
-        self.assertEqual(payload["queue"], "ok")
+        self.assertEqual(payload["queue"]["status"], "ok")
         self.assertIsInstance(payload["cache_age_ms"], int)
         self.assertIn("dependency_duration_ms", payload)
-        self.assertEqual(set(payload["checks"].keys()), {"db", "redis", "queue"})
+        self.assertEqual(set(payload["checks"].keys()), {"db", "redis", "queue", "queue_lag"})
         db.assert_called_once()
         redis.assert_called_once()
         queue.assert_called_once()
@@ -92,7 +103,14 @@ class ObservabilityPhaseDTests(unittest.TestCase):
         with patch("app.modules.observability.health._check_db_sync"):
             with patch("app.modules.observability.health._check_redis_sync"):
                 with patch("app.modules.observability.health._check_queue_sync"):
-                    asyncio.run(health_module.refresh_health_snapshot(timeout_ms=100))
+                    with patch("app.modules.observability.health._check_worker_queue_lag_sync") as queue_lag:
+                        queue_lag.return_value = health_module.QueueHealthState(
+                            status="ok",
+                            queued_count=0,
+                            dead_letter_count=0,
+                            max_lag_ms=None,
+                        )
+                        asyncio.run(health_module.refresh_health_snapshot(timeout_ms=100))
 
         def slow_check():
             time.sleep(0.2)
@@ -111,13 +129,15 @@ class ObservabilityPhaseDTests(unittest.TestCase):
             "ok": True,
             "db": "ok",
             "redis": "ok",
-            "queue": "ok",
+            "queue": {"status": "ok", "queued_count": 0, "dead_letter_count": 0, "max_lag_ms": None, "error_category": None},
+            "queue_redis": "ok",
             "duration_ms": 0,
             "dependency_duration_ms": 3,
             "checks": {
                 "db": {"status": "ok", "latency_ms": 1, "error_category": None},
                 "redis": {"status": "ok", "latency_ms": 1, "error_category": None},
                 "queue": {"status": "ok", "latency_ms": 1, "error_category": None},
+                "queue_lag": {"status": "ok", "queued_count": 0, "dead_letter_count": 0, "max_lag_ms": None, "error_category": None},
             },
         }
         health_module._health_snapshot = health_module.HealthSnapshot(
@@ -142,9 +162,16 @@ class ObservabilityPhaseDTests(unittest.TestCase):
             with patch("app.modules.observability.health._check_db_sync", side_effect=record_check):
                 with patch("app.modules.observability.health._check_redis_sync", side_effect=record_check):
                     with patch("app.modules.observability.health._check_queue_sync", side_effect=record_check):
-                        payload = await build_healthz_payload()
-                        await asyncio.sleep(0.05)
-                        warmed = await build_healthz_payload()
+                        with patch("app.modules.observability.health._check_worker_queue_lag_sync") as queue_lag:
+                            queue_lag.return_value = health_module.QueueHealthState(
+                                status="ok",
+                                queued_count=0,
+                                dead_letter_count=0,
+                                max_lag_ms=None,
+                            )
+                            payload = await build_healthz_payload()
+                            await asyncio.sleep(0.05)
+                            warmed = await build_healthz_payload()
                         return payload, warmed
 
         payload, warmed = asyncio.run(run_probe())
@@ -171,6 +198,43 @@ class ObservabilityPhaseDTests(unittest.TestCase):
             health_module._check_db_sync()
 
         self.assertEqual(fake_client.rpc_name, "mode_health_ping")
+
+    def test_healthz_reports_degraded_when_lag_exceeds_15s(self):
+        state = self._queue_state_from_rows(
+            [{"queued_count": 1, "dead_letter_count": 0, "max_lag_ms": 16_000}]
+        )
+
+        self.assertEqual(state.status, "degraded")
+        self.assertEqual(state.queued_count, 1)
+        self.assertEqual(state.max_lag_ms, 16_000)
+
+    def test_healthz_reports_dead_when_dead_letter_count_nonzero(self):
+        state = self._queue_state_from_rows(
+            [{"queued_count": 0, "dead_letter_count": 1, "max_lag_ms": 1_000}]
+        )
+
+        self.assertEqual(state.status, "dead")
+        self.assertEqual(state.dead_letter_count, 1)
+
+    def _queue_state_from_rows(self, rows):
+        class FakeQuery:
+            def __init__(self, data):
+                self.data = data
+
+            def select(self, columns):
+                del columns
+                return self
+
+            def execute(self):
+                return self
+
+        class FakeClient:
+            def table(self, table_name):
+                self.table_name = table_name
+                return FakeQuery(rows)
+
+        with patch("app.modules.observability.health.get_supabase_public_client", return_value=FakeClient()):
+            return health_module._check_worker_queue_lag_sync()
 
     def test_chat_trace_includes_prompt_version_and_cost_metrics(self):
         trace = ChatTrace(
@@ -211,6 +275,9 @@ class ObservabilityPhaseDTests(unittest.TestCase):
                     "model_fallback_chain": ["openai:gpt-5.4"],
                     "tokens_cost_usd": 0.002,
                     "queue_enqueue_latency_ms": 3,
+                    "stream_fallback_attempted": True,
+                    "mid_stream_failure": False,
+                    "providers_attempted": ["openai:gpt-5.4"],
                 },
             }
         )
@@ -220,6 +287,50 @@ class ObservabilityPhaseDTests(unittest.TestCase):
         self.assertEqual(built.model_fallback_chain, ["openai:gpt-5.4"])
         self.assertEqual(built.tokens_cost_usd, 0.002)
         self.assertEqual(built.queue_enqueue_latency_ms, 3)
+        self.assertTrue(built.stream_fallback_attempted)
+        self.assertEqual(built.providers_attempted, ["openai:gpt-5.4"])
+
+    def test_cost_returns_none_for_unknown_model_without_crashing(self):
+        with self.assertLogs("app.config.model_pricing", level="WARNING") as logs:
+            cost = calculate_cost_usd("unknown-model", 10, 10)
+
+        self.assertIsNone(cost)
+        self.assertIn("cost_calculation_missing_model", "\n".join(logs.output))
+
+    def test_cost_calculated_for_all_models_in_pricing_config(self):
+        self.assertEqual(PRICING_LAST_VERIFIED, "2026-05-16")
+        for model in MODEL_PRICING:
+            self.assertIsNotNone(calculate_cost_usd(model, 100, 50))
+
+    def test_prompt_version_present_in_every_trace_emission(self):
+        trace = ChatTraceAccumulator(request_id="req-1", user_id="user-1", trainer_id="trainer-1")
+        trace.observe_payload({"type": "done", "_trace": {"model_used": "gpt-5.4-mini"}})
+
+        self.assertEqual(trace.build().prompt_version, "inline_legacy")
+
+    def test_worker_job_id_present_in_trace_after_enqueue(self):
+        response = ChatResponse(
+            conversation_id="conversation-1",
+            assistant_message="ok",
+            conversation_state=ConversationState(),
+            route_debug=RouteDebug(
+                selected_provider="openai",
+                selected_model="gpt-5.4-mini",
+                execution_provider="openai",
+                execution_model="gpt-5.4-mini",
+                flow="default_fast",
+                reason="default",
+                task_type="qa_quick",
+                response_mode="direct_answer",
+                worker_job_id="job-1",
+                queue_enqueue_latency_ms=4,
+            ),
+        )
+
+        trace = _trace_metadata_from_response(response)
+
+        self.assertEqual(trace["worker_job_id"], "job-1")
+        self.assertEqual(trace["queue_enqueue_latency_ms"], 4)
 
     def test_worker_trace_emitted_on_job_completion(self):
         job = IntelligenceJob(
