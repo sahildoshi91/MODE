@@ -404,10 +404,13 @@ async def _chat_stream_once_async(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
     }
+    client_context: dict[str, Any] = {"launch_gate_smoke": True}
+    if stop_after_first_token:
+        client_context["launch_gate_ttft_only"] = True
     body = {
         "request_id": str(uuid4()),
         "message": message,
-        "client_context": {"launch_gate_smoke": True},
+        "client_context": client_context,
     }
     request_id = str(body["request_id"])
     url = urljoin(f"{base_url.rstrip('/')}/", CHAT_STREAM_PATH.lstrip("/"))

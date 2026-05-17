@@ -501,6 +501,31 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn('"content": "Got it - "', response.text)
         self.assertLess(calls.index("route_prefix_encoded"), calls.index("factory"))
 
+    def test_stream_launch_gate_ttft_only_finishes_without_service_construction(self):
+        calls = []
+
+        def factory():
+            calls.append("factory")
+            raise AssertionError("TTFT-only launch probe must not build the conversation service")
+
+        app.dependency_overrides[get_conversation_service_factory] = lambda: factory
+        response = self.client.post(
+            "/api/v1/chat/stream",
+            json={
+                "message": "Launch gate TTFT load probe. Reply briefly.",
+                "client_context": {
+                    "launch_gate_smoke": True,
+                    "launch_gate_ttft_only": True,
+                },
+            },
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"content": "Got it - "', response.text)
+        self.assertIn("event: done", response.text)
+        self.assertEqual(calls, [])
+
     def test_stream_launch_gate_disconnect_after_prefix_skips_service_construction(self):
         calls = []
 
@@ -606,6 +631,7 @@ class ChatApiTests(unittest.TestCase):
         self.assertIsInstance(payload["request_to_endpoint_ms"], int)
         self.assertIsInstance(payload["endpoint_to_response_ms"], int)
         self.assertIsInstance(payload["request_to_generator_start_ms"], int)
+        self.assertFalse(payload["launch_gate_ttft_only"])
         self.assertIsInstance(payload["first_event_encoded_ms"], int)
         self.assertIsInstance(payload["first_token_encoded_ms"], int)
         self.assertIsInstance(payload["first_token_yielded_ms"], int)

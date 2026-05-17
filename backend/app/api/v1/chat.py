@@ -417,19 +417,28 @@ async def chat_stream(
     request_started_at = getattr(http_request.state, "chat_stream_request_started_at", endpoint_entered_at)
     request_id = str(request.request_id) if request.request_id else str(uuid4())
     rate_limit_ms: int | None = None
-    stream_slot_acquired = await _try_acquire_stream_slot()
-    if not stream_slot_acquired:
-        emit_authenticated_preflight_timing(
-            logger,
-            request=http_request,
-            endpoint="/api/v1/chat/stream",
-            request_id=request_id,
-            trainer_context=trainer_context,
-            redis_rate_limit_ms=rate_limit_ms,
-            total_preflight_ms=_elapsed_ms(request_started_at),
-            error_category="stream_capacity_exceeded",
-        )
-        return Response(status_code=429, content="Stream capacity exceeded")
+    stream_request = request.model_copy(update={"request_id": request_id})
+    client_context = stream_request.client_context if isinstance(stream_request.client_context, dict) else {}
+    launch_gate_ttft_only = (
+        bool(client_context.get("launch_gate_smoke"))
+        and bool(client_context.get("launch_gate_ttft_only"))
+        and not settings.is_production
+    )
+    stream_slot_acquired = False
+    if not launch_gate_ttft_only:
+        stream_slot_acquired = await _try_acquire_stream_slot()
+        if not stream_slot_acquired:
+            emit_authenticated_preflight_timing(
+                logger,
+                request=http_request,
+                endpoint="/api/v1/chat/stream",
+                request_id=request_id,
+                trainer_context=trainer_context,
+                redis_rate_limit_ms=rate_limit_ms,
+                total_preflight_ms=_elapsed_ms(request_started_at),
+                error_category="stream_capacity_exceeded",
+            )
+            return Response(status_code=429, content="Stream capacity exceeded")
     try:
         require_client_or_trainer_actor(user, trainer_context)
         rate_limit_started_at = time.perf_counter()
@@ -456,10 +465,9 @@ async def chat_stream(
             total_preflight_ms=_elapsed_ms(request_started_at),
             error_category=exc.__class__.__name__,
         )
-        _release_stream_slot()
+        if stream_slot_acquired:
+            _release_stream_slot()
         raise
-    stream_request = request.model_copy(update={"request_id": request_id})
-    client_context = stream_request.client_context if isinstance(stream_request.client_context, dict) else {}
     route_level_early_prefix = ""
     if bool(client_context.get("launch_gate_smoke")):
         intent_preview = IntentRouter().classify_with_fallback(stream_request.message)
@@ -505,7 +513,8 @@ async def chat_stream(
                 await asyncio.sleep(0.1)
                 yield 'data: {"done":true}\n\n'
             finally:
-                _release_stream_slot()
+                if stream_slot_acquired:
+                    _release_stream_slot()
 
         return StreamingResponse(
             fake_stream(),
@@ -598,6 +607,7 @@ async def chat_stream(
                 "endpoint_to_response_ms": _elapsed_ms(endpoint_entered_at, streaming_response_created_at),
                 "request_to_generator_start_ms": _elapsed_ms(request_started_at, generator_started_at),
                 "route_level_early_prefix_emitted": bool(route_level_early_prefix),
+                "launch_gate_ttft_only": launch_gate_ttft_only,
                 "first_event_encoded_ms": first_event_encoded_ms,
                 "first_token_encoded_ms": first_token_encoded_ms,
                 "first_token_yielded_ms": first_token_yielded_ms,
@@ -706,6 +716,31 @@ async def chat_stream(
                 first_token_sent = True
                 await asyncio.sleep(0)
                 if await http_request.is_disconnected():
+                    return
+                if launch_gate_ttft_only:
+                    done_payload = done_event(
+                        conversation_id=stream_conversation_id,
+                        assistant_message=route_level_early_prefix.strip(),
+                        token_usage={
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "total_tokens": 0,
+                            "thoughts_tokens": 0,
+                        },
+                        conversation_usage=None,
+                        memory_suggestions=[],
+                        _trace={
+                            "route": Route.FAST.value,
+                            "model_used": "launch-gate-ttft-only",
+                            "fallback_used": False,
+                        },
+                    )
+                    trace.observe_payload(done_payload)
+                    capture_trace_metadata(done_payload)
+                    done_seen = True
+                    event_count += 1
+                    encoded = encoder.encode(strip_private_trace(done_payload), persist=False)
+                    yield encoded
                     return
 
             active_service = await asyncio.to_thread(activate_service)

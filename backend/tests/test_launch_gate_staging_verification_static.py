@@ -258,6 +258,7 @@ def test_chat_stream_once_async_accepts_data_only_fake_provider() -> None:
 def test_chat_stream_once_async_can_stop_after_first_token() -> None:
     module = _load_launch_verify_module()
     yielded_lines = []
+    request_bodies = []
 
     class FakeAsyncResponse:
         status_code = 200
@@ -281,7 +282,8 @@ def test_chat_stream_once_async_can_stop_after_first_token() -> None:
                 yield line
 
     class FakeAsyncClient:
-        def stream(self, *_args, **_kwargs):
+        def stream(self, *_args, **kwargs):
+            request_bodies.append(kwargs["json"])
             return FakeAsyncResponse()
 
     result = asyncio.run(
@@ -299,6 +301,7 @@ def test_chat_stream_once_async_can_stop_after_first_token() -> None:
     assert result["done_seen"] is False
     assert result["last_event"] == "token"
     assert result["stopped_after_first_token"] is True
+    assert request_bodies[0]["client_context"]["launch_gate_ttft_only"] is True
     assert yielded_lines == [
         "event: status",
         "data: {}",
