@@ -3,6 +3,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -47,6 +48,11 @@ logger = logging.getLogger(__name__)
 CONTROLLED_CHAT_ERROR_DETAIL = "Chat response could not be completed"
 _stream_semaphore_limit = int(settings.max_active_chat_streams_per_instance)
 _stream_semaphore = asyncio.Semaphore(_stream_semaphore_limit)
+_provider_stream_executor_workers = int(settings.chat_stream_provider_worker_threads)
+_provider_stream_executor = ThreadPoolExecutor(
+    max_workers=_provider_stream_executor_workers,
+    thread_name_prefix="chat-provider-stream",
+)
 
 
 def _elapsed_ms(started_at: float, ended_at: float | None = None) -> int:
@@ -106,6 +112,11 @@ def _release_stream_slot() -> None:
         semaphore.release()
     except ValueError:
         logger.warning("chat_stream_semaphore_release_overflow")
+
+
+async def _next_stream_payload(event_iterator, stream_done):
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_provider_stream_executor, next, event_iterator, stream_done)
 
 
 def _public_chat_response(response: ChatResponse) -> ChatResponse:
@@ -710,7 +721,7 @@ async def chat_stream(
                     direct_pre_token_nexts_remaining -= 1
                     payload = next(event_iterator, stream_done)
                 else:
-                    payload = await asyncio.to_thread(next, event_iterator, stream_done)
+                    payload = await _next_stream_payload(event_iterator, stream_done)
                 if payload is stream_done:
                     break
                 if await http_request.is_disconnected():

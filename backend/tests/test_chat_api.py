@@ -383,6 +383,24 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("enforce_rate_limit", calls)
 
+    def test_stream_advances_provider_iterator_on_dedicated_executor(self):
+        self._override_conversation_service(FakeConversationService())
+        calls = []
+
+        async def recording_next_stream_payload(event_iterator, stream_done):
+            calls.append("provider_stream_executor")
+            return next(event_iterator, stream_done)
+
+        with patch("app.api.v1.chat._next_stream_payload", recording_next_stream_payload):
+            response = self.client.post(
+                "/api/v1/chat/stream",
+                json={"message": "Hello"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("provider_stream_executor", calls)
+
     def test_stream_fake_provider_short_circuits_service_factory(self):
         calls = []
 
