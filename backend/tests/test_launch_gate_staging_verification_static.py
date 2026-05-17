@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import importlib.util
 import json
 import sys
@@ -178,6 +179,124 @@ def test_chat_stream_once_records_stream_timing_diagnostics(monkeypatch) -> None
     assert result["data_line_count"] == 3
     assert result["line_count"] == 6
     assert result["done_seen"] is True
+
+
+def test_chat_stream_once_accepts_data_only_fake_provider(monkeypatch) -> None:
+    module = _load_launch_verify_module()
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def getcode(self):
+            return 200
+
+        def __iter__(self):
+            return iter(
+                [
+                    b'data: {"token":"start"}\n',
+                    b"\n",
+                    b'data: {"done":true}\n',
+                    b"\n",
+                ]
+            )
+
+    monkeypatch.setattr(module, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+
+    result = module._chat_stream_once("https://mode-backend-staging.onrender.com", "token", 1.0, "hello")
+
+    assert result["ok"] is True
+    assert result["first_event"] == "token"
+    assert result["first_token_ms"] == result["ttft_ms"]
+    assert result["done_seen"] is True
+
+
+def test_chat_stream_once_async_accepts_data_only_fake_provider() -> None:
+    module = _load_launch_verify_module()
+
+    class FakeAsyncResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def aiter_lines(self):
+            for line in ('data: {"token":"start"}', "", 'data: {"done":true}', ""):
+                yield line
+
+    class FakeAsyncClient:
+        def stream(self, *_args, **_kwargs):
+            return FakeAsyncResponse()
+
+    result = asyncio.run(
+        module._chat_stream_once_async(
+            FakeAsyncClient(),
+            "https://mode-backend-staging.onrender.com",
+            "token",
+            "hello",
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["first_event"] == "token"
+    assert result["first_token_ms"] == result["ttft_ms"]
+    assert result["done_seen"] is True
+
+
+def test_chat_load_reuses_one_shared_async_client(monkeypatch) -> None:
+    module = _load_launch_verify_module()
+    clients = []
+    seen_clients = []
+
+    class FakeAsyncClient:
+        def __init__(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+            clients.append(self)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    async def fake_chat_stream_once_async(client, *_args, **_kwargs):
+        seen_clients.append(client)
+        return {
+            "ok": True,
+            "status": 200,
+            "request_id": "request",
+            "ttft_ms": 25,
+            "done_seen": True,
+        }
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(module, "_chat_stream_once_async", fake_chat_stream_once_async)
+    args = argparse.Namespace(
+        base_url="https://mode-backend-staging.onrender.com",
+        auth_token="token-a",
+        auth_token_file=None,
+        chat_load_requests=5,
+        chat_load_concurrency=5,
+        ttft_target_ms=2500,
+    )
+
+    result = module._chat_load(args)
+
+    assert result.status == "PASS"
+    assert len(clients) == 1
+    assert len(seen_clients) == 5
+    assert set(map(id, seen_clients)) == {id(clients[0])}
+    assert clients[0].kwargs["timeout"] == 30.0
+    limits = clients[0].kwargs["limits"]
+    assert limits.max_connections is None
+    assert limits.max_keepalive_connections == 50
 
 
 def test_healthz_uses_server_duration_for_latency_gate(monkeypatch) -> None:

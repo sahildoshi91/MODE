@@ -8,6 +8,7 @@ LLM/load checks only run when explicitly requested.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import math
 import os
@@ -15,7 +16,6 @@ import socket
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 from uuid import uuid4
+
+import httpx
 
 from apply_launch_gate_migrations import _read_validated_sql_files
 
@@ -259,6 +261,26 @@ def _db_security(args: argparse.Namespace) -> CheckResult:
     return _run_command("db_security", [sys.executable, "scripts/staging_db_security_check.py"], cwd=BACKEND_ROOT)
 
 
+def _classify_sse_data_line(event_name: str, data: str) -> tuple[str | None, bool, bool]:
+    inferred_event = event_name or None
+    token_seen = event_name in {"token", "message_delta"} and bool(data and data != "{}")
+    done_seen = event_name == "done"
+    if token_seen or done_seen:
+        return inferred_event, token_seen, done_seen
+    try:
+        payload = json.loads(data)
+    except json.JSONDecodeError:
+        return inferred_event, token_seen, done_seen
+    if not isinstance(payload, dict):
+        return inferred_event, token_seen, done_seen
+    payload_type = str(payload.get("type") or "").strip()
+    if payload.get("done") is True or payload_type == "done":
+        return inferred_event or "done", token_seen, True
+    if "token" in payload or payload_type in {"token", "message_delta"}:
+        return inferred_event or "token", True, done_seen
+    return inferred_event, token_seen, done_seen
+
+
 def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -> dict[str, Any]:
     headers = {
         "Accept": "text/event-stream",
@@ -299,9 +321,15 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
                 elif line.startswith("data:"):
                     data_line_count += 1
                     data = line.split(":", 1)[1].strip()
-                    if event_name == "token" and first_token_ms is None and data and data != "{}":
+                    inferred_event, token_seen, line_done_seen = _classify_sse_data_line(event_name, data)
+                    if first_event_ms is None and inferred_event:
+                        first_event_ms = int((time.perf_counter() - started) * 1000)
+                        first_event = inferred_event
+                        if not event_name:
+                            event_count += 1
+                    if token_seen and first_token_ms is None:
                         first_token_ms = int((time.perf_counter() - started) * 1000)
-                    if event_name == "done":
+                    if line_done_seen:
                         done_seen = True
                         break
             return {
@@ -328,6 +356,96 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
             "error": exc.read().decode("utf-8", errors="replace")[:500],
         }
     except Exception as exc:
+        return {
+            "ok": False,
+            "status": None,
+            "request_id": request_id,
+            "total_ms": int((time.perf_counter() - started) * 1000),
+            "error": str(exc),
+        }
+
+
+async def _chat_stream_once_async(
+    client: httpx.AsyncClient,
+    base_url: str,
+    token: str,
+    message: str,
+) -> dict[str, Any]:
+    headers = {
+        "Accept": "text/event-stream",
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+    body = {
+        "request_id": str(uuid4()),
+        "message": message,
+        "client_context": {"launch_gate_smoke": True},
+    }
+    request_id = str(body["request_id"])
+    url = urljoin(f"{base_url.rstrip('/')}/", CHAT_STREAM_PATH.lstrip("/"))
+    started = time.perf_counter()
+    headers_ms: int | None = None
+    first_event_ms: int | None = None
+    first_event: str | None = None
+    first_token_ms: int | None = None
+    event_name = ""
+    event_count = 0
+    data_line_count = 0
+    line_count = 0
+    done_seen = False
+    try:
+        async with client.stream("POST", url, headers=headers, json=body) as response:
+            headers_ms = int((time.perf_counter() - started) * 1000)
+            status = int(response.status_code)
+            if status >= 400:
+                error_body = (await response.aread()).decode("utf-8", errors="replace")
+                return {
+                    "ok": False,
+                    "status": status,
+                    "request_id": request_id,
+                    "headers_ms": headers_ms,
+                    "total_ms": int((time.perf_counter() - started) * 1000),
+                    "error": error_body[:500],
+                }
+            async for raw_line in response.aiter_lines():
+                line_count += 1
+                line = str(raw_line or "").strip()
+                if line.startswith("event:"):
+                    event_name = line.split(":", 1)[1].strip()
+                    event_count += 1
+                    if first_event_ms is None:
+                        first_event_ms = int((time.perf_counter() - started) * 1000)
+                        first_event = event_name
+                elif line.startswith("data:"):
+                    data_line_count += 1
+                    data = line.split(":", 1)[1].strip()
+                    inferred_event, token_seen, line_done_seen = _classify_sse_data_line(event_name, data)
+                    if first_event_ms is None and inferred_event:
+                        first_event_ms = int((time.perf_counter() - started) * 1000)
+                        first_event = inferred_event
+                        if not event_name:
+                            event_count += 1
+                    if token_seen and first_token_ms is None:
+                        first_token_ms = int((time.perf_counter() - started) * 1000)
+                    if line_done_seen:
+                        done_seen = True
+                        break
+            return {
+                "ok": status == 200 and first_token_ms is not None and done_seen,
+                "status": status,
+                "request_id": request_id,
+                "headers_ms": headers_ms,
+                "first_event": first_event,
+                "first_event_ms": first_event_ms,
+                "first_token_ms": first_token_ms,
+                "ttft_ms": first_token_ms,
+                "total_ms": int((time.perf_counter() - started) * 1000),
+                "event_count": event_count,
+                "data_line_count": data_line_count,
+                "line_count": line_count,
+                "done_seen": done_seen,
+            }
+    except (httpx.TimeoutException, httpx.HTTPError, OSError) as exc:
         return {
             "ok": False,
             "status": None,
@@ -373,6 +491,30 @@ def _chat_smoke(args: argparse.Namespace) -> CheckResult:
     )
 
 
+async def _run_chat_load_requests(args: argparse.Namespace, tokens: list[str]) -> list[dict[str, Any]]:
+    request_count = int(args.chat_load_requests)
+    concurrency = max(1, int(args.chat_load_concurrency))
+    semaphore = asyncio.Semaphore(concurrency)
+    async with httpx.AsyncClient(
+        timeout=30.0,
+        limits=httpx.Limits(
+            max_connections=None,
+            max_keepalive_connections=50,
+        ),
+    ) as client:
+        async def run_one(index: int) -> dict[str, Any]:
+            async with semaphore:
+                token = tokens[index % len(tokens)]
+                return await _chat_stream_once_async(
+                    client,
+                    args.base_url,
+                    token,
+                    "Launch gate TTFT load probe. Reply briefly.",
+                )
+
+        return list(await asyncio.gather(*(run_one(index) for index in range(request_count))))
+
+
 def _chat_load(args: argparse.Namespace) -> CheckResult:
     if int(args.chat_load_requests) <= 0:
         return CheckResult("chat_ttft_load", "SKIP", "No chat load requested.")
@@ -381,22 +523,7 @@ def _chat_load(args: argparse.Namespace) -> CheckResult:
         return CheckResult("chat_ttft_load", "FAIL", "Chat load requires --auth-token or --auth-token-file.")
     request_count = int(args.chat_load_requests)
     concurrency = max(1, int(args.chat_load_concurrency))
-    results: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = []
-        for index in range(request_count):
-            token = tokens[index % len(tokens)]
-            futures.append(
-                executor.submit(
-                    _chat_stream_once,
-                    args.base_url,
-                    token,
-                    max(float(args.timeout_seconds), 45.0),
-                    "Launch gate TTFT load probe. Reply briefly.",
-                )
-            )
-        for future in as_completed(futures):
-            results.append(future.result())
+    results = asyncio.run(_run_chat_load_requests(args, tokens))
     ttfts = [int(item["ttft_ms"]) for item in results if item.get("ok") and item.get("ttft_ms") is not None]
     p95 = _percentile(ttfts, 95)
     failures = [item for item in results if not item.get("ok")]

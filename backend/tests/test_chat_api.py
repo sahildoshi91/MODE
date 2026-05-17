@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -13,6 +14,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from fastapi.testclient import TestClient
 
+from app.api.v1 import chat as chat_api_module
 from app.core.auth import AuthenticatedUser, require_user
 from app.core.config import settings
 from app.core.dependencies import get_conversation_service, get_conversation_service_factory, get_trainer_context
@@ -231,9 +233,14 @@ class ChatApiTests(unittest.TestCase):
         self._original_rate_limit_enabled = settings.rate_limit_enabled
         self._original_rate_limit_window_seconds = settings.rate_limit_window_seconds
         self._original_rate_limit_chat_per_window = settings.rate_limit_chat_per_window
+        self._original_use_fake_provider = settings.use_fake_provider
+        self._original_max_active_chat_streams_per_instance = settings.max_active_chat_streams_per_instance
         settings.rate_limit_enabled = True
         settings.rate_limit_window_seconds = 60
         settings.rate_limit_chat_per_window = 30
+        settings.use_fake_provider = False
+        settings.max_active_chat_streams_per_instance = 15
+        chat_api_module._reset_stream_semaphore_for_tests()
         _rate_limiter._windows.clear()
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
             id="user-123",
@@ -260,6 +267,9 @@ class ChatApiTests(unittest.TestCase):
         settings.rate_limit_enabled = self._original_rate_limit_enabled
         settings.rate_limit_window_seconds = self._original_rate_limit_window_seconds
         settings.rate_limit_chat_per_window = self._original_rate_limit_chat_per_window
+        settings.use_fake_provider = self._original_use_fake_provider
+        settings.max_active_chat_streams_per_instance = self._original_max_active_chat_streams_per_instance
+        chat_api_module._reset_stream_semaphore_for_tests()
         _rate_limiter._windows.clear()
         app.dependency_overrides.clear()
 
@@ -372,6 +382,45 @@ class ChatApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("enforce_rate_limit", calls)
+
+    def test_stream_fake_provider_short_circuits_service_factory(self):
+        calls = []
+
+        def factory():
+            calls.append("factory")
+            raise AssertionError("Fake provider must not build the conversation service")
+
+        settings.use_fake_provider = True
+        app.dependency_overrides[get_conversation_service_factory] = lambda: factory
+
+        response = self.client.post(
+            "/api/v1/chat/stream",
+            json={"message": "Hello"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data: {"token":"start"}', response.text)
+        self.assertIn('data: {"done":true}', response.text)
+        self.assertEqual(calls, [])
+
+    def test_stream_capacity_guard_returns_429_without_queuing(self):
+        self._override_conversation_service(FakeConversationService())
+        settings.max_active_chat_streams_per_instance = 1
+        chat_api_module._reset_stream_semaphore_for_tests(1)
+        acquired = asyncio.run(chat_api_module._try_acquire_stream_slot())
+        self.assertTrue(acquired)
+        try:
+            response = self.client.post(
+                "/api/v1/chat/stream",
+                json={"message": "Hello"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+        finally:
+            chat_api_module._release_stream_slot()
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(response.text, "Stream capacity exceeded")
 
     def test_stream_defers_request_persistence_until_after_first_token(self):
         service = RecordingStreamPersistenceService()

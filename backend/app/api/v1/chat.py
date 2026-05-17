@@ -6,7 +6,7 @@ from collections.abc import Callable
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.api.v1.trainer_auth import require_client_or_trainer_actor
@@ -45,6 +45,8 @@ from app.modules.conversation.trace import ChatTraceAccumulator, emit_chat_trace
 router = APIRouter()
 logger = logging.getLogger(__name__)
 CONTROLLED_CHAT_ERROR_DETAIL = "Chat response could not be completed"
+_stream_semaphore_limit = int(settings.max_active_chat_streams_per_instance)
+_stream_semaphore = asyncio.Semaphore(_stream_semaphore_limit)
 
 
 def _elapsed_ms(started_at: float, ended_at: float | None = None) -> int:
@@ -73,6 +75,37 @@ def _provider_from_model(model: object) -> str | None:
     if model_text.startswith(("gpt-", "o1", "o3", "o4")):
         return "openai"
     return None
+
+
+def _reset_stream_semaphore_for_tests(limit: int | None = None) -> None:
+    global _stream_semaphore, _stream_semaphore_limit
+    configured_limit = int(limit if limit is not None else settings.max_active_chat_streams_per_instance)
+    _stream_semaphore_limit = max(configured_limit, 1)
+    _stream_semaphore = asyncio.Semaphore(_stream_semaphore_limit)
+
+
+def _get_stream_semaphore() -> asyncio.Semaphore:
+    global _stream_semaphore, _stream_semaphore_limit
+    configured_limit = max(int(settings.max_active_chat_streams_per_instance), 1)
+    if configured_limit != _stream_semaphore_limit and getattr(_stream_semaphore, "_value", 0) == _stream_semaphore_limit:
+        _reset_stream_semaphore_for_tests(configured_limit)
+    return _stream_semaphore
+
+
+async def _try_acquire_stream_slot() -> bool:
+    semaphore = _get_stream_semaphore()
+    if semaphore.locked():
+        return False
+    await semaphore.acquire()
+    return True
+
+
+def _release_stream_slot() -> None:
+    semaphore = _get_stream_semaphore()
+    try:
+        semaphore.release()
+    except ValueError:
+        logger.warning("chat_stream_semaphore_release_overflow")
 
 
 def _public_chat_response(response: ChatResponse) -> ChatResponse:
@@ -373,6 +406,19 @@ async def chat_stream(
     request_started_at = getattr(http_request.state, "chat_stream_request_started_at", endpoint_entered_at)
     request_id = str(request.request_id) if request.request_id else str(uuid4())
     rate_limit_ms: int | None = None
+    stream_slot_acquired = await _try_acquire_stream_slot()
+    if not stream_slot_acquired:
+        emit_authenticated_preflight_timing(
+            logger,
+            request=http_request,
+            endpoint="/api/v1/chat/stream",
+            request_id=request_id,
+            trainer_context=trainer_context,
+            redis_rate_limit_ms=rate_limit_ms,
+            total_preflight_ms=_elapsed_ms(request_started_at),
+            error_category="stream_capacity_exceeded",
+        )
+        return Response(status_code=429, content="Stream capacity exceeded")
     try:
         require_client_or_trainer_actor(user, trainer_context)
         rate_limit_started_at = time.perf_counter()
@@ -399,6 +445,7 @@ async def chat_stream(
             total_preflight_ms=_elapsed_ms(request_started_at),
             error_category=exc.__class__.__name__,
         )
+        _release_stream_slot()
         raise
     stream_request = request.model_copy(update={"request_id": request_id})
     client_context = stream_request.client_context if isinstance(stream_request.client_context, dict) else {}
@@ -440,6 +487,20 @@ async def chat_stream(
         redis_rate_limit_ms=rate_limit_ms,
         total_preflight_ms=_elapsed_ms(request_started_at),
     )
+    if settings.use_fake_provider:
+        async def fake_stream():
+            try:
+                yield 'data: {"token":"start"}\n\n'
+                await asyncio.sleep(0.1)
+                yield 'data: {"done":true}\n\n'
+            finally:
+                _release_stream_slot()
+
+        return StreamingResponse(
+            fake_stream(),
+            media_type="text/event-stream",
+            headers=STREAMING_RESPONSE_HEADERS,
+        )
 
     async def event_stream():
         nonlocal request_id
@@ -772,6 +833,7 @@ async def chat_stream(
                 client_id=str(trainer_context.client_id or ""),
                 conversation_id=stream_conversation_id,
             )
+            _release_stream_slot()
 
     streaming_response_created_at = time.perf_counter()
     return StreamingResponse(
