@@ -541,6 +541,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         )
         self.request = ChatRequest(
             conversation_id=None,
+            request_id=uuid4(),
             message="I can train four days a week.",
             client_context={"platform": "ios"},
         )
@@ -653,6 +654,7 @@ class ConversationServiceRoutingTests(unittest.TestCase):
             f"{DEFAULT_FAST_DEADLINE_PREFIX}GPT stream",
         )
         self.assertEqual(payload["event"], "chat_stream_timing")
+        self.assertEqual(payload["request_id"], str(self.request.request_id))
         self.assertEqual(payload["tenant_id"], "tenant-123")
         self.assertEqual(payload["trainer_id"], "trainer-123")
         self.assertEqual(payload["client_id"], "client-123")

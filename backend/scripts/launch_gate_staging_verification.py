@@ -261,24 +261,27 @@ def _db_security(args: argparse.Namespace) -> CheckResult:
     return _run_command("db_security", [sys.executable, "scripts/staging_db_security_check.py"], cwd=BACKEND_ROOT)
 
 
-def _classify_sse_data_line(event_name: str, data: str) -> tuple[str | None, bool, bool]:
+def _classify_sse_data_line(event_name: str, data: str) -> tuple[str | None, bool, bool, bool]:
     inferred_event = event_name or None
     token_seen = event_name in {"token", "message_delta"} and bool(data and data != "{}")
     done_seen = event_name == "done"
-    if token_seen or done_seen:
-        return inferred_event, token_seen, done_seen
+    error_seen = event_name == "error"
+    if token_seen or done_seen or error_seen:
+        return inferred_event, token_seen, done_seen, error_seen
     try:
         payload = json.loads(data)
     except json.JSONDecodeError:
-        return inferred_event, token_seen, done_seen
+        return inferred_event, token_seen, done_seen, error_seen
     if not isinstance(payload, dict):
-        return inferred_event, token_seen, done_seen
+        return inferred_event, token_seen, done_seen, error_seen
     payload_type = str(payload.get("type") or "").strip()
     if payload.get("done") is True or payload_type == "done":
-        return inferred_event or "done", token_seen, True
+        return inferred_event or "done", token_seen, True, error_seen
+    if payload_type == "error" or "error" in payload:
+        return inferred_event or "error", token_seen, done_seen, True
     if "token" in payload or payload_type in {"token", "message_delta"}:
-        return inferred_event or "token", True, done_seen
-    return inferred_event, token_seen, done_seen
+        return inferred_event or "token", True, done_seen, error_seen
+    return inferred_event, token_seen, done_seen, error_seen
 
 
 def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -> dict[str, Any]:
@@ -304,6 +307,10 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
     data_line_count = 0
     line_count = 0
     done_seen = False
+    error_seen = False
+    first_error_ms: int | None = None
+    last_event: str | None = None
+    last_data: str | None = None
     req = Request(url, data=json.dumps(body).encode("utf-8"), headers=headers, method="POST")
     try:
         with urlopen(req, timeout=timeout) as response:
@@ -314,6 +321,7 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if line.startswith("event:"):
                     event_name = line.split(":", 1)[1].strip()
+                    last_event = event_name or last_event
                     event_count += 1
                     if first_event_ms is None:
                         first_event_ms = int((time.perf_counter() - started) * 1000)
@@ -321,7 +329,9 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
                 elif line.startswith("data:"):
                     data_line_count += 1
                     data = line.split(":", 1)[1].strip()
-                    inferred_event, token_seen, line_done_seen = _classify_sse_data_line(event_name, data)
+                    last_data = data[:500]
+                    inferred_event, token_seen, line_done_seen, line_error_seen = _classify_sse_data_line(event_name, data)
+                    last_event = inferred_event or last_event
                     if first_event_ms is None and inferred_event:
                         first_event_ms = int((time.perf_counter() - started) * 1000)
                         first_event = inferred_event
@@ -329,6 +339,10 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
                             event_count += 1
                     if token_seen and first_token_ms is None:
                         first_token_ms = int((time.perf_counter() - started) * 1000)
+                    if line_error_seen:
+                        error_seen = True
+                        if first_error_ms is None:
+                            first_error_ms = int((time.perf_counter() - started) * 1000)
                     if line_done_seen:
                         done_seen = True
                         break
@@ -346,6 +360,10 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
                 "data_line_count": data_line_count,
                 "line_count": line_count,
                 "done_seen": done_seen,
+                "error_seen": error_seen,
+                "first_error_ms": first_error_ms,
+                "last_event": last_event,
+                "last_data": last_data,
             }
     except HTTPError as exc:
         return {
@@ -393,6 +411,10 @@ async def _chat_stream_once_async(
     data_line_count = 0
     line_count = 0
     done_seen = False
+    error_seen = False
+    first_error_ms: int | None = None
+    last_event: str | None = None
+    last_data: str | None = None
     try:
         async with client.stream("POST", url, headers=headers, json=body) as response:
             headers_ms = int((time.perf_counter() - started) * 1000)
@@ -412,6 +434,7 @@ async def _chat_stream_once_async(
                 line = str(raw_line or "").strip()
                 if line.startswith("event:"):
                     event_name = line.split(":", 1)[1].strip()
+                    last_event = event_name or last_event
                     event_count += 1
                     if first_event_ms is None:
                         first_event_ms = int((time.perf_counter() - started) * 1000)
@@ -419,7 +442,9 @@ async def _chat_stream_once_async(
                 elif line.startswith("data:"):
                     data_line_count += 1
                     data = line.split(":", 1)[1].strip()
-                    inferred_event, token_seen, line_done_seen = _classify_sse_data_line(event_name, data)
+                    last_data = data[:500]
+                    inferred_event, token_seen, line_done_seen, line_error_seen = _classify_sse_data_line(event_name, data)
+                    last_event = inferred_event or last_event
                     if first_event_ms is None and inferred_event:
                         first_event_ms = int((time.perf_counter() - started) * 1000)
                         first_event = inferred_event
@@ -427,6 +452,10 @@ async def _chat_stream_once_async(
                             event_count += 1
                     if token_seen and first_token_ms is None:
                         first_token_ms = int((time.perf_counter() - started) * 1000)
+                    if line_error_seen:
+                        error_seen = True
+                        if first_error_ms is None:
+                            first_error_ms = int((time.perf_counter() - started) * 1000)
                     if line_done_seen:
                         done_seen = True
                         break
@@ -444,6 +473,10 @@ async def _chat_stream_once_async(
                 "data_line_count": data_line_count,
                 "line_count": line_count,
                 "done_seen": done_seen,
+                "error_seen": error_seen,
+                "first_error_ms": first_error_ms,
+                "last_event": last_event,
+                "last_data": last_data,
             }
     except (httpx.TimeoutException, httpx.HTTPError, OSError) as exc:
         return {

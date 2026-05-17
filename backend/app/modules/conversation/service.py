@@ -183,6 +183,7 @@ class PromptPackage:
 @dataclass
 class ChatStreamTiming:
     started_at: float = field(default_factory=time.perf_counter)
+    request_id: str | None = None
     tenant_id: str | None = None
     trainer_id: str | None = None
     client_id: str | None = None
@@ -198,6 +199,10 @@ class ChatStreamTiming:
     total_stream_ms: int | None = None
     _provider_iteration_started_at: float | None = field(default=None, repr=False)
     _logged: bool = field(default=False, repr=False)
+
+    def set_request(self, request: ChatRequest) -> None:
+        if request.request_id:
+            self.request_id = str(request.request_id)
 
     def set_context(self, *, trainer_context: TrainerContext, conversation_id: str | None = None) -> None:
         self.tenant_id = str(trainer_context.tenant_id or "") or None
@@ -277,6 +282,7 @@ class ChatStreamTiming:
         self.mark_total()
         payload = {
             "event": "chat_stream_timing",
+            "request_id": self.request_id,
             "tenant_id": self.tenant_id,
             "trainer_id": self.trainer_id,
             "client_id": self.client_id,
@@ -2764,6 +2770,7 @@ class ConversationService:
         request: ChatRequest,
     ) -> Iterator[dict[str, Any]]:
         stream_timing = ChatStreamTiming()
+        stream_timing.set_request(request)
         stream_timing.set_context(trainer_context=trainer_context, conversation_id=request.conversation_id)
         stream_error_category: str | None = None
         client_context = request.client_context if isinstance(request.client_context, dict) else {}
@@ -3071,6 +3078,7 @@ class ConversationService:
     ) -> tuple[str, Iterator[str], RouteDebug, StreamResultState]:
         del user_id
         timing = stream_timing or ChatStreamTiming()
+        timing.set_request(request)
         timing.set_context(trainer_context=trainer_context, conversation_id=request.conversation_id)
         persisted_assistant_prefix = str(assistant_prefix or "")
         if not trainer_context.trainer_id:

@@ -179,6 +179,9 @@ def test_chat_stream_once_records_stream_timing_diagnostics(monkeypatch) -> None
     assert result["data_line_count"] == 3
     assert result["line_count"] == 6
     assert result["done_seen"] is True
+    assert result["error_seen"] is False
+    assert result["first_error_ms"] is None
+    assert result["last_event"] == "done"
 
 
 def test_chat_stream_once_accepts_data_only_fake_provider(monkeypatch) -> None:
@@ -212,6 +215,7 @@ def test_chat_stream_once_accepts_data_only_fake_provider(monkeypatch) -> None:
     assert result["first_event"] == "token"
     assert result["first_token_ms"] == result["ttft_ms"]
     assert result["done_seen"] is True
+    assert result["last_event"] == "done"
 
 
 def test_chat_stream_once_async_accepts_data_only_fake_provider() -> None:
@@ -247,6 +251,45 @@ def test_chat_stream_once_async_accepts_data_only_fake_provider() -> None:
     assert result["first_event"] == "token"
     assert result["first_token_ms"] == result["ttft_ms"]
     assert result["done_seen"] is True
+    assert result["last_event"] == "done"
+
+
+def test_chat_stream_once_records_error_event_diagnostics(monkeypatch) -> None:
+    module = _load_launch_verify_module()
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def getcode(self):
+            return 200
+
+        def __iter__(self):
+            return iter(
+                [
+                    b"event: status\n",
+                    b"data: {}\n",
+                    b"event: token\n",
+                    b'data: {"content":"hello"}\n',
+                    b"event: error\n",
+                    b'data: {"type":"error","detail":"provider_timeout"}\n',
+                ]
+            )
+
+    monkeypatch.setattr(module, "urlopen", lambda *_args, **_kwargs: FakeResponse())
+
+    result = module._chat_stream_once("https://mode-backend-staging.onrender.com", "token", 1.0, "hello")
+
+    assert result["ok"] is False
+    assert result["ttft_ms"] is not None
+    assert result["done_seen"] is False
+    assert result["error_seen"] is True
+    assert isinstance(result["first_error_ms"], int)
+    assert result["last_event"] == "error"
+    assert "provider_timeout" in result["last_data"]
 
 
 def test_chat_load_reuses_one_shared_async_client(monkeypatch) -> None:
