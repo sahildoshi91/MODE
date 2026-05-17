@@ -46,9 +46,9 @@ def test_chat_stream_semaphore_env_documented() -> None:
     staging = STAGING_TEMPLATE.read_text(encoding="utf-8")
     release = RELEASE_TEMPLATE.read_text(encoding="utf-8")
 
-    assert "MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE=<15_for_staging_or_25_for_production>" in shared
+    assert "MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE=<15_for_staging_or_10_for_production>" in shared
     assert "MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE=<15>" in staging
-    assert "MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE=<25>" in release
+    assert "MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE=<10>" in release
     assert "USE_FAKE_PROVIDER=<false>" in staging
     assert "USE_FAKE_PROVIDER=<false>" in release
 
