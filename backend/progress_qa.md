@@ -5,7 +5,7 @@
 1. Start backend from repo code:
    ```bash
    cd backend
-   python3 main.py
+   ./venv/bin/python main.py
    ```
 2. Confirm preflight checks:
    ```bash
