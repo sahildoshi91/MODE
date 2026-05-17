@@ -704,6 +704,32 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertNotIn("GPT stream", joined_logs)
         self.assertTrue(any(event.get("type") == "done" for event in events))
 
+    def test_launch_gate_smoke_stream_stops_after_first_provider_chunk(self):
+        service = self._build_service()
+        request = self.request.model_copy(
+            update={
+                "client_context": {
+                    **self.request.client_context,
+                    "launch_gate_smoke": True,
+                }
+            }
+        )
+
+        with patch("app.modules.conversation.service.enqueue_post_chat_jobs", return_value=[]):
+            with self.assertLogs("app.modules.conversation.service", level="INFO") as logs:
+                events = list(service.stream_chat_events("user-123", self.trainer_context, request))
+
+        token_contents = [event.get("content") for event in events if event.get("type") == "token"]
+        done_event = next(event for event in events if event.get("type") == "done")
+        timing_line = next(line for line in logs.output if '"event": "chat_stream_timing"' in line)
+        timing_payload = json.loads(timing_line.split(":", 2)[2])
+
+        self.assertEqual(token_contents, [DEFAULT_FAST_DEADLINE_PREFIX, "GPT "])
+        self.assertEqual(done_event["assistant_message"], "Got it - GPT")
+        self.assertEqual(self.repository.saved_messages[-1]["message_text"], "Got it - GPT")
+        self.assertTrue(timing_payload["launch_gate_smoke"])
+        self.assertIsInstance(timing_payload["provider_stream_cutoff_ms"], int)
+
     def test_handle_chat_succeeds_when_usage_analytics_are_unavailable(self):
         repository = BrokenUsageConversationRepository()
         service = self._build_service_with_repository(repository)

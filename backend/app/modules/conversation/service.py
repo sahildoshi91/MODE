@@ -321,6 +321,8 @@ class ChatStreamTiming:
             "provider_first_chunk_total_ms": self.phase_timings.get("provider_first_chunk_total_ms"),
             "service_provider_text_received_ms": self.phase_timings.get("service_provider_text_received_ms"),
             "provider_iteration_to_text_ms": self.phase_timings.get("provider_iteration_to_text_ms"),
+            "provider_stream_cutoff_ms": self.phase_timings.get("provider_stream_cutoff_ms"),
+            "launch_gate_smoke": bool(self.phase_timings.get("launch_gate_smoke", 0)),
             "first_chunk_deadline_prefix_ms": self.phase_timings.get("first_chunk_deadline_prefix_ms"),
             "first_chunk_validation_ms": self.phase_timings.get("first_chunk_validation_ms"),
             "first_safe_chunk_ready_ms": self.phase_timings.get("first_safe_chunk_ready_ms"),
@@ -3081,6 +3083,10 @@ class ConversationService:
         timing.set_request(request)
         timing.set_context(trainer_context=trainer_context, conversation_id=request.conversation_id)
         persisted_assistant_prefix = str(assistant_prefix or "")
+        client_context = request.client_context if isinstance(request.client_context, dict) else {}
+        launch_gate_smoke = bool(client_context.get("launch_gate_smoke"))
+        if launch_gate_smoke:
+            timing.record_phase("launch_gate_smoke", 1)
         if not trainer_context.trainer_id:
             if request.conversation_id:
                 raise ValueError("Conversation not found")
@@ -3340,7 +3346,7 @@ class ConversationService:
                     provider_stream = self._iter_with_first_chunk_deadline(
                         self._iter_observed_provider_stream(stream, timing),
                         timing,
-                        enabled=route.flow == "default_fast",
+                        enabled=route.flow == "default_fast" and timing.first_client_token_ms is None,
                     )
                     for text in provider_stream:
                         safe_text = self._validate_stream_chunk_for_yield(
@@ -3354,6 +3360,12 @@ class ConversationService:
                         if safe_text:
                             self._mark_stream_chunk_yield_attempt(timing)
                             yield safe_text
+                            if launch_gate_smoke:
+                                timing.record_phase_once(
+                                    "provider_stream_cutoff_ms",
+                                    (time.perf_counter() - timing.started_at) * 1000,
+                                )
+                                break
 
                     assistant_message = "".join(full_response).strip()
                     if not assistant_message:
@@ -3453,7 +3465,7 @@ class ConversationService:
                     provider_stream = self._iter_with_first_chunk_deadline(
                         self._iter_observed_provider_stream(stream, timing),
                         timing,
-                        enabled=route.flow == "default_fast",
+                        enabled=route.flow == "default_fast" and timing.first_client_token_ms is None,
                     )
                     for text in provider_stream:
                         safe_text = self._validate_stream_chunk_for_yield(
@@ -3467,6 +3479,12 @@ class ConversationService:
                         if safe_text:
                             self._mark_stream_chunk_yield_attempt(timing)
                             yield safe_text
+                            if launch_gate_smoke:
+                                timing.record_phase_once(
+                                    "provider_stream_cutoff_ms",
+                                    (time.perf_counter() - timing.started_at) * 1000,
+                                )
+                                break
 
                     assistant_message = "".join(full_response).strip()
                     if not assistant_message:
@@ -3662,7 +3680,7 @@ class ConversationService:
                 provider_stream = self._iter_with_first_chunk_deadline(
                     self._iter_observed_provider_stream(stream, timing),
                     timing,
-                    enabled=route.flow == "default_fast",
+                    enabled=route.flow == "default_fast" and timing.first_client_token_ms is None,
                 )
                 for text in provider_stream:
                     safe_text = self._validate_stream_chunk_for_yield(
@@ -3676,6 +3694,12 @@ class ConversationService:
                     if safe_text:
                         self._mark_stream_chunk_yield_attempt(timing)
                         yield safe_text
+                        if launch_gate_smoke:
+                            timing.record_phase_once(
+                                "provider_stream_cutoff_ms",
+                                (time.perf_counter() - timing.started_at) * 1000,
+                            )
+                            break
 
                 assistant_message = "".join(full_response).strip()
                 if not assistant_message:
