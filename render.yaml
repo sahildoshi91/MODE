@@ -31,7 +31,7 @@ services:
       - key: CHAT_STREAM_LEGACY_ALIAS_ENABLED
         value: "true"
       - key: USE_FAKE_PROVIDER
-        value: "true"
+        value: "false"
       - key: MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE
         value: "50"
       - key: REDIS_URL
