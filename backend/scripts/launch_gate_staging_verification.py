@@ -80,7 +80,24 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-account-deletion-enqueue-smoke", action="store_true")
     parser.add_argument("--chat-load-requests", type=int, default=0)
     parser.add_argument("--chat-load-concurrency", type=int, default=1)
-    parser.add_argument("--ttft-target-ms", type=int, default=2500)
+    parser.add_argument("--ttft-target-ms", type=int, default=None)
+    parser.add_argument(
+        "--full-stream",
+        action="store_true",
+        help="For chat load, read every stream through done/error instead of closing after first token.",
+    )
+    parser.add_argument(
+        "--chat-load-max-error-rate",
+        type=float,
+        default=None,
+        help="Maximum allowed chat load error rate, expressed as a ratio such as 0.02.",
+    )
+    parser.add_argument(
+        "--chat-load-min-semaphore-429s",
+        type=int,
+        default=0,
+        help="Minimum required HTTP 429 responses for deliberate semaphore breach validation.",
+    )
     parser.add_argument(
         "--chat-load-stop-after-first-token",
         action="store_true",
@@ -90,6 +107,18 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     return parser
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.full_stream and args.chat_load_stop_after_first_token:
+        parser.error("--full-stream cannot be combined with --chat-load-stop-after-first-token")
+    if args.chat_load_max_error_rate is not None and not 0 <= float(args.chat_load_max_error_rate) <= 1:
+        parser.error("--chat-load-max-error-rate must be between 0 and 1")
+    if int(args.chat_load_min_semaphore_429s) < 0:
+        parser.error("--chat-load-min-semaphore-429s must be non-negative")
+    return args
 
 
 def _percentile(values: list[int], percentile: int) -> int | None:
@@ -351,6 +380,7 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
                         error_seen = True
                         if first_error_ms is None:
                             first_error_ms = int((time.perf_counter() - started) * 1000)
+                        break
                     if line_done_seen:
                         done_seen = True
                         break
@@ -369,6 +399,7 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
                 "line_count": line_count,
                 "done_seen": done_seen,
                 "error_seen": error_seen,
+                "disconnect": status == 200 and not done_seen and not error_seen,
                 "first_error_ms": first_error_ms,
                 "last_event": last_event,
                 "last_data": last_data,
@@ -380,6 +411,7 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
             "request_id": request_id,
             "total_ms": int((time.perf_counter() - started) * 1000),
             "error": exc.read().decode("utf-8", errors="replace")[:500],
+            "semaphore_429": int(exc.code) == 429,
         }
     except Exception as exc:
         return {
@@ -388,6 +420,7 @@ def _chat_stream_once(base_url: str, token: str, timeout: float, message: str) -
             "request_id": request_id,
             "total_ms": int((time.perf_counter() - started) * 1000),
             "error": str(exc),
+            "transport_error": True,
         }
 
 
@@ -441,6 +474,7 @@ async def _chat_stream_once_async(
                     "headers_ms": headers_ms,
                     "total_ms": int((time.perf_counter() - started) * 1000),
                     "error": error_body[:500],
+                    "semaphore_429": status == 429,
                 }
             async for raw_line in response.aiter_lines():
                 line_count += 1
@@ -481,6 +515,7 @@ async def _chat_stream_once_async(
                                 "line_count": line_count,
                                 "done_seen": done_seen,
                                 "error_seen": error_seen,
+                                "disconnect": False,
                                 "first_error_ms": first_error_ms,
                                 "last_event": inferred_event or last_event,
                                 "last_data": last_data,
@@ -490,6 +525,7 @@ async def _chat_stream_once_async(
                         error_seen = True
                         if first_error_ms is None:
                             first_error_ms = int((time.perf_counter() - started) * 1000)
+                        break
                     if line_done_seen:
                         done_seen = True
                         break
@@ -508,6 +544,7 @@ async def _chat_stream_once_async(
                 "line_count": line_count,
                 "done_seen": done_seen,
                 "error_seen": error_seen,
+                "disconnect": status == 200 and not done_seen and not error_seen,
                 "first_error_ms": first_error_ms,
                 "last_event": last_event,
                 "last_data": last_data,
@@ -519,6 +556,7 @@ async def _chat_stream_once_async(
             "request_id": request_id,
             "total_ms": int((time.perf_counter() - started) * 1000),
             "error": str(exc),
+            "transport_error": True,
         }
 
 
@@ -562,8 +600,12 @@ async def _run_chat_load_requests(args: argparse.Namespace, tokens: list[str]) -
     request_count = int(args.chat_load_requests)
     concurrency = max(1, int(args.chat_load_concurrency))
     semaphore = asyncio.Semaphore(concurrency)
+    client_timeout_seconds = max(
+        float(getattr(args, "timeout_seconds", 8.0)),
+        120.0 if getattr(args, "full_stream", False) else 30.0,
+    )
     async with httpx.AsyncClient(
-        timeout=30.0,
+        timeout=client_timeout_seconds,
         limits=httpx.Limits(
             max_connections=None,
             max_keepalive_connections=50,
@@ -591,24 +633,77 @@ def _chat_load(args: argparse.Namespace) -> CheckResult:
         return CheckResult("chat_ttft_load", "FAIL", "Chat load requires --auth-token or --auth-token-file.")
     request_count = int(args.chat_load_requests)
     concurrency = max(1, int(args.chat_load_concurrency))
+    full_stream = bool(getattr(args, "full_stream", False))
+    result_name = "chat_full_stream_load" if full_stream else "chat_ttft_load"
     results = asyncio.run(_run_chat_load_requests(args, tokens))
-    ttfts = [int(item["ttft_ms"]) for item in results if item.get("ok") and item.get("ttft_ms") is not None]
-    p95 = _percentile(ttfts, 95)
+    successes = [item for item in results if item.get("ok")]
+    ttfts = [int(item["ttft_ms"]) for item in successes if item.get("ttft_ms") is not None]
+    totals = [int(item["total_ms"]) for item in successes if item.get("total_ms") is not None]
     failures = [item for item in results if not item.get("ok")]
-    if failures:
-        return CheckResult("chat_ttft_load", "FAIL", f"{len(failures)} chat load requests failed.", {"results": results})
-    if p95 is None or p95 > int(args.ttft_target_ms):
-        return CheckResult(
-            "chat_ttft_load",
-            "FAIL",
-            f"TTFT p95 {p95}ms exceeds target {args.ttft_target_ms}ms.",
-            {"p95_ms": p95, "request_count": request_count, "concurrency": concurrency, "results": results},
-        )
+    error_count = len(failures)
+    error_rate = (error_count / request_count) if request_count > 0 else 0.0
+    non_200_count = sum(1 for item in results if item.get("status") is not None and int(item.get("status")) != 200)
+    semaphore_429_count = sum(1 for item in results if int(item.get("status") or 0) == 429)
+    disconnect_or_transport_count = sum(
+        1
+        for item in results
+        if item.get("transport_error") or item.get("disconnect") or item.get("status") is None
+    )
+    ttft_p50 = _percentile(ttfts, 50)
+    ttft_p95 = _percentile(ttfts, 95)
+    ttft_p99 = _percentile(ttfts, 99)
+    total_p50 = _percentile(totals, 50)
+    total_p95 = _percentile(totals, 95)
+    total_p99 = _percentile(totals, 99)
+    metrics = {
+        "mode": "full-stream" if full_stream else "ttft",
+        "request_count": request_count,
+        "concurrency": concurrency,
+        "success_count": len(successes),
+        "error_count": error_count,
+        "error_rate": error_rate,
+        "non_200_count": non_200_count,
+        "disconnect_or_transport_count": disconnect_or_transport_count,
+        "semaphore_429_count": semaphore_429_count,
+        "ttft_p50_ms": ttft_p50,
+        "ttft_p95_ms": ttft_p95,
+        "ttft_p99_ms": ttft_p99,
+        "total_stream_p50_ms": total_p50,
+        "total_stream_p95_ms": total_p95,
+        "total_stream_p99_ms": total_p99,
+        "p95_ms": ttft_p95,
+        "results": results,
+    }
+
+    failure_reasons: list[str] = []
+    minimum_429s = int(getattr(args, "chat_load_min_semaphore_429s", 0) or 0)
+    if minimum_429s > 0 and semaphore_429_count < minimum_429s:
+        failure_reasons.append(f"semaphore 429 count {semaphore_429_count} below required {minimum_429s}")
+
+    max_error_rate = getattr(args, "chat_load_max_error_rate", None)
+    if max_error_rate is not None and error_rate > float(max_error_rate):
+        failure_reasons.append(f"error rate {error_rate:.3f} exceeds target {float(max_error_rate):.3f}")
+    elif max_error_rate is None and minimum_429s <= 0 and failures:
+        failure_reasons.append(f"{len(failures)} chat load requests failed")
+
+    ttft_target_ms = getattr(args, "ttft_target_ms", None)
+    if ttft_target_ms is None and not full_stream:
+        ttft_target_ms = 2500
+    if ttft_target_ms is not None and (ttft_p95 is None or ttft_p95 > int(ttft_target_ms)):
+        failure_reasons.append(f"TTFT p95 {ttft_p95}ms exceeds target {ttft_target_ms}ms")
+
+    if failure_reasons:
+        return CheckResult(result_name, "FAIL", "; ".join(failure_reasons) + ".", metrics)
+
     return CheckResult(
-        "chat_ttft_load",
+        result_name,
         "PASS",
-        "Chat TTFT load target passed.",
-        {"p95_ms": p95, "request_count": request_count, "concurrency": concurrency, "results": results},
+        (
+            f"Chat {'full-stream' if full_stream else 'TTFT'} load target passed "
+            f"(ttft p95={ttft_p95}ms, total p95={total_p95}ms, "
+            f"error_rate={error_rate:.3f}, semaphore_429s={semaphore_429_count})."
+        ),
+        metrics,
     )
 
 
@@ -691,7 +786,7 @@ def _print_results(results: list[CheckResult]) -> None:
 
 
 def main() -> int:
-    args = _build_parser().parse_args()
+    args = _parse_args()
     args.base_url = str(args.base_url).rstrip("/")
     results = [
         _validate_sql(),

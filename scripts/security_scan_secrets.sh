@@ -45,9 +45,10 @@ if rg -n \
 fi
 
 if rg -n \
+  --pcre2 \
   --hidden \
   "${SCAN_GLOBS[@]}" \
-  '(OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|SUPABASE_SERVICE_ROLE_KEY|JWT_SECRET|WEBHOOK_SECRET|SIGNING_SECRET|STRIPE_SECRET_KEY|FIREBASE_PRIVATE_KEY)[[:space:]]*=[[:space:]]*[^[:space:]]{24,}' \
+  '(OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|SUPABASE_SERVICE_ROLE_KEY|JWT_SECRET|WEBHOOK_SECRET|SIGNING_SECRET|STRIPE_SECRET_KEY|FIREBASE_PRIVATE_KEY)[[:space:]]*=[[:space:]]*(?!<)[^[:space:]]{24,}' \
   .; then
   echo "[security] high-privilege environment variable assignment detected (see matches above)"
   exit 1

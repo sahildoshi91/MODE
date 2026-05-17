@@ -127,6 +127,34 @@ npm run launch:verify -- \
   --chat-load-concurrency 50
 ```
 
+Full-stream launch matrix requires real providers (`USE_FAKE_PROVIDER=false`) and a one-worker staging
+deploy with `MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE=25` so the deliberate 26-concurrent breach is
+deterministic:
+
+```bash
+MODE_STAGING_AUTH_TOKEN_FILE=./staging_tokens.txt \
+npm run launch:verify -- \
+  --base-url https://mode-backend-staging.onrender.com \
+  --full-stream --chat-load-requests 10 --chat-load-concurrency 10 \
+  --ttft-target-ms 2000 --chat-load-max-error-rate 0
+```
+
+```bash
+MODE_STAGING_AUTH_TOKEN_FILE=./staging_tokens.txt \
+npm run launch:verify -- \
+  --base-url https://mode-backend-staging.onrender.com \
+  --full-stream --chat-load-requests 25 --chat-load-concurrency 25 \
+  --ttft-target-ms 3000 --chat-load-max-error-rate 0.019
+```
+
+```bash
+MODE_STAGING_AUTH_TOKEN_FILE=./staging_tokens.txt \
+npm run launch:verify -- \
+  --base-url https://mode-backend-staging.onrender.com \
+  --full-stream --chat-load-requests 26 --chat-load-concurrency 26 \
+  --chat-load-min-semaphore-429s 1
+```
+
 ## Gate Interpretation
 - `GO`: all requested checks passed.
 - `PASS with skipped gates`: local/smoke checks passed, but one or more launch gates were not requested.
@@ -144,4 +172,6 @@ Skipping live DB, authenticated chat, storage, account deletion, or load checks 
 - Storage signed URL flow succeeds for allowed own paths and rejects cross-tenant paths.
 - Account deletion enqueue returns `202 queued` for a sacrificial test account.
 - TTFT p95 < 2.5s with 50 concurrent chat streams.
+- Full-stream matrix captures raw TTFT and total stream p50/p95/p99 for 10, 25, and 26 concurrency.
+- Deliberate 26-concurrent full-stream run returns at least one semaphore `429`.
 - Queue lag p95 < 30s under burst load.

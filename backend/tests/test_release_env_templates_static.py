@@ -5,6 +5,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RELEASE_TEMPLATE = REPO_ROOT / ".env.release.example"
 STAGING_TEMPLATE = REPO_ROOT / ".env.staging.example"
+SHARED_TEMPLATE = REPO_ROOT / ".env.example"
 GITIGNORE_PATH = REPO_ROOT / ".gitignore"
 
 BANNED_SECRET_PATTERNS = [
@@ -35,8 +36,21 @@ def _assert_placeholder_only_template(path: Path) -> None:
 
 
 def test_release_env_templates_are_placeholder_only_and_secret_safe() -> None:
+    _assert_placeholder_only_template(SHARED_TEMPLATE)
     _assert_placeholder_only_template(RELEASE_TEMPLATE)
     _assert_placeholder_only_template(STAGING_TEMPLATE)
+
+
+def test_chat_stream_semaphore_env_documented() -> None:
+    shared = SHARED_TEMPLATE.read_text(encoding="utf-8")
+    staging = STAGING_TEMPLATE.read_text(encoding="utf-8")
+    release = RELEASE_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE=<15_for_staging_or_25_for_production>" in shared
+    assert "MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE=<15>" in staging
+    assert "MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE=<25>" in release
+    assert "USE_FAKE_PROVIDER=<false>" in staging
+    assert "USE_FAKE_PROVIDER=<false>" in release
 
 
 def test_release_env_files_are_gitignored() -> None:

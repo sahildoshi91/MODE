@@ -77,6 +77,10 @@ def test_launch_gate_verification_runner_covers_required_smokes() -> None:
     assert "MODE_ALLOW_ACCOUNT_DELETION_SMOKE" in source
     assert "chat-load-requests" in source
     assert "chat-load-stop-after-first-token" in source
+    assert "full-stream" in source
+    assert "chat-load-max-error-rate" in source
+    assert "chat-load-min-semaphore-429s" in source
+    assert "semaphore_429_count" in source
     assert "ttft-target-ms" in source
     assert "server_duration_p95_ms" in source
     assert "client_p95_ms" in source
@@ -310,6 +314,57 @@ def test_chat_stream_once_async_can_stop_after_first_token() -> None:
     ]
 
 
+def test_chat_stream_once_async_full_stream_does_not_send_ttft_only() -> None:
+    module = _load_launch_verify_module()
+    request_bodies = []
+
+    class FakeAsyncResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def aiter_lines(self):
+            for line in (
+                "event: token",
+                'data: {"content":"hello"}',
+                "event: done",
+                "data: {}",
+            ):
+                yield line
+
+    class FakeAsyncClient:
+        def stream(self, *_args, **kwargs):
+            request_bodies.append(kwargs["json"])
+            return FakeAsyncResponse()
+
+    result = asyncio.run(
+        module._chat_stream_once_async(
+            FakeAsyncClient(),
+            "https://mode-backend-staging.onrender.com",
+            "token",
+            "hello",
+        )
+    )
+
+    assert result["ok"] is True
+    assert request_bodies[0]["client_context"] == {"launch_gate_smoke": True}
+
+
+def test_parse_args_rejects_full_stream_with_stop_after_first_token() -> None:
+    module = _load_launch_verify_module()
+
+    try:
+        module._parse_args(["--full-stream", "--chat-load-stop-after-first-token"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("Expected parser to reject incompatible full-stream flags")
+
+
 def test_chat_stream_once_records_error_event_diagnostics(monkeypatch) -> None:
     module = _load_launch_verify_module()
 
@@ -398,6 +453,106 @@ def test_chat_load_reuses_one_shared_async_client(monkeypatch) -> None:
     limits = clients[0].kwargs["limits"]
     assert limits.max_connections is None
     assert limits.max_keepalive_connections == 50
+
+
+def test_full_stream_chat_load_reports_percentiles(monkeypatch) -> None:
+    module = _load_launch_verify_module()
+
+    async def fake_run_chat_load_requests(_args, _tokens):
+        return [
+            {"ok": True, "status": 200, "ttft_ms": 10, "total_ms": 100, "done_seen": True},
+            {"ok": True, "status": 200, "ttft_ms": 20, "total_ms": 200, "done_seen": True},
+            {"ok": True, "status": 200, "ttft_ms": 30, "total_ms": 300, "done_seen": True},
+        ]
+
+    monkeypatch.setattr(module, "_run_chat_load_requests", fake_run_chat_load_requests)
+    args = argparse.Namespace(
+        base_url="https://mode-backend-staging.onrender.com",
+        auth_token="token-a",
+        auth_token_file=None,
+        chat_load_requests=3,
+        chat_load_concurrency=3,
+        timeout_seconds=8.0,
+        ttft_target_ms=30,
+        full_stream=True,
+        chat_load_stop_after_first_token=False,
+        chat_load_max_error_rate=0,
+        chat_load_min_semaphore_429s=0,
+    )
+
+    result = module._chat_load(args)
+
+    assert result.status == "PASS"
+    assert result.name == "chat_full_stream_load"
+    assert result.metrics["ttft_p50_ms"] == 20
+    assert result.metrics["ttft_p95_ms"] == 30
+    assert result.metrics["ttft_p99_ms"] == 30
+    assert result.metrics["total_stream_p50_ms"] == 200
+    assert result.metrics["total_stream_p95_ms"] == 300
+    assert result.metrics["total_stream_p99_ms"] == 300
+
+
+def test_full_stream_chat_load_counts_error_rate_and_429s(monkeypatch) -> None:
+    module = _load_launch_verify_module()
+
+    async def fake_run_chat_load_requests(_args, _tokens):
+        return [
+            {"ok": True, "status": 200, "ttft_ms": 25, "total_ms": 100, "done_seen": True},
+            {"ok": False, "status": 429, "total_ms": 3, "error": "Stream capacity exceeded. Retry shortly."},
+            {"ok": False, "status": 500, "total_ms": 50, "error": "server error"},
+            {"ok": False, "status": None, "total_ms": 80, "transport_error": True, "error": "disconnect"},
+        ]
+
+    monkeypatch.setattr(module, "_run_chat_load_requests", fake_run_chat_load_requests)
+    args = argparse.Namespace(
+        base_url="https://mode-backend-staging.onrender.com",
+        auth_token="token-a",
+        auth_token_file=None,
+        chat_load_requests=4,
+        chat_load_concurrency=4,
+        timeout_seconds=8.0,
+        ttft_target_ms=None,
+        full_stream=True,
+        chat_load_stop_after_first_token=False,
+        chat_load_max_error_rate=1.0,
+        chat_load_min_semaphore_429s=1,
+    )
+
+    result = module._chat_load(args)
+
+    assert result.status == "PASS"
+    assert result.metrics["error_count"] == 3
+    assert result.metrics["error_rate"] == 0.75
+    assert result.metrics["non_200_count"] == 2
+    assert result.metrics["disconnect_or_transport_count"] == 1
+    assert result.metrics["semaphore_429_count"] == 1
+
+
+def test_full_stream_chat_load_fails_when_required_429_missing(monkeypatch) -> None:
+    module = _load_launch_verify_module()
+
+    async def fake_run_chat_load_requests(_args, _tokens):
+        return [{"ok": True, "status": 200, "ttft_ms": 25, "total_ms": 100, "done_seen": True}]
+
+    monkeypatch.setattr(module, "_run_chat_load_requests", fake_run_chat_load_requests)
+    args = argparse.Namespace(
+        base_url="https://mode-backend-staging.onrender.com",
+        auth_token="token-a",
+        auth_token_file=None,
+        chat_load_requests=1,
+        chat_load_concurrency=1,
+        timeout_seconds=8.0,
+        ttft_target_ms=None,
+        full_stream=True,
+        chat_load_stop_after_first_token=False,
+        chat_load_max_error_rate=None,
+        chat_load_min_semaphore_429s=1,
+    )
+
+    result = module._chat_load(args)
+
+    assert result.status == "FAIL"
+    assert "semaphore 429 count 0 below required 1" in result.detail
 
 
 def test_healthz_uses_server_duration_for_latency_gate(monkeypatch) -> None:

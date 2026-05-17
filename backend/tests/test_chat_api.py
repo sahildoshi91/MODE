@@ -263,6 +263,49 @@ class ChatApiTests(unittest.TestCase):
         app.dependency_overrides[get_conversation_service] = lambda: service
         app.dependency_overrides[get_conversation_service_factory] = lambda: (lambda: service)
 
+    @staticmethod
+    def _direct_stream_request():
+        class FakeState:
+            pass
+
+        class FakeClient:
+            host = "testclient"
+
+        class FakeRequest:
+            def __init__(self):
+                self.state = FakeState()
+                self.client = FakeClient()
+
+            async def is_disconnected(self):
+                return False
+
+        return FakeRequest()
+
+    @staticmethod
+    def _direct_user():
+        return AuthenticatedUser(
+            id="user-123",
+            email="user@example.com",
+            access_token="token-123",
+        )
+
+    @staticmethod
+    def _direct_trainer_context():
+        return TrainerContext(
+            tenant_id="tenant-123",
+            trainer_id="trainer-123",
+            trainer_user_id="trainer-user-123",
+            trainer_display_name="Coach Alex",
+            client_id="client-123",
+            client_user_id="user-123",
+            persona_id="persona-123",
+            persona_name="Strength Coach",
+        )
+
+    async def _consume_streaming_response(self, response):
+        async for _chunk in response.body_iterator:
+            pass
+
     def tearDown(self):
         settings.rate_limit_enabled = self._original_rate_limit_enabled
         settings.rate_limit_window_seconds = self._original_rate_limit_window_seconds
@@ -426,7 +469,7 @@ class ChatApiTests(unittest.TestCase):
         self._override_conversation_service(FakeConversationService())
         settings.max_active_chat_streams_per_instance = 1
         chat_api_module._reset_stream_semaphore_for_tests(1)
-        acquired = asyncio.run(chat_api_module._try_acquire_stream_slot())
+        acquired = chat_api_module._try_acquire_stream_slot()
         self.assertTrue(acquired)
         try:
             response = self.client.post(
@@ -438,7 +481,87 @@ class ChatApiTests(unittest.TestCase):
             chat_api_module._release_stream_slot()
 
         self.assertEqual(response.status_code, 429)
-        self.assertEqual(response.text, "Stream capacity exceeded")
+        self.assertEqual(response.text, "Stream capacity exceeded. Retry shortly.")
+        self.assertEqual(response.headers["Retry-After"], "2")
+
+    def test_stream_capacity_guard_rejects_limit_plus_one_concurrent_full_stream(self):
+        settings.max_active_chat_streams_per_instance = 2
+        chat_api_module._reset_stream_semaphore_for_tests(2)
+
+        async def run_scenario():
+            held_responses = []
+            try:
+                for _ in range(2):
+                    held_responses.append(
+                        await chat_api_module.chat_stream(
+                            ChatRequest(message="Hello"),
+                            self._direct_stream_request(),
+                            self._direct_user(),
+                            self._direct_trainer_context(),
+                            lambda: FakeConversationService(),
+                        )
+                    )
+                rejected = await chat_api_module.chat_stream(
+                    ChatRequest(message="Hello"),
+                    self._direct_stream_request(),
+                    self._direct_user(),
+                    self._direct_trainer_context(),
+                    lambda: FakeConversationService(),
+                )
+                return held_responses, rejected
+            except Exception:
+                for response in held_responses:
+                    await self._consume_streaming_response(response)
+                raise
+
+        held, rejected = asyncio.run(run_scenario())
+        try:
+            self.assertEqual(rejected.status_code, 429)
+            self.assertEqual(rejected.body.decode("utf-8"), "Stream capacity exceeded. Retry shortly.")
+            self.assertEqual(rejected.headers["Retry-After"], "2")
+        finally:
+            async def cleanup():
+                await asyncio.gather(*(self._consume_streaming_response(response) for response in held))
+
+            asyncio.run(cleanup())
+
+        self.assertEqual(chat_api_module._stream_semaphore_available(), 2)
+
+    def test_stream_capacity_guard_exempts_ttft_only_without_changing_capacity(self):
+        settings.max_active_chat_streams_per_instance = 1
+        chat_api_module._reset_stream_semaphore_for_tests(1)
+
+        async def run_scenario():
+            held = await chat_api_module.chat_stream(
+                ChatRequest(message="Hello"),
+                self._direct_stream_request(),
+                self._direct_user(),
+                self._direct_trainer_context(),
+                lambda: FakeConversationService(),
+            )
+            ttft_only = await chat_api_module.chat_stream(
+                ChatRequest(
+                    message="Launch gate TTFT load probe. Reply briefly.",
+                    client_context={"launch_gate_smoke": True, "launch_gate_ttft_only": True},
+                ),
+                self._direct_stream_request(),
+                self._direct_user(),
+                self._direct_trainer_context(),
+                lambda: FakeConversationService(),
+            )
+            available_after_ttft_response = chat_api_module._stream_semaphore_available()
+            await self._consume_streaming_response(ttft_only)
+            available_after_ttft_body = chat_api_module._stream_semaphore_available()
+            await self._consume_streaming_response(held)
+            available_after_full_release = chat_api_module._stream_semaphore_available()
+            return ttft_only, available_after_ttft_response, available_after_ttft_body, available_after_full_release
+
+        ttft_response, after_response, after_body, after_release = asyncio.run(run_scenario())
+
+        self.assertEqual(ttft_response.status_code, 200)
+        self.assertEqual(after_response, 0)
+        self.assertEqual(after_body, 0)
+        self.assertEqual(after_release, 1)
 
     def test_stream_defers_request_persistence_until_after_first_token(self):
         service = RecordingStreamPersistenceService()
@@ -627,6 +750,8 @@ class ChatApiTests(unittest.TestCase):
         self.assertFalse(payload["trainer_context_cache_hit"])
         self.assertIsInstance(payload["rate_limit_ms"], int)
         self.assertIsInstance(payload["endpoint_preflight_ms"], int)
+        self.assertIsInstance(payload["chat_stream_semaphore_available"], int)
+        self.assertEqual(payload["chat_stream_semaphore_limit"], 15)
         self.assertIsInstance(payload["request_to_endpoint_unattributed_ms"], int)
         self.assertIsInstance(payload["request_to_endpoint_ms"], int)
         self.assertIsInstance(payload["endpoint_to_response_ms"], int)
@@ -649,6 +774,22 @@ class ChatApiTests(unittest.TestCase):
         joined_logs = "\n".join(logs.output)
         self.assertNotIn("Hello sensitive text", joined_logs)
         self.assertNotIn("first token", joined_logs)
+
+    def test_stream_trace_includes_semaphore_metrics(self):
+        service = RecordingStreamPersistenceService()
+        self._override_conversation_service(service)
+
+        with patch("app.api.v1.chat.emit_chat_trace") as emit_trace:
+            response = self.client.post(
+                "/api/v1/chat/stream",
+                json={"message": "Hello"},
+                headers={"Authorization": "Bearer ignored-by-override"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        trace = emit_trace.call_args.args[0]
+        self.assertIsInstance(trace.chat_stream_semaphore_available, int)
+        self.assertEqual(trace.chat_stream_semaphore_limit, 15)
 
     def test_chat_maps_unexpected_failure_to_controlled_502(self):
         app.dependency_overrides[get_conversation_service] = lambda: UnexpectedExplodingConversationService()

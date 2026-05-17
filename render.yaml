@@ -10,7 +10,7 @@ services:
     autoDeployTrigger: commit
     healthCheckPath: /healthz
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m uvicorn main:app --host 0.0.0.0 --port $PORT --workers 4
+    startCommand: python -m uvicorn main:app --host 0.0.0.0 --port $PORT --workers 1
     envVars:
       - key: APP_ENV
         value: staging
@@ -33,7 +33,7 @@ services:
       - key: USE_FAKE_PROVIDER
         value: "false"
       - key: MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE
-        value: "15"
+        value: "25"
       - key: REDIS_URL
         sync: false
       - key: SUPABASE_URL

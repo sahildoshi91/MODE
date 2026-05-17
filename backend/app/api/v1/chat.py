@@ -98,11 +98,24 @@ def _get_stream_semaphore() -> asyncio.Semaphore:
     return _stream_semaphore
 
 
-async def _try_acquire_stream_slot() -> bool:
+def _stream_semaphore_available() -> int:
     semaphore = _get_stream_semaphore()
-    if semaphore.locked():
+    try:
+        return max(int(getattr(semaphore, "_value")), 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _stream_semaphore_configured_limit() -> int:
+    _get_stream_semaphore()
+    return max(int(_stream_semaphore_limit), 1)
+
+
+def _try_acquire_stream_slot() -> bool:
+    semaphore = _get_stream_semaphore()
+    if _stream_semaphore_available() <= 0:
         return False
-    await semaphore.acquire()
+    semaphore._value -= 1
     return True
 
 
@@ -426,7 +439,7 @@ async def chat_stream(
     )
     stream_slot_acquired = False
     if not launch_gate_ttft_only:
-        stream_slot_acquired = await _try_acquire_stream_slot()
+        stream_slot_acquired = _try_acquire_stream_slot()
         if not stream_slot_acquired:
             emit_authenticated_preflight_timing(
                 logger,
@@ -438,7 +451,11 @@ async def chat_stream(
                 total_preflight_ms=_elapsed_ms(request_started_at),
                 error_category="stream_capacity_exceeded",
             )
-            return Response(status_code=429, content="Stream capacity exceeded")
+            return Response(
+                status_code=429,
+                content="Stream capacity exceeded. Retry shortly.",
+                headers={"Retry-After": "2"},
+            )
     try:
         require_client_or_trainer_actor(user, trainer_context)
         rate_limit_started_at = time.perf_counter()
@@ -608,6 +625,8 @@ async def chat_stream(
                 "request_to_generator_start_ms": _elapsed_ms(request_started_at, generator_started_at),
                 "route_level_early_prefix_emitted": bool(route_level_early_prefix),
                 "launch_gate_ttft_only": launch_gate_ttft_only,
+                "chat_stream_semaphore_available": _stream_semaphore_available(),
+                "chat_stream_semaphore_limit": _stream_semaphore_configured_limit(),
                 "first_event_encoded_ms": first_event_encoded_ms,
                 "first_token_encoded_ms": first_token_encoded_ms,
                 "first_token_yielded_ms": first_token_yielded_ms,
@@ -876,6 +895,8 @@ async def chat_stream(
                 error_detail=CONTROLLED_CHAT_ERROR_DETAIL,
             )
         finally:
+            trace.chat_stream_semaphore_available = _stream_semaphore_available()
+            trace.chat_stream_semaphore_limit = _stream_semaphore_configured_limit()
             emit_api_timing()
             trace.request_id = request_id
             emit_chat_trace(
@@ -884,7 +905,8 @@ async def chat_stream(
                 client_id=str(trainer_context.client_id or ""),
                 conversation_id=stream_conversation_id,
             )
-            _release_stream_slot()
+            if stream_slot_acquired:
+                _release_stream_slot()
 
     streaming_response_created_at = time.perf_counter()
     return StreamingResponse(

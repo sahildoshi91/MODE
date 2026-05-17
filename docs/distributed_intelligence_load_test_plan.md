@@ -22,6 +22,12 @@ This plan verifies the launch gates for the four-lane architecture after Phase A
 - Helper command:
   `npm run launch:verify -- --base-url <staging-url> --auth-token-file ./staging_tokens.txt --chat-load-requests 50 --chat-load-concurrency 50`
 
+### Full Stream
+- Deploy staging with `USE_FAKE_PROVIDER=false`, one uvicorn worker, and `MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE=25`.
+- Run one full-stream wave at concurrency 10, 25, and 26 using `--full-stream`.
+- Capture TTFT p50/p95/p99, total stream p50/p95/p99, error rate, and semaphore 429 count.
+- Pass targets: 10 concurrent p95 TTFT < 2000ms with 0 errors; 25 concurrent p95 TTFT < 3000ms with error rate < 2%; 26 concurrent returns at least one HTTP 429.
+
 ### Standard API
 - Run 50 concurrent requests against non-streaming chat/session endpoints.
 - Pass target: p95 < 500ms.

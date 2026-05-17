@@ -15,6 +15,7 @@ class SettingsTests(unittest.TestCase):
 
         self.assertEqual(settings.ai_request_timeout_seconds, 30.0)
         self.assertEqual(settings.ai_max_retries, 2)
+        self.assertEqual(settings.max_active_chat_streams_per_instance, 25)
 
 
 if __name__ == "__main__":

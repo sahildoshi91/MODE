@@ -36,6 +36,8 @@ class ChatTrace:
     model_fallback_chain: list[str] = field(default_factory=list)
     tokens_cost_usd: float | None = None
     queue_enqueue_latency_ms: int | None = None
+    chat_stream_semaphore_available: int | None = None
+    chat_stream_semaphore_limit: int | None = None
 
     def log(self) -> None:
         emit_chat_trace_metrics(self)
@@ -65,6 +67,8 @@ class ChatTraceAccumulator:
         self.model_fallback_chain: list[str] = []
         self.tokens_cost_usd: float | None = None
         self.queue_enqueue_latency_ms: int | None = None
+        self.chat_stream_semaphore_available: int | None = None
+        self.chat_stream_semaphore_limit: int | None = None
 
     def observe_payload(self, payload: dict[str, Any]) -> None:
         payload_type = str(payload.get("type") or "").strip().lower()
@@ -95,6 +99,14 @@ class ChatTraceAccumulator:
             self.queue_enqueue_latency_ms = _int_or_none(
                 trace.get("queue_enqueue_latency_ms"),
                 self.queue_enqueue_latency_ms,
+            )
+            self.chat_stream_semaphore_available = _int_or_none(
+                trace.get("chat_stream_semaphore_available"),
+                self.chat_stream_semaphore_available,
+            )
+            self.chat_stream_semaphore_limit = _int_or_none(
+                trace.get("chat_stream_semaphore_limit"),
+                self.chat_stream_semaphore_limit,
             )
         token_usage = payload.get("token_usage")
         if isinstance(token_usage, dict):
@@ -128,6 +140,8 @@ class ChatTraceAccumulator:
             model_fallback_chain=self.model_fallback_chain,
             tokens_cost_usd=self.tokens_cost_usd,
             queue_enqueue_latency_ms=self.queue_enqueue_latency_ms,
+            chat_stream_semaphore_available=self.chat_stream_semaphore_available,
+            chat_stream_semaphore_limit=self.chat_stream_semaphore_limit,
         )
 
 
