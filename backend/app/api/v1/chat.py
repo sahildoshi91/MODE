@@ -704,6 +704,9 @@ async def chat_stream(
                 yield encoded
                 first_token_resume_ms = _elapsed_ms(request_started_at)
                 first_token_sent = True
+                await asyncio.sleep(0)
+                if await http_request.is_disconnected():
+                    return
 
             active_service = await asyncio.to_thread(activate_service)
             stream_events = getattr(active_service, "stream_chat_events", None)
@@ -770,6 +773,8 @@ async def chat_stream(
                     first_token_resume_ms = _elapsed_ms(request_started_at)
                 if is_first_token_payload:
                     await asyncio.sleep(0)
+                    if await http_request.is_disconnected():
+                        break
                 if payload_type in {"token", "message_delta"}:
                     first_token_sent = True
                 if first_token_sent or payload_type in {"done", "error"}:

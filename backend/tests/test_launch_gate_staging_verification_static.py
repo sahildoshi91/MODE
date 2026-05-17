@@ -76,6 +76,7 @@ def test_launch_gate_verification_runner_covers_required_smokes() -> None:
     assert "/api/v1/account/me" in source
     assert "MODE_ALLOW_ACCOUNT_DELETION_SMOKE" in source
     assert "chat-load-requests" in source
+    assert "chat-load-stop-after-first-token" in source
     assert "ttft-target-ms" in source
     assert "server_duration_p95_ms" in source
     assert "client_p95_ms" in source
@@ -254,6 +255,58 @@ def test_chat_stream_once_async_accepts_data_only_fake_provider() -> None:
     assert result["last_event"] == "done"
 
 
+def test_chat_stream_once_async_can_stop_after_first_token() -> None:
+    module = _load_launch_verify_module()
+    yielded_lines = []
+
+    class FakeAsyncResponse:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def aiter_lines(self):
+            for line in (
+                "event: status",
+                "data: {}",
+                "event: token",
+                'data: {"content":"hello"}',
+                "event: done",
+                "data: {}",
+            ):
+                yielded_lines.append(line)
+                yield line
+
+    class FakeAsyncClient:
+        def stream(self, *_args, **_kwargs):
+            return FakeAsyncResponse()
+
+    result = asyncio.run(
+        module._chat_stream_once_async(
+            FakeAsyncClient(),
+            "https://mode-backend-staging.onrender.com",
+            "token",
+            "hello",
+            stop_after_first_token=True,
+        )
+    )
+
+    assert result["ok"] is True
+    assert result["first_token_ms"] == result["ttft_ms"]
+    assert result["done_seen"] is False
+    assert result["last_event"] == "token"
+    assert result["stopped_after_first_token"] is True
+    assert yielded_lines == [
+        "event: status",
+        "data: {}",
+        "event: token",
+        'data: {"content":"hello"}',
+    ]
+
+
 def test_chat_stream_once_records_error_event_diagnostics(monkeypatch) -> None:
     module = _load_launch_verify_module()
 
@@ -311,6 +364,7 @@ def test_chat_load_reuses_one_shared_async_client(monkeypatch) -> None:
 
     async def fake_chat_stream_once_async(client, *_args, **_kwargs):
         seen_clients.append(client)
+        assert _kwargs["stop_after_first_token"] is False
         return {
             "ok": True,
             "status": 200,
@@ -328,6 +382,7 @@ def test_chat_load_reuses_one_shared_async_client(monkeypatch) -> None:
         chat_load_requests=5,
         chat_load_concurrency=5,
         ttft_target_ms=2500,
+        chat_load_stop_after_first_token=False,
     )
 
     result = module._chat_load(args)

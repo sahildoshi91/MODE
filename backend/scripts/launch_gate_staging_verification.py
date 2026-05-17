@@ -81,6 +81,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chat-load-requests", type=int, default=0)
     parser.add_argument("--chat-load-concurrency", type=int, default=1)
     parser.add_argument("--ttft-target-ms", type=int, default=2500)
+    parser.add_argument(
+        "--chat-load-stop-after-first-token",
+        action="store_true",
+        help=(
+            "For chat load, close each stream as soon as TTFT is observed. "
+            "Use this to isolate first-token latency from provider tail/completion latency."
+        ),
+    )
     return parser
 
 
@@ -388,6 +396,8 @@ async def _chat_stream_once_async(
     base_url: str,
     token: str,
     message: str,
+    *,
+    stop_after_first_token: bool = False,
 ) -> dict[str, Any]:
     headers = {
         "Accept": "text/event-stream",
@@ -452,6 +462,27 @@ async def _chat_stream_once_async(
                             event_count += 1
                     if token_seen and first_token_ms is None:
                         first_token_ms = int((time.perf_counter() - started) * 1000)
+                        if stop_after_first_token:
+                            return {
+                                "ok": status == 200,
+                                "status": status,
+                                "request_id": request_id,
+                                "headers_ms": headers_ms,
+                                "first_event": first_event,
+                                "first_event_ms": first_event_ms,
+                                "first_token_ms": first_token_ms,
+                                "ttft_ms": first_token_ms,
+                                "total_ms": int((time.perf_counter() - started) * 1000),
+                                "event_count": event_count,
+                                "data_line_count": data_line_count,
+                                "line_count": line_count,
+                                "done_seen": done_seen,
+                                "error_seen": error_seen,
+                                "first_error_ms": first_error_ms,
+                                "last_event": inferred_event or last_event,
+                                "last_data": last_data,
+                                "stopped_after_first_token": True,
+                            }
                     if line_error_seen:
                         error_seen = True
                         if first_error_ms is None:
@@ -543,6 +574,7 @@ async def _run_chat_load_requests(args: argparse.Namespace, tokens: list[str]) -
                     args.base_url,
                     token,
                     "Launch gate TTFT load probe. Reply briefly.",
+                    stop_after_first_token=bool(getattr(args, "chat_load_stop_after_first_token", False)),
                 )
 
         return list(await asyncio.gather(*(run_one(index) for index in range(request_count))))

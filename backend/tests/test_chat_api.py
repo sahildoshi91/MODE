@@ -21,7 +21,7 @@ from app.core.dependencies import get_conversation_service, get_conversation_ser
 from app.core.rate_limit import _rate_limiter
 from app.core.tenancy import TrainerContext
 from app.main import app
-from app.modules.conversation.schemas import ChatResponse, ConversationState, ConversationUsage, RouteDebug, TokenUsage
+from app.modules.conversation.schemas import ChatRequest, ChatResponse, ConversationState, ConversationUsage, RouteDebug, TokenUsage
 from app.modules.conversation.service import ConversationProcessingError
 
 
@@ -500,6 +500,61 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn('"content": "Got it - "', response.text)
         self.assertLess(calls.index("route_prefix_encoded"), calls.index("factory"))
+
+    def test_stream_launch_gate_disconnect_after_prefix_skips_service_construction(self):
+        calls = []
+
+        class FakeState:
+            pass
+
+        class FakeClient:
+            host = "testclient"
+
+        class DisconnectingRequest:
+            def __init__(self):
+                self.state = FakeState()
+                self.client = FakeClient()
+
+            async def is_disconnected(self):
+                return True
+
+        def factory():
+            calls.append("factory")
+            raise AssertionError("Service should not be built after first-token disconnect")
+
+        async def run_stream():
+            response = await chat_api_module.chat_stream(
+                ChatRequest(
+                    message="Launch gate TTFT load probe. Reply briefly.",
+                    client_context={"launch_gate_smoke": True},
+                ),
+                DisconnectingRequest(),
+                AuthenticatedUser(
+                    id="user-123",
+                    email="user@example.com",
+                    access_token="token-123",
+                ),
+                TrainerContext(
+                    tenant_id="tenant-123",
+                    trainer_id="trainer-123",
+                    trainer_user_id="trainer-user-123",
+                    trainer_display_name="Coach Alex",
+                    client_id="client-123",
+                    client_user_id="user-123",
+                    persona_id="persona-123",
+                    persona_name="Strength Coach",
+                ),
+                factory,
+            )
+            chunks = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else str(chunk))
+            return "".join(chunks)
+
+        body = asyncio.run(run_stream())
+
+        self.assertIn('"content": "Got it - "', body)
+        self.assertEqual(calls, [])
 
     def test_stream_emits_sanitized_api_timing_diagnostics(self):
         service = RecordingStreamPersistenceService()
