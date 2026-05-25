@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.ai.client import GEMINI_FLASH_LITE_MODEL as GEMINI_3_1_FLASH_LITE_MODEL
 from app.modules.trainer_assistant.schemas import (
     FallbackPolicyConfig,
     ProviderModelRegistry,
@@ -20,7 +21,6 @@ GPT_5_4_MINI_MODEL = "gpt-5.4-mini"
 GPT_5_4_MODEL = "gpt-5.4"
 CLAUDE_SONNET_4_6_MODEL = "claude-sonnet-4.6"
 CLAUDE_OPUS_4_7_MODEL = "claude-opus-4.7"
-GEMINI_3_1_FLASH_LITE_MODEL = "gemini-3.1-flash-lite"
 
 
 def default_provider_registry() -> ProviderModelRegistry:

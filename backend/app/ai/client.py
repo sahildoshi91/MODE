@@ -12,6 +12,8 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 GEMINI_MODEL = "gemini-3.5-flash"
 GEMINI_FLASH_LITE_MODEL = "gemini-3.1-flash-lite"
+# Keep Pro tasks pinned to the stable, production-tested gemini-2.5-pro tier
+# while Flash-family models move forward to 3.x.
 GPT_5_4_MINI_MODEL = "gpt-5.4-mini"
 ANTHROPIC_SONNET_MODEL = "claude-sonnet-4-20250514"
 StreamTimingObserver = Callable[[str, int], None]

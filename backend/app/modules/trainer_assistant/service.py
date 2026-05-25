@@ -63,6 +63,7 @@ MODEL_PRICING_PER_1K: dict[str, tuple[float, float]] = {
     "claude-sonnet-4.6": (0.0010, 0.0050),
     "claude-opus-4.7": (0.0150, 0.0750),
     "gemini-3.1-flash-lite": (0.00025, 0.0015),
+    "gemini-2.5-pro": (0.00125, 0.0100),
 }
 
 
