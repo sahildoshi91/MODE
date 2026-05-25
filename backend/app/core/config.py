@@ -33,6 +33,14 @@ class Settings(BaseSettings):
     ai_max_retries: int = 2
     expose_route_debug: bool = False
     redis_url: str | None = None
+    chat_enabled: bool = True
+    streaming_enabled: bool = True
+    llm_provider_enabled: bool = True
+    memory_writes_enabled: bool = True
+    chat_provider_timeout_seconds: float = Field(default=30.0, ge=0.1, le=120.0)
+    chat_max_output_tokens: int = Field(default=0, ge=0, le=8192)
+    global_chat_rate_limit: int = Field(default=0, ge=0, le=100000)
+    per_user_chat_rate_limit: int = Field(default=0, ge=0, le=10000)
     chat_cache_enabled: bool = True
     chat_cache_timeout_ms: int = Field(default=25, ge=1, le=500)
     chat_router_timeout_ms: int = Field(default=200, ge=1, le=1000)

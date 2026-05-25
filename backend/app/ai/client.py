@@ -99,6 +99,18 @@ def _run_with_retries(provider: str, model: str, fn):
                 raise
 
 
+def _ensure_llm_provider_enabled() -> None:
+    if not settings.llm_provider_enabled:
+        raise RuntimeError("llm_provider_disabled")
+
+
+def _chat_provider_timeout_seconds() -> float:
+    try:
+        return max(float(settings.chat_provider_timeout_seconds), 0.1)
+    except (TypeError, ValueError):
+        return max(float(settings.ai_request_timeout_seconds), 0.1)
+
+
 def _observe_stream_timing(
     observer: StreamTimingObserver | None,
     phase: str,
@@ -117,7 +129,7 @@ class OpenAIClient:
         openai_class = _load_openai_class()
         self.client = openai_class(
             api_key=settings.openai_api_key,
-            timeout=settings.ai_request_timeout_seconds,
+            timeout=_chat_provider_timeout_seconds(),
         )
 
     def create_chat_completion(
@@ -140,6 +152,7 @@ class OpenAIClient:
         *,
         max_output_tokens: int | None = None,
     ) -> TextCompletion:
+        _ensure_llm_provider_enabled()
         request_payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -172,6 +185,7 @@ class OpenAIClient:
         max_output_tokens: int | None = None,
         stream_timing_observer: StreamTimingObserver | None = None,
     ) -> Iterator[str]:
+        _ensure_llm_provider_enabled()
         request_payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -254,7 +268,10 @@ class AnthropicClient:
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is not set")
 
-        self.client = anthropic_module.Anthropic(api_key=api_key)
+        try:
+            self.client = anthropic_module.Anthropic(api_key=api_key, timeout=_chat_provider_timeout_seconds())
+        except TypeError:
+            self.client = anthropic_module.Anthropic(api_key=api_key)
 
     def create_chat_completion(
         self,
@@ -264,6 +281,7 @@ class AnthropicClient:
         *,
         max_output_tokens: int | None = None,
     ) -> TextCompletion:
+        _ensure_llm_provider_enabled()
         response = _run_with_retries(
             "anthropic",
             model,
@@ -301,6 +319,7 @@ class AnthropicClient:
         max_output_tokens: int | None = None,
         stream_timing_observer: StreamTimingObserver | None = None,
     ) -> Iterator[str]:
+        _ensure_llm_provider_enabled()
         provider_started_at = time.perf_counter()
         stream_context = _run_with_retries(
             "anthropic",
@@ -362,6 +381,7 @@ class GeminiClient:
         max_output_tokens: int | None = None,
         stream_timing_observer: StreamTimingObserver | None = None,
     ) -> Iterator[str]:
+        _ensure_llm_provider_enabled()
         config_kwargs: dict[str, Any] = {
             "thinking_config": self._types.ThinkingConfig(thinking_budget=0),
         }
@@ -410,6 +430,7 @@ class GeminiClient:
         model: str = GEMINI_MODEL,
         max_output_tokens: int | None = None,
     ) -> GeminiCompletion:
+        _ensure_llm_provider_enabled()
         config_kwargs: dict[str, Any] = {
             "thinking_config": self._types.ThinkingConfig(thinking_budget=0),
         }

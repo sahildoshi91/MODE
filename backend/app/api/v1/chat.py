@@ -46,6 +46,8 @@ from app.modules.conversation.trace import ChatTraceAccumulator, emit_chat_trace
 router = APIRouter()
 logger = logging.getLogger(__name__)
 CONTROLLED_CHAT_ERROR_DETAIL = "Chat response could not be completed"
+CHAT_DISABLED_ERROR_DETAIL = "Chat is temporarily unavailable. Please try again later."
+STREAMING_DISABLED_ERROR_DETAIL = "Chat streaming is temporarily unavailable. Please try again later."
 _stream_semaphore_limit = int(settings.max_active_chat_streams_per_instance)
 _stream_semaphore = asyncio.Semaphore(_stream_semaphore_limit)
 _provider_stream_executor_workers = int(settings.chat_stream_provider_worker_threads)
@@ -136,6 +138,27 @@ def _public_chat_response(response: ChatResponse) -> ChatResponse:
     if settings.expose_route_debug:
         return response
     return response.model_copy(update={"route_debug": None})
+
+
+def _log_chat_control_event(control: str) -> None:
+    logger.warning(json.dumps({
+        "event": "chat_kill_switch",
+        "control": control,
+        "enabled": False,
+    }))
+
+
+def require_chat_enabled() -> None:
+    if not settings.chat_enabled:
+        _log_chat_control_event("CHAT_ENABLED")
+        raise HTTPException(status_code=503, detail=CHAT_DISABLED_ERROR_DETAIL)
+
+
+def require_chat_streaming_enabled() -> None:
+    require_chat_enabled()
+    if not settings.streaming_enabled:
+        _log_chat_control_event("STREAMING_ENABLED")
+        raise HTTPException(status_code=503, detail=STREAMING_DISABLED_ERROR_DETAIL)
 
 
 def _trace_metadata_from_response(response: ChatResponse) -> dict[str, object]:
@@ -253,6 +276,18 @@ async def chat(
     service: ConversationService = Depends(get_conversation_service),
 ):
     require_client_or_trainer_actor(user, trainer_context)
+    require_chat_enabled()
+    logger.info(
+        json.dumps({
+            "event": "chat_request_started",
+            "endpoint": "/api/v1/chat",
+            "user_id_present": bool(user.id),
+            "tenant_id_present": bool(trainer_context.tenant_id),
+            "trainer_id_present": bool(trainer_context.trainer_id),
+            "client_id_present": bool(trainer_context.client_id),
+            "request_id": str(request.request_id) if request.request_id else None,
+        })
+    )
     enforce_rate_limit(
         group="chat",
         user=user,
@@ -443,6 +478,7 @@ async def chat_stream(
         and bool(client_context.get("launch_gate_ttft_only"))
         and not settings.is_production
     )
+    require_chat_streaming_enabled()
     stream_slot_acquired = False
     if not launch_gate_ttft_only:
         stream_slot_acquired = _try_acquire_stream_slot()

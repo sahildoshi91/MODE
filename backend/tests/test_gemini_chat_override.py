@@ -22,6 +22,7 @@ from app.modules.conversation.service import (
     SAFETY_ESCALATION_HOLDING_RESPONSE,
     ConversationProcessingError,
     ConversationService,
+    PromptPackage,
 )
 from app.modules.trainer_persona.repository import TrainerPersonaRepository
 from app.modules.trainer_onboarding.repository import TrainerOnboardingStorageUnavailableError
@@ -617,6 +618,61 @@ class ConversationServiceRoutingTests(unittest.TestCase):
         self.assertEqual(response.route_debug.execution_provider, "openai")
         self.assertEqual(service.gemini_client.prompts, [])
         self.assertEqual(len(service.openai_client.calls), 1)
+
+    def test_llm_provider_disabled_fails_safely_without_prompt_logging(self):
+        original_enabled = settings.llm_provider_enabled
+        settings.llm_provider_enabled = False
+        service = self._build_service()
+        try:
+            with self.assertLogs("app.modules.conversation.service", level="ERROR") as logs:
+                with self.assertRaises(ConversationProcessingError):
+                    service.handle_chat("user-123", self.trainer_context, self.request)
+        finally:
+            settings.llm_provider_enabled = original_enabled
+
+        self.assertEqual(service.openai_client.calls, [])
+        self.assertEqual(service.gemini_client.prompts, [])
+        self.assertNotIn(self.request.message, "\n".join(logs.output))
+
+    def test_chat_max_output_tokens_caps_route_budget(self):
+        original_cap = settings.chat_max_output_tokens
+        settings.chat_max_output_tokens = 256
+        try:
+            service = self._build_service()
+            prompt = PromptPackage(
+                system_prompt="system",
+                user_prompt="user",
+                orchestration_metadata={"token_budgets": {"max_output": 1024}},
+            )
+            self.assertEqual(service._max_output_tokens_for_prompt(prompt), 256)
+            prompt_without_budget = PromptPackage(
+                system_prompt="system",
+                user_prompt="user",
+                orchestration_metadata={},
+            )
+            self.assertEqual(service._max_output_tokens_for_prompt(prompt_without_budget), 256)
+        finally:
+            settings.chat_max_output_tokens = original_cap
+
+    def test_memory_writes_disabled_suppresses_memory_enqueue(self):
+        original_enabled = settings.memory_writes_enabled
+        settings.memory_writes_enabled = False
+        service = self._build_service()
+        try:
+            with patch("app.modules.conversation.service.enqueue_post_chat_jobs", return_value=[]) as enqueue:
+                service._enqueue_post_chat_jobs_safely(
+                    trainer_context=self.trainer_context,
+                    request=self.request,
+                    conversation_id="convo-123",
+                    route=None,
+                    assistant_message="safe assistant text",
+                    user_message_id="msg-1",
+                    include_memory=True,
+                )
+        finally:
+            settings.memory_writes_enabled = original_enabled
+
+        self.assertFalse(enqueue.call_args.kwargs["include_memory"])
 
     def test_stream_chat_yields_chunks_and_persists_full_response(self):
         service = self._build_service()

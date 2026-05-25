@@ -1,6 +1,7 @@
 import React from 'react';
 import {
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -17,6 +18,11 @@ import {
   SafeScreen,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
+import {
+  AI_FITNESS_DISCLAIMER,
+  getLegalLinks,
+  getLegalLinksFallbackText,
+} from '../../../config/legalLinks';
 
 const AUTH_LAYOUT_MODE = {
   FULL: 'full',
@@ -61,6 +67,19 @@ export default function AuthChoiceScreen({
   const primaryAuthAction = showPasswordAuth
     ? onContinueWithPassword
     : onContinueWithEmail;
+  const legalLinks = getLegalLinks();
+  const legalLinksFallbackText = getLegalLinksFallbackText(legalLinks);
+
+  const handleLegalLinkPress = async (link) => {
+    if (!link?.url) {
+      return;
+    }
+    try {
+      await Linking.openURL(link.url);
+    } catch (_error) {
+      // Link targets are environment configured; leave the visible fallback in place.
+    }
+  };
 
   const authContent = (
     <ModeCard
@@ -70,6 +89,14 @@ export default function AuthChoiceScreen({
       <ModeText variant="h2">{headline}</ModeText>
       <ModeText variant="bodySm" tone="secondary" style={styles.subtitle}>
         {subtitleText}
+      </ModeText>
+      <ModeText
+        testID="auth-ai-fitness-disclaimer"
+        variant="caption"
+        tone="tertiary"
+        style={styles.aiDisclaimer}
+      >
+        {AI_FITNESS_DISCLAIMER}
       </ModeText>
 
       <View style={styles.formSection}>
@@ -176,6 +203,43 @@ export default function AuthChoiceScreen({
           </ModeText>
         </ModeText>
       </Pressable>
+
+      <View style={styles.complianceBlock}>
+        <View testID="auth-legal-links" style={styles.legalLinksRow}>
+          {legalLinks.map((link, index) => (
+            <React.Fragment key={link.id}>
+              {index > 0 ? (
+                <ModeText variant="caption" tone="tertiary" style={styles.legalSeparator}>
+                  |
+                </ModeText>
+              ) : null}
+              <Pressable
+                accessibilityRole="link"
+                accessibilityLabel={link.label}
+                accessibilityHint={link.isConfigured ? undefined : `Set ${link.envVar} to enable this link.`}
+                disabled={!link.isConfigured}
+                onPress={() => handleLegalLinkPress(link)}
+                testID={`auth-legal-link-${link.id}`}
+                style={styles.legalLinkPressable}
+              >
+                <ModeText variant="caption" tone={link.isConfigured ? 'accent' : 'tertiary'}>
+                  {link.label}
+                </ModeText>
+              </Pressable>
+            </React.Fragment>
+          ))}
+        </View>
+        {legalLinksFallbackText ? (
+          <ModeText
+            testID="auth-legal-links-fallback"
+            variant="caption"
+            tone="tertiary"
+            style={styles.legalFallback}
+          >
+            {legalLinksFallbackText}
+          </ModeText>
+        ) : null}
+      </View>
     </ModeCard>
   );
 
@@ -236,6 +300,9 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     marginTop: theme.spacing[1],
+    marginBottom: theme.spacing[1],
+  },
+  aiDisclaimer: {
     marginBottom: theme.spacing[2],
   },
   formSection: {
@@ -281,6 +348,27 @@ const styles = StyleSheet.create({
   switchLink: {
     marginTop: theme.spacing[3],
     alignSelf: 'center',
+  },
+  complianceBlock: {
+    marginTop: theme.spacing[2],
+    alignItems: 'center',
+    gap: theme.spacing[1] - 4,
+  },
+  legalLinksRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  legalLinkPressable: {
+    paddingHorizontal: theme.spacing[1],
+    paddingVertical: theme.spacing[1],
+  },
+  legalSeparator: {
+    paddingHorizontal: 2,
+  },
+  legalFallback: {
+    textAlign: 'center',
   },
   footer: {
     paddingHorizontal: theme.spacing[3],

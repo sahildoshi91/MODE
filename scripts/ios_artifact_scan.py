@@ -14,7 +14,9 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-MAX_FILE_BYTES = 5 * 1024 * 1024
+MAX_PLIST_BYTES = 5 * 1024 * 1024
+STREAM_CHUNK_BYTES = 1024 * 1024
+TEXT_SCAN_OVERLAP_BYTES = 8192
 BLOCKED_GENERIC_SCHEMES = {"app", "myapp", "test", "demo", "example", "sample"}
 SCHEME_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{2,}$")
 
@@ -33,6 +35,12 @@ PATTERN_GROUPS: dict[str, list[re.Pattern[str]]] = {
     "staging_or_local_urls": [
         re.compile(r"https?://(?:localhost|127\.0\.0\.1|staging)[^\"'\s>]*", re.IGNORECASE),
         re.compile(r"https?://(?:192\.168\.|10\.|172\.16\.)[^\"'\s>]*", re.IGNORECASE),
+        re.compile(r"https?://[^\"'\s>]*(?:\.dev|dev\.|development)[^\"'\s>]*", re.IGNORECASE),
+    ],
+    "stale_expo_metadata": [
+        re.compile(r"\bEXSDKVersion\b", re.IGNORECASE),
+        re.compile(r"\bsdkVersion\b", re.IGNORECASE),
+        re.compile(r"host\.exp\.Exponent", re.IGNORECASE),
     ],
     "debug_flags_or_verbose_logs": [
         re.compile(r"\b__DEV__\b"),
@@ -49,6 +57,9 @@ PATTERN_GROUPS: dict[str, list[re.Pattern[str]]] = {
 
 TEXTUAL_EXTENSIONS = {
     ".js",
+    ".jsbundle",
+    ".bundle",
+    ".map",
     ".json",
     ".plist",
     ".txt",
@@ -58,6 +69,9 @@ TEXTUAL_EXTENSIONS = {
     ".strings",
     ".cfg",
 }
+
+
+FindingKey = tuple[str, str]
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -81,12 +95,42 @@ def _resolve_ipa_path(path_override: str | None) -> Path | None:
     return path
 
 
-def _scan_text(content: str, *, file_name: str, findings: list[str]) -> None:
+def _scan_text(
+    content: str,
+    *,
+    file_name: str,
+    findings: list[str],
+    seen_findings: set[FindingKey],
+) -> None:
     for category, patterns in PATTERN_GROUPS.items():
+        finding_key = (category, file_name)
+        if finding_key in seen_findings:
+            continue
         for pattern in patterns:
             if pattern.search(content):
                 findings.append(f"{category}:{file_name}:{pattern.pattern}")
+                seen_findings.add(finding_key)
                 break
+
+
+def _scan_text_stream(
+    handle,
+    *,
+    file_name: str,
+    findings: list[str],
+    seen_findings: set[FindingKey],
+) -> None:
+    carry = b""
+    while True:
+        chunk = handle.read(STREAM_CHUNK_BYTES)
+        if not chunk:
+            break
+
+        window = carry + chunk
+        text = window.decode("utf-8", errors="ignore")
+        if text:
+            _scan_text(text, file_name=file_name, findings=findings, seen_findings=seen_findings)
+        carry = window[-TEXT_SCAN_OVERLAP_BYTES:]
 
 
 def _scan_info_plist(payload: dict, *, file_name: str, findings: list[str]) -> None:
@@ -143,6 +187,11 @@ def _scan_plist(raw_bytes: bytes, *, file_name: str, findings: list[str]) -> Non
     _scan_info_plist(payload, file_name=file_name, findings=findings)
 
 
+def _should_scan_text_member(info: zipfile.ZipInfo) -> bool:
+    suffix = Path(info.filename).suffix.lower()
+    return suffix in TEXTUAL_EXTENSIONS or info.file_size <= MAX_PLIST_BYTES
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
@@ -162,28 +211,33 @@ def main() -> int:
         return 1
 
     findings: list[str] = []
+    seen_findings: set[FindingKey] = set()
     try:
         with zipfile.ZipFile(ipa_path, "r") as archive:
             for info in archive.infolist():
                 if info.is_dir():
                     continue
                 file_name = info.filename
-                suffix = Path(file_name).suffix.lower()
-                if suffix not in TEXTUAL_EXTENSIONS and info.file_size > MAX_FILE_BYTES:
+
+                if file_name.endswith("Info.plist"):
+                    if info.file_size > MAX_PLIST_BYTES:
+                        findings.append(f"unsafe_ats_config:{file_name}:Info.plist_too_large")
+                    else:
+                        with archive.open(info, "r") as handle:
+                            raw_bytes = handle.read(MAX_PLIST_BYTES + 1)
+                        if len(raw_bytes) <= MAX_PLIST_BYTES:
+                            _scan_plist(raw_bytes, file_name=file_name, findings=findings)
+
+                if not _should_scan_text_member(info):
                     continue
 
                 with archive.open(info, "r") as handle:
-                    raw_bytes = handle.read(MAX_FILE_BYTES + 1)
-                if len(raw_bytes) > MAX_FILE_BYTES:
-                    continue
-
-                if file_name.endswith("Info.plist"):
-                    _scan_plist(raw_bytes, file_name=file_name, findings=findings)
-
-                text = raw_bytes.decode("utf-8", errors="ignore")
-                if not text:
-                    continue
-                _scan_text(text, file_name=file_name, findings=findings)
+                    _scan_text_stream(
+                        handle,
+                        file_name=file_name,
+                        findings=findings,
+                        seen_findings=seen_findings,
+                    )
     except Exception as exc:
         print("iOS artifact scan: FAILED")
         print(f"- Unable to scan IPA: {exc}")

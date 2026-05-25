@@ -235,6 +235,18 @@ describe('CoachChatScreen', () => {
     });
   });
 
+  it('renders the AI fitness disclaimer in the chat header', () => {
+    const tree = renderScreen();
+    const disclaimer = tree.root.findByProps({ testID: 'coach-chat-ai-fitness-disclaimer' });
+
+    expect(disclaimer.props.children).toContain('AI-generated fitness coaching');
+    expect(disclaimer.props.children).toContain('not medical advice');
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
   it('computes sender grouping metadata and keeps speaker labels on group starts', () => {
     mockUseChatConversation.mockReturnValue({
       messages: [
