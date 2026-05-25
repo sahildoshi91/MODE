@@ -51,6 +51,53 @@ def test_chat_stream_semaphore_env_documented() -> None:
     assert "MAX_ACTIVE_CHAT_STREAMS_PER_INSTANCE=<10>" in release
     assert "USE_FAKE_PROVIDER=<false>" in staging
     assert "USE_FAKE_PROVIDER=<false>" in release
+    assert "CHAT_STREAM_PROVIDER_WORKER_THREADS=<50>" in staging
+    assert "CHAT_STREAM_PROVIDER_WORKER_THREADS=<50>" in release
+    assert "CHAT_STAGING_OPENAI_ONLY=<false>" in staging
+    assert "CHAT_STAGING_OPENAI_ONLY=<false>" in release
+
+
+def test_release_env_templates_document_redis_chat_rate_controls() -> None:
+    staging = STAGING_TEMPLATE.read_text(encoding="utf-8")
+    release = RELEASE_TEMPLATE.read_text(encoding="utf-8")
+
+    required_placeholders = [
+        "RATE_LIMIT_BACKEND=<redis>",
+        "RATE_LIMIT_ENABLED=<true>",
+        "RATE_LIMIT_WINDOW_SECONDS=<60>",
+        "RATE_LIMIT_CHAT_PER_WINDOW=<30>",
+        "RATE_LIMIT_CHAT_CLIENT_PER_WINDOW=<20>",
+        "RATE_LIMIT_CHAT_TRAINER_PER_WINDOW=<200>",
+        "RATE_LIMIT_CHAT_IP_PER_WINDOW=<500>",
+        "RATE_LIMIT_IP_PER_WINDOW=<1000>",
+    ]
+    for placeholder in required_placeholders:
+        assert placeholder in staging
+        assert placeholder in release
+
+
+def test_env_templates_document_launch_chat_controls_and_legal_urls() -> None:
+    shared = SHARED_TEMPLATE.read_text(encoding="utf-8")
+    staging = STAGING_TEMPLATE.read_text(encoding="utf-8")
+    release = RELEASE_TEMPLATE.read_text(encoding="utf-8")
+
+    required_keys = [
+        "EXPO_PUBLIC_PRIVACY_POLICY_URL=",
+        "EXPO_PUBLIC_TERMS_URL=",
+        "EXPO_PUBLIC_SUPPORT_URL=",
+        "CHAT_ENABLED=",
+        "STREAMING_ENABLED=",
+        "LLM_PROVIDER_ENABLED=",
+        "MEMORY_WRITES_ENABLED=",
+        "CHAT_PROVIDER_TIMEOUT_SECONDS=",
+        "CHAT_MAX_OUTPUT_TOKENS=",
+        "GLOBAL_CHAT_RATE_LIMIT=",
+        "PER_USER_CHAT_RATE_LIMIT=",
+    ]
+    for key in required_keys:
+        assert key in shared
+        assert key in staging
+        assert key in release
 
 
 def test_release_env_files_are_gitignored() -> None:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from threading import Lock
@@ -9,6 +11,9 @@ from fastapi import HTTPException, Request, status
 
 from app.core.auth import AuthenticatedUser
 from app.core.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -290,15 +295,21 @@ def _rate_limit_checks(
     client_id = context.get("client_id")
     trainer_id = context.get("trainer_id")
     client_ip = _client_ip(request)
+    per_user_chat_limit = int(settings.per_user_chat_rate_limit)
+    global_chat_limit = int(settings.global_chat_rate_limit)
 
     if client_id:
         checks.append((f"chat|scope:client:{client_id}", int(settings.rate_limit_chat_client_per_window)))
+    if user_id and per_user_chat_limit > 0:
+        checks.append((f"chat|scope:user:{user_id}", per_user_chat_limit))
     if user_id:
         checks.append((f"chat|scope:user:{user_id}|{context_key}", int(settings.rate_limit_chat_per_window)))
     if trainer_id:
         checks.append((f"chat|scope:trainer:{trainer_id}", int(settings.rate_limit_chat_trainer_per_window)))
     checks.append((f"chat|scope:ip:{client_ip}", int(settings.rate_limit_chat_ip_per_window)))
     checks.append((f"any|scope:ip:{client_ip}", int(settings.rate_limit_ip_per_window)))
+    if global_chat_limit > 0:
+        checks.append(("chat|scope:global", global_chat_limit))
     return _dedupe_checks(checks)
 
 
@@ -384,6 +395,16 @@ def enforce_rate_limit(
         else:
             return
 
+    logger.warning(
+        json.dumps({
+            "event": "rate_limit_event",
+            "group": group,
+            "backend": backend,
+            "retry_after_seconds": retry_after_seconds,
+            "scopes_checked_count": len(checked_keys),
+            "user_id_present": bool(getattr(user, "id", None)),
+        })
+    )
     raise HTTPException(
         status_code=status.HTTP_429_TOO_MANY_REQUESTS,
         detail={

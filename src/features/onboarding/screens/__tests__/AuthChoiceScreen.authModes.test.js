@@ -106,4 +106,18 @@ describe('AuthChoiceScreen password mode', () => {
 
     expect(rendered).not.toContain('Back');
   });
+
+  it('renders AI safety copy and legal support links', () => {
+    const tree = createScreen({ showPasswordAuth: true });
+    const rendered = JSON.stringify(tree.toJSON());
+
+    expect(rendered).toContain('AI-generated fitness coaching');
+    expect(rendered).toContain('not medical advice');
+    expect(rendered).toContain('Privacy');
+    expect(rendered).toContain('Terms');
+    expect(rendered).toContain('Support');
+    expect(tree.root.findByProps({ testID: 'auth-legal-link-privacy' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'auth-legal-link-terms' })).toBeTruthy();
+    expect(tree.root.findByProps({ testID: 'auth-legal-link-support' })).toBeTruthy();
+  });
 });

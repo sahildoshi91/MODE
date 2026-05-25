@@ -83,6 +83,11 @@ describe('ProfileScreen trainer schedule', () => {
     expect(rendered).toContain('Typical Location:');
     expect(rendered).toContain('My Gym');
     expect(rendered).toContain('view-only');
+    expect(rendered).toContain('AI-generated fitness coaching');
+    expect(rendered).toContain('Legal & Support');
+    expect(rendered).toContain('Privacy');
+    expect(rendered).toContain('Terms');
+    expect(rendered).toContain('Support');
     expect(getMyTrainerSchedule).toHaveBeenCalledWith({ accessToken: 'client-token' });
   });
 
@@ -158,16 +163,21 @@ describe('ProfileScreen trainer schedule', () => {
     });
     await flushEffects();
 
+    let rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Submits a permanent deletion request');
+    expect(rendered).toContain('Processing may continue after sign-out');
+
     const deleteButton = tree.root.find(
-      (node) => node?.props?.title === 'Delete Account Permanently' && typeof node?.props?.onPress === 'function',
+      (node) => node?.props?.title === 'Submit Deletion Request' && typeof node?.props?.onPress === 'function',
     );
 
     await act(async () => {
       await deleteButton.props.onPress();
     });
 
-    let rendered = JSON.stringify(tree.toJSON());
+    rendered = JSON.stringify(tree.toJSON());
     expect(rendered).toContain('Type DELETE to confirm');
+    expect(rendered).toContain('submit your account deletion request');
     expect(onDeleteAccount).not.toHaveBeenCalled();
 
     const confirmationInput = tree.root.find(
@@ -182,5 +192,7 @@ describe('ProfileScreen trainer schedule', () => {
     });
 
     expect(onDeleteAccount).toHaveBeenCalledWith({ confirmation: 'DELETE' });
+    rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('Account deletion request submitted');
   });
 });

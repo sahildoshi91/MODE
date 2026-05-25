@@ -86,6 +86,44 @@ class OpenAIClientTests(unittest.TestCase):
 
         self.assertEqual(text, '{"title":"Builder"}')
 
+    def test_openai_client_uses_chat_provider_timeout_setting(self):
+        original_timeout = settings.chat_provider_timeout_seconds
+        settings.chat_provider_timeout_seconds = 12.5
+        fake_sdk_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=unittest.mock.Mock()),
+            )
+        )
+        try:
+            with patch("app.ai.client.OpenAI", return_value=fake_sdk_client) as openai_cls:
+                OpenAIClient()
+        finally:
+            settings.chat_provider_timeout_seconds = original_timeout
+
+        openai_cls.assert_called_once_with(api_key=settings.openai_api_key, timeout=12.5)
+
+    def test_provider_disabled_prevents_openai_request(self):
+        original_enabled = settings.llm_provider_enabled
+        settings.llm_provider_enabled = False
+        create_mock = unittest.mock.Mock(return_value=FakeOpenAIResponse("{}"))
+        fake_sdk_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=create_mock),
+            )
+        )
+        try:
+            with patch("app.ai.client.OpenAI", return_value=fake_sdk_client):
+                client = OpenAIClient()
+                with self.assertRaisesRegex(RuntimeError, "llm_provider_disabled"):
+                    client.create_chat_completion_with_usage(
+                        model="gpt-5.4-mini",
+                        messages=[{"role": "user", "content": "Return JSON"}],
+                    )
+        finally:
+            settings.llm_provider_enabled = original_enabled
+
+        create_mock.assert_not_called()
+
     def test_run_with_retries_retries_timeout_once(self):
         original_max_retries = settings.ai_max_retries
         settings.ai_max_retries = 2

@@ -13,6 +13,7 @@ os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from app.core.auth import AuthenticatedUser, require_user
+from app.core.config import settings
 from app.core.dependencies import get_chat_session_history_service, get_chat_session_service, get_trainer_context
 from app.core.tenancy import TrainerContext
 from app.main import app
@@ -135,6 +136,10 @@ class MissingChatSessionStorageService(FakeChatSessionApiService):
 
 class ChatSessionsApiTests(unittest.TestCase):
     def setUp(self):
+        self._original_chat_enabled = settings.chat_enabled
+        self._original_streaming_enabled = settings.streaming_enabled
+        settings.chat_enabled = True
+        settings.streaming_enabled = True
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
             id="user-123",
             email="user@example.com",
@@ -153,6 +158,8 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.client = TestClient(app, raise_server_exceptions=False)
 
     def tearDown(self):
+        settings.chat_enabled = self._original_chat_enabled
+        settings.streaming_enabled = self._original_streaming_enabled
         app.dependency_overrides.clear()
 
     def test_history_endpoint_accepts_no_trailing_slash(self):
@@ -278,6 +285,39 @@ class ChatSessionsApiTests(unittest.TestCase):
         self.assertEqual(
             response.json()["detail"]["message"],
             "Chat session storage is not migrated on this backend yet.",
+        )
+
+    def test_chat_disabled_blocks_session_writes_but_not_history(self):
+        settings.chat_enabled = False
+
+        history_response = self.client.get(
+            "/api/v1/chat/sessions?role=client&session_type=client_chat&limit=1",
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        send_response = self.client.post(
+            "/api/v1/chat/sessions/session-1/messages",
+            json={"message": "Do not log this raw session message"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(history_response.status_code, 200)
+        self.assertEqual(send_response.status_code, 503)
+        self.assertEqual(send_response.json()["detail"], "Chat is temporarily unavailable. Please try again later.")
+        self.assertNotIn("Do not log this raw session message", send_response.text)
+
+    def test_streaming_disabled_blocks_session_stream(self):
+        settings.streaming_enabled = False
+
+        response = self.client.post(
+            "/api/v1/chat/sessions/session-1/messages/stream",
+            json={"message": "Reach step goal"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json()["detail"],
+            "Chat streaming is temporarily unavailable. Please try again later.",
         )
 
     def test_message_stream_uses_new_event_contract_and_persists_ai_once(self):

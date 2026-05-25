@@ -23,6 +23,7 @@ import {
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { BREATHING_TRANSITIONS_ENABLED } from '../../../config/featureFlags';
+import { AI_FITNESS_DISCLAIMER } from '../../../config/legalLinks';
 import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/loading';
 import {
   createTrainerClientMemory,
@@ -1382,6 +1383,14 @@ export default function CoachChatScreen({
                   style={styles.sessionIntroCard}
                   testID="coach-chat-session-intro"
                 />
+                <ModeText
+                  testID="coach-chat-ai-fitness-disclaimer"
+                  variant="caption"
+                  tone="tertiary"
+                  style={styles.aiDisclaimer}
+                >
+                  {AI_FITNESS_DISCLAIMER}
+                </ModeText>
                 <HistoryPaginationControl
                   hasMoreHistory={hasMoreHistory}
                   isLoading={isLoadingMoreHistory}
@@ -1675,6 +1684,9 @@ const styles = StyleSheet.create({
   sessionIntroCard: {
     marginBottom: theme.spacing[2],
     ...theme.shadows.medium,
+  },
+  aiDisclaimer: {
+    marginBottom: theme.spacing[2],
   },
   historyPagination: {
     alignItems: 'center',

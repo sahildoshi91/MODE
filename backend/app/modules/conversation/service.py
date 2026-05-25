@@ -390,6 +390,8 @@ class ConversationService:
     def gemini_client(self) -> GeminiClient | Any | None:
         if self._gemini_client_override is not _CLIENT_OVERRIDE_UNSET:
             return self._gemini_client_override
+        if not settings.llm_provider_enabled:
+            return None
         return self._safe_get_gemini_client()
 
     @gemini_client.setter
@@ -400,6 +402,8 @@ class ConversationService:
     def openai_client(self) -> OpenAIClient | Any | None:
         if self._openai_client_override is not _CLIENT_OVERRIDE_UNSET:
             return self._openai_client_override
+        if not settings.llm_provider_enabled:
+            return None
         return self._safe_get_openai_client()
 
     @openai_client.setter
@@ -410,6 +414,8 @@ class ConversationService:
     def anthropic_client(self) -> AnthropicClient | Any | None:
         if self._anthropic_client_override is not _CLIENT_OVERRIDE_UNSET:
             return self._anthropic_client_override
+        if not settings.llm_provider_enabled:
+            return None
         if not settings.anthropic_api_key:
             return None
         return self._safe_get_anthropic_client()
@@ -444,6 +450,17 @@ class ConversationService:
         except Exception:
             logger.exception("Anthropic client failed to initialize, continuing with fallback providers")
             return None
+
+    def _ensure_llm_provider_enabled(self) -> None:
+        if not settings.llm_provider_enabled:
+            logger.warning(
+                json.dumps({
+                    "event": "chat_kill_switch",
+                    "control": "LLM_PROVIDER_ENABLED",
+                    "enabled": False,
+                })
+            )
+            raise RuntimeError("llm_provider_disabled")
 
     def _exception_attribute(self, exc: Exception, attribute: str) -> Any:
         current: BaseException | None = exc
@@ -1630,6 +1647,7 @@ class ConversationService:
         timing.record_phase_once("first_provider_chunk_yield_attempt_ms", (time.perf_counter() - timing.started_at) * 1000)
 
     def _gemini_text_completion(self, prompt: PromptPackage, *, model: str = GEMINI_MODEL) -> TextCompletion:
+        self._ensure_llm_provider_enabled()
         gemini_client = self.gemini_client
         if not gemini_client:
             raise ConversationProcessingError("Chat response could not be completed")
@@ -1660,15 +1678,23 @@ class ConversationService:
 
     def _max_output_tokens_for_prompt(self, prompt: PromptPackage) -> int | None:
         budgets = prompt.orchestration_metadata.get("token_budgets")
-        if not isinstance(budgets, dict):
-            return None
+        budget_value = 0
+        if isinstance(budgets, dict):
+            try:
+                budget_value = int(budgets.get("max_output") or 0)
+            except (TypeError, ValueError):
+                budget_value = 0
         try:
-            value = int(budgets.get("max_output") or 0)
+            configured_cap = int(settings.chat_max_output_tokens or 0)
         except (TypeError, ValueError):
+            configured_cap = 0
+        positive_values = [value for value in (budget_value, configured_cap) if value > 0]
+        if not positive_values:
             return None
-        return value if value > 0 else None
+        return min(positive_values)
 
     def _execute_provider_model(self, provider: str, model: str, prompt: PromptPackage) -> TextCompletion:
+        self._ensure_llm_provider_enabled()
         api_model = self._api_model_for_provider(provider, model)
         max_output_tokens = self._max_output_tokens_for_prompt(prompt)
         if provider == "openai":
@@ -1726,6 +1752,8 @@ class ConversationService:
 
     def _provider_fallback_reason(self, provider: str, exc: Exception | None = None) -> str:
         if exc is not None:
+            if str(exc) == "llm_provider_disabled":
+                return "llm_provider_disabled"
             if self._is_timeout_exception(exc):
                 return f"{provider}_timeout"
             if self._is_rate_limit_exception(exc):
@@ -2133,6 +2161,17 @@ class ConversationService:
     ) -> None:
         trainer_id = trainer_context.trainer_id
         client_id = trainer_context.client_id
+        if not settings.memory_writes_enabled:
+            logger.info(
+                json.dumps({
+                    "event": "chat_kill_switch",
+                    "control": "MEMORY_WRITES_ENABLED",
+                    "enabled": False,
+                    "trainer_id_present": bool(trainer_id),
+                    "client_id_present": bool(client_id),
+                })
+            )
+            return
         if not trainer_id or not client_id:
             return
         candidate = evaluate_memory_write(request.message)
@@ -2190,6 +2229,17 @@ class ConversationService:
         request: ChatRequest,
         conversation_id: str,
     ) -> None:
+        if not settings.memory_writes_enabled:
+            logger.info(
+                json.dumps({
+                    "event": "chat_kill_switch",
+                    "control": "MEMORY_WRITES_ENABLED",
+                    "enabled": False,
+                    "trainer_id_present": bool(trainer_context.trainer_id),
+                    "client_id_present": bool(trainer_context.client_id),
+                })
+            )
+            return
         self._enqueue_post_chat_jobs_safely(
             trainer_context=trainer_context,
             request=request,
@@ -2215,6 +2265,7 @@ class ConversationService:
         try:
             job_repository = self._intelligence_job_repository()
             route_payload = route.as_dict() if route else {}
+            effective_include_memory = bool(include_memory and settings.memory_writes_enabled)
             results = enqueue_post_chat_jobs(
                 trainer_id=trainer_context.trainer_id,
                 client_id=trainer_context.client_id,
@@ -2225,7 +2276,7 @@ class ConversationService:
                 assistant_message=assistant_message,
                 user_message_id=user_message_id,
                 tenant_id=trainer_context.tenant_id,
-                include_memory=include_memory,
+                include_memory=effective_include_memory,
                 job_repository=job_repository,
             )
             summary_result = self._maybe_enqueue_summarization_after_assistant(
@@ -3184,12 +3235,18 @@ class ConversationService:
         intent = route.intent_route if isinstance(route.intent_route, dict) else {}
         route_name = str(intent.get("route") or "").upper()
         if route_name == "SAFETY_ESCALATION" or route.flow == "safety_escalation":
-            return 6.0
-        if route_name == "DEEP_PATH" or route.flow in {"deep_path", "reasoning_structured"}:
-            return 8.0
-        if route_name == "FAST_PATH" or route.flow == "default_fast":
-            return 4.0
-        return 6.0
+            route_timeout = 6.0
+        elif route_name == "DEEP_PATH" or route.flow in {"deep_path", "reasoning_structured"}:
+            route_timeout = 8.0
+        elif route_name == "FAST_PATH" or route.flow == "default_fast":
+            route_timeout = 4.0
+        else:
+            route_timeout = 6.0
+        try:
+            configured_timeout = max(float(settings.chat_provider_timeout_seconds), 0.001)
+        except (TypeError, ValueError):
+            configured_timeout = route_timeout
+        return min(route_timeout, configured_timeout)
 
     @staticmethod
     def _has_semantic_commitment(text: str) -> bool:
@@ -3242,6 +3299,7 @@ class ConversationService:
         prompt: PromptPackage,
         timing: ChatStreamTiming,
     ) -> tuple[Iterator[str], str]:
+        self._ensure_llm_provider_enabled()
         api_model = self._api_model_for_provider(attempt.provider, attempt.model)
         max_output_tokens = self._max_output_tokens_for_prompt(prompt)
         if attempt.provider == "openai":

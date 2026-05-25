@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from app.api.v1.chat import CONTROLLED_CHAT_ERROR_DETAIL
+from app.api.v1.chat import CONTROLLED_CHAT_ERROR_DETAIL, require_chat_enabled, require_chat_streaming_enabled
 from app.api.v1.trainer_auth import require_client_or_trainer_actor
 from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.config import settings
@@ -163,6 +163,7 @@ async def get_today_chat_session(
     service: ChatSessionService = Depends(get_chat_session_service),
 ):
     require_client_or_trainer_actor(user, trainer_context)
+    require_chat_enabled()
     _rate_limit_chat(http_request, user, trainer_context)
     try:
         return service.get_or_create_today_session(
@@ -296,6 +297,7 @@ async def continue_chat_session(
     service: ChatSessionService = Depends(get_chat_session_service),
 ):
     require_client_or_trainer_actor(user, trainer_context)
+    require_chat_enabled()
     _rate_limit_chat(http_request, user, trainer_context)
     try:
         return service.continue_from_session(
@@ -324,6 +326,7 @@ async def send_chat_session_message(
     service: ChatSessionService = Depends(get_chat_session_service),
 ):
     require_client_or_trainer_actor(user, trainer_context)
+    require_chat_enabled()
     _rate_limit_chat(http_request, user, trainer_context)
     try:
         return service.send_message(
@@ -355,6 +358,7 @@ async def stream_chat_session_message(
     service: ChatSessionService = Depends(get_chat_session_service),
 ):
     require_client_or_trainer_actor(user, trainer_context)
+    require_chat_streaming_enabled()
     _rate_limit_chat(http_request, user, trainer_context)
     request_id = str(request.request_id) if request.request_id else str(uuid4())
 

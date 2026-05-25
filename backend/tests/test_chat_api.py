@@ -233,13 +233,27 @@ class ChatApiTests(unittest.TestCase):
         self._original_rate_limit_enabled = settings.rate_limit_enabled
         self._original_rate_limit_window_seconds = settings.rate_limit_window_seconds
         self._original_rate_limit_chat_per_window = settings.rate_limit_chat_per_window
+        self._original_rate_limit_chat_client_per_window = settings.rate_limit_chat_client_per_window
+        self._original_rate_limit_chat_trainer_per_window = settings.rate_limit_chat_trainer_per_window
+        self._original_rate_limit_chat_ip_per_window = settings.rate_limit_chat_ip_per_window
         self._original_use_fake_provider = settings.use_fake_provider
         self._original_max_active_chat_streams_per_instance = settings.max_active_chat_streams_per_instance
+        self._original_chat_enabled = settings.chat_enabled
+        self._original_streaming_enabled = settings.streaming_enabled
+        self._original_global_chat_rate_limit = settings.global_chat_rate_limit
+        self._original_per_user_chat_rate_limit = settings.per_user_chat_rate_limit
         settings.rate_limit_enabled = True
         settings.rate_limit_window_seconds = 60
         settings.rate_limit_chat_per_window = 30
+        settings.rate_limit_chat_client_per_window = 20
+        settings.rate_limit_chat_trainer_per_window = 200
+        settings.rate_limit_chat_ip_per_window = 500
         settings.use_fake_provider = False
         settings.max_active_chat_streams_per_instance = 15
+        settings.chat_enabled = True
+        settings.streaming_enabled = True
+        settings.global_chat_rate_limit = 0
+        settings.per_user_chat_rate_limit = 0
         chat_api_module._reset_stream_semaphore_for_tests()
         _rate_limiter._windows.clear()
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
@@ -310,8 +324,15 @@ class ChatApiTests(unittest.TestCase):
         settings.rate_limit_enabled = self._original_rate_limit_enabled
         settings.rate_limit_window_seconds = self._original_rate_limit_window_seconds
         settings.rate_limit_chat_per_window = self._original_rate_limit_chat_per_window
+        settings.rate_limit_chat_client_per_window = self._original_rate_limit_chat_client_per_window
+        settings.rate_limit_chat_trainer_per_window = self._original_rate_limit_chat_trainer_per_window
+        settings.rate_limit_chat_ip_per_window = self._original_rate_limit_chat_ip_per_window
         settings.use_fake_provider = self._original_use_fake_provider
         settings.max_active_chat_streams_per_instance = self._original_max_active_chat_streams_per_instance
+        settings.chat_enabled = self._original_chat_enabled
+        settings.streaming_enabled = self._original_streaming_enabled
+        settings.global_chat_rate_limit = self._original_global_chat_rate_limit
+        settings.per_user_chat_rate_limit = self._original_per_user_chat_rate_limit
         chat_api_module._reset_stream_semaphore_for_tests()
         _rate_limiter._windows.clear()
         app.dependency_overrides.clear()
@@ -352,6 +373,66 @@ class ChatApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["detail"], "Chat response could not be completed")
+
+    def test_chat_disabled_returns_user_safe_503(self):
+        app.dependency_overrides[get_conversation_service] = lambda: FakeConversationService()
+        settings.chat_enabled = False
+
+        response = self.client.post(
+            "/api/v1/chat",
+            json={"message": "Never log this raw chat content"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], chat_api_module.CHAT_DISABLED_ERROR_DETAIL)
+        self.assertNotIn("Never log this raw chat content", response.text)
+
+    def test_per_user_chat_rate_limit_is_enforced(self):
+        app.dependency_overrides[get_conversation_service] = lambda: FakeConversationService()
+        settings.rate_limit_chat_per_window = 100
+        settings.rate_limit_chat_client_per_window = 100
+        settings.rate_limit_chat_trainer_per_window = 100
+        settings.rate_limit_chat_ip_per_window = 100
+        settings.per_user_chat_rate_limit = 1
+
+        first = self.client.post(
+            "/api/v1/chat",
+            json={"message": "Hello"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        second = self.client.post(
+            "/api/v1/chat",
+            json={"message": "Hello again"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        self.assertIn("chat|scope:user:user-123", second.json()["detail"]["scopes_checked"])
+
+    def test_global_chat_rate_limit_is_enforced(self):
+        app.dependency_overrides[get_conversation_service] = lambda: FakeConversationService()
+        settings.rate_limit_chat_per_window = 100
+        settings.rate_limit_chat_client_per_window = 100
+        settings.rate_limit_chat_trainer_per_window = 100
+        settings.rate_limit_chat_ip_per_window = 100
+        settings.global_chat_rate_limit = 1
+
+        first = self.client.post(
+            "/api/v1/chat",
+            json={"message": "Hello"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+        second = self.client.post(
+            "/api/v1/chat",
+            json={"message": "Hello again"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        self.assertIn("chat|scope:global", second.json()["detail"]["scopes_checked"])
 
     def test_chat_emits_structured_trace(self):
         app.dependency_overrides[get_conversation_service] = lambda: FakeConversationService()
@@ -464,6 +545,21 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn('data: {"token":"start"}', response.text)
         self.assertIn('data: {"done":true}', response.text)
         self.assertEqual(calls, [])
+
+    def test_streaming_disabled_returns_503_before_stream_slot(self):
+        self._override_conversation_service(FakeConversationService())
+        settings.streaming_enabled = False
+        before = chat_api_module._stream_semaphore_available()
+
+        response = self.client.post(
+            "/api/v1/chat/stream",
+            json={"message": "Hello"},
+            headers={"Authorization": "Bearer ignored-by-override"},
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.json()["detail"], chat_api_module.STREAMING_DISABLED_ERROR_DETAIL)
+        self.assertEqual(chat_api_module._stream_semaphore_available(), before)
 
     def test_stream_capacity_guard_returns_429_without_queuing(self):
         self._override_conversation_service(FakeConversationService())

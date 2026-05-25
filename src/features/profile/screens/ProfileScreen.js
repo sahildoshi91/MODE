@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import Constants from 'expo-constants';
 
 import {
@@ -24,6 +24,11 @@ import {
   prepareAssistantDisplayNameForSave,
   resolveAssistantDisplayName,
 } from '../../messaging';
+import {
+  AI_FITNESS_DISCLAIMER,
+  getLegalLinks,
+  getLegalLinksFallbackText,
+} from '../../../config/legalLinks';
 import { formatIsoWeekdaySummary } from '../../trainerClients/utils/scheduleResolver';
 
 function valueOrFallback(value, fallback = 'Not available') {
@@ -110,6 +115,10 @@ export default function ProfileScreen({
   const [deleteConfirmationText, setDeleteConfirmationText] = useState('');
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [deleteAccountError, setDeleteAccountError] = useState(null);
+  const [deleteAccountNotice, setDeleteAccountNotice] = useState(null);
+  const [legalLinksError, setLegalLinksError] = useState(null);
+  const legalLinks = useMemo(() => getLegalLinks(), []);
+  const legalLinksFallbackText = useMemo(() => getLegalLinksFallbackText(legalLinks), [legalLinks]);
   const resolvedAssistantPreviewName = useMemo(
     () => resolveAssistantDisplayName(trainerSettingsDraft.assistantDisplayName),
     [trainerSettingsDraft.assistantDisplayName],
@@ -236,18 +245,33 @@ export default function ProfileScreen({
 
     const normalized = String(deleteConfirmationText || '').trim().toUpperCase();
     if (normalized !== 'DELETE') {
-      setDeleteAccountError('Type DELETE to confirm permanent account deletion.');
+      setDeleteAccountError('Type DELETE to submit your account deletion request.');
       return;
     }
 
     setIsDeletingAccount(true);
     setDeleteAccountError(null);
+    setDeleteAccountNotice(null);
     try {
       await onDeleteAccount({ confirmation: 'DELETE' });
+      setDeleteAccountNotice('Account deletion request submitted. Processing may continue after sign-out.');
     } catch (error) {
-      setDeleteAccountError(error?.message || 'Unable to delete account right now.');
+      setDeleteAccountError(error?.message || 'Unable to submit deletion request right now.');
     } finally {
       setIsDeletingAccount(false);
+    }
+  };
+
+  const handleLegalLinkPress = async (link) => {
+    if (!link?.url) {
+      setLegalLinksError(`Set ${link?.envVar || 'the link URL'} to open ${link?.label || 'this link'}.`);
+      return;
+    }
+    setLegalLinksError(null);
+    try {
+      await Linking.openURL(link.url);
+    } catch (_error) {
+      setLegalLinksError(`Unable to open ${link.label} right now.`);
     }
   };
 
@@ -296,6 +320,13 @@ export default function ProfileScreen({
             enabled={reminderPreference}
             onToggle={() => setReminderPreference((current) => !current)}
           />
+        </ModeCard>
+
+        <ModeCard variant="surface">
+          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>AI Fitness Guidance</ModeText>
+          <ModeText testID="profile-ai-fitness-disclaimer" variant="bodySm" tone="secondary">
+            {AI_FITNESS_DISCLAIMER}
+          </ModeText>
         </ModeCard>
 
         {isTrainerViewer ? (
@@ -447,9 +478,52 @@ export default function ProfileScreen({
         ) : null}
 
         <ModeCard variant="surface">
+          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Legal & Support</ModeText>
+          <View testID="profile-legal-links" style={styles.legalLinksRow}>
+            {legalLinks.map((link, index) => (
+              <React.Fragment key={link.id}>
+                {index > 0 ? (
+                  <ModeText variant="caption" tone="tertiary" style={styles.legalSeparator}>
+                    |
+                  </ModeText>
+                ) : null}
+                <Pressable
+                  accessibilityRole="link"
+                  accessibilityLabel={link.label}
+                  accessibilityHint={link.isConfigured ? undefined : `Set ${link.envVar} to enable this link.`}
+                  disabled={!link.isConfigured}
+                  onPress={() => handleLegalLinkPress(link)}
+                  testID={`profile-legal-link-${link.id}`}
+                  style={styles.legalLinkPressable}
+                >
+                  <ModeText variant="bodySm" tone={link.isConfigured ? 'accent' : 'tertiary'}>
+                    {link.label}
+                  </ModeText>
+                </Pressable>
+              </React.Fragment>
+            ))}
+          </View>
+          {legalLinksFallbackText ? (
+            <ModeText
+              testID="profile-legal-links-fallback"
+              variant="caption"
+              tone="tertiary"
+              style={styles.legalFallback}
+            >
+              {legalLinksFallbackText}
+            </ModeText>
+          ) : null}
+          {legalLinksError ? (
+            <ModeText variant="caption" tone="error" style={styles.legalFallback}>
+              {legalLinksError}
+            </ModeText>
+          ) : null}
+        </ModeCard>
+
+        <ModeCard variant="surface">
           <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Account Deletion</ModeText>
           <ModeText variant="bodySm" tone="secondary">
-            Permanently deletes your account, sessions, chat history, files, and linked training data.
+            Submits a permanent deletion request for your account, sessions, chat history, files, and linked training data. Processing may continue after sign-out.
           </ModeText>
           <ModeInput
             value={deleteConfirmationText}
@@ -461,8 +535,11 @@ export default function ProfileScreen({
           {deleteAccountError ? (
             <ModeText variant="caption" tone="error">{deleteAccountError}</ModeText>
           ) : null}
+          {deleteAccountNotice ? (
+            <ModeText variant="caption" tone="secondary">{deleteAccountNotice}</ModeText>
+          ) : null}
           <ModeButton
-            title={isDeletingAccount ? 'Deleting Account...' : 'Delete Account Permanently'}
+            title={isDeletingAccount ? 'Submitting Request...' : 'Submit Deletion Request'}
             variant="destructive"
             disabled={isDeletingAccount}
             onPress={handleDeleteAccountPress}
@@ -557,6 +634,21 @@ const styles = StyleSheet.create({
   },
   trainerDefaultsSummary: {
     gap: theme.spacing[1] - 4,
+  },
+  legalLinksRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+  },
+  legalLinkPressable: {
+    paddingRight: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+  },
+  legalSeparator: {
+    paddingRight: theme.spacing[2],
+  },
+  legalFallback: {
+    marginTop: theme.spacing[1] - 4,
   },
   trainerScheduleList: {
     marginTop: theme.spacing[1],

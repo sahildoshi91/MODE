@@ -798,7 +798,7 @@ function AppShell() {
       await clearSupabaseAuthSessionStorage();
     }
 
-    resetSignedOutState({ infoMessage: 'Your account has been permanently deleted.' });
+    resetSignedOutState({ infoMessage: 'Your account deletion request was submitted and is processing.' });
   };
 
   const handleCopyBootstrapDiagnostics = useCallback(async () => {
