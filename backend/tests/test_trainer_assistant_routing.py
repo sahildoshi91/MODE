@@ -12,7 +12,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from app.modules.trainer_assistant.routing import (  # noqa: E402
     CLAUDE_OPUS_4_7_MODEL,
     CLAUDE_SONNET_4_6_MODEL,
-    GEMINI_2_5_FLASH_LITE_MODEL,
+    GEMINI_3_1_FLASH_LITE_MODEL,
     GPT_5_4_MINI_MODEL,
     GPT_5_4_MODEL,
     TrainerAssistantRouter,
@@ -113,7 +113,7 @@ class TrainerAssistantRoutingTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(decision.model, GEMINI_2_5_FLASH_LITE_MODEL)
+        self.assertEqual(decision.model, GEMINI_3_1_FLASH_LITE_MODEL)
         self.assertEqual(decision.reason, "background_default")
         self.assertEqual(decision.interaction_type, TrainerAssistantInteractionType.BACKGROUND)
 
@@ -121,22 +121,22 @@ class TrainerAssistantRoutingTests(unittest.TestCase):
         policy = default_fallback_policy().model_fallback_order
         self.assertEqual(
             policy.get(GPT_5_4_MINI_MODEL),
-            [GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+            [GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL, GEMINI_3_1_FLASH_LITE_MODEL],
         )
         self.assertEqual(
             policy.get(GPT_5_4_MODEL),
-            [CLAUDE_SONNET_4_6_MODEL, GPT_5_4_MINI_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+            [CLAUDE_SONNET_4_6_MODEL, GPT_5_4_MINI_MODEL, GEMINI_3_1_FLASH_LITE_MODEL],
         )
         self.assertEqual(
             policy.get(CLAUDE_SONNET_4_6_MODEL),
-            [GPT_5_4_MODEL, GPT_5_4_MINI_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+            [GPT_5_4_MODEL, GPT_5_4_MINI_MODEL, GEMINI_3_1_FLASH_LITE_MODEL],
         )
         self.assertEqual(
             policy.get(CLAUDE_OPUS_4_7_MODEL),
-            [CLAUDE_SONNET_4_6_MODEL, GPT_5_4_MODEL, GPT_5_4_MINI_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+            [CLAUDE_SONNET_4_6_MODEL, GPT_5_4_MODEL, GPT_5_4_MINI_MODEL, GEMINI_3_1_FLASH_LITE_MODEL],
         )
         self.assertEqual(
-            policy.get(GEMINI_2_5_FLASH_LITE_MODEL),
+            policy.get(GEMINI_3_1_FLASH_LITE_MODEL),
             [GPT_5_4_MINI_MODEL, GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL],
         )
 

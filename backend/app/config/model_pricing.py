@@ -5,13 +5,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-PRICING_LAST_VERIFIED = "2026-05-16"
+PRICING_LAST_VERIFIED = "2026-05-25"
 
 # Per-token rates. Keep pricing centralized so routing/orchestration code does
 # not carry provider-specific price constants inline.
 MODEL_PRICING: dict[str, dict[str, float]] = {
-    "gemini-2.5-flash": {"input_per_token": 0.000075 / 1000, "output_per_token": 0.00030 / 1000},
-    "gemini-2.5-flash-lite": {"input_per_token": 0.00008 / 1000, "output_per_token": 0.00030 / 1000},
+    "gemini-3.5-flash": {"input_per_token": 1.50 / 1_000_000, "output_per_token": 9.00 / 1_000_000},
+    "gemini-3.1-flash-lite": {"input_per_token": 0.25 / 1_000_000, "output_per_token": 1.50 / 1_000_000},
     "gpt-5.4-mini": {"input_per_token": 0.00015 / 1000, "output_per_token": 0.00060 / 1000},
     "gpt-5.4": {"input_per_token": 0.00250 / 1000, "output_per_token": 0.01000 / 1000},
     "gpt-5.5": {"input_per_token": 0.00250 / 1000, "output_per_token": 0.01000 / 1000},

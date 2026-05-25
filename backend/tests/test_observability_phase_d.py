@@ -298,7 +298,7 @@ class ObservabilityPhaseDTests(unittest.TestCase):
         self.assertIn("cost_calculation_missing_model", "\n".join(logs.output))
 
     def test_cost_calculated_for_all_models_in_pricing_config(self):
-        self.assertEqual(PRICING_LAST_VERIFIED, "2026-05-16")
+        self.assertEqual(PRICING_LAST_VERIFIED, "2026-05-25")
         for model in MODEL_PRICING:
             self.assertIsNotNone(calculate_cost_usd(model, 100, 50))
 

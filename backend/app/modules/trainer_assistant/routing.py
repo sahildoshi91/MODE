@@ -20,7 +20,7 @@ GPT_5_4_MINI_MODEL = "gpt-5.4-mini"
 GPT_5_4_MODEL = "gpt-5.4"
 CLAUDE_SONNET_4_6_MODEL = "claude-sonnet-4.6"
 CLAUDE_OPUS_4_7_MODEL = "claude-opus-4.7"
-GEMINI_2_5_FLASH_LITE_MODEL = "gemini-2.5-flash-lite"
+GEMINI_3_1_FLASH_LITE_MODEL = "gemini-3.1-flash-lite"
 
 
 def default_provider_registry() -> ProviderModelRegistry:
@@ -29,7 +29,7 @@ def default_provider_registry() -> ProviderModelRegistry:
         complex_reasoning_model=GPT_5_4_MODEL,
         premium_review_model=CLAUDE_SONNET_4_6_MODEL,
         hardest_case_model=CLAUDE_OPUS_4_7_MODEL,
-        background_model=GEMINI_2_5_FLASH_LITE_MODEL,
+        background_model=GEMINI_3_1_FLASH_LITE_MODEL,
     )
 
 
@@ -37,16 +37,16 @@ def default_fallback_policy() -> FallbackPolicyConfig:
     return FallbackPolicyConfig(
         model_fallback_order={
             # Keep cross-provider fallbacks so live execution can survive a single-provider outage.
-            GPT_5_4_MINI_MODEL: [GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
-            GPT_5_4_MODEL: [CLAUDE_SONNET_4_6_MODEL, GPT_5_4_MINI_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
-            CLAUDE_SONNET_4_6_MODEL: [GPT_5_4_MODEL, GPT_5_4_MINI_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+            GPT_5_4_MINI_MODEL: [GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL, GEMINI_3_1_FLASH_LITE_MODEL],
+            GPT_5_4_MODEL: [CLAUDE_SONNET_4_6_MODEL, GPT_5_4_MINI_MODEL, GEMINI_3_1_FLASH_LITE_MODEL],
+            CLAUDE_SONNET_4_6_MODEL: [GPT_5_4_MODEL, GPT_5_4_MINI_MODEL, GEMINI_3_1_FLASH_LITE_MODEL],
             CLAUDE_OPUS_4_7_MODEL: [
                 CLAUDE_SONNET_4_6_MODEL,
                 GPT_5_4_MODEL,
                 GPT_5_4_MINI_MODEL,
-                GEMINI_2_5_FLASH_LITE_MODEL,
+                GEMINI_3_1_FLASH_LITE_MODEL,
             ],
-            GEMINI_2_5_FLASH_LITE_MODEL: [GPT_5_4_MINI_MODEL, GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL],
+            GEMINI_3_1_FLASH_LITE_MODEL: [GPT_5_4_MINI_MODEL, GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL],
         }
     )
 

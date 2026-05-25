@@ -16,7 +16,7 @@ from app.modules.ai_feedback.service import AIFeedbackService
 from app.modules.trainer_assistant.repository import TrainerAssistantRepository
 from app.modules.trainer_assistant.routing import (
     CLAUDE_SONNET_4_6_MODEL,
-    GEMINI_2_5_FLASH_LITE_MODEL,
+    GEMINI_3_1_FLASH_LITE_MODEL,
     GPT_5_4_MINI_MODEL,
     TrainerAssistantRouter,
 )
@@ -62,7 +62,7 @@ MODEL_PRICING_PER_1K: dict[str, tuple[float, float]] = {
     "gpt-5.4": (0.0012, 0.0035),
     "claude-sonnet-4.6": (0.0010, 0.0050),
     "claude-opus-4.7": (0.0150, 0.0750),
-    "gemini-2.5-flash-lite": (0.00008, 0.0003),
+    "gemini-3.1-flash-lite": (0.00025, 0.0015),
 }
 
 
@@ -595,7 +595,7 @@ class TrainerAssistantService:
         # Background jobs retry Gemini once before promoting to GPT-5.4-mini for essential tasks.
         if routing_input.interaction_type == TrainerAssistantInteractionType.BACKGROUND:
             for model in attempted_models:
-                max_attempts = 2 if model == GEMINI_2_5_FLASH_LITE_MODEL else 1
+                max_attempts = 2 if model == GEMINI_3_1_FLASH_LITE_MODEL else 1
                 for attempt_idx in range(max_attempts):
                     try:
                         completion, execution_model = self._execute_model(model, prompt)
@@ -625,7 +625,7 @@ class TrainerAssistantService:
                         )
                     except Exception:
                         logger.exception("Trainer assistant model execution failed model=%s", model)
-                        if model == GEMINI_2_5_FLASH_LITE_MODEL and attempt_idx == 0:
+                        if model == GEMINI_3_1_FLASH_LITE_MODEL and attempt_idx == 0:
                             fallback_reason = "gemini_background_retry"
                             continue
                         if fallback_reason is None:

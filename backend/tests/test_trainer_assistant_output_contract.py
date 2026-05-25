@@ -13,7 +13,7 @@ from app.core.config import settings  # noqa: E402
 from app.ai.client import TextCompletion, TokenUsage  # noqa: E402
 from app.modules.trainer_assistant.routing import (  # noqa: E402
     CLAUDE_SONNET_4_6_MODEL,
-    GEMINI_2_5_FLASH_LITE_MODEL,
+    GEMINI_3_1_FLASH_LITE_MODEL,
     GPT_5_4_MINI_MODEL,
     GPT_5_4_MODEL,
 )
@@ -60,7 +60,7 @@ class _BackgroundRetryService(TrainerAssistantService):
     def _execute_model(self, model, prompt):  # noqa: ANN001
         del prompt
         self.attempted_models.append(model)
-        if model == GEMINI_2_5_FLASH_LITE_MODEL:
+        if model == GEMINI_3_1_FLASH_LITE_MODEL:
             raise RuntimeError("gemini_unavailable")
         return (
             TextCompletion(
@@ -108,7 +108,7 @@ class _LiveGeminiFallbackService(TrainerAssistantService):
     def _execute_model(self, model, prompt):  # noqa: ANN001
         del prompt
         self.attempted_models.append(model)
-        if model != GEMINI_2_5_FLASH_LITE_MODEL:
+        if model != GEMINI_3_1_FLASH_LITE_MODEL:
             raise RuntimeError(f"{model}_unavailable")
         return (
             TextCompletion(
@@ -190,7 +190,7 @@ class TrainerAssistantOutputContractTests(unittest.TestCase):
     def test_background_retry_then_promote_for_essential_job(self):
         service = _BackgroundRetryService()
         decision = TrainerAssistantRoutingDecision(
-            model=GEMINI_2_5_FLASH_LITE_MODEL,
+            model=GEMINI_3_1_FLASH_LITE_MODEL,
             fallback_models=[],
             reason="background_default",
             escalation_applied=False,
@@ -213,7 +213,7 @@ class TrainerAssistantOutputContractTests(unittest.TestCase):
             essential_background_job=True,
         )
 
-        self.assertEqual(service.attempted_models, [GEMINI_2_5_FLASH_LITE_MODEL, GEMINI_2_5_FLASH_LITE_MODEL, GPT_5_4_MINI_MODEL])
+        self.assertEqual(service.attempted_models, [GEMINI_3_1_FLASH_LITE_MODEL, GEMINI_3_1_FLASH_LITE_MODEL, GPT_5_4_MINI_MODEL])
         self.assertEqual(result.execution_model, GPT_5_4_MINI_MODEL)
         self.assertTrue(result.fallback_applied)
         self.assertEqual(result.fallback_reason, "gemini_background_retry")
@@ -253,7 +253,7 @@ class TrainerAssistantOutputContractTests(unittest.TestCase):
         service = _LiveGeminiFallbackService()
         decision = TrainerAssistantRoutingDecision(
             model=GPT_5_4_MINI_MODEL,
-            fallback_models=[GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+            fallback_models=[GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL, GEMINI_3_1_FLASH_LITE_MODEL],
             reason="default_live",
             escalation_applied=False,
             second_pass_model=None,
@@ -277,9 +277,9 @@ class TrainerAssistantOutputContractTests(unittest.TestCase):
 
         self.assertEqual(
             service.attempted_models,
-            [GPT_5_4_MINI_MODEL, GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL, GEMINI_2_5_FLASH_LITE_MODEL],
+            [GPT_5_4_MINI_MODEL, GPT_5_4_MODEL, CLAUDE_SONNET_4_6_MODEL, GEMINI_3_1_FLASH_LITE_MODEL],
         )
-        self.assertEqual(result.execution_model, GEMINI_2_5_FLASH_LITE_MODEL)
+        self.assertEqual(result.execution_model, GEMINI_3_1_FLASH_LITE_MODEL)
         self.assertTrue(result.fallback_applied)
         self.assertEqual(result.fallback_reason, f"model_failed:{GPT_5_4_MINI_MODEL}")
 

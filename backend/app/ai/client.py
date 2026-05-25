@@ -10,8 +10,8 @@ from app.core.config import settings
 
 
 logger = logging.getLogger(__name__)
-GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_FLASH_LITE_MODEL = "gemini-2.5-flash-lite"
+GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_FLASH_LITE_MODEL = "gemini-3.1-flash-lite"
 GPT_5_4_MINI_MODEL = "gpt-5.4-mini"
 ANTHROPIC_SONNET_MODEL = "claude-sonnet-4-20250514"
 StreamTimingObserver = Callable[[str, int], None]
