@@ -30,6 +30,7 @@ DEFAULT_SQL_FILES = (
     BACKEND_ROOT / "sql" / "20260514a_allow_account_deletion_intelligence_jobs.sql",
     BACKEND_ROOT / "sql" / "20260514b_grant_service_role_worker_job_tables.sql",
     BACKEND_ROOT / "sql" / "20260515a_add_chat_bootstrap_context_rpc.sql",
+    BACKEND_ROOT / "sql" / "20260516a_worker_queue_lag_view.sql",
 )
 
 STORAGE_LIFECYCLE_MIGRATION = "20260426h_add_storage_upload_lifecycle_and_security_catalog_rpc.sql"
@@ -92,6 +93,17 @@ def _validate_sql(path: Path, source: str) -> list[str]:
             "SECURITY INVOKER",
             "GRANT EXECUTE ON FUNCTION public.chat_bootstrap_context() TO authenticated",
             "GRANT EXECUTE ON FUNCTION public.chat_bootstrap_context() TO service_role",
+        ):
+            if required not in source:
+                failures.append(f"{path.name}: missing required SQL fragment: {required}")
+    if path.name == "20260516a_worker_queue_lag_view.sql":
+        for required in (
+            "CREATE OR REPLACE VIEW public.worker_queue_lag",
+            "WITH (security_invoker = true)",
+            "REVOKE ALL ON public.worker_queue_lag FROM PUBLIC",
+            "REVOKE SELECT ON public.worker_queue_lag FROM anon, authenticated",
+            "GRANT SELECT ON public.worker_queue_lag TO service_role",
+            "NOTIFY pgrst, 'reload schema'",
         ):
             if required not in source:
                 failures.append(f"{path.name}: missing required SQL fragment: {required}")

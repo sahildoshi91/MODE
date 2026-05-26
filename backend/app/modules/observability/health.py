@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Callable
 
 from app.core.config import settings
-from app.db.client import get_supabase_public_client
+from app.db.client import get_supabase_admin_client, get_supabase_public_client
 from app.modules.intelligence_jobs.queue import QUEUE_NAMES
 from app.modules.observability.metrics import emit_db_query_metric, emit_metric
 
@@ -294,7 +294,7 @@ def _check_queue_sync() -> None:
 
 
 def _check_worker_queue_lag_sync() -> QueueHealthState:
-    client = get_supabase_public_client()
+    client = get_supabase_admin_client()
     response = client.table("worker_queue_lag").select("*").execute()
     rows = response.data or []
     queued_count = 0

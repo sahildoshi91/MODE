@@ -202,8 +202,12 @@ class IntelligenceQueueTests(unittest.TestCase):
         migration = (Path(__file__).resolve().parents[1] / "sql" / "20260516a_worker_queue_lag_view.sql").read_text()
 
         self.assertIn("CREATE OR REPLACE VIEW public.worker_queue_lag", migration)
+        self.assertIn("WITH (security_invoker = true)", migration)
         self.assertIn("COUNT(*) FILTER (WHERE status = 'queued')", migration)
         self.assertIn("MAX(\n    EXTRACT(EPOCH FROM (NOW() - enqueued_at)) * 1000", migration)
+        self.assertIn("REVOKE SELECT ON public.worker_queue_lag FROM anon, authenticated", migration)
+        self.assertIn("GRANT SELECT ON public.worker_queue_lag TO service_role", migration)
+        self.assertIn("NOTIFY pgrst, 'reload schema'", migration)
 
     def test_summarization_enqueued_at_message_threshold(self):
         repo = FakeJobRepository()

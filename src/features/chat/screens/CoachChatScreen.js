@@ -11,19 +11,15 @@ import {
 import * as Clipboard from 'expo-clipboard';
 
 import {
-  HeaderBar,
   ModeButton,
   ModeChip,
   ModeInput,
   ModeText,
   SafeScreen,
-  GlassSurface,
-  HeroOverlayCard,
   SystemActionSheet,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { BREATHING_TRANSITIONS_ENABLED } from '../../../config/featureFlags';
-import { AI_FITNESS_DISCLAIMER } from '../../../config/legalLinks';
 import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../../shared/loading';
 import {
   createTrainerClientMemory,
@@ -35,6 +31,7 @@ import {
   saveCoachChatLastMemoryClientId,
 } from '../storage/chatMemoryStorage';
 import ChatBubble from '../components/ChatBubble';
+import ChatHeader from '../components/ChatHeader';
 import CoachComposer from '../components/CoachComposer';
 import QuickReplies from '../components/QuickReplies';
 import TypingIndicator from '../components/TypingIndicator';
@@ -151,36 +148,6 @@ function resolveMessageGroupPosition(previousRole, currentRole, nextRole) {
     return 'middle';
   }
   return 'end';
-}
-
-function resolveSessionIntro(launchContext) {
-  const entrypoint = String(launchContext?.entrypoint || '').trim().toLowerCase();
-  if (entrypoint === 'trainer_agent_training') {
-    return {
-      eyebrow: 'Coach Calibration',
-      title: 'Refine Your Coaching Voice',
-      body: 'Review and approve sample responses so every client interaction sounds like you.',
-    };
-  }
-  if (entrypoint === 'generated_workout') {
-    return {
-      eyebrow: 'Workout Coach',
-      title: 'Plan Loaded',
-      body: 'Use this thread to adapt intensity, swap movements, or adjust volume before training.',
-    };
-  }
-  if (entrypoint === 'generated_nutrition') {
-    return {
-      eyebrow: 'Nutrition Coach',
-      title: 'Fuel Plan Loaded',
-      body: 'Ask for substitutions, macro adjustments, and adherence strategy for today.',
-    };
-  }
-  return {
-    eyebrow: 'Coach Channel',
-    title: 'High-Intent Conversation',
-    body: 'Use this space for direct, disciplined coaching aligned to your goals.',
-  };
 }
 
 function withFallback(value) {
@@ -442,16 +409,21 @@ export default function CoachChatScreen({
     : dockAnchorInset;
   const chatListPaddingBottom = dockHeight + activeComposerOffset + LIST_BOTTOM_BREATHING_ROOM;
   const previousChatListPaddingBottomRef = useRef(chatListPaddingBottom);
-  const sessionIntro = useMemo(() => resolveSessionIntro(launchContext), [launchContext]);
   const activeLaunchClientId = useMemo(
     () => parseClientIdFromLaunchContext(launchContext),
     [launchContext],
   );
   const resolvedMemoryClientId = activeLaunchClientId || selectedMemoryClientId;
-  const backAccessibilityLabel =
-    launchContext?.entrypoint === 'generated_nutrition'
-      ? 'Back to generated nutrition plan'
-      : 'Back to generated workout';
+  const resolvedTrainerName = useMemo(() => {
+    const fromContext = launchContext?.trainer_name
+      || launchContext?.trainerName
+      || launchContext?.persona_name
+      || launchContext?.personaName;
+    if (typeof fromContext === 'string' && fromContext.trim().length > 0) {
+      return fromContext.trim();
+    }
+    return 'Your coach';
+  }, [launchContext]);
 
   const {
     messages,
@@ -1167,11 +1139,51 @@ export default function CoachChatScreen({
       atmosphere="chat"
       atmosphereOverlayStrength={1.04}
     >
-      <HeaderBar
-        title="Coach Chat"
+      <ChatHeader
+        role="client"
+        title={resolvedTrainerName}
+        isError={hasRetryableFailure}
         onBack={onBack}
-        backAccessibilityLabel={backAccessibilityLabel}
+        onRetry={handleRetryLastMessage}
       />
+      {hasRetryableFailure ? (
+        <View style={styles.notConnectedBar}>
+          <ModeText variant="body3" style={styles.notConnectedText}>
+            {error || 'Coach is unavailable right now'}
+          </ModeText>
+          {copyFeedback ? (
+            <ModeText variant="body3" style={styles.notConnectedCopyFeedback}>
+              {copyFeedback}
+            </ModeText>
+          ) : null}
+          <Pressable
+            onPress={handleRetryLastMessage}
+            disabled={shouldDisableComposer}
+            accessibilityRole="button"
+            testID="coach-chat-retry-button"
+            style={({ pressed }) => [
+              styles.notConnectedRetry,
+              pressed && styles.notConnectedRetryPressed,
+            ]}
+          >
+            <ModeText variant="label" style={styles.notConnectedRetryText}>
+              {shouldDisableComposer ? 'Retrying...' : 'Retry'}
+            </ModeText>
+          </Pressable>
+          <Pressable
+            onPress={handleCopyError}
+            disabled={shouldDisableComposer}
+            accessibilityRole="button"
+            testID="coach-chat-copy-error-button"
+            style={({ pressed }) => [
+              styles.notConnectedRetry,
+              pressed && styles.notConnectedRetryPressed,
+            ]}
+          >
+            <ModeText variant="label" style={styles.notConnectedRetryText}>Copy error</ModeText>
+          </Pressable>
+        </View>
+      ) : null}
       {topToolbar ? (
         <View style={styles.toolbarContainer}>
           {topToolbar}
@@ -1376,21 +1388,6 @@ export default function CoachChatScreen({
             ]}
             ListHeaderComponent={(
               <View>
-                <HeroOverlayCard
-                  eyebrow={sessionIntro.eyebrow}
-                  title={sessionIntro.title}
-                  body={sessionIntro.body}
-                  style={styles.sessionIntroCard}
-                  testID="coach-chat-session-intro"
-                />
-                <ModeText
-                  testID="coach-chat-ai-fitness-disclaimer"
-                  variant="caption"
-                  tone="tertiary"
-                  style={styles.aiDisclaimer}
-                >
-                  {AI_FITNESS_DISCLAIMER}
-                </ModeText>
                 <HistoryPaginationControl
                   hasMoreHistory={hasMoreHistory}
                   isLoading={isLoadingMoreHistory}
@@ -1455,58 +1452,6 @@ export default function CoachChatScreen({
               }}
               style={styles.dockStack}
             >
-              {hasRetryableFailure ? (
-                <GlassSurface
-                  state="muted"
-                  radius="s"
-                  style={styles.errorRow}
-                  contentStyle={styles.errorRowContent}
-                  fillColor={theme.colors.feedback.errorBg}
-                  borderColor={theme.colors.feedback.errorBorder}
-                >
-                  <View style={styles.errorTextWrap}>
-                    <ModeText variant="caption" tone="error" style={styles.errorText}>
-                      {error || 'Coach is temporarily unavailable.'}
-                    </ModeText>
-                    {copyFeedback ? (
-                      <ModeText variant="caption" tone="secondary" style={styles.copyFeedback}>
-                        {copyFeedback}
-                      </ModeText>
-                    ) : null}
-                  </View>
-                  <View style={styles.errorActions}>
-                    <Pressable
-                      accessibilityRole="button"
-                      testID="coach-chat-retry-button"
-                      onPress={handleRetryLastMessage}
-                      disabled={shouldDisableComposer}
-                      style={({ pressed }) => [
-                        styles.retryButton,
-                        pressed && !shouldDisableComposer && styles.retryButtonPressed,
-                        shouldDisableComposer && styles.retryButtonMuted,
-                      ]}
-                    >
-                      <ModeText variant="label" tone="accent">
-                        {shouldDisableComposer ? 'Retrying...' : 'Retry'}
-                      </ModeText>
-                    </Pressable>
-                    <Pressable
-                      accessibilityRole="button"
-                      testID="coach-chat-copy-error-button"
-                      onPress={handleCopyError}
-                      disabled={shouldDisableComposer}
-                      style={({ pressed }) => [
-                        styles.retryButton,
-                        pressed && !shouldDisableComposer && styles.retryButtonPressed,
-                        shouldDisableComposer && styles.retryButtonMuted,
-                      ]}
-                    >
-                      <ModeText variant="label" tone="secondary">Copy error</ModeText>
-                    </Pressable>
-                  </View>
-                </GlassSurface>
-              ) : null}
-
               <QuickReplies
                 replies={quickReplies}
                 disabled={shouldDisableComposer}
@@ -1514,21 +1459,25 @@ export default function CoachChatScreen({
                 style={styles.quickReplies}
                 contentContainerStyle={styles.quickRepliesContent}
               />
-              {quickReplies?.length ? (
-                <ModeText variant="caption" tone="tertiary" style={styles.quickRepliesLabel}>
-                  Coach shortcuts
+              <View style={styles.composerWrap}>
+                <CoachComposer
+                  value={draft}
+                  onChangeText={setDraft}
+                  onSend={handleSend}
+                  onCancel={cancelActiveResponse}
+                  isSending={isSending}
+                  onFocus={handleComposerFocus}
+                  disabled={shouldDisableComposer}
+                  placeholder={`Ask ${resolvedTrainerName} anything...`}
+                />
+                <ModeText
+                  testID="coach-chat-ai-fitness-disclaimer"
+                  variant="body3"
+                  style={styles.composerDisclaimer}
+                >
+                  AI coaching · not medical advice
                 </ModeText>
-              ) : null}
-
-              <CoachComposer
-                value={draft}
-                onChangeText={setDraft}
-                onSend={handleSend}
-                onCancel={cancelActiveResponse}
-                isSending={isSending}
-                onFocus={handleComposerFocus}
-                disabled={shouldDisableComposer}
-              />
+              </View>
             </View>
           </View>
         </View>
@@ -1681,13 +1630,6 @@ const styles = StyleSheet.create({
     paddingTop: theme.spacing[2],
     paddingHorizontal: theme.spacing[3],
   },
-  sessionIntroCard: {
-    marginBottom: theme.spacing[2],
-    ...theme.shadows.medium,
-  },
-  aiDisclaimer: {
-    marginBottom: theme.spacing[2],
-  },
   historyPagination: {
     alignItems: 'center',
     marginBottom: theme.spacing[2],
@@ -1821,32 +1763,6 @@ const styles = StyleSheet.create({
     paddingTop: theme.spacing[1],
     gap: theme.spacing[1],
   },
-  errorRow: {
-    marginBottom: theme.spacing[1],
-  },
-  errorRowContent: {
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: theme.spacing[1],
-  },
-  errorTextWrap: {
-    flex: 1,
-    gap: 2,
-  },
-  errorText: {
-    flex: 1,
-  },
-  copyFeedback: {
-    marginTop: 2,
-  },
-  errorActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
   retryButton: {
     borderRadius: theme.radii.pill,
     backgroundColor: 'rgba(224, 237, 255, 0.11)',
@@ -1949,13 +1865,6 @@ const styles = StyleSheet.create({
   quickRepliesContent: {
     paddingHorizontal: 0,
   },
-  quickRepliesLabel: {
-    marginTop: -2,
-    marginBottom: theme.spacing[1] - 2,
-    paddingHorizontal: theme.spacing[1],
-    color: theme.colors.text.secondary,
-    fontWeight: '600',
-  },
   memorySheetContent: {
     gap: theme.spacing[1],
     paddingTop: theme.spacing[1],
@@ -1990,5 +1899,47 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     flexWrap: 'wrap',
+  },
+  notConnectedBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing[3],
+    paddingVertical: theme.spacing[1],
+    backgroundColor: theme.colors.feedback.errorBg,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.feedback.errorBorder,
+  },
+  notConnectedText: {
+    color: theme.colors.status.error,
+    flex: 1,
+  },
+  notConnectedCopyFeedback: {
+    color: theme.colors.text.secondary,
+    marginRight: theme.spacing[1],
+  },
+  notConnectedRetry: {
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 4,
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+    borderColor: theme.colors.status.error,
+    marginLeft: theme.spacing[2],
+  },
+  notConnectedRetryPressed: {
+    opacity: theme.interaction.pressedOpacity,
+  },
+  notConnectedRetryText: {
+    color: theme.colors.status.error,
+  },
+  composerWrap: {
+    gap: 4,
+  },
+  composerDisclaimer: {
+    textAlign: 'center',
+    fontSize: 9,
+    color: theme.colors.text.disabled,
+    paddingBottom: 2,
+    letterSpacing: 0.1,
   },
 });

@@ -8,7 +8,8 @@ ALTER TABLE public.intelligence_jobs
 ALTER TABLE public.intelligence_jobs
   ADD COLUMN IF NOT EXISTS next_retry_at TIMESTAMPTZ;
 
-CREATE OR REPLACE VIEW public.worker_queue_lag AS
+CREATE OR REPLACE VIEW public.worker_queue_lag
+WITH (security_invoker = true) AS
 SELECT
   job_type,
   COUNT(*) FILTER (WHERE status = 'queued')      AS queued_count,
@@ -25,9 +26,11 @@ FROM public.intelligence_jobs
 WHERE enqueued_at > NOW() - INTERVAL '1 hour'
 GROUP BY job_type;
 
-GRANT SELECT ON public.worker_queue_lag TO authenticated;
-GRANT SELECT ON public.worker_queue_lag TO anon;
+REVOKE ALL ON public.worker_queue_lag FROM PUBLIC;
+REVOKE SELECT ON public.worker_queue_lag FROM anon, authenticated;
 GRANT SELECT ON public.worker_queue_lag TO service_role;
+
+NOTIFY pgrst, 'reload schema';
 
 -- Rollback:
 -- DROP VIEW IF EXISTS public.worker_queue_lag;

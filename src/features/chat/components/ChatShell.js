@@ -163,6 +163,19 @@ function ChatConversationView({
     }
     return role === 'trainer' ? 'Daily operating brief' : 'Today';
   }, [isReadOnly, role, sessionState.session]);
+  const resolvedChatTitle = useMemo(() => {
+    const fromSession = sessionState?.session?.trainer_name
+      || sessionState?.session?.persona_name
+      || sessionState?.metadata?.trainer_name
+      || sessionState?.metadata?.persona_name;
+    if (typeof fromSession === 'string' && fromSession.trim().length > 0) {
+      return fromSession.trim();
+    }
+    if (clientName && role === 'trainer') {
+      return clientName;
+    }
+    return null;
+  }, [clientName, role, sessionState?.metadata, sessionState?.session]);
 
   const handleContinue = useCallback(async () => {
     if (!sessionState.session?.id) {
@@ -384,10 +397,13 @@ function ChatConversationView({
       <ChatHeader
         role={role}
         readOnly={isReadOnly}
+        title={resolvedChatTitle}
         subtitle={subtitle}
+        isError={Boolean(sessionState.error || messageState.error)}
         onOpenHistory={isReadOnly ? null : onOpenHistory}
         onBack={onBack}
         onContinue={isReadOnly ? handleContinue : null}
+        onRetry={sessionState.reload}
       />
       <ChatMessageList
         messages={displayMessages}

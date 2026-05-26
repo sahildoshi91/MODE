@@ -199,6 +199,35 @@ class ObservabilityPhaseDTests(unittest.TestCase):
 
         self.assertEqual(fake_client.rpc_name, "mode_health_ping")
 
+    def test_healthz_queue_lag_uses_service_role_client(self):
+        class FakeQuery:
+            data = [{"queued_count": 0, "dead_letter_count": 0, "max_lag_ms": None}]
+
+            def select(self, columns):
+                del columns
+                return self
+
+            def execute(self):
+                return self
+
+        class FakeClient:
+            def __init__(self):
+                self.table_name = None
+
+            def table(self, table_name):
+                self.table_name = table_name
+                return FakeQuery()
+
+        fake_client = FakeClient()
+        with patch("app.modules.observability.health.get_supabase_admin_client", return_value=fake_client) as admin_client:
+            with patch("app.modules.observability.health.get_supabase_public_client") as public_client:
+                state = health_module._check_worker_queue_lag_sync()
+
+        self.assertEqual(state.status, "ok")
+        self.assertEqual(fake_client.table_name, "worker_queue_lag")
+        admin_client.assert_called_once()
+        public_client.assert_not_called()
+
     def test_healthz_reports_degraded_when_lag_exceeds_15s(self):
         state = self._queue_state_from_rows(
             [{"queued_count": 1, "dead_letter_count": 0, "max_lag_ms": 16_000}]
@@ -233,7 +262,7 @@ class ObservabilityPhaseDTests(unittest.TestCase):
                 self.table_name = table_name
                 return FakeQuery(rows)
 
-        with patch("app.modules.observability.health.get_supabase_public_client", return_value=FakeClient()):
+        with patch("app.modules.observability.health.get_supabase_admin_client", return_value=FakeClient()):
             return health_module._check_worker_queue_lag_sync()
 
     def test_chat_trace_includes_prompt_version_and_cost_metrics(self):

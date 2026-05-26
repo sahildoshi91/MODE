@@ -11,6 +11,7 @@ export default function CoachComposer({
   isSending = false,
   disabled = false,
   onFocus,
+  placeholder,
 }) {
   return (
     <GlassInputBar
@@ -21,6 +22,7 @@ export default function CoachComposer({
       onCancel={onCancel}
       isSending={isSending}
       disabled={disabled}
+      placeholder={placeholder}
       style={styles.container}
     />
   );

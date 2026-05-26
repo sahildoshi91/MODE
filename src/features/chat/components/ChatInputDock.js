@@ -80,7 +80,7 @@ const styles = StyleSheet.create({
   dock: {
     paddingHorizontal: theme.spacing[3],
     paddingTop: theme.spacing[2],
-    backgroundColor: 'rgba(8, 17, 31, 0.74)',
+    backgroundColor: 'transparent',
   },
   readOnlySurface: {
     marginBottom: 0,
