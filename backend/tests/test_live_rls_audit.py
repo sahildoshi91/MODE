@@ -2,6 +2,11 @@ import os
 import shutil
 import subprocess
 import unittest
+import uuid
+
+
+CROSS_TENANT_UUID = uuid.UUID(int=0)
+CROSS_TENANT_UUID_SQL = f"'{CROSS_TENANT_UUID}'::uuid"
 
 TABLES_REQUIRING_ISOLATION_TESTS = [
     "conversations",
@@ -24,20 +29,22 @@ TABLE_SCHEMAS = {
     "intelligence_jobs": {"trainer_col": "trainer_id", "trainer_is_uuid": False},
     "worker_job_traces": {"trainer_col": "trainer_id", "trainer_is_uuid": False},
     # Child tables that enforce security strictly via nested parent RLS policies:
-    "chat_messages": {"trainer_col": None},
-    "conversation_messages": {"trainer_col": None},
-    "daily_checkins": {"trainer_col": None},
+    "chat_messages": {"trainer_col": None, "child_filter_col": "session_id"},
+    "conversation_messages": {"trainer_col": None, "child_filter_col": "conversation_id"},
+    "daily_checkins": {"trainer_col": None, "child_filter_col": "client_id"},
 }
+
 
 def _security_db_ready() -> bool:
     return bool(os.getenv("MODE_SECURITY_DATABASE_URL") and shutil.which("psql"))
+
 
 @unittest.skipUnless(
     _security_db_ready(),
     "Set MODE_SECURITY_DATABASE_URL to a Supabase direct Postgres URL and ensure psql is available.",
 )
 class LiveRlsAuditTests(unittest.TestCase):
-    
+
     def _run_query(self, sql: str) -> str:
         completed = subprocess.run(
             [
@@ -71,15 +78,22 @@ class LiveRlsAuditTests(unittest.TestCase):
                 return int(value)
         raise AssertionError(f"No count returned for SQL: {sql}")
 
+
+def _child_table_clause(table: str) -> str:
+    child_filter_col = TABLE_SCHEMAS[table]["child_filter_col"]
+    return f"{child_filter_col} = {CROSS_TENANT_UUID_SQL}"
+
+
 def _make_cross_trainer_test(table: str):
     def test(self):
         cfg = TABLE_SCHEMAS.get(table, {"trainer_col": None})
         col = cfg["trainer_col"]
-        
+
         if not col:
-            # Child table query to verify the nested RLS policy doesn't blow up
-            count = self._query_count_as_authenticated(f"SELECT COUNT(*) FROM public.{table}")
-            self.assertIsInstance(count, int)
+            count = self._query_count_as_authenticated(
+                f"SELECT COUNT(*) FROM public.{table} WHERE {_child_table_clause(table)}"
+            )
+            self.assertEqual(count, 0, f"Cross-tenant RLS violation on {table}: got {count} rows")
             return
 
         if cfg["trainer_is_uuid"]:
@@ -91,15 +105,17 @@ def _make_cross_trainer_test(table: str):
         self.assertEqual(count, 0)
     return test
 
+
 def _make_cross_client_test(table: str):
     def test(self):
         cfg = TABLE_SCHEMAS.get(table, {"trainer_col": None})
         col = cfg["trainer_col"]
-        
+
         if not col:
-            # Child table query to verify nested cross-client session filtering runs safely
-            count = self._query_count_as_authenticated(f"SELECT COUNT(*) FROM public.{table}")
-            self.assertIsInstance(count, int)
+            count = self._query_count_as_authenticated(
+                f"SELECT COUNT(*) FROM public.{table} WHERE {_child_table_clause(table)}"
+            )
+            self.assertEqual(count, 0, f"Cross-tenant RLS violation on {table}: got {count} rows")
             return
 
         clauses = []
@@ -117,9 +133,11 @@ def _make_cross_client_test(table: str):
         self.assertEqual(count, 0)
     return test
 
+
 for _table in TABLES_REQUIRING_ISOLATION_TESTS:
     setattr(LiveRlsAuditTests, f"test_cross_trainer_rls_{_table}", _make_cross_trainer_test(_table))
     setattr(LiveRlsAuditTests, f"test_cross_client_rls_{_table}", _make_cross_client_test(_table))
+
 
 if __name__ == "__main__":
     unittest.main()

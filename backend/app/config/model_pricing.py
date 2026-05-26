@@ -18,6 +18,7 @@ MODEL_PRICING: dict[str, dict[str, float]] = {
     "gpt-5.5": {"input_per_token": 0.00250 / 1000, "output_per_token": 0.01000 / 1000},
     "claude-sonnet-4.6": {"input_per_token": 0.00300 / 1000, "output_per_token": 0.01500 / 1000},
     "claude-sonnet-4-20250514": {"input_per_token": 0.00300 / 1000, "output_per_token": 0.01500 / 1000},
+    "claude-opus-4.7": {"input_per_token": 0.01500 / 1000, "output_per_token": 0.07500 / 1000},
 }
 
 

@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.ai.client import AnthropicClient, GeminiClient, OpenAIClient, TextCompletion, TokenUsage
+from app.config.model_pricing import calculate_cost_usd
 from app.core.config import settings
 from app.core.tenancy import TrainerContext
 from app.modules.ai_feedback.schemas import AIOutputApproveRequest, AIOutputEditRequest, AIOutputRejectRequest
@@ -55,16 +56,6 @@ from app.modules.trainer_intelligence.service import TrainerIntelligenceService
 
 logger = logging.getLogger(__name__)
 TRAINER_ASSISTANT_DRAFT_SOURCE_TYPE = "trainer_assistant_draft"
-
-
-MODEL_PRICING_PER_1K: dict[str, tuple[float, float]] = {
-    "gpt-5.4-mini": (0.0002, 0.0008),
-    "gpt-5.4": (0.0012, 0.0035),
-    "claude-sonnet-4.6": (0.0010, 0.0050),
-    "claude-opus-4.7": (0.0150, 0.0750),
-    "gemini-3.1-flash-lite": (0.00025, 0.0015),
-    "gemini-2.5-pro": (0.00125, 0.0100),
-}
 
 
 @dataclass
@@ -1303,8 +1294,7 @@ class TrainerAssistantService:
         return trainer_id
 
     def _estimate_cost(self, model: str, prompt_tokens: int, completion_tokens: int) -> float:
-        in_rate, out_rate = MODEL_PRICING_PER_1K.get(model, (0.0, 0.0))
-        return round((prompt_tokens / 1000.0 * in_rate) + (completion_tokens / 1000.0 * out_rate), 6)
+        return calculate_cost_usd(model, prompt_tokens, completion_tokens) or 0.0
 
     def _log_router_event(self, event: TrainerAssistantRouterEvent) -> None:
         try:

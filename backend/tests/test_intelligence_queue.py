@@ -251,6 +251,22 @@ class IntelligenceQueueTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(repo.queued, [])
 
+    def test_summarization_without_job_repository_logs_and_does_not_enqueue(self):
+        with patch("app.modules.intelligence_jobs.queue.enqueue_intelligence_job") as enqueue:
+            with self.assertLogs("app.modules.intelligence_jobs.queue", level="WARNING") as logs:
+                result = maybe_enqueue_summarization(
+                    conversation_id="conversation-1",
+                    trainer_id="trainer-1",
+                    client_id="client-1",
+                    message_count=20,
+                    trace_id="trace-1",
+                    job_repository=None,
+                )
+
+        self.assertIsNone(result)
+        enqueue.assert_not_called()
+        self.assertIn("Summarization skipped: job_repository is None", "\n".join(logs.output))
+
     def test_summarization_output_validation_rejects_malformed(self):
         job = intelligence_job("conversation_summarization")
         job.payload = {"summary": {"summary_text": "too short"}}

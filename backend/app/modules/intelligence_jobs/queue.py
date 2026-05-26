@@ -253,19 +253,24 @@ def maybe_enqueue_summarization(
         return None
     if int(message_count or 0) <= 0 or int(message_count or 0) % SUMMARIZATION_TRIGGER != 0:
         return None
-    if job_repository is not None:
-        try:
-            if job_repository.has_active_job(
-                job_type="conversation_summarization",
-                conversation_id=conversation_id,
-            ):
-                return None
-        except Exception:
-            logger.exception(
-                "conversation_summarization_idempotency_check_failed conversation_id=%s",
-                conversation_id,
-            )
+    if job_repository is None:
+        logger.warning(
+            "Summarization skipped: job_repository is None",
+            extra={"trainer_id": trainer_id, "client_id": client_id},
+        )
+        return None
+    try:
+        if job_repository.has_active_job(
+            job_type="conversation_summarization",
+            conversation_id=conversation_id,
+        ):
             return None
+    except Exception:
+        logger.exception(
+            "conversation_summarization_idempotency_check_failed conversation_id=%s",
+            conversation_id,
+        )
+        return None
     job = build_job(
         job_type="conversation_summarization",
         trainer_id=trainer_id,

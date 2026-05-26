@@ -9,8 +9,9 @@ os.environ.setdefault("SUPABASE_URL", "https://example.supabase.co")
 os.environ.setdefault("SUPABASE_ANON_KEY", "test-anon-key")
 os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
-from app.core.config import settings  # noqa: E402
 from app.ai.client import TextCompletion, TokenUsage  # noqa: E402
+from app.config.model_pricing import calculate_cost_usd  # noqa: E402
+from app.core.config import settings  # noqa: E402
 from app.modules.trainer_assistant.routing import (  # noqa: E402
     CLAUDE_SONNET_4_6_MODEL,
     GEMINI_3_1_FLASH_LITE_MODEL,
@@ -186,6 +187,17 @@ class TrainerAssistantOutputContractTests(unittest.TestCase):
         self.assertTrue(output.preview_required)
         self.assertTrue(output.client_impacting)
         self.assertIn("key_issue", output.editable_payload)
+
+    def test_estimate_cost_uses_canonical_pricing(self):
+        self.assertEqual(
+            self.service._estimate_cost("claude-opus-4.7", 1000, 1000),  # noqa: SLF001
+            calculate_cost_usd("claude-opus-4.7", 1000, 1000),
+        )
+
+        with self.assertLogs("app.config.model_pricing", level="WARNING") as logs:
+            self.assertEqual(self.service._estimate_cost("unknown-model", 10, 10), 0.0)  # noqa: SLF001
+
+        self.assertIn("cost_calculation_missing_model", "\n".join(logs.output))
 
     def test_background_retry_then_promote_for_essential_job(self):
         service = _BackgroundRetryService()
