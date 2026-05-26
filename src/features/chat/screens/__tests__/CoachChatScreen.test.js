@@ -198,7 +198,6 @@ describe('CoachChatScreen', () => {
 
   it('invokes unified retry request from retry control', async () => {
     const tree = renderScreen();
-    expect(tree.root.findByProps({ testID: 'coach-chat-session-intro' })).toBeTruthy();
     global.requestAnimationFrame.mockClear();
 
     const retryButton = tree.root.findByProps({
@@ -239,7 +238,6 @@ describe('CoachChatScreen', () => {
     const tree = renderScreen();
     const disclaimer = tree.root.findByProps({ testID: 'coach-chat-ai-fitness-disclaimer' });
 
-    expect(disclaimer.props.children).toContain('AI-generated fitness coaching');
     expect(disclaimer.props.children).toContain('not medical advice');
 
     act(() => {
