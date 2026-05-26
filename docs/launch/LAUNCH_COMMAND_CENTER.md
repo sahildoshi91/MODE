@@ -2,7 +2,7 @@
 
 ## Last Updated
 
-2026-05-26 queue lag remediation tracking
+2026-05-26 staging deploy drift validation
 
 Source posture: repo docs/configs/artifacts only. Local secret/env values were not inspected.
 
@@ -12,18 +12,18 @@ Status markers: `BLOCKED`, `REMEDIATION PR PENDING`, `AT RISK`, `UNKNOWN`, `READ
 
 | Area | Status | Owner | Founder read |
 | --- | --- | --- | --- |
-| Overall launch | `BLOCKED` | Founder | Launch remains blocked; queue lag visibility and staging `/healthz` are fixed, but full release/staging gates have not passed. |
-| Config drift | `REMEDIATION PR PENDING` | Backend/DevOps + Security | Current working tree has no workflow `RATE_LIMIT_BACKEND=postgres` pins, but this workspace is not a clean post-merge state and release/staging reruns remain required. |
-| Staging validation | `BLOCKED` | Backend/QA/DevOps | Staging `/healthz` is now green after manually applying the queue lag view SQL; lightweight verification passes with skipped gates, but full live gates still need to run. |
+| Overall launch | `BLOCKED` | Founder | Launch remains blocked; repo-side queue lag hardening is on `origin/main`, but Render staging is still serving a stale build and `/healthz` is degraded. |
+| Config drift | `READY` | Backend/DevOps + Security | `origin/main` has Redis-only workflow/env/schema remediation; release/staging reruns remain required. |
+| Staging validation | `BLOCKED` | Backend/QA/DevOps | Render `mode-backend-staging` is serving `efa167c2c05139c3a1da43b5ae0793f848ede1b5` from `pr6-ai-chat-memory-scaling`, not `origin/main` `0dc04119b39a0f597adec8127ad82cd2f9514071`; `/healthz` is degraded with queue lag `APIError`. |
 | Production deployment | `UNKNOWN` | Backend/DevOps | No production API host, production worker, or production release-gate pass is evidenced in repo docs. |
 | iOS/TestFlight | `BLOCKED` | Mobile release + App Store owner | Bundle ID is still `com.anonymous.mode`; no signed/exported release path is evidenced. |
 | Apple/legal ops | `BLOCKED` | Founder + Legal/App Store owners | Apple human tasks and production legal/support URLs remain open in launch docs. |
 
-Next operational action: merge the queue lag SQL tracking and Redis remediation, configure/confirm required GitHub and Render env values without printing secrets, then rerun release and full staging gates with no skipped launch gates.
+Next operational action: deploy `origin/main` to Render `mode-backend-staging`, recheck `/healthz`, and only reapply `backend/sql/20260516a_worker_queue_lag_view.sql` to Supabase staging if the current-main build still reports queue lag `APIError`.
 
 ## Immediate Founder Priorities (Next 72 Hours)
 
-1. Merge the Redis-only `RATE_LIMIT_BACKEND` remediation and rerun release/staging gates.
+1. Deploy current `main` to `mode-backend-staging` and validate `/healthz` before any SQL reapply.
 2. Finalize Apple org, bundle ID, and signing authority.
 3. Produce first signed TestFlight-capable IPA.
 4. Execute and archive staging launch verification evidence.
@@ -34,10 +34,11 @@ Next operational action: merge the queue lag SQL tracking and Redis remediation,
 
 | Blocker | Status | Owner | Evidence |
 | --- | --- | --- | --- |
-| `RATE_LIMIT_BACKEND` conflict between release workflows and production assumptions | `REMEDIATION PR PENDING` | Backend/DevOps + Security | Current working tree has no workflow `postgres` pin and fails closed when `REDIS_URL` is missing; post-merge tracking and release/staging reruns remain required |
+| Stale Render staging deploy | `BLOCKED` | Backend/DevOps | `mode-backend-staging` serves `efa167c2c05139c3a1da43b5ae0793f848ede1b5` from `pr6-ai-chat-memory-scaling`; deploy `origin/main` `0dc04119b39a0f597adec8127ad82cd2f9514071` before SQL reapply or full gates |
+| `RATE_LIMIT_BACKEND` conflict between release workflows and production assumptions | `READY` | Backend/DevOps + Security | `origin/main` has Redis-only workflow config and fails closed when `REDIS_URL` is missing; release/staging reruns remain required |
 | Final bundle ID, Apple Team, signing/export path, and signed IPA | `BLOCKED` | Founder/App Store owner + Mobile release owner | `app.json`, `ios/MODE.xcodeproj/project.pbxproj`, `docs/launch/APPLE_HUMAN_TASKS.md`, `docs/launch/TESTFLIGHT_CHECKLIST.md` |
 | Tenant isolation/RLS runtime evidence | `BLOCKED` | DB owner | `docs/launch/LAUNCH_RISK_REGISTER.md` LSR-006; launch checklist still requires mixed-tenant RLS and staging DB security proof |
-| Staging launch gate evidence | `BLOCKED` | Backend/QA/DevOps | Staging health and queue lag visibility are remediated, but DB security, auth chat, storage, account deletion, rate-limit/load, and rollback evidence still need full no-skip verification |
+| Staging launch gate evidence | `BLOCKED` | Backend/QA/DevOps | Staging is not yet on current `main`; `/healthz` is degraded through queue lag `APIError`, and full no-skip verification must wait |
 | Production release security evidence | `UNKNOWN` | Security/DevOps | Latest recorded release-mode artifacts show environment gate failures; local-mode passes are not production release evidence |
 | App Store/legal readiness | `BLOCKED` | Founder + Legal/App Store owners | Privacy Policy, Terms, Support, App Privacy labels, age rating, reviewer notes, screenshots, demo path, and tester plans are open |
 
@@ -45,7 +46,7 @@ Next operational action: merge the queue lag SQL tracking and Redis remediation,
 
 | Target | Status | Owner | Notes |
 | --- | --- | --- | --- |
-| Staging backend web | `AT RISK` | Backend/DevOps | `render.yaml` defines `mode-backend-staging`; staging `/healthz` is now green after the manual queue lag view apply, but full no-skip verification remains open. |
+| Staging backend web | `BLOCKED` | Backend/DevOps | `render.yaml` defines `mode-backend-staging`; live service is still on `efa167c2c05139c3a1da43b5ae0793f848ede1b5`, while `origin/main` is `0dc04119b39a0f597adec8127ad82cd2f9514071`. |
 | Staging intelligence worker | `UNKNOWN` | Backend/DevOps | `render.yaml` defines `mode-intelligence-worker-staging`; restart durability and queue lag evidence are open. |
 | Staging routing config in repo | `READY` | Backend | Repo config uses `CHAT_STAGING_OPENAI_ONLY=false`, `USE_FAKE_PROVIDER=false`; deployed runtime still needs verification. |
 | Production backend API | `UNKNOWN` | Backend/DevOps | No production API origin found in launch docs. |
@@ -58,20 +59,20 @@ Next operational action: merge the queue lag SQL tracking and Redis remediation,
 | Capability | Status | Owner | Notes |
 | --- | --- | --- | --- |
 | Redis/RQ worker architecture | `DONE` | Backend | Worker queue, job tables, worker entrypoint, and Render worker definition exist. |
-| Production Redis/rate-limit posture | `REMEDIATION PR PENDING` | Backend/DevOps + Security | Controlled release-mode env fails clearly when `REDIS_URL` is missing; real GitHub secret and release-mode pass evidence remain unknown. |
+| Production Redis/rate-limit posture | `READY` | Backend/DevOps + Security | Repo config is Redis-only on `origin/main`; real GitHub secret and release-mode pass evidence remain unknown. |
 | Launch migrations helper | `READY` | DB/Backend | Helper tracks the queue lag view SQL after chat bootstrap context; do not apply migrations without explicit human DB approval. |
 | Service-role retirement staging apply | `UNKNOWN` | DB owner | Listed as required evidence; not recorded complete. |
 | Storage signed URL exception | `AT RISK` | Backend/Security | Exception is documented; staging storage smoke still required. |
-| `/healthz` launch SLO | `AT RISK` | Backend/DevOps | Staging `/healthz` is green after queue lag remediation; p95/SLO evidence from full verification remains open. |
+| `/healthz` launch SLO | `BLOCKED` | Backend/DevOps | Staging `/healthz` currently returns `ok=false` because `checks.queue_lag.error_category="APIError"` on stale Render build `efa167c2c05139c3a1da43b5ae0793f848ede1b5`. |
 | Worker restart durability | `UNKNOWN` | Backend/QA | Required by launch checklist; no pass evidence found. |
-| Queue lag under burst | `UNKNOWN` | Backend/QA | Queue lag visibility is fixed in staging; required p95 < 30s under burst still lacks dated full-gate evidence. |
+| Queue lag under burst | `UNKNOWN` | Backend/QA | Queue lag visibility is fixed repo-side; live staging validation is blocked until Render deploys current `main`. |
 | Observability metrics | `DONE` | Backend | Structured metrics/log contracts exist. Dashboards/alerts owner remains `UNKNOWN`. |
 
 ## GO / NO-GO Criteria
 
 Launch is `NO-GO` if any are true:
 
-- Redis-only rate-limit remediation is unmerged, or release/staging reruns have not passed after it.
+- Staging is not deployed from current `main`, or release/staging reruns have not passed after Redis-only remediation.
 - IPA is unsigned, unexported, or lacks a passing artifact scan.
 - Production release security gates fail or are not run in release mode.
 - Cross-tenant RLS evidence is missing or failing.
@@ -93,14 +94,14 @@ Launch becomes `GO` only when all are true:
 
 | Gate | Status | Last verified evidence | Expected artifact | Owner |
 | --- | --- | --- | --- | --- |
-| Reconcile launch-critical config drift: `RATE_LIMIT_BACKEND=postgres` vs `redis` | `REMEDIATION PR PENDING` | Redis-only remediation prepared in repo config | Merged PR plus release-mode and staging verification reruns | Backend/DevOps + Security |
+| Reconcile launch-critical config drift: `RATE_LIMIT_BACKEND=postgres` vs `redis` | `READY` | Redis-only remediation is on `origin/main`; no workflow `postgres` pins found | Release-mode and staging verification reruns | Backend/DevOps + Security |
 | Record final bundle ID and Apple Team ID | `BLOCKED` | Current repo still uses `com.anonymous.mode` | Founder-approved bundle ID + Apple Team ID record | Founder/App Store owner |
 | Produce signed/exported IPA through approved release path | `BLOCKED` | NONE | Signed IPA path and export method record | Mobile release owner |
 | Pass IPA artifact scan against release candidate | `UNKNOWN` | NONE for release candidate | Passing `security_artifacts/release/<timestamp>/summary.json` | Mobile release owner |
 | Confirm production HTTPS API base and Supabase production project | `UNKNOWN` | NONE | Production API URL, Supabase project ref, `/healthz`, and route preflight evidence | Backend/DevOps |
 | Run production release security gates in release mode | `BLOCKED` | 2026-05-26 release-mode environment gates failed, including missing `REDIS_URL` | Release-mode `GO` summary artifact | Security/DevOps |
-| Apply approved staging launch migrations | `UNKNOWN` | NONE | DB owner approval plus migration apply log | DB owner |
-| Pass staging launch verification without skipped launch gates | `BLOCKED` | 2026-05-26 lightweight verifier PASS with skipped gates after queue lag remediation; full DB/chat/storage/account/load gates were not run | Dated staging verification result with no skipped launch gates | Backend/QA |
+| Apply approved staging launch migrations | `BLOCKED` | Do not reapply queue lag SQL until Render staging is deployed from current `main` and health is rechecked | DB owner approval plus migration apply log | DB owner |
+| Pass staging launch verification without skipped launch gates | `BLOCKED` | 2026-05-26 staging `/healthz` degraded on stale Render build `efa167c2c05139c3a1da43b5ae0793f848ede1b5`; full gates were not run | Dated staging verification result with no skipped launch gates | Backend/QA |
 | Record 50-concurrent TTFT p95 < 2.5s | `UNKNOWN` | NONE after current launch gate requirements | `docs/load_test_results/YYYY-MM-DD.md` | Backend/QA |
 | Record full-stream 10/25/26 concurrency matrix | `UNKNOWN` | NONE | `docs/load_test_results/YYYY-MM-DD.md` | Backend/QA |
 | Record queue lag p95 < 30s under burst | `UNKNOWN` | NONE | `docs/load_test_results/YYYY-MM-DD.md` with worker queue lag | Backend/QA |
@@ -130,7 +131,7 @@ Launch becomes `GO` only when all are true:
 
 | Task | Status | Owner |
 | --- | --- | --- |
-| Create `Launch-Critical Config Drift Audit` issue and resolve runtime/gate mismatch | `REMEDIATION PR PENDING` | Backend/DevOps + Security |
+| Create `Launch-Critical Config Drift Audit` issue and resolve runtime/gate mismatch | `READY` | Backend/DevOps + Security |
 | Track `docs/launch/LAUNCH_COMMAND_CENTER.md` in git | `DONE` | Backend/DevOps |
 | Approve final Bundle ID, Apple org account, D-U-N-S, Team ID | `BLOCKED` | Founder/App Store owner |
 | Create App Store Connect record and TestFlight groups | `BLOCKED` | App Store owner |
@@ -146,7 +147,7 @@ Launch becomes `GO` only when all are true:
 
 | Decision | Status | Owner |
 | --- | --- | --- |
-| Is production rate limiting Redis-only, and should workflows be changed from `postgres` to `redis`? | `REMEDIATION PR PENDING` | Backend/DevOps + Security |
+| Is production rate limiting Redis-only, and should workflows be changed from `postgres` to `redis`? | `DONE` | Backend/DevOps + Security |
 | What is the approved iOS bundle identifier and Apple Team ID? | `BLOCKED` | Founder/App Store owner |
 | What production API origin and Supabase project are approved for the release build? | `UNKNOWN` | Backend/DevOps |
 | Who can approve and schedule DB/RLS launch migrations? | `UNKNOWN` | DB owner/Founder |
@@ -178,17 +179,17 @@ Repo evidence:
 - `render.yaml`: staging web and worker services are defined.
 - `app.json` and `ios/MODE.xcodeproj/project.pbxproj`: bundle identifier remains `com.anonymous.mode`.
 - `backend/app/core/startup_guards.py` and `backend/security/production_env_schema.json`: production expects Redis-backed rate limiting.
-- `.github/workflows/release-security.yml` and `.github/workflows/security-release-gates.yml`: remediation should set `RATE_LIMIT_BACKEND=redis`; release-mode rerun remains required.
+- `.github/workflows/release-security.yml` and `.github/workflows/security-release-gates.yml`: `origin/main` sets `RATE_LIMIT_BACKEND=redis`; release-mode rerun remains required.
 - `backend/sql/20260516a_worker_queue_lag_view.sql`: queue lag view remediation now includes PostgREST schema reload tracking.
 - `security_artifacts/release/2026-05-25-231127/summary.json`: release-mode environment gate failed.
 - `security_artifacts/release/2026-05-25-231128/summary.json`: local-mode environment gate passed with warnings; not production release evidence.
-- `docs/load_test_results/2026-05-26-redis-drift-validation.md`: latest Redis drift and queue lag remediation evidence; result remains NO-GO until skipped gates run.
+- `docs/load_test_results/2026-05-26-redis-drift-validation.md`: latest Redis drift and queue lag evidence; Render staging is stale on `efa167c2c05139c3a1da43b5ae0793f848ede1b5`, `/healthz` is degraded, and result remains NO-GO.
 - `security_artifacts/release/2026-05-26-042649/summary.json`: release-mode env-file validation failed.
 - `security_artifacts/release/2026-05-26-042704/summary.json`: controlled release-mode env failed clearly on missing `REDIS_URL`.
 
 Stale or conflicting docs:
 
-- `REMEDIATION PR PENDING`: `RATE_LIMIT_BACKEND` repo config is being aligned to Redis, but launch remains blocked until release/staging evidence is regenerated.
+- `READY`: `RATE_LIMIT_BACKEND` repo config is aligned to Redis on `origin/main`, but launch remains blocked until current `main` is deployed to staging and release/staging evidence is regenerated.
 - `AT RISK`: `docs/chat_pipeline_deployment_handoff.md` and `docs/chat_slow_response_runbook.md` both describe May 11 staging baselines but report different outcomes. Treat both as historical, not current launch evidence.
 - `AT RISK`: `docs/chat_pipeline_final_deliverables.md` says no queue system was introduced; distributed-intelligence docs and `render.yaml` supersede that with an RQ worker architecture.
 
