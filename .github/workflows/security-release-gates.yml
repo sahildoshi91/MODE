@@ -31,7 +31,8 @@ jobs:
       EXPO_PUBLIC_API_BASE_URL: https://api.mode.app
       EXPO_PUBLIC_SUPABASE_REDIRECT_URL: mode://auth/callback
       APP_ENV: production
-      RATE_LIMIT_BACKEND: postgres
+      RATE_LIMIT_BACKEND: redis
+      REDIS_URL: redis://localhost:6379/0
       STORAGE_UPLOAD_WINDOW_SECONDS: 90
       MODE_SECURITY_TARGET_ENV: production
     steps:

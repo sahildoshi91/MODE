@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -8,6 +9,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "release_security_runner.py"
 WRAPPER_PATH = REPO_ROOT / "scripts" / "release_security.sh"
+WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
+PRODUCTION_ENV_SCHEMA = REPO_ROOT / "backend" / "security" / "production_env_schema.json"
 
 
 def test_release_security_runner_scripts_exist() -> None:
@@ -23,6 +26,30 @@ def test_release_security_runner_contains_required_output_contract() -> None:
     assert "--local" in source
     assert "--only" in source
     assert "security_artifacts" in source
+
+
+def test_release_workflows_do_not_pin_postgres_rate_limit_backend() -> None:
+    workflow_paths = sorted(WORKFLOWS_DIR.glob("*.yml"))
+    assert workflow_paths, "Expected GitHub workflow files to exist"
+    offenders = [
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in workflow_paths
+        if "RATE_LIMIT_BACKEND: postgres" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+
+def test_production_env_schema_requires_redis_rate_limit_backend() -> None:
+    payload = json.loads(PRODUCTION_ENV_SCHEMA.read_text(encoding="utf-8"))
+    required_env_vars = payload.get("required_env_vars")
+    assert isinstance(required_env_vars, list)
+    by_name = {
+        str(row.get("name")): row
+        for row in required_env_vars
+        if isinstance(row, dict) and row.get("name")
+    }
+    assert by_name["RATE_LIMIT_BACKEND"]["allowed_values"] == ["redis"]
+    assert "rate_limit_backend=redis" in payload.get("required_backend_settings", [])
 
 
 def test_release_security_runner_help_lists_required_flags() -> None:

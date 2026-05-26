@@ -14,6 +14,8 @@ services:
     envVars:
       - key: APP_ENV
         value: staging
+      - key: RATE_LIMIT_BACKEND
+        value: redis
       - key: CHAT_CACHE_ENABLED
         value: "true"
       - key: CHAT_CACHE_TIMEOUT_MS

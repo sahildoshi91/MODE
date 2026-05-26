@@ -78,12 +78,13 @@ jobs:
       PERSONAL_DATA_INVENTORY_PATH: security/personal_data_inventory.json
       ACCOUNT_DELETION_ACTIVE_SINK_CATEGORIES: file_storage,retrieval_caches,analytics_events
       ACCOUNT_DELETION_DISABLED_SINK_CATEGORIES: vector_indexes,embedding_stores,logs,notification_providers,email_providers,ai_memory_retrieval_systems
-      RATE_LIMIT_BACKEND: postgres
+      RATE_LIMIT_BACKEND: redis
       STORAGE_UPLOAD_WINDOW_SECONDS: "180"
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
       EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
       EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
       EXPO_PUBLIC_API_BASE_URL: ${{ secrets.EXPO_PUBLIC_API_BASE_URL }}
