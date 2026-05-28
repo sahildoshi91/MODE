@@ -226,9 +226,14 @@ describe('CoachChatScreen', () => {
       );
     });
 
-    const firstCall = mockChatBubble.mock.calls[0]?.[0];
-    expect(firstCall.role).toBe('assistant');
-    expect(firstCall.isError).toBe(true);
+    // Error message is rendered in the chat list as a long-press pressable
+    const messagePressable = tree.root.findByProps({
+      testID: 'coach-chat-message-longpress-assistant-err-1',
+    });
+    expect(messagePressable).toBeTruthy();
+    // Error bar is visible because hasRetryableFailure is true
+    const retryButton = tree.root.findByProps({ testID: 'coach-chat-retry-button' });
+    expect(retryButton).toBeTruthy();
     act(() => {
       tree.unmount();
     });
@@ -274,46 +279,31 @@ describe('CoachChatScreen', () => {
       );
     });
 
-    const bubbleProps = mockChatBubble.mock.calls.map(([props]) => props);
-    const propsForText = (text) => bubbleProps.find((item) => item?.text === text);
+    // All 6 messages are rendered in the chat list (FlatList may double-render items,
+    // so use findAllByProps and check at least one instance exists).
+    ['assistant-1', 'assistant-2', 'user-1', 'user-2', 'user-3', 'assistant-3'].forEach((id) => {
+      const items = tree.root.findAllByProps({ testID: `coach-chat-message-longpress-${id}` });
+      expect(items.length).toBeGreaterThan(0);
+    });
 
-    expect(propsForText('Assistant 1')).toMatchObject({
-      role: 'assistant',
-      groupPosition: 'start',
-      showSpeakerLabel: true,
-    });
-    expect(propsForText('Assistant 2')).toMatchObject({
-      role: 'assistant',
-      groupPosition: 'end',
-      showSpeakerLabel: false,
-    });
-    expect(propsForText('User 1')).toMatchObject({
-      role: 'user',
-      groupPosition: 'start',
-      showSpeakerLabel: true,
-    });
-    expect(propsForText('User 2')).toMatchObject({
-      role: 'user',
-      groupPosition: 'middle',
-      showSpeakerLabel: false,
-    });
-    expect(propsForText('User 3')).toMatchObject({
-      role: 'user',
-      groupPosition: 'end',
-      showSpeakerLabel: false,
-    });
-    expect(propsForText('Assistant 3')).toMatchObject({
-      role: 'assistant',
-      groupPosition: 'single',
-      showSpeakerLabel: true,
-    });
+    // assistant-1 (group start) shows COACH label; assistant-2 (end) does not.
+    const assistant1Items = tree.root.findAllByProps({ testID: 'coach-chat-message-longpress-assistant-1' });
+    expect(assistant1Items.some((p) => p.findAllByProps({ children: 'COACH' }).length > 0)).toBe(true);
+    const assistant2Items = tree.root.findAllByProps({ testID: 'coach-chat-message-longpress-assistant-2' });
+    expect(assistant2Items.every((p) => p.findAllByProps({ children: 'COACH' }).length === 0)).toBe(true);
+
+    // user-1 (group start) shows 'You' label; user-2 (middle) does not.
+    const user1Items = tree.root.findAllByProps({ testID: 'coach-chat-message-longpress-user-1' });
+    expect(user1Items.some((p) => p.findAllByProps({ children: 'You' }).length > 0)).toBe(true);
+    const user2Items = tree.root.findAllByProps({ testID: 'coach-chat-message-longpress-user-2' });
+    expect(user2Items.every((p) => p.findAllByProps({ children: 'You' }).length === 0)).toBe(true);
 
     act(() => {
       tree.unmount();
     });
   });
 
-  it('passes message kind through to ChatBubble for stream/finalize rendering decisions', () => {
+  it('renders assistant_stream messages as inline AI bubbles (not TypingIndicator)', () => {
     mockUseChatConversation.mockReturnValue({
       messages: [
         { id: 'assistant-stream-1', role: 'assistant', kind: 'assistant_stream', text: 'Streaming draft...' },
@@ -338,11 +328,16 @@ describe('CoachChatScreen', () => {
       );
     });
 
-    const bubbleProps = mockChatBubble.mock.calls.map(([props]) => props);
-    const streamBubble = bubbleProps.find((item) => item?.id === 'assistant-stream-1' || item?.text === 'Streaming draft...');
-    const finalBubble = bubbleProps.find((item) => item?.id === 'assistant-final-1' || item?.text === 'Final response.');
-    expect(streamBubble?.messageKind).toBe('assistant_stream');
-    expect(finalBubble?.messageKind || null).toBe(null);
+    // Both render as long-press pressables (inline AI bubbles), not TypingIndicators.
+    // Only assistant_progress kind routes to TypingIndicator.
+    const streamPressable = tree.root.findByProps({
+      testID: 'coach-chat-message-longpress-assistant-stream-1',
+    });
+    const finalPressable = tree.root.findByProps({
+      testID: 'coach-chat-message-longpress-assistant-final-1',
+    });
+    expect(streamPressable).toBeTruthy();
+    expect(finalPressable).toBeTruthy();
 
     act(() => {
       tree.unmount();

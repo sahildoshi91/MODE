@@ -6,9 +6,12 @@ import {
   Platform,
   Pressable,
   StyleSheet,
+  Text,
   View,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   ModeButton,
@@ -30,8 +33,6 @@ import {
   loadCoachChatLastMemoryClientId,
   saveCoachChatLastMemoryClientId,
 } from '../storage/chatMemoryStorage';
-import ChatBubble from '../components/ChatBubble';
-import ChatHeader from '../components/ChatHeader';
 import CoachComposer from '../components/CoachComposer';
 import QuickReplies from '../components/QuickReplies';
 import TypingIndicator from '../components/TypingIndicator';
@@ -46,6 +47,57 @@ const DIFFERENT_SENDER_MESSAGE_GAP = 14;
 const MEMORY_SUGGESTION_MIN_CONFIDENCE = 0.78;
 const MEMORY_CAPTURE_TAG_OPTIONS = ['Goal', 'Injury', 'Preference', 'Constraint'];
 
+const OPENING_LABEL_PATTERN = /^(Training|Nutrition|Mindset):\s*(.*)$/i;
+const OPENING_QUESTION_PATTERN = /what do you want/i;
+
+function parseOpeningSummary(text) {
+  const lines = String(text || '').split(/\n/);
+  const title = String(lines[0] || '').trim();
+  const questionIndex = lines.findIndex((line) => OPENING_QUESTION_PATTERN.test(String(line || '')));
+  const bodyLines = lines
+    .slice(1, questionIndex >= 0 ? questionIndex : lines.length)
+    .map((line) => String(line || '').trim())
+    .filter(Boolean);
+  const firstLabelIndex = bodyLines.findIndex((line) => OPENING_LABEL_PATTERN.test(line));
+  const subtitle = firstLabelIndex > 0 || firstLabelIndex === -1
+    ? bodyLines.slice(0, firstLabelIndex === -1 ? bodyLines.length : firstLabelIndex).join(' ')
+    : '';
+  const sectionLines = firstLabelIndex >= 0 ? bodyLines.slice(firstLabelIndex) : [];
+  const question = questionIndex >= 0
+    ? lines.slice(questionIndex).join(' ').trim()
+    : '';
+  return {
+    title,
+    subtitle,
+    sections: sectionLines.map((line) => {
+      const match = OPENING_LABEL_PATTERN.exec(line);
+      if (!match) {
+        return { label: null, body: line };
+      }
+      return {
+        label: match[1][0].toUpperCase() + match[1].slice(1).toLowerCase(),
+        body: String(match[2] || '').trim(),
+      };
+    }),
+    question,
+  };
+}
+
+function getModeColor(mode) {
+  const key = typeof mode === 'string' ? mode.trim().toLowerCase() : '';
+  return theme.colors.mode[key] || theme.colors.accent.primary;
+}
+
+function isOpeningAssistantMessage(item) {
+  if (!item || item.role !== 'assistant') {
+    return false;
+  }
+  if (typeof item.id === 'string' && item.id.startsWith('welcome')) {
+    return true;
+  }
+  return item.kind === 'assistant_opening_summary';
+}
+
 const MEMORY_CAPTURE_PHASE = {
   IDLE: 'idle',
   SUGGESTED: 'suggested',
@@ -54,6 +106,207 @@ const MEMORY_CAPTURE_PHASE = {
   EDITING: 'editing',
   DISMISSED: 'dismissed',
 };
+
+function CoachScreenHeader({
+  trainerName = 'Your coach',
+  isError = false,
+  onBack = null,
+}) {
+  const insets = useSafeAreaInsets();
+  const initial = typeof trainerName === 'string' && trainerName.length > 0
+    ? trainerName.charAt(0).toUpperCase()
+    : 'C';
+
+  return (
+    <View style={headerStyles.header} testID="chat-header">
+      <View style={{ height: insets.top, backgroundColor: theme.colors.background.primary }} />
+      <View style={headerStyles.row}>
+        {onBack ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
+            onPress={onBack}
+            style={({ pressed }) => [
+              headerStyles.backButton,
+              pressed && headerStyles.backButtonPressed,
+            ]}
+          >
+            <Text style={headerStyles.backChevron}>‹</Text>
+          </Pressable>
+        ) : (
+          <View style={headerStyles.backPlaceholder} />
+        )}
+
+        <View style={headerStyles.avatarWrap}>
+          <LinearGradient
+            colors={theme.colors.accent.gradient}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={headerStyles.avatar}
+          >
+            <Text style={headerStyles.avatarInitial}>{initial}</Text>
+          </LinearGradient>
+        </View>
+
+        <View style={headerStyles.titleBlock}>
+          <Text style={headerStyles.titleText} numberOfLines={1}>{trainerName}</Text>
+          <View style={headerStyles.statusRow}>
+            <View style={[
+              headerStyles.statusDot,
+              isError ? headerStyles.statusDotError : headerStyles.statusDotOnline,
+            ]} />
+            <Text style={[
+              headerStyles.statusText,
+              isError ? headerStyles.statusTextError : headerStyles.statusTextOnline,
+            ]}>
+              {isError ? 'not connected' : 'online'}
+            </Text>
+          </View>
+        </View>
+
+        <View style={headerStyles.rightSlot} />
+      </View>
+    </View>
+  );
+}
+
+function OpeningMessageSequence({ item, launchContext }) {
+  const checkinMode = typeof launchContext?.checkin_context?.assigned_mode === 'string'
+    ? launchContext.checkin_context.assigned_mode.trim().toUpperCase()
+    : null;
+  const checkinScore = typeof launchContext?.checkin_context?.checkin_score === 'number'
+    ? launchContext.checkin_context.checkin_score
+    : null;
+  const modeColor = checkinMode ? getModeColor(checkinMode) : null;
+  const summary = parseOpeningSummary(item?.text || '');
+  const hasSections = summary.sections.length > 0;
+  const hasQuestion = Boolean(summary.question);
+
+  const readinessText = summary.subtitle || (hasSections ? null : summary.title ? null : item.text);
+  const bodyText = !hasSections && !summary.subtitle
+    ? (summary.title || item.text)
+    : null;
+
+  return (
+    <View style={openingStyles.container}>
+      {checkinMode ? (
+        <View style={openingStyles.modeBadgeWrap}>
+          <View style={[openingStyles.modeBadge, { borderColor: `${modeColor}44` }]}>
+            <View style={[openingStyles.modeDot, { backgroundColor: modeColor }]} />
+            <Text style={[openingStyles.modeBadgeText, { color: modeColor }]}>
+              {checkinMode} MODE{checkinScore !== null ? ` · ${checkinScore}/25` : ''}
+            </Text>
+          </View>
+        </View>
+      ) : null}
+
+      {summary.title && hasSections ? (
+        <View style={openingStyles.bubbleWrap}>
+          <Text style={openingStyles.coachLabel}>COACH</Text>
+          <View style={openingStyles.aiBubble}>
+            <Text style={openingStyles.aiBubbleText}>{summary.title}</Text>
+            {readinessText ? (
+              <Text style={openingStyles.aiBubbleSubText}>{readinessText}</Text>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
+
+      {hasSections ? (
+        <View style={openingStyles.bubbleWrap}>
+          <View style={openingStyles.aiBubble}>
+            {summary.sections.map((section, idx) => (
+              <View key={`${section.label || 'line'}-${idx}`} style={openingStyles.sectionLine}>
+                {section.label ? (
+                  <Text style={openingStyles.sectionLabel}>{section.label}</Text>
+                ) : null}
+                <Text style={openingStyles.sectionBody}>
+                  {section.label ? `  ${section.body}` : section.body}
+                </Text>
+              </View>
+            ))}
+          </View>
+        </View>
+      ) : null}
+
+      {!hasSections && bodyText ? (
+        <View style={openingStyles.bubbleWrap}>
+          <Text style={openingStyles.coachLabel}>COACH</Text>
+          <View style={openingStyles.aiBubble}>
+            <Text style={openingStyles.aiBubbleText}>{bodyText}</Text>
+          </View>
+        </View>
+      ) : null}
+
+      {hasQuestion ? (
+        <View style={[openingStyles.bubbleWrap, openingStyles.ctaBubbleWrap]}>
+          <View style={openingStyles.ctaBubble}>
+            <Text style={openingStyles.ctaBubbleText}>{summary.question}</Text>
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function InlineBubbleUser({ text, showSpeakerLabel, groupPosition }) {
+  const cornerStyle = resolveUserCorner(groupPosition);
+  return (
+    <View style={bubbleStyles.userRow}>
+      {showSpeakerLabel ? (
+        <Text style={bubbleStyles.userSpeakerLabel}>You</Text>
+      ) : null}
+      <LinearGradient
+        colors={theme.colors.bubble.user.gradient}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={[bubbleStyles.userBubble, cornerStyle]}
+      >
+        <Text style={bubbleStyles.userBubbleText}>{text}</Text>
+      </LinearGradient>
+    </View>
+  );
+}
+
+function InlineBubbleAI({ text, showSpeakerLabel, groupPosition, isError }) {
+  const cornerStyle = resolveAICorner(groupPosition);
+  return (
+    <View style={bubbleStyles.aiRow}>
+      {showSpeakerLabel ? (
+        <Text style={[bubbleStyles.coachLabel, isError && bubbleStyles.coachLabelError]}>
+          {isError ? 'COACH' : 'COACH'}
+        </Text>
+      ) : null}
+      <View style={[
+        bubbleStyles.aiBubble,
+        cornerStyle,
+        isError && bubbleStyles.aiBubbleError,
+      ]}>
+        <Text style={[bubbleStyles.aiBubbleText, isError && bubbleStyles.aiBubbleTextError]}>
+          {text}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function resolveUserCorner(groupPosition) {
+  switch (groupPosition) {
+    case 'start': return bubbleStyles.userCornerStart;
+    case 'middle': return bubbleStyles.userCornerMiddle;
+    case 'end': return bubbleStyles.userCornerEnd;
+    default: return bubbleStyles.userCornerSingle;
+  }
+}
+
+function resolveAICorner(groupPosition) {
+  switch (groupPosition) {
+    case 'start': return bubbleStyles.aiCornerStart;
+    case 'middle': return bubbleStyles.aiCornerMiddle;
+    case 'end': return bubbleStyles.aiCornerEnd;
+    default: return bubbleStyles.aiCornerSingle;
+  }
+}
 
 function parseMemoryVisibilityLabel(visibility) {
   return visibility === 'internal_only' ? 'Internal' : 'AI';
@@ -1139,12 +1392,18 @@ export default function CoachChatScreen({
       atmosphere="chat"
       atmosphereOverlayStrength={1.04}
     >
-      <ChatHeader
-        role="client"
-        title={resolvedTrainerName}
+      <View pointerEvents="none" style={styles.ambientGlowContainer}>
+        <LinearGradient
+          colors={['rgba(30,60,200,0.08)', 'rgba(30,60,200,0)']}
+          start={{ x: 0.5, y: 0 }}
+          end={{ x: 0.5, y: 1 }}
+          style={styles.ambientGlow}
+        />
+      </View>
+      <CoachScreenHeader
+        trainerName={resolvedTrainerName}
         isError={hasRetryableFailure}
         onBack={onBack}
-        onRetry={handleRetryLastMessage}
       />
       {hasRetryableFailure ? (
         <View style={styles.notConnectedBar}>
@@ -1252,6 +1511,7 @@ export default function CoachChatScreen({
                 isMemoryAnchorMessage
                 && memoryCapture.phase === MEMORY_CAPTURE_PHASE.SAVED
               );
+              const isOpening = isOpeningAssistantMessage(item);
               return (
                 <View style={[styles.messageItem, { marginBottom: messageSpacing }]}>
                   <Pressable
@@ -1262,15 +1522,27 @@ export default function CoachChatScreen({
                     accessibilityLabel="Open message actions"
                     testID={`coach-chat-message-longpress-${item?.id || index}`}
                   >
-                    <ChatBubble
-                      role={item.role}
-                      text={item.text}
-                      isError={item.isError}
-                      fallbackTriggered={item.fallbackTriggered}
-                      showSpeakerLabel={showSpeakerLabel}
-                      groupPosition={groupPosition}
-                      messageKind={item?.kind || null}
-                    />
+                    {isOpening ? (
+                      <OpeningMessageSequence item={item} launchContext={launchContext} />
+                    ) : item.role === 'user' ? (
+                      <InlineBubbleUser
+                        text={String(item.text || '')}
+                        showSpeakerLabel={showSpeakerLabel}
+                        groupPosition={groupPosition}
+                      />
+                    ) : (
+                      <InlineBubbleAI
+                        text={String(item.text || '')}
+                        showSpeakerLabel={showSpeakerLabel}
+                        groupPosition={groupPosition}
+                        isError={Boolean(item.isError)}
+                      />
+                    )}
+                    {item.fallbackTriggered ? (
+                      <View style={[styles.fallbackTag, item.role === 'user' && styles.userFallbackTag]}>
+                        <Text style={styles.fallbackTagText}>Flagged for trainer review</Text>
+                      </View>
+                    ) : null}
                   </Pressable>
                   {stepPreview ? (
                     <View style={styles.previewCard}>
@@ -1608,9 +1880,303 @@ export default function CoachChatScreen({
   );
 }
 
+const headerStyles = StyleSheet.create({
+  header: {
+    backgroundColor: theme.colors.background.primary,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.06)',
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+    gap: 10,
+  },
+  backButton: {
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  backButtonPressed: {
+    opacity: theme.interaction.pressedOpacity,
+  },
+  backChevron: {
+    fontSize: 28,
+    color: theme.colors.text.primary,
+    lineHeight: 32,
+    marginTop: -2,
+  },
+  backPlaceholder: {
+    width: 36,
+  },
+  avatarWrap: {},
+  avatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarInitial: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    fontFamily: theme.typography.fontFamily,
+  },
+  titleBlock: {
+    flex: 1,
+    gap: 2,
+  },
+  titleText: {
+    ...theme.typography.headerName,
+    fontFamily: theme.typography.fontFamily,
+    color: theme.colors.text.primary,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  statusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  statusDotOnline: {
+    backgroundColor: '#3CB97A',
+  },
+  statusDotError: {
+    backgroundColor: theme.colors.status.error,
+  },
+  statusText: {
+    ...theme.typography.headerSub,
+    fontFamily: theme.typography.fontFamily,
+  },
+  statusTextOnline: {
+    color: '#3CB97A',
+  },
+  statusTextError: {
+    color: theme.colors.status.error,
+  },
+  rightSlot: {
+    width: 36,
+  },
+});
+
+const openingStyles = StyleSheet.create({
+  container: {
+    gap: 8,
+    paddingTop: 4,
+    paddingBottom: 4,
+  },
+  modeBadgeWrap: {
+    alignSelf: 'flex-start',
+    marginBottom: 2,
+  },
+  modeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderRadius: theme.radii.chip,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+  },
+  modeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  modeBadgeText: {
+    ...theme.typography.modeLabel,
+    fontFamily: theme.typography.fontFamily,
+  },
+  bubbleWrap: {
+    alignSelf: 'flex-start',
+    maxWidth: '88%',
+    gap: 3,
+  },
+  aiBubble: {
+    backgroundColor: theme.colors.bubble.ai.bg,
+    borderWidth: 1,
+    borderColor: theme.colors.bubble.ai.border,
+    borderRadius: theme.radii.bubble,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    gap: 6,
+  },
+  aiBubbleText: {
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    color: theme.colors.bubble.ai.text,
+  },
+  aiBubbleSubText: {
+    ...theme.typography.body3,
+    fontFamily: theme.typography.fontFamily,
+    color: 'rgba(196,207,238,0.72)',
+    marginTop: 2,
+  },
+  coachLabel: {
+    ...theme.typography.bubbleLabel,
+    fontFamily: theme.typography.fontFamily,
+    color: theme.colors.bubble.ai.label,
+    marginBottom: 1,
+  },
+  sectionLine: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    alignItems: 'flex-start',
+  },
+  sectionLabel: {
+    ...theme.typography.bubbleLabel,
+    fontFamily: theme.typography.fontFamily,
+    color: theme.colors.accent.primary,
+    letterSpacing: 0.8,
+    paddingTop: 2,
+    minWidth: 60,
+  },
+  sectionBody: {
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    color: theme.colors.bubble.ai.text,
+    flex: 1,
+  },
+  ctaBubbleWrap: {
+    marginTop: 4,
+  },
+  ctaBubble: {
+    backgroundColor: 'rgba(255,255,255,0.065)',
+    borderWidth: 1,
+    borderColor: theme.colors.bubble.ai.border,
+    borderRadius: theme.radii.bubble,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  ctaBubbleText: {
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    color: '#D6E4FF',
+    fontWeight: '500',
+  },
+});
+
+const bubbleStyles = StyleSheet.create({
+  userRow: {
+    alignItems: 'flex-end',
+    paddingLeft: '15%',
+  },
+  userSpeakerLabel: {
+    ...theme.typography.bubbleLabel,
+    fontFamily: theme.typography.fontFamily,
+    color: theme.colors.text.muted,
+    marginBottom: 3,
+    marginRight: 2,
+    alignSelf: 'flex-end',
+  },
+  userBubble: {
+    overflow: 'hidden',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    shadowColor: theme.colors.bubble.user.shadow,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 1,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  userCornerSingle: {
+    borderTopLeftRadius: theme.radii.bubble,
+    borderTopRightRadius: theme.radii.bubble,
+    borderBottomLeftRadius: theme.radii.bubble,
+    borderBottomRightRadius: theme.radii.bubble,
+  },
+  userCornerStart: {
+    borderTopLeftRadius: theme.radii.bubble,
+    borderTopRightRadius: theme.radii.bubble,
+    borderBottomLeftRadius: theme.radii.bubble,
+    borderBottomRightRadius: theme.radii.bubbleSm,
+  },
+  userCornerMiddle: {
+    borderTopLeftRadius: theme.radii.bubble,
+    borderTopRightRadius: theme.radii.bubbleSm,
+    borderBottomLeftRadius: theme.radii.bubble,
+    borderBottomRightRadius: theme.radii.bubbleSm,
+  },
+  userCornerEnd: {
+    borderTopLeftRadius: theme.radii.bubble,
+    borderTopRightRadius: theme.radii.bubbleSm,
+    borderBottomLeftRadius: theme.radii.bubble,
+    borderBottomRightRadius: theme.radii.bubble,
+  },
+  userBubbleText: {
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    color: theme.colors.bubble.user.text,
+  },
+  aiRow: {
+    alignItems: 'flex-start',
+    paddingRight: '15%',
+  },
+  coachLabel: {
+    ...theme.typography.bubbleLabel,
+    fontFamily: theme.typography.fontFamily,
+    color: theme.colors.bubble.ai.label,
+    marginBottom: 3,
+    marginLeft: 2,
+  },
+  coachLabelError: {
+    color: theme.colors.status.error,
+  },
+  aiBubble: {
+    backgroundColor: theme.colors.bubble.ai.bg,
+    borderWidth: 1,
+    borderColor: theme.colors.bubble.ai.border,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  aiCornerSingle: {
+    borderTopLeftRadius: theme.radii.bubble,
+    borderTopRightRadius: theme.radii.bubble,
+    borderBottomLeftRadius: theme.radii.bubble,
+    borderBottomRightRadius: theme.radii.bubble,
+  },
+  aiCornerStart: {
+    borderTopLeftRadius: theme.radii.bubble,
+    borderTopRightRadius: theme.radii.bubble,
+    borderBottomLeftRadius: theme.radii.bubbleSm,
+    borderBottomRightRadius: theme.radii.bubble,
+  },
+  aiCornerMiddle: {
+    borderTopLeftRadius: theme.radii.bubbleSm,
+    borderTopRightRadius: theme.radii.bubble,
+    borderBottomLeftRadius: theme.radii.bubbleSm,
+    borderBottomRightRadius: theme.radii.bubble,
+  },
+  aiCornerEnd: {
+    borderTopLeftRadius: theme.radii.bubbleSm,
+    borderTopRightRadius: theme.radii.bubble,
+    borderBottomLeftRadius: theme.radii.bubble,
+    borderBottomRightRadius: theme.radii.bubble,
+  },
+  aiBubbleText: {
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    color: theme.colors.bubble.ai.text,
+  },
+  aiBubbleError: {
+    borderColor: 'rgba(197,122,108,0.4)',
+  },
+  aiBubbleTextError: {
+    color: theme.colors.status.error,
+  },
+});
+
 const styles = StyleSheet.create({
   screen: {
-    backgroundColor: theme.colors.background.app,
+    backgroundColor: theme.colors.background.primary,
   },
   content: {
     flex: 1,
@@ -1618,6 +2184,18 @@ const styles = StyleSheet.create({
   toolbarContainer: {
     paddingHorizontal: theme.spacing[3],
     paddingBottom: theme.spacing[1],
+  },
+  ambientGlowContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 300,
+    zIndex: 0,
+    pointerEvents: 'none',
+  },
+  ambientGlow: {
+    flex: 1,
   },
   chatViewport: {
     flex: 1,
@@ -1663,6 +2241,29 @@ const styles = StyleSheet.create({
   },
   chatBubblePressable: {
     width: '100%',
+  },
+  fallbackTag: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    marginLeft: 2,
+    borderRadius: theme.radii.pill,
+    backgroundColor: 'rgba(197,122,108,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(197,122,108,0.3)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    overflow: 'hidden',
+  },
+  userFallbackTag: {
+    alignSelf: 'flex-end',
+    marginLeft: 0,
+    marginRight: 2,
+  },
+  fallbackTagText: {
+    fontSize: 10,
+    fontWeight: '500',
+    color: theme.colors.status.error,
+    letterSpacing: 0.2,
   },
   memorySuggestionRail: {
     alignSelf: 'flex-start',
