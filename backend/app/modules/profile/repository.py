@@ -103,10 +103,27 @@ class ProfileRepository:
         client_id: str,
         memory_id: str,
     ) -> dict[str, Any]:
+        existing = self.get_algorithm_memory(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            memory_id=memory_id,
+        )
+        if not existing:
+            return {}
+
+        value_json = existing.get("value_json")
+        value = dict(value_json) if isinstance(value_json, dict) else {}
+        value["is_archived"] = True
+
         response = (
             self.supabase
             .table("coach_memory")
-            .delete()
+            .update(
+                {
+                    "value_json": value,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
             .eq("trainer_id", trainer_id)
             .eq("client_id", client_id)
             .eq("id", memory_id)

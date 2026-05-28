@@ -44,6 +44,11 @@ const INACTIVE_OPACITY = 0.58;
 export const NAV_BOTTOM_OFFSET = 8;
 export const NAV_PILL_HEIGHT = 56;
 
+function getModeTheme(activeMode) {
+  const normalized = typeof activeMode === 'string' ? activeMode.trim().toLowerCase() : '';
+  return theme.modes[normalized] || theme.modes.fallback;
+}
+
 function LiquidNavTab({
   tab,
   index,
@@ -51,6 +56,9 @@ function LiquidNavTab({
   activeIndex,
   onLayout,
   onPress,
+  activeTint,
+  inactiveTint,
+  activeShadowColor,
 }) {
   const { Icon, label } = tab;
   const iconStyle = useAnimatedStyle(() => ({
@@ -67,17 +75,19 @@ function LiquidNavTab({
       accessibilityRole="button"
       accessibilityState={{ selected }}
       hitSlop={8}
-      android_ripple={{ color: 'rgba(255,255,255,0.08)', borderless: false }}
+      accessibilityLabel={`${label} tab`}
+      android_ripple={{ color: theme.colors.glass.active, borderless: false }}
       style={({ pressed }) => [
         styles.tabButton,
         selected && styles.tabButtonActive,
+        selected && { shadowColor: activeShadowColor },
         pressed && styles.tabButtonPressed,
       ]}
     >
       <Animated.View pointerEvents="none" style={iconStyle}>
         <Icon
           size={18}
-          color={theme.colors.nav.activeIcon}
+          color={selected ? activeTint : inactiveTint}
           strokeWidth={2.2}
         />
       </Animated.View>
@@ -85,7 +95,10 @@ function LiquidNavTab({
         variant="caption"
         tone="primary"
         numberOfLines={1}
-        style={selected ? styles.tabLabelActive : styles.tabLabelInactive}
+        style={[
+          selected ? styles.tabLabelActive : styles.tabLabelInactive,
+          { color: selected ? activeTint : theme.colors.nav.inactiveLabel },
+        ]}
       >
         {label}
       </ModeText>
@@ -99,10 +112,12 @@ export default function LiquidBottomNav({
   bottomInset = 0,
   role = 'client',
   trainerNavMode = 'coach_os',
+  activeMode = null,
 }) {
   const tabs = role === 'trainer'
     ? (trainerNavMode === 'legacy' ? TRAINER_TABS_LEGACY : TRAINER_TABS_COACH_OS)
     : CLIENT_TABS;
+  const modeTheme = useMemo(() => getModeTheme(activeMode), [activeMode]);
   const tabLayouts = useRef(Array.from({ length: tabs.length }, () => null));
   const hasPositionedPill = useRef(false);
   const previousTabs = useRef(tabs);
@@ -168,11 +183,23 @@ export default function LiquidBottomNav({
     >
       <View style={styles.navContainer}>
         <Animated.View
+          testID="liquid-bottom-nav-active-pill"
           pointerEvents="none"
-          style={[styles.activePill, pillStyle]}
+          style={[
+            styles.activePill,
+            {
+              backgroundColor: modeTheme.navFill,
+              borderColor: modeTheme.navBorder,
+              shadowColor: modeTheme.navShadow,
+            },
+            pillStyle,
+          ]}
         >
           <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
-          <View pointerEvents="none" style={styles.activePillTopHighlight} />
+          <View
+            pointerEvents="none"
+            style={[styles.activePillTopHighlight, { backgroundColor: modeTheme.accentSoft }]}
+          />
         </Animated.View>
 
         {tabs.map((tab, index) => (
@@ -182,6 +209,9 @@ export default function LiquidBottomNav({
             index={index}
             selected={tab.key === activeTab}
             activeIndex={activeIndex}
+            activeTint={modeTheme.accentStrong}
+            inactiveTint={theme.colors.nav.inactiveIcon}
+            activeShadowColor={modeTheme.navShadow}
             onLayout={(event) => {
               const { x, y, width, height } = event.nativeEvent.layout;
               tabLayouts.current[index] = { x, y, width, height };
@@ -219,10 +249,10 @@ const styles = StyleSheet.create({
     position: 'relative',
     padding: 7,
     borderRadius: 26,
-    backgroundColor: 'rgba(8,14,28,0.86)',
+    backgroundColor: theme.colors.surface.overlay,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    shadowColor: '#01060D',
+    borderColor: theme.colors.glass.borderDefault,
+    shadowColor: theme.colors.background.app,
     shadowOpacity: 0.22,
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 10 },
@@ -235,10 +265,10 @@ const styles = StyleSheet.create({
     zIndex: 0,
     overflow: 'hidden',
     borderRadius: 20,
-    backgroundColor: 'rgba(255,255,255,0.10)',
+    backgroundColor: theme.colors.glass.active,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.22)',
-    shadowColor: '#fff',
+    borderColor: theme.colors.glass.borderStrong,
+    shadowColor: theme.colors.text.primary,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.18,
     shadowRadius: 0,
@@ -250,7 +280,7 @@ const styles = StyleSheet.create({
     top: 1,
     height: 1,
     borderRadius: 1,
-    backgroundColor: 'rgba(255,255,255,0.24)',
+    backgroundColor: theme.colors.glass.highlight,
   },
   tabButton: {
     flex: 1,
@@ -273,12 +303,10 @@ const styles = StyleSheet.create({
     transform: [{ scale: theme.interaction.pressedScale }],
   },
   tabLabelActive: {
-    color: theme.colors.nav.activeLabel,
     fontWeight: '600',
     opacity: ACTIVE_OPACITY,
   },
   tabLabelInactive: {
-    color: '#EEF3FF',
     fontWeight: '400',
     opacity: INACTIVE_OPACITY,
   },

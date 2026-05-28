@@ -41,6 +41,7 @@ from app.modules.conversation.cache import (
 from app.modules.conversation.context import (
     ChatContext,
     build_user_digest,
+    memory_row_is_archived,
     memory_rows_to_chunks,
     render_context_prompt,
 )
@@ -878,7 +879,12 @@ class ConversationService:
         notes: list[str] = []
         for row in rows:
             value = row.get("value_json") if isinstance(row, dict) else None
-            if isinstance(value, dict) and value.get("ai_usable") is not False and value.get("text"):
+            if (
+                isinstance(value, dict)
+                and not memory_row_is_archived(row)
+                and value.get("ai_usable") is not False
+                and value.get("text")
+            ):
                 notes.append(str(value.get("text")))
         return notes[:8]
 

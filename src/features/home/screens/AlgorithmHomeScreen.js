@@ -1,22 +1,25 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  KeyboardAvoidingView,
   Pressable,
   ScrollView,
   StyleSheet,
+  TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   GlassSurface,
-  GlassToggle,
   ModeButton,
   ModeInput,
   ModeText,
   SafeScreen,
-  SystemActionSheet,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import AlgorithmSummaryCard from '../components/AlgorithmSummaryCard';
@@ -31,11 +34,22 @@ import {
 const EMPTY_SUMMARY = 'MODE is still learning what drives you. Add your Why to personalize your coaching.';
 const SUMMARY_WORD_LIMIT = 30;
 const WHY_SUMMARY_PREFIX = "You're building strength, energy, and consistency around what matters most:";
-const SOURCE_LABELS = {
-  user: 'User',
-  trainer: 'Trainer',
-  ai: 'AI inferred',
+const MODE_ALIASES = {
+  base: 'build',
+  build: 'build',
+  green: 'build',
+  beast: 'beast',
+  overdrive: 'beast',
+  red: 'beast',
+  recover: 'recover',
+  recovery: 'recover',
+  yellow: 'recover',
+  rest: 'rest',
+  reset: 'rest',
+  blue: 'rest',
 };
+const MEMORY_INPUT_MIN_HEIGHT = 30;
+const MEMORY_INPUT_MAX_HEIGHT = 92;
 
 function normalizePayload(payload) {
   return {
@@ -45,14 +59,6 @@ function normalizePayload(payload) {
     algorithm_summary_updated_at: payload?.algorithm_summary_updated_at || null,
     memories: Array.isArray(payload?.memories) ? payload.memories : [],
   };
-}
-
-function normalizeTagsText(value) {
-  return String(value || '')
-    .split(',')
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean)
-    .slice(0, 8);
 }
 
 function limitSummaryWords(value) {
@@ -75,44 +81,311 @@ function buildSummaryText(payload) {
   return payload?.summary_text || EMPTY_SUMMARY;
 }
 
-function MemoryPill({ memory, onPress }) {
-  const sourceLabel = SOURCE_LABELS[memory?.source] || 'Coach';
-  const canEdit = Boolean(memory?.can_edit);
-  const statusLabel = memory?.ai_usable ? 'AI usable' : 'Private';
+function getModeTheme(currentMode) {
+  const normalized = typeof currentMode === 'string' ? currentMode.trim().toLowerCase() : '';
+  return theme.modes[MODE_ALIASES[normalized]] || theme.modes.fallback;
+}
 
+function colorWithOpacity(hexColor, opacity) {
+  const normalized = String(hexColor || '').replace('#', '');
+  if (![3, 6].includes(normalized.length)) {
+    return hexColor;
+  }
+  const full = normalized.length === 3
+    ? normalized.split('').map((char) => `${char}${char}`).join('')
+    : normalized;
+  const red = parseInt(full.slice(0, 2), 16);
+  const green = parseInt(full.slice(2, 4), 16);
+  const blue = parseInt(full.slice(4, 6), 16);
+  if ([red, green, blue].some((value) => Number.isNaN(value))) {
+    return hexColor;
+  }
+  return `rgba(${red}, ${green}, ${blue}, ${opacity})`;
+}
+
+function capitalizeFirst(value) {
+  if (!value) {
+    return '';
+  }
+  return `${value.charAt(0).toUpperCase()}${value.slice(1)}`;
+}
+
+function getGreetingName(viewerDisplayName) {
+  const trimmed = String(viewerDisplayName || '').trim();
+  if (!trimmed) {
+    return 'there';
+  }
+  const withoutDomain = trimmed.includes('@') ? trimmed.split('@')[0] : trimmed;
+  const firstToken = withoutDomain.split(/\s+/)[0].split(/[._-]/)[0];
+  return capitalizeFirst(firstToken || 'there');
+}
+
+function formatHeaderDate(date = new Date()) {
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      weekday: 'long',
+      month: 'short',
+      day: 'numeric',
+    }).format(date);
+  } catch (_error) {
+    return 'Today';
+  }
+}
+
+function normalizeReadinessScore(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatReadinessScore(value) {
+  const score = normalizeReadinessScore(value);
+  if (score === null) {
+    return '--';
+  }
+  const rounded = Math.round(score);
+  return `${rounded} / ${rounded > 25 ? 100 : 25}`;
+}
+
+function getInputHeightFromEvent(event) {
+  const nextHeight = Number(event?.nativeEvent?.contentSize?.height);
+  if (!Number.isFinite(nextHeight)) {
+    return MEMORY_INPUT_MIN_HEIGHT;
+  }
+  return Math.min(MEMORY_INPUT_MAX_HEIGHT, Math.max(MEMORY_INPUT_MIN_HEIGHT, Math.ceil(nextHeight)));
+}
+
+function InlineMemoryEditor({
+  value,
+  onChangeText,
+  onSave,
+  onCancel,
+  onContentSizeChange,
+  inputHeight,
+  saving,
+  placeholder,
+  error,
+  modeTheme,
+  testID,
+}) {
   return (
     <GlassSurface
-      testID={`algorithm-memory-pill-${memory.id}`}
-      state={memory?.ai_usable ? 'active' : 'default'}
+      testID={testID}
+      state="active"
       radius="l"
       padding={0}
-      onPress={canEdit ? onPress : undefined}
-      style={styles.memoryPill}
-      contentStyle={styles.memoryPillContent}
-      borderColor={memory?.ai_usable ? theme.colors.glass.borderActive : theme.colors.glass.borderSoft}
-      fillColor={memory?.ai_usable ? theme.colors.glass.active : theme.colors.glass.elevated}
-      highlight={memory?.ai_usable}
+      style={styles.memoryEditorChip}
+      contentStyle={styles.memoryEditorContent}
+      fillColor={theme.memoryChip.fillEditing}
+      borderColor={modeTheme.cardBorder}
+      highlight
     >
-      <View style={styles.memoryPillTop}>
-        <ModeText variant="bodySm" style={styles.memoryPillText}>
-          {memory.text}
-        </ModeText>
-        {canEdit ? (
-          <Feather name="edit-2" size={14} color={theme.colors.text.secondary} />
-        ) : null}
+      <TextInput
+        testID="algorithm-memory-input"
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor={theme.colors.text.muted}
+        selectionColor={modeTheme.accent}
+        multiline
+        autoFocus
+        autoCapitalize="sentences"
+        autoCorrect
+        maxLength={240}
+        editable={!saving}
+        onContentSizeChange={onContentSizeChange}
+        style={[
+          styles.memoryInlineInput,
+          {
+            color: theme.colors.text.primary,
+            height: inputHeight,
+          },
+        ]}
+      />
+      <View style={styles.memoryEditorActions}>
+        <Pressable
+          testID="algorithm-memory-save"
+          accessibilityRole="button"
+          accessibilityLabel="Save fact"
+          hitSlop={8}
+          disabled={saving}
+          onPress={onSave}
+          style={({ pressed }) => [
+            styles.memoryIconButton,
+            { borderColor: modeTheme.cardBorder, backgroundColor: modeTheme.accentSoft },
+            pressed && styles.pressedControl,
+            saving && styles.disabledControl,
+          ]}
+        >
+          {saving ? (
+            <ActivityIndicator size="small" color={modeTheme.accentStrong} />
+          ) : (
+            <Feather name="check" size={17} color={modeTheme.accentStrong} />
+          )}
+        </Pressable>
+        <Pressable
+          testID="algorithm-memory-cancel"
+          accessibilityRole="button"
+          accessibilityLabel="Cancel fact edit"
+          hitSlop={8}
+          disabled={saving}
+          onPress={onCancel}
+          style={({ pressed }) => [
+            styles.memoryIconButton,
+            pressed && styles.pressedControl,
+            saving && styles.disabledControl,
+          ]}
+        >
+          <Feather name="x" size={17} color={theme.colors.text.secondary} />
+        </Pressable>
       </View>
-      <View style={styles.memoryPillMeta}>
-        <ModeText variant="caption" tone="tertiary" style={styles.memoryMetaText}>{sourceLabel}</ModeText>
-        <View style={styles.memoryMetaDot} />
-        <ModeText variant="caption" tone={memory?.ai_usable ? 'accent' : 'tertiary'} style={styles.memoryMetaText}>
-          {statusLabel}
+      {error ? (
+        <ModeText variant="caption" tone="error" style={styles.memoryEditorError}>
+          {error}
         </ModeText>
-      </View>
+      ) : null}
     </GlassSurface>
   );
 }
 
-function LoadingSkeleton({ bottomInset }) {
+function MemoryFactChip({
+  memory,
+  modeTheme,
+  onPress,
+  onLongPress,
+  onDelete,
+  isDeleteCandidate,
+  isMutating,
+}) {
+  const wobble = useRef(new Animated.Value(0)).current;
+  const canEdit = Boolean(memory?.can_edit);
+
+  useEffect(() => {
+    if (!isDeleteCandidate) {
+      wobble.stopAnimation();
+      wobble.setValue(0);
+      return undefined;
+    }
+
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(wobble, {
+          toValue: -1,
+          duration: theme.animation.duration.short,
+          useNativeDriver: false,
+        }),
+        Animated.timing(wobble, {
+          toValue: 1,
+          duration: theme.animation.duration.short,
+          useNativeDriver: false,
+        }),
+        Animated.timing(wobble, {
+          toValue: 0,
+          duration: theme.animation.duration.short,
+          useNativeDriver: false,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+    };
+  }, [isDeleteCandidate, wobble]);
+
+  const wobbleStyle = {
+    transform: [
+      {
+        rotate: wobble.interpolate({
+          inputRange: [-1, 1],
+          outputRange: ['-1.2deg', '1.2deg'],
+        }),
+      },
+    ],
+  };
+
+  return (
+    <Animated.View style={[styles.memoryChipWrap, isDeleteCandidate && wobbleStyle]}>
+      <TouchableOpacity
+        testID={`algorithm-memory-pill-${memory.id}`}
+        activeOpacity={theme.interaction.pressedOpacity}
+        delayLongPress={400}
+        disabled={isMutating || !canEdit}
+        onPress={canEdit ? onPress : undefined}
+        onLongPress={canEdit ? onLongPress : undefined}
+        accessibilityRole={canEdit ? 'button' : undefined}
+        accessibilityLabel={canEdit ? `Edit fact: ${memory.text}` : `Fact: ${memory.text}`}
+        style={[styles.memoryPillTouch, isMutating && styles.disabledControl]}
+      >
+        <GlassSurface
+          state={memory?.ai_usable ? 'active' : 'default'}
+          radius={12}
+          padding={0}
+          style={styles.memoryPill}
+          contentStyle={styles.memoryPillContent}
+          borderColor={isDeleteCandidate ? theme.memoryChip.borderDelete : modeTheme.cardBorder}
+          fillColor={isDeleteCandidate ? theme.memoryChip.fillDelete : theme.memoryChip.fill}
+          highlight={memory?.ai_usable}
+        >
+          <ModeText variant="bodySm" style={styles.memoryPillText}>
+            {memory.text}
+          </ModeText>
+        </GlassSurface>
+      </TouchableOpacity>
+      {isDeleteCandidate ? (
+        <Pressable
+          testID="algorithm-memory-delete"
+          accessibilityRole="button"
+          accessibilityLabel="Delete fact"
+          hitSlop={10}
+          disabled={isMutating}
+          onPress={onDelete}
+          style={({ pressed }) => [
+            styles.deleteBadge,
+            pressed && styles.pressedControl,
+            isMutating && styles.disabledControl,
+          ]}
+        >
+          {isMutating ? (
+            <ActivityIndicator size="small" color={theme.memoryChip.badgeText} />
+          ) : (
+            <Feather name="x" size={14} color={theme.memoryChip.badgeText} />
+          )}
+        </Pressable>
+      ) : null}
+    </Animated.View>
+  );
+}
+
+function ModeAtmosphere({ modeTheme }) {
+  const secondaryGlow = colorWithOpacity(modeTheme.accent, 0.07);
+
+  return (
+    <View pointerEvents="none" style={styles.modeAtmosphere}>
+      <LinearGradient
+        colors={[modeTheme.backgroundAlt, modeTheme.background]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+      <LinearGradient
+        colors={['rgba(40,80,255,0.22)', 'rgba(20,40,160,0.06)', 'transparent']}
+        start={{ x: 0.65, y: 0 }}
+        end={{ x: 0.35, y: 1 }}
+        style={styles.primaryGlow}
+      />
+      <LinearGradient
+        colors={[secondaryGlow, theme.colors.utility.transparent]}
+        start={{ x: 0.1, y: 0 }}
+        end={{ x: 0.9, y: 1 }}
+        style={styles.secondaryGlow}
+      />
+    </View>
+  );
+}
+
+function LoadingSkeleton({ bottomInset, modeTheme }) {
   return (
     <ScrollView
       contentContainerStyle={[
@@ -122,10 +395,10 @@ function LoadingSkeleton({ bottomInset }) {
     >
       <View style={styles.phoneFrame}>
         <View style={styles.headerBlock}>
-          <View style={styles.skeletonTitle} />
+          <View style={[styles.skeletonTitle, { backgroundColor: modeTheme.cardFill }]} />
         </View>
-        <View style={[styles.skeletonCard, styles.skeletonHero]} />
-        <View style={styles.skeletonCard} />
+        <View style={[styles.skeletonCard, styles.skeletonHero, { borderColor: modeTheme.cardBorder }]} />
+        <View style={[styles.skeletonCard, { borderColor: modeTheme.cardBorder }]} />
         <View style={styles.skeletonPillRow}>
           <View style={styles.skeletonPill} />
           <View style={styles.skeletonPillWide} />
@@ -140,6 +413,9 @@ export default function AlgorithmHomeScreen({
   accessToken,
   bottomInset = 0,
   memoryRefreshToken = 0,
+  currentMode = null,
+  readinessScore = null,
+  viewerDisplayName = null,
 }) {
   const insets = useSafeAreaInsets();
   const feedbackTimerRef = useRef(null);
@@ -151,20 +427,23 @@ export default function AlgorithmHomeScreen({
   const [whyDraft, setWhyDraft] = useState('');
   const [whySaving, setWhySaving] = useState(false);
   const [whyError, setWhyError] = useState(null);
-  const [memoryEditor, setMemoryEditor] = useState({
-    visible: false,
-    mode: 'add',
-    record: null,
-    text: '',
-    category: '',
-    tagsText: '',
-    aiUsable: true,
-    saving: false,
-    deleting: false,
-    error: null,
-  });
+  const [editingMemoryId, setEditingMemoryId] = useState(null);
+  const [memoryDraft, setMemoryDraft] = useState('');
+  const [memoryDraftHeight, setMemoryDraftHeight] = useState(MEMORY_INPUT_MIN_HEIGHT);
+  const [addingMemory, setAddingMemory] = useState(false);
+  const [newMemoryDraft, setNewMemoryDraft] = useState('');
+  const [newMemoryDraftHeight, setNewMemoryDraftHeight] = useState(MEMORY_INPUT_MIN_HEIGHT);
+  const [deleteCandidateId, setDeleteCandidateId] = useState(null);
+  const [memorySavingId, setMemorySavingId] = useState(null);
+  const [memoryDeletingId, setMemoryDeletingId] = useState(null);
+  const [memoryError, setMemoryError] = useState(null);
 
-  const isMemoryMutating = memoryEditor.saving || memoryEditor.deleting;
+  const isMemoryMutating = Boolean(memorySavingId || memoryDeletingId);
+  const modeTheme = useMemo(() => getModeTheme(currentMode), [currentMode]);
+  const greetingName = useMemo(() => getGreetingName(viewerDisplayName), [viewerDisplayName]);
+  const headerDate = useMemo(() => formatHeaderDate(), []);
+  const readinessLabel = useMemo(() => formatReadinessScore(readinessScore), [readinessScore]);
+  const readinessTextColor = colorWithOpacity(modeTheme.accent, 0.55);
 
   const showFeedback = useCallback((message) => {
     setFeedback(message);
@@ -244,172 +523,221 @@ export default function AlgorithmHomeScreen({
     }
   }, [accessToken, payload, showFeedback, whyDraft]);
 
+  const visibleMemories = useMemo(() => payload.memories || [], [payload.memories]);
+  const summaryText = useMemo(() => buildSummaryText(payload), [payload]);
+
   const openAddMemory = useCallback(() => {
-    setMemoryEditor({
-      visible: true,
-      mode: 'add',
-      record: null,
-      text: '',
-      category: '',
-      tagsText: '',
-      aiUsable: true,
-      saving: false,
-      deleting: false,
-      error: null,
-    });
-  }, []);
-
-  const openEditMemory = useCallback((memory) => {
-    setMemoryEditor({
-      visible: true,
-      mode: 'edit',
-      record: memory,
-      text: memory?.text || '',
-      category: memory?.category || '',
-      tagsText: Array.isArray(memory?.tags) ? memory.tags.join(', ') : '',
-      aiUsable: Boolean(memory?.ai_usable),
-      saving: false,
-      deleting: false,
-      error: null,
-    });
-  }, []);
-
-  const closeMemoryEditor = useCallback(() => {
     if (isMemoryMutating) {
       return;
     }
-    setMemoryEditor((current) => ({
-      ...current,
-      visible: false,
-      error: null,
-    }));
+    setAddingMemory(true);
+    setEditingMemoryId(null);
+    setDeleteCandidateId(null);
+    setNewMemoryDraft('');
+    setNewMemoryDraftHeight(MEMORY_INPUT_MIN_HEIGHT);
+    setMemoryError(null);
   }, [isMemoryMutating]);
 
-  const handleSaveMemory = useCallback(async () => {
-    const text = memoryEditor.text.trim();
-    if (!text) {
-      setMemoryEditor((current) => ({ ...current, error: 'Add a memory first.' }));
+  const openEditMemory = useCallback((memory) => {
+    if (!memory?.can_edit || isMemoryMutating) {
       return;
     }
-    const previous = payload;
-    const draftRecord = {
-      id: memoryEditor.record?.id || `optimistic-${Date.now()}`,
-      text,
-      category: memoryEditor.category.trim() || null,
-      source: 'user',
-      ai_usable: memoryEditor.aiUsable,
-      client_visible: true,
-      can_edit: true,
-      tags: normalizeTagsText(memoryEditor.tagsText),
-    };
-    setMemoryEditor((current) => ({
-      ...current,
-      saving: true,
-      deleting: false,
-      error: null,
-    }));
-    setPayload((current) => {
-      if (memoryEditor.mode === 'edit') {
-        return {
-          ...current,
-          memories: current.memories.map((item) => (
-            item.id === draftRecord.id ? { ...item, ...draftRecord } : item
-          )),
-        };
-      }
-      return {
-        ...current,
-        memories: [draftRecord, ...current.memories],
-      };
-    });
-    try {
-      const nextPayload = memoryEditor.mode === 'edit'
-        ? await updateMyMemory({
-          accessToken,
-          memoryId: memoryEditor.record.id,
-          text,
-          category: memoryEditor.category.trim() || null,
-          aiUsable: memoryEditor.aiUsable,
-          tags: normalizeTagsText(memoryEditor.tagsText),
-        })
-        : await createMyMemory({
-          accessToken,
-          text,
-          category: memoryEditor.category.trim() || null,
-          aiUsable: memoryEditor.aiUsable,
-          tags: normalizeTagsText(memoryEditor.tagsText),
-        });
-      setPayload(normalizePayload(nextPayload));
-      setMemoryEditor((current) => ({
-        ...current,
-        visible: false,
-        saving: false,
-        deleting: false,
-      }));
-      showFeedback(memoryEditor.mode === 'edit' ? 'Memory updated.' : 'Memory added.');
-    } catch (saveError) {
-      setPayload(previous);
-      setMemoryEditor((current) => ({
-        ...current,
-        saving: false,
-        deleting: false,
-        error: saveError?.message || 'Unable to save memory.',
-      }));
-    }
-  }, [accessToken, memoryEditor, payload, showFeedback]);
+    setAddingMemory(false);
+    setEditingMemoryId(memory.id);
+    setDeleteCandidateId(null);
+    setMemoryDraft(memory?.text || '');
+    setMemoryDraftHeight(MEMORY_INPUT_MIN_HEIGHT);
+    setMemoryError(null);
+  }, [isMemoryMutating]);
 
-  const handleDeleteMemory = useCallback(async (memory) => {
+  const closeMemoryDraft = useCallback(() => {
+    if (isMemoryMutating) {
+      return;
+    }
+    setAddingMemory(false);
+    setEditingMemoryId(null);
+    setDeleteCandidateId(null);
+    setMemoryDraft('');
+    setNewMemoryDraft('');
+    setMemoryError(null);
+  }, [isMemoryMutating]);
+
+  const armDeleteMemory = useCallback((memory) => {
+    if (!memory?.can_edit || isMemoryMutating) {
+      return;
+    }
+    setAddingMemory(false);
+    setEditingMemoryId(null);
+    setDeleteCandidateId(memory.id);
+    setMemoryError(null);
+  }, [isMemoryMutating]);
+
+  const handleSaveEditedMemory = useCallback(async () => {
+    const memory = visibleMemories.find((item) => item.id === editingMemoryId);
+    const text = memoryDraft.trim();
     if (!memory?.id || !memory?.can_edit) {
       return;
     }
+    if (!text) {
+      setMemoryError('Add a fact first.');
+      return;
+    }
+
     const previous = payload;
-    setMemoryEditor((current) => ({
+    const draftRecord = {
+      ...memory,
+      text,
+      category: memory?.category || null,
+      source: memory?.source || 'user',
+      ai_usable: Boolean(memory?.ai_usable),
+      client_visible: memory?.client_visible !== false,
+      can_edit: true,
+      tags: Array.isArray(memory?.tags) ? memory.tags : [],
+    };
+    setMemorySavingId(memory.id);
+    setMemoryError(null);
+    setPayload((current) => ({
       ...current,
-      saving: false,
-      deleting: true,
-      error: null,
+      memories: current.memories.map((item) => (
+        item.id === memory.id ? draftRecord : item
+      )),
     }));
+
+    try {
+      const nextPayload = await updateMyMemory({
+        accessToken,
+        memoryId: memory.id,
+        text,
+        category: memory?.category || null,
+        aiUsable: Boolean(memory?.ai_usable),
+        tags: Array.isArray(memory?.tags) ? memory.tags : [],
+      });
+      setPayload(normalizePayload(nextPayload));
+      setEditingMemoryId(null);
+      setMemoryDraft('');
+      showFeedback('Fact updated.');
+    } catch (saveError) {
+      setPayload(previous);
+      setMemoryError(saveError?.message || 'Unable to save fact.');
+    } finally {
+      setMemorySavingId(null);
+    }
+  }, [accessToken, editingMemoryId, memoryDraft, payload, showFeedback, visibleMemories]);
+
+  const handleCreateMemory = useCallback(async () => {
+    const text = newMemoryDraft.trim();
+    if (!text) {
+      setMemoryError('Add a fact first.');
+      return;
+    }
+
+    const previous = payload;
+    const draftRecord = {
+      id: `optimistic-${Date.now()}`,
+      text,
+      category: null,
+      source: 'user',
+      ai_usable: true,
+      client_visible: true,
+      can_edit: true,
+      tags: [],
+    };
+    setMemorySavingId('new');
+    setMemoryError(null);
+    setPayload((current) => ({
+      ...current,
+      memories: [draftRecord, ...current.memories],
+    }));
+
+    try {
+      const nextPayload = await createMyMemory({
+        accessToken,
+        text,
+        category: null,
+        aiUsable: true,
+        tags: [],
+      });
+      setPayload(normalizePayload(nextPayload));
+      setAddingMemory(false);
+      setNewMemoryDraft('');
+      showFeedback('Fact added.');
+    } catch (saveError) {
+      setPayload(previous);
+      setMemoryError(saveError?.message || 'Unable to save fact.');
+    } finally {
+      setMemorySavingId(null);
+    }
+  }, [accessToken, newMemoryDraft, payload, showFeedback]);
+
+  const handleDeleteMemory = useCallback(async (memory) => {
+    if (!memory?.id || !memory?.can_edit || isMemoryMutating) {
+      return;
+    }
+
+    const previous = payload;
+    setMemoryDeletingId(memory.id);
+    setMemoryError(null);
     setPayload((current) => ({
       ...current,
       memories: current.memories.filter((item) => item.id !== memory.id),
     }));
+
     try {
       const nextPayload = await deleteMyMemory({ accessToken, memoryId: memory.id });
       setPayload(normalizePayload(nextPayload));
-      showFeedback('Memory deleted.');
-      setMemoryEditor((current) => ({
-        ...current,
-        visible: false,
-        saving: false,
-        deleting: false,
-      }));
+      setDeleteCandidateId(null);
+      showFeedback('Fact deleted.');
     } catch (deleteError) {
       setPayload(previous);
-      setMemoryEditor((current) => ({
-        ...current,
-        saving: false,
-        deleting: false,
-        error: deleteError?.message || 'Unable to delete memory.',
-      }));
+      setMemoryError(deleteError?.message || 'Unable to delete fact.');
+    } finally {
+      setMemoryDeletingId(null);
     }
-  }, [accessToken, payload, showFeedback]);
+  }, [accessToken, isMemoryMutating, payload, showFeedback]);
 
-  const visibleMemories = useMemo(() => payload.memories || [], [payload.memories]);
-  const summaryText = useMemo(() => buildSummaryText(payload), [payload]);
+  const whyHeaderAction = whySaving ? (
+    <ActivityIndicator size="small" color={modeTheme.accentStrong} />
+  ) : whyEditing ? (
+    <Pressable
+      testID="algorithm-why-save"
+      accessibilityRole="button"
+      accessibilityLabel="Save Why"
+      hitSlop={8}
+      onPress={handleSaveWhy}
+      style={({ pressed }) => [
+        styles.whyHeaderAction,
+        { borderColor: modeTheme.cardBorder, backgroundColor: modeTheme.accentSoft },
+        pressed && styles.pressedControl,
+      ]}
+    >
+      <Feather name="save" size={18} color={modeTheme.accentStrong} />
+    </Pressable>
+  ) : (
+    <Feather name="edit-2" size={18} color={modeTheme.accentStrong} />
+  );
 
   if (loading) {
     return (
-      <SafeScreen includeTopInset={false} style={styles.screen} atmosphere="home">
-        <LoadingSkeleton bottomInset={bottomInset} />
+      <SafeScreen includeTopInset={false} style={[styles.screen, { backgroundColor: modeTheme.background }]}>
+        <ModeAtmosphere modeTheme={modeTheme} />
+        <LoadingSkeleton bottomInset={bottomInset} modeTheme={modeTheme} />
       </SafeScreen>
     );
   }
 
   if (error) {
     return (
-      <SafeScreen includeTopInset={false} style={styles.screen} atmosphere="home">
+      <SafeScreen includeTopInset={false} style={[styles.screen, { backgroundColor: modeTheme.background }]}>
+        <ModeAtmosphere modeTheme={modeTheme} />
         <View style={[styles.errorWrap, { paddingTop: Math.max(insets.top, theme.spacing[3]) }]}>
-          <GlassSurface state="elevated" radius="xl" padding={theme.spacing[4]} style={styles.errorCard}>
+          <GlassSurface
+            state="elevated"
+            radius="xl"
+            padding={theme.spacing[4]}
+            style={styles.errorCard}
+            fillColor={modeTheme.cardFill}
+            borderColor={modeTheme.cardBorder}
+          >
             <ModeText variant="h3">Your MODE algorithm is offline.</ModeText>
             <ModeText variant="bodySm" tone="secondary" style={styles.errorText}>
               {error?.message || 'Unable to load your coaching context.'}
@@ -422,18 +750,20 @@ export default function AlgorithmHomeScreen({
   }
 
   return (
-    <SafeScreen includeTopInset={false} style={styles.screen} atmosphere="home">
-      <ScrollView
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={[
-          styles.content,
-          {
-            paddingTop: Math.max(insets.top, theme.spacing[3]),
-            paddingBottom: bottomInset + theme.spacing[5],
-          },
-        ]}
-      >
+    <SafeScreen includeTopInset={false} style={[styles.screen, { backgroundColor: modeTheme.background }]}>
+      <ModeAtmosphere modeTheme={modeTheme} />
+      <KeyboardAvoidingView behavior="padding" style={styles.keyboardAvoidingView}>
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[
+            styles.content,
+            {
+              paddingTop: Math.max(insets.top, theme.spacing[3]),
+              paddingBottom: bottomInset + theme.spacing[5],
+            },
+          ]}
+        >
         <View style={styles.phoneFrame}>
           {whyEditing ? (
             <Pressable
@@ -444,44 +774,43 @@ export default function AlgorithmHomeScreen({
             />
           ) : null}
           <View style={styles.headerBlock}>
-            <ModeText variant="h2" style={styles.title}>Your MODE algorithm</ModeText>
+            <ModeText testID="algorithm-home-greeting" variant="bodySm" tone="secondary" style={styles.greetingText}>
+              {`Good morning, ${greetingName}`}
+            </ModeText>
+            <ModeText variant="caption" tone="tertiary" style={styles.dateText}>
+              {headerDate}
+            </ModeText>
+            <ModeText
+              testID="algorithm-home-mode-label"
+              variant="display"
+              style={[styles.modeTitle, { color: modeTheme.accentStrong }]}
+              numberOfLines={2}
+            >
+              {modeTheme.displayLabel}
+            </ModeText>
+            <ModeText
+              testID="algorithm-home-readiness-score"
+              variant="caption"
+              style={[styles.readinessText, { color: readinessTextColor }]}
+            >
+              {`${readinessLabel} readiness`}
+            </ModeText>
           </View>
 
-          <AlgorithmSummaryCard summaryText={summaryText} />
-
-          <GlassSurface
+          <AlgorithmSummaryCard
             testID="algorithm-why-card"
-            state="elevated"
-            radius="xl"
-            padding={theme.spacing[3]}
+            textTestID="algorithm-summary-card-text"
+            label="Your Why"
+            summaryText={summaryText}
+            animate={!whyEditing}
+            accentColor={modeTheme.accentStrong}
+            fillColor={modeTheme.cardFill}
+            borderColor={modeTheme.cardBorder}
+            headerTrailing={whyHeaderAction}
             style={[styles.sectionCard, whyEditing && styles.whyCardEditing]}
-            contentStyle={styles.sectionCardContent}
             onPress={whyEditing ? undefined : openWhyEditor}
+            accessibilityLabel="Edit your Why"
           >
-            <View style={styles.sectionHeaderRow}>
-              <View style={styles.sectionHeaderCopy}>
-                <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Your Why</ModeText>
-              </View>
-              {whySaving ? (
-                <ActivityIndicator size="small" color={theme.colors.accent.primary} />
-              ) : whyEditing ? (
-                <Pressable
-                  testID="algorithm-why-save"
-                  accessibilityRole="button"
-                  accessibilityLabel="Save Why"
-                  hitSlop={8}
-                  onPress={handleSaveWhy}
-                  style={({ pressed }) => [
-                    styles.whyHeaderAction,
-                    pressed && styles.whyHeaderActionPressed,
-                  ]}
-                >
-                  <Feather name="save" size={18} color={theme.colors.text.secondary} />
-                </Pressable>
-              ) : (
-                <Feather name="edit-2" size={18} color={theme.colors.text.secondary} />
-              )}
-            </View>
             {whyEditing ? (
               <>
                 <ModeInput
@@ -499,45 +828,98 @@ export default function AlgorithmHomeScreen({
                 />
                 {whyError ? <ModeText variant="caption" tone="error">{whyError}</ModeText> : null}
               </>
-            ) : (
-              <ModeText variant="h3" style={styles.sectionTitle}>
-                {payload.user_why ? payload.user_why : 'Add the reason this matters.'}
-              </ModeText>
-            )}
-          </GlassSurface>
+            ) : null}
+          </AlgorithmSummaryCard>
 
           <View style={styles.memorySection}>
-            <View style={styles.sectionHeaderRow}>
+            <View style={styles.memoryHeaderRow}>
               <View style={styles.sectionHeaderCopy}>
                 <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>
-                  What your coach knows about you
+                  Memory
+                </ModeText>
+                <ModeText variant="bodySm" tone="secondary" style={styles.memorySubtitle}>
+                  Facts your coach can use today
                 </ModeText>
               </View>
             </View>
+            <ModeText
+              testID="algorithm-memory-management-hint"
+              variant="caption"
+              style={[styles.memoryHint, { color: theme.memoryChip.hintText }]}
+            >
+              Tap to edit. Hold to remove.
+            </ModeText>
+            {memoryError && !addingMemory && !editingMemoryId ? (
+              <ModeText variant="caption" tone="error" style={styles.memorySectionError}>
+                {memoryError}
+              </ModeText>
+            ) : null}
             <View style={styles.memoryPillWrap}>
               {visibleMemories.map((memory) => (
-                <MemoryPill
-                  key={memory.id}
-                  memory={memory}
-                  onPress={() => openEditMemory(memory)}
-                />
+                editingMemoryId === memory.id ? (
+                  <InlineMemoryEditor
+                    key={memory.id}
+                    testID={`algorithm-memory-editor-${memory.id}`}
+                    value={memoryDraft}
+                    onChangeText={setMemoryDraft}
+                    onSave={handleSaveEditedMemory}
+                    onCancel={closeMemoryDraft}
+                    inputHeight={memoryDraftHeight}
+                    onContentSizeChange={(event) => setMemoryDraftHeight(getInputHeightFromEvent(event))}
+                    saving={memorySavingId === memory.id}
+                    placeholder="What should your coach remember?"
+                    error={memoryError}
+                    modeTheme={modeTheme}
+                  />
+                ) : (
+                  <MemoryFactChip
+                    key={memory.id}
+                    memory={memory}
+                    modeTheme={modeTheme}
+                    onPress={() => openEditMemory(memory)}
+                    onLongPress={() => armDeleteMemory(memory)}
+                    onDelete={() => handleDeleteMemory(memory)}
+                    isDeleteCandidate={deleteCandidateId === memory.id}
+                    isMutating={memoryDeletingId === memory.id}
+                  />
+                )
               ))}
-              <GlassSurface
-                testID="algorithm-add-memory"
-                state="default"
-                radius="pill"
-                padding={0}
-                onPress={openAddMemory}
-                style={styles.addMemoryPill}
-                contentStyle={styles.addMemoryContent}
-                borderColor={theme.colors.glass.borderActive}
-                fillColor={theme.colors.glass.base}
-              >
-                <Feather name="plus" size={15} color={theme.colors.accent.primary} />
-                <ModeText variant="bodySm" tone="accent" style={styles.addMemoryText}>Add memory</ModeText>
-              </GlassSurface>
+              {addingMemory ? (
+                <InlineMemoryEditor
+                  testID="algorithm-memory-editor-new"
+                  value={newMemoryDraft}
+                  onChangeText={setNewMemoryDraft}
+                  onSave={handleCreateMemory}
+                  onCancel={closeMemoryDraft}
+                  inputHeight={newMemoryDraftHeight}
+                  onContentSizeChange={(event) => setNewMemoryDraftHeight(getInputHeightFromEvent(event))}
+                  saving={memorySavingId === 'new'}
+                  placeholder="Add a fact for your coach"
+                  error={memoryError}
+                  modeTheme={modeTheme}
+                />
+              ) : (
+                <GlassSurface
+                  testID="algorithm-add-memory"
+                  state="default"
+                  radius={12}
+                  padding={0}
+                  disabled={isMemoryMutating}
+                  onPress={openAddMemory}
+                  accessibilityLabel="Add fact"
+                  style={styles.addMemoryPill}
+                  contentStyle={styles.addMemoryContent}
+                  borderColor={modeTheme.cardBorder}
+                  fillColor={theme.memoryChip.fillActive}
+                >
+                  <Feather name="plus" size={15} color={modeTheme.accentStrong} />
+                  <ModeText variant="bodySm" style={[styles.addMemoryText, { color: modeTheme.accentStrong }]}>
+                    Add fact
+                  </ModeText>
+                </GlassSurface>
+              )}
             </View>
-            {visibleMemories.length === 0 ? (
+            {visibleMemories.length === 0 && !addingMemory ? (
               <ModeText variant="bodySm" tone="secondary" style={styles.emptyMemoryText}>
                 Add what your coach should remember for better motivation and accountability.
               </ModeText>
@@ -550,83 +932,8 @@ export default function AlgorithmHomeScreen({
             </GlassSurface>
           ) : null}
         </View>
-      </ScrollView>
-
-      <SystemActionSheet
-        visible={memoryEditor.visible}
-        onClose={closeMemoryEditor}
-        testID="algorithm-memory-sheet"
-      >
-        <View style={styles.sheetTitleRow}>
-          <View style={styles.sheetTitleCopy}>
-            <ModeText variant="label" tone="tertiary" style={styles.sheetLabel}>
-              {memoryEditor.mode === 'edit' ? 'Edit memory' : 'Add memory'}
-            </ModeText>
-            {memoryEditor.record?.source ? (
-              <ModeText variant="caption" tone="secondary">
-                {SOURCE_LABELS[memoryEditor.record.source] || 'User'}
-              </ModeText>
-            ) : null}
-          </View>
-          <ModeButton
-            testID="algorithm-memory-save"
-            title={memoryEditor.saving ? 'Saving...' : 'Save'}
-            size="sm"
-            disabled={isMemoryMutating}
-            onPress={handleSaveMemory}
-            style={styles.sheetHeaderSaveButton}
-          />
-        </View>
-        <ModeInput
-          testID="algorithm-memory-input"
-          value={memoryEditor.text}
-          onChangeText={(text) => setMemoryEditor((current) => ({ ...current, text }))}
-          placeholder="What should your coach remember?"
-          multiline
-          autoFocus
-          editable={!isMemoryMutating}
-          style={styles.sheetInput}
-        />
-        <ModeInput
-          testID="algorithm-memory-category-input"
-          value={memoryEditor.category}
-          onChangeText={(category) => setMemoryEditor((current) => ({ ...current, category }))}
-          placeholder="Category (optional)"
-          editable={!isMemoryMutating}
-        />
-        <ModeInput
-          testID="algorithm-memory-tags-input"
-          value={memoryEditor.tagsText}
-          onChangeText={(tagsText) => setMemoryEditor((current) => ({ ...current, tagsText }))}
-          placeholder="Tags, comma separated"
-          editable={!isMemoryMutating}
-        />
-        <View style={styles.toggleRow}>
-          <View style={styles.toggleCopy}>
-            <ModeText variant="bodySm">Use this for coaching</ModeText>
-          </View>
-          <GlassToggle
-            testID="algorithm-memory-ai-toggle"
-            value={memoryEditor.aiUsable}
-            onValueChange={(aiUsable) => setMemoryEditor((current) => ({ ...current, aiUsable }))}
-            disabled={isMemoryMutating}
-          />
-        </View>
-        {memoryEditor.error ? <ModeText variant="caption" tone="error">{memoryEditor.error}</ModeText> : null}
-        {memoryEditor.mode === 'edit' && memoryEditor.record?.can_edit ? (
-          <View style={styles.sheetActions}>
-            <ModeButton
-              testID="algorithm-memory-delete"
-              title={memoryEditor.deleting ? 'Deleting...' : 'Delete'}
-              variant="destructive"
-              size="sm"
-              disabled={isMemoryMutating}
-              onPress={() => handleDeleteMemory(memoryEditor.record)}
-              style={styles.sheetDeleteButton}
-            />
-          </View>
-        ) : null}
-      </SystemActionSheet>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeScreen>
   );
 }
@@ -636,9 +943,31 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: theme.colors.background.app,
   },
+  modeAtmosphere: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+  },
+  keyboardAvoidingView: {
+    flex: 1,
+  },
+  primaryGlow: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 300,
+  },
+  secondaryGlow: {
+    position: 'absolute',
+    top: 100,
+    left: 0,
+    right: 0,
+    height: 200,
+  },
   content: {
     paddingHorizontal: theme.spacing[3],
     alignItems: 'center',
+    position: 'relative',
   },
   phoneFrame: {
     width: '100%',
@@ -647,20 +976,40 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   headerBlock: {
-    minHeight: 44,
-    justifyContent: 'center',
+    marginBottom: 0,
+  },
+  greetingText: {
+    marginBottom: 1,
+    letterSpacing: 0,
+  },
+  dateText: {
+    marginBottom: 12,
+    letterSpacing: 0,
+  },
+  modeTitle: {
+    marginTop: 0,
+    marginBottom: 4,
+    letterSpacing: 0,
+  },
+  readinessText: {
+    marginTop: 0,
+    marginBottom: 20,
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: '500',
+    letterSpacing: 0,
   },
   title: {
     color: theme.colors.text.primary,
     letterSpacing: 0,
   },
   sectionCard: {
-    marginTop: theme.spacing[3],
+    marginTop: 0,
   },
   whyDismissBackdrop: {
     ...StyleSheet.absoluteFillObject,
     zIndex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0)',
+    backgroundColor: theme.colors.utility.transparent,
   },
   whyCardEditing: {
     position: 'relative',
@@ -668,15 +1017,19 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   whyHeaderAction: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  whyHeaderActionPressed: {
+  pressedControl: {
     opacity: theme.interaction.pressedOpacity,
     transform: [{ scale: theme.interaction.pressedScale }],
+  },
+  disabledControl: {
+    opacity: theme.interaction.disabledOpacity,
   },
   sectionCardContent: {
     gap: theme.spacing[2],
@@ -705,19 +1058,48 @@ const styles = StyleSheet.create({
   memorySection: {
     marginTop: theme.spacing[4],
   },
+  memoryHeaderRow: {
+    minHeight: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[2],
+  },
+  memorySubtitle: {
+    letterSpacing: 0,
+  },
+  memoryHint: {
+    marginTop: theme.spacing[1],
+    letterSpacing: 0,
+  },
+  memorySectionError: {
+    marginTop: theme.spacing[1],
+  },
   memoryPillWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: theme.spacing[1],
+    gap: 7,
     marginTop: theme.spacing[2],
+  },
+  memoryChipWrap: {
+    maxWidth: '100%',
+    position: 'relative',
+    alignSelf: 'flex-start',
+  },
+  memoryPillTouch: {
+    maxWidth: '100%',
+    alignSelf: 'flex-start',
   },
   memoryPill: {
     maxWidth: '100%',
+    alignSelf: 'flex-start',
+    borderRadius: 12,
   },
   memoryPillContent: {
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: 10,
-    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    minHeight: 36,
+    justifyContent: 'center',
   },
   memoryPillTop: {
     flexDirection: 'row',
@@ -726,8 +1108,63 @@ const styles = StyleSheet.create({
   },
   memoryPillText: {
     flexShrink: 1,
-    fontWeight: '700',
+    fontWeight: '500',
     letterSpacing: 0,
+  },
+  memoryEditorChip: {
+    flex: 1,
+    minWidth: 220,
+    maxWidth: '100%',
+    alignSelf: 'flex-start',
+  },
+  memoryEditorContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: theme.spacing[1],
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: theme.spacing[1],
+  },
+  memoryInlineInput: {
+    minWidth: 142,
+    flexGrow: 1,
+    flexShrink: 1,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.body2.fontSize,
+    lineHeight: theme.typography.body2.lineHeight,
+    fontWeight: '400',
+    textAlignVertical: 'center',
+  },
+  memoryEditorActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  memoryIconButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: theme.colors.glass.borderDefault,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  memoryEditorError: {
+    width: '100%',
+    letterSpacing: 0,
+  },
+  deleteBadge: {
+    position: 'absolute',
+    top: -8,
+    right: -8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: theme.memoryChip.badgeFill,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   memoryPillMeta: {
     flexDirection: 'row',
@@ -744,14 +1181,15 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.text.tertiary,
   },
   addMemoryPill: {
-    minHeight: 44,
+    minHeight: 36,
+    borderRadius: 12,
   },
   addMemoryContent: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
   addMemoryText: {
     fontWeight: '700',

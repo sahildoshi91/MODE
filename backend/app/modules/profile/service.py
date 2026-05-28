@@ -209,13 +209,18 @@ class ProfileService:
             client_id=client_id,
             memory_id=memory_id,
         )
-        if self.delete_repository.get_algorithm_memory(
+        persisted = self.delete_repository.get_algorithm_memory(
             trainer_id=trainer_id,
             client_id=client_id,
             memory_id=memory_id,
-        ):
+        )
+        if persisted and not self._coerce_bool(self._memory_value(persisted).get("is_archived"), default=False):
             raise ProfilePersistenceVerificationError(PROFILE_MEMORY_DELETE_VERIFICATION_FAILED_DETAIL)
-        return self.get_algorithm_home(client_id, trainer_id)
+
+        algorithm_home = self.get_algorithm_home(client_id, trainer_id)
+        if any(memory.id == memory_id for memory in algorithm_home.memories):
+            raise ProfilePersistenceVerificationError(PROFILE_MEMORY_DELETE_VERIFICATION_FAILED_DETAIL)
+        return algorithm_home
 
     def _persist_summary_if_needed(self, client_id: str, profile: dict, summary: str) -> dict:
         if profile.get("algorithm_summary") == summary and profile.get("algorithm_summary_updated_at"):

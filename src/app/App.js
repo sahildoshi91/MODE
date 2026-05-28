@@ -366,6 +366,28 @@ function getMillisecondsUntilNextLocalDay(now = new Date()) {
   return Math.max(1000, next.getTime() - now.getTime() + 1000);
 }
 
+function buildTodayCheckinContext(source) {
+  const container = source?.checkin && typeof source.checkin === 'object'
+    ? source.checkin
+    : source;
+  if (!container || typeof container !== 'object') {
+    return null;
+  }
+  const assignedMode = container.assigned_mode || container.mode || null;
+  const checkinScore = typeof container.checkin_score === 'number'
+    ? container.checkin_score
+    : (typeof container.score === 'number' ? container.score : null);
+  if (!assignedMode && checkinScore === null) {
+    return null;
+  }
+  return {
+    checkin_id: container.checkin_id || container.id || null,
+    checkin_date: container.checkin_date || container.date || source?.date || null,
+    assigned_mode: assignedMode,
+    checkin_score: checkinScore,
+  };
+}
+
 function AppShell() {
   const insets = useSafeAreaInsets();
   const [session, setSession] = useState(null);
@@ -396,6 +418,7 @@ function AppShell() {
   const [shellLoadingState, setShellLoadingState] = useState(null);
   const [algorithmMemoryRefreshToken, setAlgorithmMemoryRefreshToken] = useState(0);
   const [clientLocalDate, setClientLocalDate] = useState(() => getCheckinLocalDateString());
+  const [todayCheckinContext, setTodayCheckinContext] = useState(null);
   const [coachCheckinGate, setCoachCheckinGate] = useState({
     status: 'idle',
     date: null,
@@ -437,6 +460,7 @@ function AppShell() {
     setAssignmentStatus(null);
     setAssignmentStatusError(null);
     setClientLocalDate(getCheckinLocalDateString());
+    setTodayCheckinContext(null);
     setCoachCheckinGate({
       status: 'idle',
       date: null,
@@ -626,6 +650,10 @@ function AppShell() {
     return () => {
       clearTimeout(timer);
     };
+  }, [clientLocalDate]);
+
+  useEffect(() => {
+    setTodayCheckinContext(null);
   }, [clientLocalDate]);
 
   useEffect(() => {
@@ -948,6 +976,7 @@ function AppShell() {
         if (!isActive) {
           return;
         }
+        setTodayCheckinContext(status?.completed ? buildTodayCheckinContext(status) : null);
         setCoachCheckinGate({
           status: status?.completed ? 'complete' : 'required',
           date: clientLocalDate,
@@ -1230,6 +1259,7 @@ function AppShell() {
       date: clientLocalDate,
       error: null,
     });
+    setTodayCheckinContext(buildTodayCheckinContext(result));
     setChatLaunchContext({
       entrypoint: 'post_checkin',
       checkin_context: result,
@@ -1452,6 +1482,10 @@ function AppShell() {
   const hasAssignedTrainer = Boolean(assignedTrainerId);
   const legacyCoachLaunchEntrypoint = resolvedTrainerCoachLaunchContext?.entrypoint;
   const clientCoachCurrentMode = resolvedTrainerCoachLaunchContext?.checkin_context?.assigned_mode || null;
+  const homeCurrentMode = todayCheckinContext?.assigned_mode || clientCoachCurrentMode;
+  const homeReadinessScore = todayCheckinContext?.checkin_score
+    ?? resolvedTrainerCoachLaunchContext?.checkin_context?.checkin_score
+    ?? null;
   const shouldUseLegacyCoachChat = Boolean(
     isTrainerViewer
     || (
@@ -1510,6 +1544,9 @@ function AppShell() {
                 accessToken={session.access_token}
                 bottomInset={contentBottomInset}
                 memoryRefreshToken={algorithmMemoryRefreshToken}
+                currentMode={homeCurrentMode}
+                readinessScore={homeReadinessScore}
+                viewerDisplayName={assignmentStatus?.viewer_display_name || null}
               />
             ) : null}
 
@@ -1643,6 +1680,7 @@ function AppShell() {
           bottomInset={navBottomInset}
           role={isTrainerViewer ? 'trainer' : 'client'}
           trainerNavMode={isTrainerViewer && useCoachOsTrainerNav ? 'coach_os' : 'legacy'}
+          activeMode={homeCurrentMode}
         />
       ) : null}
     </View>

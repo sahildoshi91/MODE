@@ -124,6 +124,54 @@ class StaleDeleteMemoryRepository(FakeProfileRepository):
         ) or {}
 
 
+class SoftArchiveDeleteMemoryRepository(FakeProfileRepository):
+    def delete_algorithm_memory(self, *, trainer_id, client_id, memory_id):
+        memory = self.get_algorithm_memory(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            memory_id=memory_id,
+        )
+        if not memory:
+            return {}
+        value_json = memory.get("value_json")
+        value = dict(value_json) if isinstance(value_json, dict) else {}
+        value["is_archived"] = True
+        memory["value_json"] = value
+        memory["updated_at"] = "2026-05-04T13:00:00+00:00"
+        return memory
+
+
+class SelectHidesArchivedMemoryRepository(SoftArchiveDeleteMemoryRepository):
+    def get_algorithm_memory(self, *, trainer_id, client_id, memory_id):
+        memory = super().get_algorithm_memory(
+            trainer_id=trainer_id,
+            client_id=client_id,
+            memory_id=memory_id,
+        )
+        if not memory:
+            return None
+        value_json = memory.get("value_json")
+        value = value_json if isinstance(value_json, dict) else {}
+        if bool(value.get("is_archived")):
+            return None
+        return memory
+
+    def delete_algorithm_memory(self, *, trainer_id, client_id, memory_id):
+        for memory in self.memories:
+            if (
+                memory.get("id") == memory_id
+                and memory.get("trainer_id") == trainer_id
+                and memory.get("client_id") == client_id
+            ):
+                value_json = memory.get("value_json")
+                value = dict(value_json) if isinstance(value_json, dict) else {}
+                value["is_archived"] = True
+                memory["value_json"] = value
+                memory["updated_at"] = "2026-05-04T13:00:00+00:00"
+                return memory
+        return {}
+
+
 class RecordingDeleteMemoryRepository(FakeProfileRepository):
     def __init__(self, shared_memories):
         super().__init__()
@@ -386,6 +434,41 @@ class ProfileAlgorithmServiceTests(unittest.TestCase):
             )
 
         self.assertEqual(str(context.exception), PROFILE_MEMORY_DELETE_VERIFICATION_FAILED_DETAIL)
+
+    def test_client_memory_delete_verifies_soft_archive_is_hidden(self):
+        repository = SoftArchiveDeleteMemoryRepository()
+        repository.memories = [memory_row("user-visible", text="Motivated by family.")]
+        service = ProfileService(repository)
+
+        result = service.delete_algorithm_memory(
+            client_id="client-1",
+            trainer_id="trainer-1",
+            memory_id="user-visible",
+        )
+
+        self.assertTrue(repository.memories[0]["value_json"]["is_archived"])
+        self.assertEqual(result.memories, [])
+
+    def test_client_memory_delete_accepts_archived_row_hidden_by_select_policy(self):
+        repository = SelectHidesArchivedMemoryRepository()
+        repository.memories = [memory_row("user-visible", text="Motivated by family.")]
+        service = ProfileService(repository)
+
+        result = service.delete_algorithm_memory(
+            client_id="client-1",
+            trainer_id="trainer-1",
+            memory_id="user-visible",
+        )
+
+        self.assertTrue(repository.memories[0]["value_json"]["is_archived"])
+        self.assertEqual(result.memories, [])
+        self.assertIsNone(
+            repository.get_algorithm_memory(
+                trainer_id="trainer-1",
+                client_id="client-1",
+                memory_id="user-visible",
+            )
+        )
 
     def test_client_cannot_edit_trainer_owned_memory(self):
         repository = FakeProfileRepository()

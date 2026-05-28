@@ -152,12 +152,26 @@ def memory_rows_to_chunks(rows: list[dict[str, Any]]) -> list[str]:
         value = row.get("value_json") if isinstance(row, dict) else None
         if not isinstance(value, dict):
             continue
+        if memory_row_is_archived(row):
+            continue
         text = value.get("text") or value.get("summary") or value.get("description")
         if not text:
             continue
         source = row.get("memory_type") or value.get("category") or "memory"
         chunks.append(f"{source}: {_clip_words(text, 40)}")
     return chunks
+
+
+def memory_row_is_archived(row: dict[str, Any]) -> bool:
+    value = row.get("value_json") if isinstance(row, dict) else None
+    if not isinstance(value, dict):
+        return False
+    archived = value.get("is_archived")
+    if isinstance(archived, bool):
+        return archived
+    if isinstance(archived, str):
+        return archived.strip().lower() in {"true", "1", "yes"}
+    return bool(archived)
 
 
 def _readiness_from_context(client_context: dict[str, Any]) -> ReadinessSummary:

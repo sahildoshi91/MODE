@@ -20,7 +20,12 @@ from app.modules.conversation.cache import (
     trainer_persona_key,
     user_digest_key,
 )
-from app.modules.conversation.context import ChatContext, build_user_digest, render_context_prompt
+from app.modules.conversation.context import (
+    ChatContext,
+    build_user_digest,
+    memory_rows_to_chunks,
+    render_context_prompt,
+)
 from app.modules.conversation.intent import IntentRouter, IntentRoute, Route
 from app.modules.conversation.memory import evaluate_memory_write
 from app.modules.conversation.security import sanitize_user_input
@@ -77,9 +82,22 @@ class FakeMemoryRepository:
         return [
             {
                 "memory_type": "injury",
+                "memory_key": "old-knee",
+                "value_json": {
+                    "ai_usable": True,
+                    "is_archived": True,
+                    "text": "Archived knee note should not be used.",
+                },
+            },
+            {
+                "memory_type": "injury",
                 "memory_key": "knee",
-                "value_json": {"ai_usable": True, "text": "Avoid deep knee flexion."},
-            }
+                "value_json": {
+                    "ai_usable": True,
+                    "is_archived": False,
+                    "text": "Avoid deep knee flexion.",
+                },
+            },
         ]
 
 
@@ -249,6 +267,40 @@ class ChatPipelinePrimitiveTests(unittest.TestCase):
 
         self.assertEqual(chunks, ["injury: Avoid deep knee flexion."])
         self.assertEqual(service.trainer_intelligence_service.repository.calls, [("trainer-1", "client-1", 5)])
+
+    def test_chat_context_memory_helpers_skip_archived_rows(self):
+        rows = [
+            {
+                "memory_type": "preference",
+                "value_json": {
+                    "ai_usable": True,
+                    "is_archived": True,
+                    "text": "Archived preference should not be retrieved.",
+                },
+            },
+            {
+                "memory_type": "preference",
+                "value_json": {
+                    "ai_usable": True,
+                    "is_archived": False,
+                    "text": "Active preference should be retrieved.",
+                },
+            },
+        ]
+
+        self.assertEqual(
+            memory_rows_to_chunks(rows),
+            ["preference: Active preference should be retrieved."],
+        )
+
+    def test_behavioral_notes_skip_archived_memory(self):
+        service = ConversationService.__new__(ConversationService)
+        service.trainer_intelligence_service = FakeTrainerIntelligenceService()
+
+        notes = service._load_behavioral_notes("trainer-1", "client-1")
+
+        self.assertEqual(notes, ["Avoid deep knee flexion."])
+        self.assertEqual(service.trainer_intelligence_service.repository.calls, [("trainer-1", "client-1", 8)])
 
     def test_semantic_cache_scoped_by_trainer(self):
         one = semantic_cache_key("trainer-1", "How much protein?")

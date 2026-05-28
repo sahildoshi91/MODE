@@ -42,6 +42,7 @@ describe('LiquidBottomNav premium contract', () => {
           role="trainer"
           trainerNavMode="coach_os"
           bottomInset={0}
+          activeMode="BEAST"
         />,
       );
     });
@@ -55,7 +56,34 @@ describe('LiquidBottomNav premium contract', () => {
     expect(selectedStyle.shadowOpacity).toBeGreaterThan(0);
 
     const selectedLabel = tree.root.find((node) => node.props?.children === 'Clients');
-    expect(flatten(selectedLabel.props.style).color).toBe(theme.colors.nav.activeLabel);
+    expect(flatten(selectedLabel.props.style).color).toBe(theme.modes.beast.accentStrong);
+
+    const activePill = tree.root.findByProps({ testID: 'liquid-bottom-nav-active-pill' });
+    expect(flatten(activePill.props.style).backgroundColor).toBe(theme.modes.beast.navFill);
+    expect(flatten(activePill.props.style).borderColor).toBe(theme.modes.beast.navBorder);
+
+    act(() => tree.unmount());
+  });
+
+  it('falls back to the default mode accent for unknown modes', () => {
+    let tree;
+    act(() => {
+      tree = renderer.create(
+        <LiquidBottomNav
+          activeTab="home"
+          onTabChange={() => {}}
+          role="client"
+          bottomInset={0}
+          activeMode="mystery"
+        />,
+      );
+    });
+
+    const selectedLabel = tree.root.find((node) => node.props?.children === 'Home');
+    expect(flatten(selectedLabel.props.style).color).toBe(theme.modes.fallback.accentStrong);
+
+    const activePill = tree.root.findByProps({ testID: 'liquid-bottom-nav-active-pill' });
+    expect(flatten(activePill.props.style).backgroundColor).toBe(theme.modes.fallback.navFill);
 
     act(() => tree.unmount());
   });

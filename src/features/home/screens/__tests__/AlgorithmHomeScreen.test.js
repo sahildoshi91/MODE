@@ -39,9 +39,11 @@ import renderer, { act } from 'react-test-renderer';
 
 import AlgorithmHomeScreen from '../AlgorithmHomeScreen';
 import {
+  createMyMemory,
   deleteMyMemory,
   getMyAlgorithm,
   patchMyWhy,
+  updateMyMemory,
 } from '../../services/algorithmApi';
 
 let currentTree = null;
@@ -109,15 +111,37 @@ describe('AlgorithmHomeScreen inline Why editor', () => {
     const tree = await renderScreen();
 
     expect(tree.root.findAllByProps({ testID: 'algorithm-why-sheet' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'algorithm-memory-sheet' })).toHaveLength(0);
+    expect(findPressableByTestID(tree.root, 'algorithm-why-card')).toBeTruthy();
 
     await act(async () => {
-      tree.root.findByProps({ testID: 'algorithm-why-card' }).props.onPress();
+      findPressableByTestID(tree.root, 'algorithm-why-card').props.onPress();
     });
 
     expect(tree.root.findByProps({ testID: 'algorithm-why-input' }).props.value).toBe('');
     expect(tree.root.findAllByProps({ testID: 'algorithm-why-cancel' })).toHaveLength(0);
     expect(findPressableByTestID(tree.root, 'algorithm-why-save')).toBeTruthy();
     expect(tree.root.findAllByProps({ testID: 'algorithm-why-sheet' })).toHaveLength(0);
+  });
+
+  it('renders a mode-aware morning header with readiness', async () => {
+    const tree = await renderScreen(buildAlgorithmPayload(), {
+      currentMode: 'BUILD',
+      readinessScore: 20,
+      viewerDisplayName: 'Ari Mode',
+    });
+
+    expect(readNodeText(tree.root.findByProps({ testID: 'algorithm-home-greeting' }))).toContain('Ari');
+    expect(readNodeText(tree.root.findByProps({ testID: 'algorithm-home-mode-label' }))).toBe('BUILD MODE');
+    expect(readNodeText(tree.root.findByProps({ testID: 'algorithm-home-readiness-score' }))).toContain('20 / 25 readiness');
+  });
+
+  it('cleans raw username-style display names before greeting', async () => {
+    const tree = await renderScreen(buildAlgorithmPayload(), {
+      viewerDisplayName: 'test.user',
+    });
+
+    expect(readNodeText(tree.root.findByProps({ testID: 'algorithm-home-greeting' }))).toBe('Good morning, Test');
   });
 
   it('finishes the top summary from Your Why when the API summary is stale-truncated', async () => {
@@ -155,7 +179,7 @@ describe('AlgorithmHomeScreen inline Why editor', () => {
     }));
 
     await act(async () => {
-      tree.root.findByProps({ testID: 'algorithm-why-card' }).props.onPress();
+      findPressableByTestID(tree.root, 'algorithm-why-card').props.onPress();
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'algorithm-why-input' }).props.onChangeText('Dance until I am 100.');
@@ -180,7 +204,7 @@ describe('AlgorithmHomeScreen inline Why editor', () => {
     }));
 
     await act(async () => {
-      tree.root.findByProps({ testID: 'algorithm-why-card' }).props.onPress();
+      findPressableByTestID(tree.root, 'algorithm-why-card').props.onPress();
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'algorithm-why-input' }).props.onChangeText('Different draft');
@@ -203,7 +227,7 @@ describe('AlgorithmHomeScreen inline Why editor', () => {
     patchMyWhy.mockRejectedValueOnce(new Error('Request failed'));
 
     await act(async () => {
-      tree.root.findByProps({ testID: 'algorithm-why-card' }).props.onPress();
+      findPressableByTestID(tree.root, 'algorithm-why-card').props.onPress();
     });
     await act(async () => {
       tree.root.findByProps({ testID: 'algorithm-why-input' }).props.onChangeText('Draft why.');
@@ -244,7 +268,7 @@ describe('AlgorithmHomeScreen inline Why editor', () => {
     expect(tree.root.findByProps({ testID: 'algorithm-memory-pill-memory-six-pack' })).toBeTruthy();
   });
 
-  it('puts memory Save in the sheet header and dismisses by tapping outside the sheet', async () => {
+  it('edits memory facts inline and keeps meta labels clean', async () => {
     const tree = await renderScreen(buildAlgorithmPayload({
       memories: [
         {
@@ -257,23 +281,87 @@ describe('AlgorithmHomeScreen inline Why editor', () => {
         },
       ],
     }));
+    updateMyMemory.mockResolvedValueOnce(buildAlgorithmPayload({
+      memories: [
+        {
+          id: 'memory-1',
+          text: 'Prefers outdoor morning workouts',
+          source: 'user',
+          ai_usable: true,
+          can_edit: true,
+          tags: ['schedule'],
+        },
+      ],
+    }));
+
+    expect(readNodeText(tree.root)).not.toContain('AI usable');
+    expect(tree.root.findAllByProps({ testID: 'algorithm-memory-sheet' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'algorithm-memory-manage-toggle' })).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'algorithm-memory-management-hint' })).toBeTruthy();
 
     await act(async () => {
       tree.root.findByProps({ testID: 'algorithm-memory-pill-memory-1' }).props.onPress();
     });
 
     expect(findPressableByTestID(tree.root, 'algorithm-memory-save')).toBeTruthy();
-    expect(findPressableByTestID(tree.root, 'algorithm-memory-delete')).toBeTruthy();
-    expect(tree.root.findAllByProps({ testID: 'algorithm-memory-archive' })).toHaveLength(0);
-    expect(readNodeText(tree.root)).not.toContain('Archive');
-    expect(readNodeText(tree.root)).not.toContain('Cancel');
-
+    expect(tree.root.findByProps({ testID: 'algorithm-memory-input' }).props.value).toBe('Prefers morning workouts');
     await act(async () => {
-      findPressableByTestID(tree.root, 'algorithm-memory-sheet-backdrop').props.onPress();
+      tree.root.findByProps({ testID: 'algorithm-memory-input' }).props.onChangeText('Prefers outdoor morning workouts');
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'algorithm-memory-save').props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
     });
 
+    expect(updateMyMemory).toHaveBeenCalledWith({
+      accessToken: 'token-123',
+      memoryId: 'memory-1',
+      text: 'Prefers outdoor morning workouts',
+      category: null,
+      aiUsable: true,
+      tags: ['schedule'],
+    });
     expect(tree.root.findAllByProps({ testID: 'algorithm-memory-input' })).toHaveLength(0);
-    expect(deleteMyMemory).not.toHaveBeenCalled();
+    expect(readNodeText(tree.root)).toContain('Prefers outdoor morning workouts');
+  });
+
+  it('adds a new fact inline through the existing API', async () => {
+    const tree = await renderScreen();
+    createMyMemory.mockResolvedValueOnce(buildAlgorithmPayload({
+      memories: [
+        {
+          id: 'memory-new',
+          text: 'Needs a low-friction evening option',
+          source: 'user',
+          ai_usable: true,
+          can_edit: true,
+          tags: [],
+        },
+      ],
+    }));
+
+    await act(async () => {
+      findPressableByTestID(tree.root, 'algorithm-add-memory').props.onPress();
+    });
+    await act(async () => {
+      tree.root.findByProps({ testID: 'algorithm-memory-input' }).props.onChangeText('Needs a low-friction evening option');
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'algorithm-memory-save').props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(createMyMemory).toHaveBeenCalledWith({
+      accessToken: 'token-123',
+      text: 'Needs a low-friction evening option',
+      category: null,
+      aiUsable: true,
+      tags: [],
+    });
+    expect(readNodeText(tree.root)).toContain('Needs a low-friction evening option');
+    expect(tree.root.findAllByProps({ testID: 'algorithm-memory-sheet' })).toHaveLength(0);
   });
 
   it('deletes editable memories through the API and removes them from the home state', async () => {
@@ -291,8 +379,11 @@ describe('AlgorithmHomeScreen inline Why editor', () => {
     }));
     deleteMyMemory.mockResolvedValueOnce(buildAlgorithmPayload({ memories: [] }));
 
+    expect(tree.root.findAllByProps({ testID: 'algorithm-memory-manage-toggle' })).toHaveLength(0);
+    expect(tree.root.findByProps({ testID: 'algorithm-memory-management-hint' })).toBeTruthy();
+
     await act(async () => {
-      tree.root.findByProps({ testID: 'algorithm-memory-pill-memory-1' }).props.onPress();
+      tree.root.findByProps({ testID: 'algorithm-memory-pill-memory-1' }).props.onLongPress();
     });
     await act(async () => {
       findPressableByTestID(tree.root, 'algorithm-memory-delete').props.onPress();
@@ -305,6 +396,38 @@ describe('AlgorithmHomeScreen inline Why editor', () => {
       memoryId: 'memory-1',
     });
     expect(tree.root.findAllByProps({ testID: 'algorithm-memory-pill-memory-1' })).toHaveLength(0);
-    expect(readNodeText(tree.root)).toContain('Memory deleted.');
+    expect(readNodeText(tree.root)).toContain('Fact deleted.');
+  });
+
+  it('restores a memory chip and shows the backend error when delete verification fails', async () => {
+    const tree = await renderScreen(buildAlgorithmPayload({
+      memories: [
+        {
+          id: 'memory-1',
+          text: 'Prefers morning workouts',
+          source: 'user',
+          ai_usable: true,
+          can_edit: true,
+          tags: ['schedule'],
+        },
+      ],
+    }));
+    deleteMyMemory.mockRejectedValueOnce(new Error('Memory could not be verified after deleting. Please retry.'));
+
+    await act(async () => {
+      tree.root.findByProps({ testID: 'algorithm-memory-pill-memory-1' }).props.onLongPress();
+    });
+    await act(async () => {
+      findPressableByTestID(tree.root, 'algorithm-memory-delete').props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(deleteMyMemory).toHaveBeenCalledWith({
+      accessToken: 'token-123',
+      memoryId: 'memory-1',
+    });
+    expect(tree.root.findByProps({ testID: 'algorithm-memory-pill-memory-1' })).toBeTruthy();
+    expect(readNodeText(tree.root)).toContain('Memory could not be verified after deleting. Please retry.');
   });
 });

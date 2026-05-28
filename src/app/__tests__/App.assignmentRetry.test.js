@@ -375,6 +375,7 @@ describe('App assignment status retry behavior', () => {
 
     const nav = tree.root.findByType('MockLiquidBottomNav');
     expect(nav.props.activeTab).toBe('coach');
+    expect(nav.props.activeMode).toBe('BUILD');
 
     const chat = tree.root.findByType('MockChatShell');
     expect(chat.props.role).toBe('client');
@@ -417,6 +418,7 @@ describe('App assignment status retry behavior', () => {
     const chat = tree.root.findByType('MockChatShell');
     expect(chat.props.sessionType).toBe('atlas_client_chat');
     expect(tree.root.findByType('MockLiquidBottomNav').props.activeTab).toBe('coach');
+    expect(tree.root.findByType('MockLiquidBottomNav').props.activeMode).toBe('BUILD');
 
     await act(async () => {
       tree.unmount();
