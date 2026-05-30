@@ -1,16 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Linking, ScrollView, StyleSheet } from 'react-native';
 import Constants from 'expo-constants';
 
 import {
-  GlassSurface,
-  GlassToggle,
   HeaderBar,
   ModeButton,
-  ModeCard,
-  ModeInput,
-  ModeText,
   SafeScreen,
+  SystemNavRow,
+  SystemSectionCard,
+  SystemSectionHeader,
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { getApiDebugInfo } from '../../../services/apiBaseUrl';
@@ -20,64 +18,44 @@ import {
   patchTrainerSettingsMe,
 } from '../services/profileApi';
 import {
-  ASSISTANT_DISPLAY_NAME_MAX_LENGTH,
   prepareAssistantDisplayNameForSave,
   resolveAssistantDisplayName,
 } from '../../messaging';
 import {
-  AI_FITNESS_DISCLAIMER,
   getLegalLinks,
   getLegalLinksFallbackText,
 } from '../../../config/legalLinks';
-import { formatIsoWeekdaySummary } from '../../trainerClients/utils/scheduleResolver';
+import AccountSettingsScreen from './AccountSettingsScreen';
+import AIGuidanceScreen from './AIGuidanceScreen';
+import DeleteAccountScreen from './DeleteAccountScreen';
+import DiagnosticsScreen from './DiagnosticsScreen';
+import LegalSupportScreen from './LegalSupportScreen';
+import PersonalizationScreen from './PersonalizationScreen';
+import TrainerDefaultsScreen from './TrainerDefaultsScreen';
+import TrainerScheduleScreen from './TrainerScheduleScreen';
+
+const PROFILE_SETTINGS_VIEW = {
+  ROOT: 'root',
+  ACCOUNT: 'account',
+  PERSONALIZATION: 'personalization',
+  TRAINER_SCHEDULE: 'trainer_schedule',
+  TRAINER_DEFAULTS: 'trainer_defaults',
+  AI_GUIDANCE: 'ai_guidance',
+  LEGAL_SUPPORT: 'legal_support',
+  DIAGNOSTICS: 'diagnostics',
+  DELETE_ACCOUNT: 'delete_account',
+};
+
+const SHOW_ACCOUNT_DIAGNOSTICS = (
+  (typeof __DEV__ === 'boolean' && __DEV__)
+  || String(process.env.EXPO_PUBLIC_SHOW_ACCOUNT_DIAGNOSTICS || '').trim().toLowerCase() === 'true'
+);
 
 function valueOrFallback(value, fallback = 'Not available') {
   if (typeof value === 'string' && value.trim().length > 0) {
     return value;
   }
   return fallback;
-}
-
-function formatExceptionDate(value) {
-  if (!value) {
-    return 'Unknown date';
-  }
-  const parsed = new Date(`${value}T00:00:00`);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleDateString(undefined, {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-  });
-}
-
-function SettingToggle({ label, description, enabled, onToggle }) {
-  return (
-    <GlassSurface
-      state={enabled ? 'active' : 'default'}
-      radius="s"
-      padding={theme.spacing[2]}
-      onPress={onToggle}
-      highlight={false}
-      style={[
-        styles.toggleRow,
-        enabled && styles.toggleRowEnabled,
-      ]}
-      contentStyle={styles.toggleRowContent}
-      fillColor={enabled ? theme.colors.nav.activeBg : theme.colors.glass.base}
-      borderColor={enabled ? theme.colors.nav.activeBorder : theme.colors.glass.borderDefault}
-    >
-      <View style={styles.toggleCopy}>
-        <ModeText variant="bodySm">{label}</ModeText>
-        <ModeText variant="caption" tone="secondary">{description}</ModeText>
-      </View>
-      <View pointerEvents="none">
-        <GlassToggle value={enabled} onValueChange={() => {}} />
-      </View>
-    </GlassSurface>
-  );
 }
 
 export default function ProfileScreen({
@@ -93,12 +71,13 @@ export default function ProfileScreen({
   const trainerName = valueOrFallback(assignmentStatus?.assigned_trainer_display_name, 'No trainer assigned');
   const appVersion = valueOrFallback(Constants.expoConfig?.version, 'dev');
   const environment = __DEV__ ? 'Development' : 'Production';
-  const showDiagnostics = __DEV__;
+  const showDiagnostics = SHOW_ACCOUNT_DIAGNOSTICS;
   const isTrainerViewer = assignmentStatus?.viewer_role === 'trainer';
 
+  const [viewStack, setViewStack] = useState([{ key: PROFILE_SETTINGS_VIEW.ROOT, params: null }]);
   const [tonePreference, setTonePreference] = useState(true);
   const [reminderPreference, setReminderPreference] = useState(true);
-  const [trainerSettings, setTrainerSettings] = useState(null);
+  const [, setTrainerSettings] = useState(null);
   const [trainerSettingsDraft, setTrainerSettingsDraft] = useState({
     defaultMeetingLocation: '',
     autoFillMeetingLocation: true,
@@ -126,6 +105,23 @@ export default function ProfileScreen({
   const assistantDisplayNameCharacterCount = String(
     trainerSettingsDraft.assistantDisplayName || '',
   ).trim().length;
+  const currentView = viewStack[viewStack.length - 1] || { key: PROFILE_SETTINGS_VIEW.ROOT, params: null };
+
+  const pushView = useCallback((key, params = null) => {
+    setViewStack((current) => [...current, { key, params }]);
+  }, []);
+
+  const popView = useCallback(() => {
+    setViewStack((current) => (current.length > 1 ? current.slice(0, -1) : current));
+  }, []);
+
+  const handleToggleTonePreference = useCallback(() => {
+    setTonePreference((current) => !current);
+  }, []);
+
+  const handleToggleReminderPreference = useCallback(() => {
+    setReminderPreference((current) => !current);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -275,6 +271,106 @@ export default function ProfileScreen({
     }
   };
 
+  const commonChildProps = {
+    bottomInset,
+    onBack: popView,
+  };
+
+  if (currentView.key === PROFILE_SETTINGS_VIEW.ACCOUNT) {
+    return (
+      <AccountSettingsScreen
+        {...commonChildProps}
+        email={email}
+        trainerName={trainerName}
+      />
+    );
+  }
+
+  if (currentView.key === PROFILE_SETTINGS_VIEW.PERSONALIZATION) {
+    return (
+      <PersonalizationScreen
+        {...commonChildProps}
+        tonePreference={tonePreference}
+        reminderPreference={reminderPreference}
+        onToggleTonePreference={handleToggleTonePreference}
+        onToggleReminderPreference={handleToggleReminderPreference}
+      />
+    );
+  }
+
+  if (currentView.key === PROFILE_SETTINGS_VIEW.TRAINER_SCHEDULE && !isTrainerViewer) {
+    return (
+      <TrainerScheduleScreen
+        {...commonChildProps}
+        trainerSchedule={trainerSchedule}
+        trainerScheduleError={trainerScheduleError}
+        isLoadingTrainerSchedule={isLoadingTrainerSchedule}
+      />
+    );
+  }
+
+  if (currentView.key === PROFILE_SETTINGS_VIEW.TRAINER_DEFAULTS && isTrainerViewer) {
+    return (
+      <TrainerDefaultsScreen
+        {...commonChildProps}
+        trainerSettingsDraft={trainerSettingsDraft}
+        onTrainerSettingsDraftChange={setTrainerSettingsDraft}
+        resolvedAssistantPreviewName={resolvedAssistantPreviewName}
+        assistantDisplayNameCharacterCount={assistantDisplayNameCharacterCount}
+        isLoadingTrainerSettings={isLoadingTrainerSettings}
+        isSavingTrainerSettings={isSavingTrainerSettings}
+        trainerSettingsError={trainerSettingsError}
+        trainerSettingsSuccess={trainerSettingsSuccess}
+        onSaveTrainerSettings={handleSaveTrainerSettings}
+      />
+    );
+  }
+
+  if (currentView.key === PROFILE_SETTINGS_VIEW.AI_GUIDANCE) {
+    return (
+      <AIGuidanceScreen
+        {...commonChildProps}
+      />
+    );
+  }
+
+  if (currentView.key === PROFILE_SETTINGS_VIEW.LEGAL_SUPPORT) {
+    return (
+      <LegalSupportScreen
+        {...commonChildProps}
+        legalLinks={legalLinks}
+        legalLinksFallbackText={legalLinksFallbackText}
+        legalLinksError={legalLinksError}
+        onLegalLinkPress={handleLegalLinkPress}
+      />
+    );
+  }
+
+  if (currentView.key === PROFILE_SETTINGS_VIEW.DIAGNOSTICS && showDiagnostics) {
+    return (
+      <DiagnosticsScreen
+        {...commonChildProps}
+        environment={environment}
+        appVersion={appVersion}
+        apiBase={valueOrFallback(debugInfo.resolvedApiBaseUrl)}
+      />
+    );
+  }
+
+  if (currentView.key === PROFILE_SETTINGS_VIEW.DELETE_ACCOUNT) {
+    return (
+      <DeleteAccountScreen
+        {...commonChildProps}
+        deleteConfirmationText={deleteConfirmationText}
+        onDeleteConfirmationTextChange={setDeleteConfirmationText}
+        deleteAccountError={deleteAccountError}
+        deleteAccountNotice={deleteAccountNotice}
+        isDeletingAccount={isDeletingAccount}
+        onDeleteAccountPress={handleDeleteAccountPress}
+      />
+    );
+  }
+
   return (
     <SafeScreen
       includeTopInset={false}
@@ -293,262 +389,86 @@ export default function ProfileScreen({
           { paddingBottom: theme.spacing[4] + bottomInset },
         ]}
       >
-        <ModeCard variant="hero">
-          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Account</ModeText>
-          <View style={styles.row}>
-            <ModeText variant="bodySm" tone="secondary">Email</ModeText>
-            <ModeText variant="bodySm">{email}</ModeText>
-          </View>
-          <View style={styles.divider} />
-          <View style={styles.row}>
-            <ModeText variant="bodySm" tone="secondary">Coach</ModeText>
-            <ModeText variant="bodySm">{trainerName}</ModeText>
-          </View>
-        </ModeCard>
-
-        <ModeCard variant="tinted">
-          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Personalization</ModeText>
-          <SettingToggle
-            label="Supportive coaching tone"
-            description="Keep language calm, clear, and emotionally intelligent."
-            enabled={tonePreference}
-            onToggle={() => setTonePreference((current) => !current)}
+        <SystemSectionCard>
+          <SystemSectionHeader title="Profile" />
+          <SystemNavRow
+            icon="user"
+            title="Account"
+            subtitle="Email and coach details."
+            onPress={() => pushView(PROFILE_SETTINGS_VIEW.ACCOUNT)}
+            testID="profile-settings-nav-account"
           />
-          <SettingToggle
-            label="Gentle progress reminders"
-            description="Use low-pressure nudges focused on consistency."
-            enabled={reminderPreference}
-            onToggle={() => setReminderPreference((current) => !current)}
+          <SystemNavRow
+            icon="sliders"
+            title="Personalization"
+            subtitle="Coaching tone and reminder style."
+            onPress={() => pushView(PROFILE_SETTINGS_VIEW.PERSONALIZATION)}
+            testID="profile-settings-nav-personalization"
           />
-        </ModeCard>
+        </SystemSectionCard>
 
-        <ModeCard variant="surface">
-          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>AI Fitness Guidance</ModeText>
-          <ModeText testID="profile-ai-fitness-disclaimer" variant="bodySm" tone="secondary">
-            {AI_FITNESS_DISCLAIMER}
-          </ModeText>
-        </ModeCard>
-
-        {isTrainerViewer ? (
-          <ModeCard variant="surface">
-            <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Trainer Session Defaults</ModeText>
-            <ModeText variant="bodySm" tone="secondary">
-              Set your default session behavior and assistant identity for your workspace.
-            </ModeText>
-
-            <ModeInput
-              value={trainerSettingsDraft.defaultMeetingLocation}
-              onChangeText={(value) => setTrainerSettingsDraft((current) => ({
-                ...current,
-                defaultMeetingLocation: value,
-              }))}
-              placeholder="Default meeting location (e.g., My Gym)"
-              style={styles.settingsInput}
+        <SystemSectionCard>
+          <SystemSectionHeader title="Training" />
+          {isTrainerViewer ? (
+            <SystemNavRow
+              icon="settings"
+              title="Trainer Defaults"
+              subtitle="Session location and assistant identity."
+              onPress={() => pushView(PROFILE_SETTINGS_VIEW.TRAINER_DEFAULTS)}
+              testID="profile-settings-nav-trainer-defaults"
             />
-
-            <View style={styles.assistantNameSection}>
-              <ModeText variant="bodySm">Name your assistant</ModeText>
-              <ModeText variant="caption" tone="secondary">
-                This is what your internal coaching AI will be called in your workspace.
-              </ModeText>
-              <ModeInput
-                value={trainerSettingsDraft.assistantDisplayName}
-                onChangeText={(value) => setTrainerSettingsDraft((current) => ({
-                  ...current,
-                  assistantDisplayName: value,
-                }))}
-                placeholder="Coach AI"
-                maxLength={ASSISTANT_DISPLAY_NAME_MAX_LENGTH}
-                style={styles.assistantNameInput}
-              />
-              <View style={styles.assistantPreviewCard}>
-                <View style={styles.assistantPreviewRow}>
-                  <ModeText variant="caption" tone="tertiary">Trainer</ModeText>
-                  <ModeText variant="caption" tone="tertiary">{resolvedAssistantPreviewName}</ModeText>
-                </View>
-                <ModeText variant="caption" tone="secondary">
-                  Preview: Trainer and {resolvedAssistantPreviewName}
-                </ModeText>
-              </View>
-              <ModeText variant="caption" tone="tertiary">
-                {`${assistantDisplayNameCharacterCount}/${ASSISTANT_DISPLAY_NAME_MAX_LENGTH} characters`}
-              </ModeText>
-            </View>
-
-            <SettingToggle
-              label="Auto-fill for client sessions"
-              description="When enabled, your default location is used when a client has no override."
-              enabled={Boolean(trainerSettingsDraft.autoFillMeetingLocation)}
-              onToggle={() => setTrainerSettingsDraft((current) => ({
-                ...current,
-                autoFillMeetingLocation: !current.autoFillMeetingLocation,
-              }))}
+          ) : (
+            <SystemNavRow
+              icon="calendar"
+              title="Trainer Schedule"
+              subtitle="Weekly days, location, and exceptions."
+              onPress={() => pushView(PROFILE_SETTINGS_VIEW.TRAINER_SCHEDULE)}
+              testID="profile-settings-nav-trainer-schedule"
             />
+          )}
+        </SystemSectionCard>
 
-            <ModeButton
-              title={isSavingTrainerSettings ? 'Saving...' : 'Save Trainer Defaults'}
-              variant="secondary"
-              disabled={isSavingTrainerSettings || isLoadingTrainerSettings}
-              onPress={handleSaveTrainerSettings}
-              style={styles.settingsAction}
+        <SystemSectionCard>
+          <SystemSectionHeader title="App" />
+          <SystemNavRow
+            icon="alert-circle"
+            title="AI Fitness Guidance"
+            subtitle="Important safety context."
+            onPress={() => pushView(PROFILE_SETTINGS_VIEW.AI_GUIDANCE)}
+            testID="profile-settings-nav-ai-guidance"
+          />
+          <SystemNavRow
+            icon="external-link"
+            title="Legal & Support"
+            subtitle="Documents and help."
+            onPress={() => pushView(PROFILE_SETTINGS_VIEW.LEGAL_SUPPORT)}
+            testID="profile-settings-nav-legal-support"
+          />
+          {showDiagnostics ? (
+            <SystemNavRow
+              icon="activity"
+              title="Diagnostics"
+              subtitle="Environment, version, and API base."
+              onPress={() => pushView(PROFILE_SETTINGS_VIEW.DIAGNOSTICS)}
+              testID="profile-settings-nav-diagnostics"
             />
-
-            {isLoadingTrainerSettings ? (
-              <ModeText variant="caption" tone="secondary">Loading trainer defaults...</ModeText>
-            ) : null}
-            {trainerSettings ? (
-              <View style={styles.trainerDefaultsSummary}>
-                <ModeText variant="caption" tone="secondary">
-                  Current default location: {valueOrFallback(trainerSettings.default_meeting_location, 'Not set')}
-                </ModeText>
-                <ModeText variant="caption" tone="secondary">
-                  Assistant name: {resolveAssistantDisplayName(trainerSettings.assistant_display_name)}
-                </ModeText>
-              </View>
-            ) : null}
-            {trainerSettingsError ? (
-              <ModeText variant="caption" tone="error">{trainerSettingsError}</ModeText>
-            ) : null}
-            {trainerSettingsSuccess ? (
-              <ModeText variant="caption" tone="secondary">{trainerSettingsSuccess}</ModeText>
-            ) : null}
-          </ModeCard>
-        ) : (
-          <ModeCard variant="surface">
-            <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Trainer Schedule</ModeText>
-            {isLoadingTrainerSchedule ? (
-              <ModeText variant="bodySm" tone="secondary">Loading trainer schedule...</ModeText>
-            ) : null}
-            {!isLoadingTrainerSchedule && trainerScheduleError ? (
-              <ModeText variant="bodySm" tone="error">{trainerScheduleError}</ModeText>
-            ) : null}
-            {!isLoadingTrainerSchedule && !trainerScheduleError ? (
-              <>
-                <ModeText variant="bodySm" tone="secondary">
-                  Trainer: {valueOrFallback(trainerSchedule?.trainer_display_name, 'Not assigned')}
-                </ModeText>
-                <ModeText variant="bodySm">
-                  Weekly Days: {formatIsoWeekdaySummary(trainerSchedule?.recurring_weekdays)}
-                </ModeText>
-                <ModeText variant="bodySm" tone="secondary">
-                  Typical Location: {valueOrFallback(trainerSchedule?.resolved_default_meeting_location, 'Not set')}
-                </ModeText>
-                {Array.isArray(trainerSchedule?.upcoming_exceptions) && trainerSchedule.upcoming_exceptions.length > 0 ? (
-                  <View style={styles.trainerScheduleList}>
-                    {trainerSchedule.upcoming_exceptions.map((exception) => (
-                      <ModeText
-                        key={`${exception.client_id || trainerSchedule?.client_id}-${exception.session_date}`}
-                        variant="caption"
-                        tone="secondary"
-                      >
-                        • {formatExceptionDate(exception.session_date)}: {exception.exception_type}
-                        {exception.meeting_location_override ? ` @ ${exception.meeting_location_override}` : ''}
-                      </ModeText>
-                    ))}
-                  </View>
-                ) : (
-                  <ModeText variant="caption" tone="secondary">No upcoming exceptions.</ModeText>
-                )}
-                <ModeText variant="caption" tone="tertiary">
-                  This section is view-only. Schedule edits are trainer-managed.
-                </ModeText>
-              </>
-            ) : null}
-          </ModeCard>
-        )}
-
-        {showDiagnostics ? (
-          <ModeCard variant="surface">
-            <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Diagnostics</ModeText>
-            <View style={styles.row}>
-              <ModeText variant="bodySm" tone="secondary">Environment</ModeText>
-              <ModeText variant="bodySm">{environment}</ModeText>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.row}>
-              <ModeText variant="bodySm" tone="secondary">Version</ModeText>
-              <ModeText variant="bodySm">{appVersion}</ModeText>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.row}>
-              <ModeText variant="bodySm" tone="secondary">API Base</ModeText>
-              <ModeText variant="bodySm" style={styles.apiText}>{valueOrFallback(debugInfo.resolvedApiBaseUrl)}</ModeText>
-            </View>
-          </ModeCard>
-        ) : null}
-
-        <ModeCard variant="surface">
-          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Legal & Support</ModeText>
-          <View testID="profile-legal-links" style={styles.legalLinksRow}>
-            {legalLinks.map((link, index) => (
-              <React.Fragment key={link.id}>
-                {index > 0 ? (
-                  <ModeText variant="caption" tone="tertiary" style={styles.legalSeparator}>
-                    |
-                  </ModeText>
-                ) : null}
-                <Pressable
-                  accessibilityRole="link"
-                  accessibilityLabel={link.label}
-                  accessibilityHint={link.isConfigured ? undefined : `Set ${link.envVar} to enable this link.`}
-                  disabled={!link.isConfigured}
-                  onPress={() => handleLegalLinkPress(link)}
-                  testID={`profile-legal-link-${link.id}`}
-                  style={styles.legalLinkPressable}
-                >
-                  <ModeText variant="bodySm" tone={link.isConfigured ? 'accent' : 'tertiary'}>
-                    {link.label}
-                  </ModeText>
-                </Pressable>
-              </React.Fragment>
-            ))}
-          </View>
-          {legalLinksFallbackText ? (
-            <ModeText
-              testID="profile-legal-links-fallback"
-              variant="caption"
-              tone="tertiary"
-              style={styles.legalFallback}
-            >
-              {legalLinksFallbackText}
-            </ModeText>
           ) : null}
-          {legalLinksError ? (
-            <ModeText variant="caption" tone="error" style={styles.legalFallback}>
-              {legalLinksError}
-            </ModeText>
-          ) : null}
-        </ModeCard>
+        </SystemSectionCard>
 
-        <ModeCard variant="surface">
-          <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Account Deletion</ModeText>
-          <ModeText variant="bodySm" tone="secondary">
-            Submits a permanent deletion request for your account, sessions, chat history, files, and linked training data. Processing may continue after sign-out.
-          </ModeText>
-          <ModeInput
-            value={deleteConfirmationText}
-            onChangeText={setDeleteConfirmationText}
-            placeholder="Type DELETE to confirm"
-            autoCapitalize="characters"
-            style={styles.settingsInput}
+        <SystemSectionCard style={styles.dangerCard}>
+          <SystemSectionHeader title="Danger Zone" />
+          <SystemNavRow
+            icon="trash-2"
+            title="Delete Account"
+            subtitle="Permanent deletion request."
+            onPress={() => pushView(PROFILE_SETTINGS_VIEW.DELETE_ACCOUNT)}
+            testID="profile-settings-nav-delete-account"
           />
-          {deleteAccountError ? (
-            <ModeText variant="caption" tone="error">{deleteAccountError}</ModeText>
-          ) : null}
-          {deleteAccountNotice ? (
-            <ModeText variant="caption" tone="secondary">{deleteAccountNotice}</ModeText>
-          ) : null}
-          <ModeButton
-            title={isDeletingAccount ? 'Submitting Request...' : 'Submit Deletion Request'}
-            variant="destructive"
-            disabled={isDeletingAccount}
-            onPress={handleDeleteAccountPress}
-          />
-        </ModeCard>
+        </SystemSectionCard>
 
         <ModeButton
           title="Sign out"
-          variant="destructive"
+          variant="ghost"
           onPress={onSignOut}
           size="lg"
         />
@@ -564,95 +484,10 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: theme.spacing[3],
     paddingTop: theme.spacing[3],
-    gap: theme.spacing[2],
+    gap: theme.spacing[3],
   },
-  sectionLabel: {
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: theme.spacing[2],
-  },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing[2],
-  },
-  divider: {
-    height: 1,
-    backgroundColor: theme.colors.border.soft,
-    marginVertical: theme.spacing[2],
-  },
-  apiText: {
-    flex: 1,
-    textAlign: 'right',
-  },
-  toggleRow: {
-    minHeight: 56,
-    marginBottom: theme.spacing[1],
-  },
-  toggleRowContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: theme.spacing[2],
-  },
-  toggleRowEnabled: {
-    borderColor: theme.colors.glass.borderActive,
-  },
-  toggleCopy: {
-    flex: 1,
-  },
-  settingsInput: {
-    marginTop: theme.spacing[2],
-    marginBottom: theme.spacing[1],
-  },
-  settingsAction: {
-    marginTop: theme.spacing[1],
-    marginBottom: theme.spacing[1],
-  },
-  assistantNameSection: {
-    marginBottom: theme.spacing[1],
-    gap: theme.spacing[1],
-  },
-  assistantNameInput: {
-    marginTop: 0,
-    marginBottom: 0,
-  },
-  assistantPreviewCard: {
-    borderRadius: theme.radii.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border.soft,
-    backgroundColor: theme.colors.surface.base,
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
-    gap: theme.spacing[1] - 4,
-  },
-  assistantPreviewRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  trainerDefaultsSummary: {
-    gap: theme.spacing[1] - 4,
-  },
-  legalLinksRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-  },
-  legalLinkPressable: {
-    paddingRight: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
-  },
-  legalSeparator: {
-    paddingRight: theme.spacing[2],
-  },
-  legalFallback: {
-    marginTop: theme.spacing[1] - 4,
-  },
-  trainerScheduleList: {
-    marginTop: theme.spacing[1],
-    marginBottom: theme.spacing[1],
-    gap: theme.spacing[1] - 4,
+  dangerCard: {
+    borderColor: theme.colors.feedback.errorBorder,
+    backgroundColor: theme.colors.feedback.errorBg,
   },
 });

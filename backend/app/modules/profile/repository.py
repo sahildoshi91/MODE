@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any
 
+from postgrest.types import ReturnMethod
 from supabase import Client
 
 
@@ -122,7 +123,8 @@ class ProfileRepository:
                 {
                     "value_json": value,
                     "updated_at": datetime.now(timezone.utc).isoformat(),
-                }
+                },
+                returning=ReturnMethod.minimal,
             )
             .eq("trainer_id", trainer_id)
             .eq("client_id", client_id)

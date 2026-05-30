@@ -14,6 +14,7 @@ COACH_MEMORY_POLICY_FILES = [
 ]
 ALGORITHM_HOME_POLICY_FILE = "backend/sql/20260504c_show_ai_usable_trainer_memory_on_algorithm_home.sql"
 ALGORITHM_HOME_WRITE_POLICY_FILE = "backend/sql/20260504b_your_mode_algorithm_home.sql"
+ALGORITHM_HOME_ARCHIVE_POLICY_FILE = "backend/sql/20260529b_allow_client_memory_archive_rls.sql"
 
 COACH_MEMORY_POLICY_BLOCK = re.compile(
     r"CREATE POLICY coach_memory_select_visible ON public\.coach_memory.*?;",
@@ -150,6 +151,20 @@ class SqlPolicyRegressionTests(unittest.TestCase):
         self.assertIn("public.auth_is_client_assigned_to_trainer(client_id, trainer_id)", text)
         self.assertIn("LOWER(COALESCE(value_json ->> 'source', '')) = 'user'", text)
         self.assertIn("LOWER(COALESCE(value_json ->> 'created_by', '')) = 'user'", text)
+
+    def test_algorithm_home_archive_policy_keeps_client_owned_rows_selectable(self):
+        text = (REPO_ROOT / ALGORITHM_HOME_ARCHIVE_POLICY_FILE).read_text()
+        blocks = COACH_MEMORY_POLICY_BLOCK.findall(text)
+
+        self.assertGreaterEqual(len(blocks), 1)
+        policy = blocks[0]
+        client_owned_index = policy.index("LOWER(COALESCE(value_json ->> 'source', '')) = 'user'")
+        archive_guard_index = policy.index("LOWER(COALESCE(value_json ->> 'is_archived', 'false')) <> 'true'")
+
+        self.assertLess(client_owned_index, archive_guard_index)
+        self.assertIn("public.auth_is_client_assigned_to_trainer(client_id, trainer_id)", policy)
+        self.assertIn("LOWER(COALESCE(value_json ->> 'created_by', '')) = 'user'", policy)
+        self.assertIn("COALESCE(LOWER(value_json ->> 'visibility'), 'internal_only') = 'ai_usable'", policy)
 
 
 if __name__ == "__main__":
