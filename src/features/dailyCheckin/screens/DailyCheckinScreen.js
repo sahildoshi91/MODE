@@ -335,6 +335,25 @@ function assignMode(score) {
   return 'REST';
 }
 
+function getCheckinResponseSections(result) {
+  const sections = result?.checkin_response && result.checkin_response.sections;
+  if (!Array.isArray(sections)) {
+    return null;
+  }
+  const usableSections = sections.filter((section) => (
+    section
+    && typeof section.id === 'string'
+    && typeof section.content === 'string'
+    && section.content.trim().length > 0
+  ));
+  return usableSections.length > 0 ? usableSections : null;
+}
+
+function getCheckinResponseSection(result, sectionId) {
+  const sections = getCheckinResponseSections(result);
+  return sections?.find((section) => section.id === sectionId) || null;
+}
+
 function buildFallbackResult({ date, inputs, timeToComplete }) {
   const score = calculateTotalScore(inputs);
   const mode = assignMode(score);
@@ -885,6 +904,53 @@ function ResultCard({
   showPlanActions,
 }) {
   const modeTheme = MODE_THEME[result.mode] || MODE_THEME.RECOVER;
+  const structuredSections = getCheckinResponseSections(result);
+
+  if (structuredSections) {
+    const displaySections = structuredSections.filter((section) => section.id !== 'opening');
+
+    return (
+      <GlassCard
+        style={[styles.resultCard, { borderColor: withAlpha(modeTheme.accent, 0.42) }]}
+        state="default"
+        padding={theme.spacing[2]}
+      >
+        {displaySections.map((section, index) => (
+          <View
+            key={section.id}
+            style={[
+              styles.bundleBlock,
+              index === 0 && styles.bundleBlockFirst,
+            ]}
+          >
+            <Text style={styles.bundleLabel}>{section.label || 'Coach question'}</Text>
+            <Text style={styles.bundleValue}>{section.content}</Text>
+          </View>
+        ))}
+        {showPlanActions ? (
+          <View style={styles.structuredPlanActions}>
+            <PlanActionCard
+              icon="dumbbell"
+              title="Build me a training routine"
+              subtitle={`Tailored to your ${result?.mode || 'BUILD'} mode today`}
+              accent={theme.colors.status.success}
+              onPress={onBuildTraining}
+              style={styles.bundleActionCard}
+              testID="build-training-routine-action"
+            />
+            <PlanActionCard
+              icon="food-apple-outline"
+              title="Build me a nutrition plan"
+              subtitle="Meals optimized for your readiness"
+              accent={theme.colors.accent.primary}
+              onPress={onBuildNutrition}
+              style={styles.bundleActionCard}
+            />
+          </View>
+        ) : null}
+      </GlassCard>
+    );
+  }
 
   return (
     <GlassCard
@@ -894,9 +960,9 @@ function ResultCard({
     >
       <View style={[styles.bundleBlock, styles.bundleBlockFirst]}>
         <Text style={styles.bundleLabel}>Training</Text>
-        <Text style={styles.bundleValue}>{result.training.type}</Text>
+        <Text style={styles.bundleValue}>{result?.training?.type || 'Training guidance unavailable'}</Text>
         <Text style={styles.bundleMeta}>
-          {result.training.duration} • {result.training.intensity}
+          {result?.training?.duration || '--'} • {result?.training?.intensity || '--'}
         </Text>
         {showPlanActions ? (
           <PlanActionCard
@@ -913,7 +979,7 @@ function ResultCard({
 
       <View style={styles.bundleBlock}>
         <Text style={styles.bundleLabel}>Nutrition</Text>
-        <Text style={styles.bundleValue}>{result.nutrition.rule}</Text>
+        <Text style={styles.bundleValue}>{result?.nutrition?.rule || 'Nutrition guidance unavailable'}</Text>
         {showPlanActions ? (
           <PlanActionCard
             icon="food-apple-outline"
@@ -937,12 +1003,19 @@ function HomeOverviewCard({ result, isModeInfoOpen, onToggleModeInfo, onOpenInsi
   const modeTheme = MODE_THEME[result.mode] || MODE_THEME.RECOVER;
   const scoreProgress = Math.max(0, Math.min(1, (result.score || 0) / 25));
   const modeGuideCopy = MODE_GUIDE_DETAILS[result.mode] || MODE_GUIDE_DETAILS.RECOVER;
+  const structuredOpening = getCheckinResponseSection(result, 'opening');
+  const structuredWorkout = getCheckinResponseSection(result, 'workout');
+  const structuredNutrition = getCheckinResponseSection(result, 'nutrition');
+  const structuredWhy = getCheckinResponseSection(result, 'why');
+  const hasStructuredResponse = Boolean(result.checkin_response && result.checkin_response.sections && structuredOpening);
 
   return (
     <HeroOverlayCard
       eyebrow="Today"
       title={`${result.mode} mode`}
-      body={result.mode_tagline || 'Progress today is about smart decisions, not pressure.'}
+      body={hasStructuredResponse
+        ? structuredOpening.content
+        : (result.mode_tagline || 'Progress today is about smart decisions, not pressure.')}
       style={styles.homeOverviewCard}
       testID="daily-checkin-home-overview"
     >
@@ -977,14 +1050,14 @@ function HomeOverviewCard({ result, isModeInfoOpen, onToggleModeInfo, onOpenInsi
         <View style={styles.homeOverviewMetricsStats}>
           <MiniStat
             label="Training"
-            value={result?.training?.duration || '--'}
-            helper={result?.training?.intensity || ''}
+            value={hasStructuredResponse ? 'Personalized' : (result?.training?.duration || '--')}
+            helper={hasStructuredResponse ? (structuredWorkout?.label || 'Workout guidance') : (result?.training?.intensity || '')}
             style={styles.homeMiniStat}
           />
           <MiniStat
             label="Nutrition"
-            value={result?.nutrition?.rule || '--'}
-            helper="Fuel focus"
+            value={hasStructuredResponse ? 'Personalized' : (result?.nutrition?.rule || '--')}
+            helper={hasStructuredResponse ? (structuredNutrition?.label || 'Fuel focus') : 'Fuel focus'}
             style={styles.homeMiniStat}
           />
         </View>
@@ -1014,9 +1087,11 @@ function HomeOverviewCard({ result, isModeInfoOpen, onToggleModeInfo, onOpenInsi
         </View>
       ) : null}
       <View style={styles.homeOverviewMindsetWrap}>
-        <ModeText variant="label" tone="tertiary">Mindset</ModeText>
+        <ModeText variant="label" tone="tertiary">{hasStructuredResponse ? (structuredWhy?.label || 'Your why') : 'Mindset'}</ModeText>
         <ModeText variant="h3" style={styles.homeOverviewMindsetValue}>
-          {result?.mindset?.cue || 'Show up with disciplined reps.'}
+          {hasStructuredResponse
+            ? (structuredWhy?.content || 'Today is about one clear, useful step.')
+            : (result?.mindset?.cue || 'Show up with disciplined reps.')}
         </ModeText>
       </View>
       <View style={styles.homeOverviewActions}>
@@ -4208,6 +4283,10 @@ const styles = StyleSheet.create({
   bundleActionCard: {
     marginTop: theme.spacing[2],
     minHeight: 84,
+  },
+  structuredPlanActions: {
+    gap: theme.spacing[2],
+    paddingTop: theme.spacing[2],
   },
   resultsContent: {
     paddingHorizontal: theme.spacing[3],

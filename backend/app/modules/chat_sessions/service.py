@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.core.tenancy import TrainerContext
 from app.modules.chat_sessions.repository import ChatSessionRepository
@@ -23,8 +23,12 @@ from app.modules.chat_sessions.schemas import (
 )
 from app.modules.conversation.schemas import ChatRequest
 from app.modules.conversation.service import ConversationService
+from app.modules.daily_checkins.schemas import CheckinResponseOutput
 from app.modules.motivation import build_mindset_why_cue
 from app.modules.trainer_home.service import TrainerHomeService
+
+if TYPE_CHECKING:
+    from app.modules.daily_checkins.service import DailyCheckinService
 
 
 CLIENT_SUGGESTED_ACTIONS = [
@@ -52,8 +56,10 @@ TRAINER_FLAG_REVIEW_CLIENT_WORD_LIMIT = 75
 TRAINER_FLAG_REVIEW_LLM_MODEL = "gpt-5.4"
 LEGACY_LOCAL_DAY_SEND_GRACE = timedelta(hours=12)
 CLIENT_MODE_BRIEF_SOURCE = "client_daily_mode_brief_v1"
+CLIENT_CHECKIN_RESPONSE_BRIEF_SOURCE = "client_daily_checkin_response_v1"
 CLIENT_NO_CHECKIN_SOURCE = "client_daily_no_checkin_v1"
 CLIENT_MODE_BRIEF_WORD_LIMIT = 75
+CLIENT_CHECKIN_RESPONSE_SECTION_IDS = ("opening", "workout", "nutrition", "why", "question")
 LEGACY_TO_CANONICAL_MODE = {
     "GREEN": "BEAST",
     "YELLOW": "BUILD",
@@ -117,10 +123,12 @@ class ChatSessionService:
         *,
         conversation_service: ConversationService | None = None,
         trainer_home_service: TrainerHomeService | None = None,
+        daily_checkin_service: "DailyCheckinService | None" = None,
     ):
         self.repository = repository
         self.conversation_service = conversation_service
         self.trainer_home_service = trainer_home_service
+        self.daily_checkin_service = daily_checkin_service
 
     def get_or_create_today_session(
         self,
@@ -616,6 +624,14 @@ class ChatSessionService:
             return True
         if metadata.get("checkin_id") != opening_metadata.get("checkin_id"):
             return True
+        if metadata.get("checkin_response_attempted") != opening_metadata.get("checkin_response_attempted"):
+            return True
+        if metadata.get("checkin_response_generated_at") != opening_metadata.get("checkin_response_generated_at"):
+            return True
+        if metadata.get("model_used") != opening_metadata.get("model_used"):
+            return True
+        if metadata.get("checkin_response") != opening_metadata.get("checkin_response"):
+            return True
         if metadata.get("suggested_action_chips") != opening_metadata.get("suggested_action_chips"):
             return True
         return False
@@ -681,8 +697,52 @@ class ChatSessionService:
                 },
             }
 
-        assigned_mode = self._canonical_mode(today_checkin.get("assigned_mode"))
         profile = self._safe(lambda: self.repository.get_profile(scope.client_id)) or {}
+        assigned_mode = self._canonical_mode(today_checkin.get("assigned_mode"))
+        metadata = {
+            "checkin_id": str(today_checkin.get("id") or "") or None,
+            "checkin_date": str(today_checkin.get("date") or scope.session_date.isoformat()),
+            "assigned_mode": assigned_mode,
+            "checkin_score": today_checkin.get("total_score"),
+            "has_checkin": True,
+            "has_user_why": bool(str(profile.get("user_why") or "").strip()),
+            "checkin_response_attempted": bool(today_checkin.get("checkin_response_attempted")),
+        }
+        raw_checkin_response = today_checkin.get("checkin_response")
+        checkin_response = self._coerce_opening_checkin_response(raw_checkin_response)
+        if (
+            not checkin_response
+            and raw_checkin_response is None
+            and not metadata["checkin_response_attempted"]
+            and self.daily_checkin_service
+            and scope.session_type == "client_chat"
+        ):
+            generated_response = self._backfill_client_checkin_response(scope=scope, checkin=today_checkin)
+            if generated_response:
+                today_checkin = {
+                    **today_checkin,
+                    "checkin_response": generated_response,
+                    "checkin_response_attempted": True,
+                }
+                checkin_response = self._coerce_opening_checkin_response(generated_response)
+            metadata["checkin_response_attempted"] = True
+
+        if checkin_response:
+            text = self._build_client_checkin_response_brief(checkin_response)
+            return {
+                "text": text,
+                "title": "Today's Coach Brief",
+                "summary": self._clip_summary(text),
+                "suggested_actions": CLIENT_MODE_BRIEF_ACTIONS,
+                "source": CLIENT_CHECKIN_RESPONSE_BRIEF_SOURCE,
+                "metadata": {
+                    **metadata,
+                    "checkin_response": checkin_response,
+                    "checkin_response_generated_at": checkin_response.get("generated_at"),
+                    "model_used": checkin_response.get("model_used"),
+                },
+            }
+
         text = self._build_client_mode_brief(today_checkin, profile=profile)
         return {
             "text": text,
@@ -690,15 +750,34 @@ class ChatSessionService:
             "summary": self._clip_summary(text),
             "suggested_actions": CLIENT_MODE_BRIEF_ACTIONS,
             "source": CLIENT_MODE_BRIEF_SOURCE,
-            "metadata": {
-                "checkin_id": str(today_checkin.get("id") or "") or None,
-                "checkin_date": str(today_checkin.get("date") or scope.session_date.isoformat()),
-                "assigned_mode": assigned_mode,
-                "checkin_score": today_checkin.get("total_score"),
-                "has_checkin": True,
-                "has_user_why": bool(str(profile.get("user_why") or "").strip()),
-            },
+            "metadata": metadata,
         }
+
+    def _backfill_client_checkin_response(
+        self,
+        *,
+        scope: ChatSessionScope,
+        checkin: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if scope.session_type != "client_chat" or not scope.client_id or not self.daily_checkin_service:
+            return None
+        try:
+            response = self.daily_checkin_service.ensure_checkin_response(
+                client_id=scope.client_id,
+                record=checkin,
+                trainer_id=scope.trainer_id,
+                trainer_display_name=scope.trainer_context.trainer_display_name,
+                trace_id=f"chat-opening-{checkin.get('id') or scope.session_date.isoformat()}",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Check-in response backfill failed for opening summary client_id=%s checkin_id=%s: %s",
+                scope.client_id,
+                checkin.get("id"),
+                exc,
+            )
+            return None
+        return response if isinstance(response, dict) else None
 
     def _build_client_mode_brief(self, checkin: dict[str, Any], profile: dict[str, Any] | None = None) -> str:
         mode = self._canonical_mode(checkin.get("assigned_mode")) or ""
@@ -747,6 +826,57 @@ class ChatSessionService:
             f"Mindset: {compact_mindset}\n\n"
             "What do you want to achieve today?"
         )
+
+    def _coerce_opening_checkin_response(self, value: Any) -> dict[str, Any] | None:
+        if not isinstance(value, dict):
+            return None
+        try:
+            response = CheckinResponseOutput(**value)
+        except Exception as exc:
+            logger.warning("Ignoring malformed check-in response for opening summary: %s", exc)
+            return None
+
+        sections_by_id: dict[str, dict[str, str | None]] = {}
+        for section in response.sections:
+            section_id = str(section.id or "").strip()
+            content = str(section.content or "").strip()
+            if section_id not in CLIENT_CHECKIN_RESPONSE_SECTION_IDS or not content:
+                continue
+            sections_by_id[section_id] = {
+                "id": section_id,
+                "label": section.label,
+                "content": content,
+            }
+        if any(section_id not in sections_by_id for section_id in CLIENT_CHECKIN_RESPONSE_SECTION_IDS):
+            return None
+
+        return {
+            "mode": self._canonical_mode(response.mode) or response.mode,
+            "total_score": response.total_score,
+            "sections": [sections_by_id[section_id] for section_id in CLIENT_CHECKIN_RESPONSE_SECTION_IDS],
+            "generated_at": response.generated_at.isoformat(),
+            "model_used": response.model_used,
+        }
+
+    def _build_client_checkin_response_brief(self, checkin_response: dict[str, Any]) -> str:
+        sections = {
+            str(section.get("id") or ""): section
+            for section in checkin_response.get("sections", [])
+            if isinstance(section, dict)
+        }
+        mode = self._canonical_mode(checkin_response.get("mode")) or ""
+        title = f"{mode} MODE" if mode else "Today's Coach Brief"
+        lines = [
+            title,
+            str(sections["opening"].get("content") or "").strip(),
+        ]
+        for section_id in ("workout", "nutrition", "why"):
+            section = sections[section_id]
+            label = str(section.get("label") or "").strip()
+            content = str(section.get("content") or "").strip()
+            lines.append(f"{label}: {content}" if label else content)
+        lines.extend(["", str(sections["question"].get("content") or "").strip()])
+        return "\n".join(line for line in lines if line is not None).strip()
 
     def _canonical_mode(self, value: Any) -> str | None:
         mode = str(value or "").strip().upper()

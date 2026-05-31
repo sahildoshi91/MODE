@@ -133,6 +133,85 @@ describe('ChatMessageBubble', () => {
     });
   });
 
+  it('renders structured check-in response sections for opening summaries', () => {
+    const staleOpeningText = (
+      'MODE: YELLOW, 19/25. Recovery-leaning day. Training: 20-30 min, Low, Light movement or recovery. '
+      + 'Nutrition: Protein steady, easy whole-food meals, hydrate first. '
+      + 'Mindset: Recovery done well is progress. Build Today: tap training routine or nutrition plan.'
+    );
+    let tree;
+
+    act(() => {
+      tree = renderer.create(
+        <ChatMessageBubble
+          message={{
+            id: 'opening-structured-1',
+            role: 'assistant',
+            text: staleOpeningText,
+            metadata: {
+              auto_generated_opening_summary: true,
+              summary_source: 'client_daily_checkin_response_v1',
+              checkin_response: {
+                mode: 'BUILD',
+                total_score: 20,
+                generated_at: '2026-05-30T16:00:00+00:00',
+                model_used: 'gpt-5.4-mini',
+                sections: [
+                  {
+                    id: 'opening',
+                    label: null,
+                    content: 'Build day - 20/25. Motivation is high, and your body is ready for steady work.',
+                  },
+                  {
+                    id: 'workout',
+                    label: "Today's workout",
+                    content: 'Use three controlled strength rounds where every rep stays clean.',
+                  },
+                  {
+                    id: 'nutrition',
+                    label: 'Before you train',
+                    content: 'Eat Greek yogurt with berries or eggs and toast, then hydrate before the session.',
+                  },
+                  {
+                    id: 'why',
+                    label: 'Your why',
+                    content: 'This is the kind of repeatable effort that gives you more energy at home.',
+                  },
+                  {
+                    id: 'question',
+                    label: null,
+                    content: 'Which movement do you want to build the session around?',
+                  },
+                ],
+              },
+            },
+          }}
+        />,
+      );
+    });
+
+    expect(mockAIResponseRenderer).not.toHaveBeenCalled();
+    expect(tree.root.findByProps({ testID: 'structured-opening-summary' })).toBeTruthy();
+    const renderedText = collectRenderedText(tree.root);
+    expect(renderedText).toContain('BUILD MODE');
+    expect(renderedText).toContain('Build day - 20/25. Motivation is high');
+    expect(renderedText).toContain("Today's workout");
+    expect(renderedText).toContain('Use three controlled strength rounds');
+    expect(renderedText).toContain('Before you train');
+    expect(renderedText).toContain('Greek yogurt with berries');
+    expect(renderedText).toContain('Your why');
+    expect(renderedText).toContain('Which movement do you want to build the session around?');
+    expect(renderedText).not.toContain('Stable readiness.');
+    expect(renderedText).not.toContain('30-45 min, Moderate');
+    expect(renderedText).not.toContain('Build momentum with disciplined reps.');
+    expect(renderedText).not.toContain('Recovery-leaning day.');
+    expect(renderedText).not.toContain('Protein steady');
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
   it('renders unstructured trainer opening summaries as body text', () => {
     const trainerOpeningText = (
       'You have 1 clients on the board today, with 0 missed check-ins and 0 showing low recovery patterns. '

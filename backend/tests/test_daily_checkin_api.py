@@ -13,12 +13,15 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from fastapi.testclient import TestClient
 
+from app.ai.client import TextCompletion, TokenUsage
 from app.core.auth import AuthenticatedUser, require_user
 from app.core.dependencies import get_daily_checkin_service, get_trainer_context
 from app.core.tenancy import TrainerContext
 from app.main import app
+from app.modules.daily_checkins.checkin_response import classify_signals, is_meaningful_client_why
 from app.modules.daily_checkins.repository import DailyCheckinRepository, DailyCheckinRepositoryError
 from app.modules.daily_checkins.schemas import (
+    CheckinResponseInput,
     DailyCheckinInputs,
     DailyCheckinResult,
     DailyCheckinStatusResponse,
@@ -150,12 +153,24 @@ class FakeDailyCheckinService:
             }
         return {"setup": None}
 
-    def submit_checkin(self, client_id: str, checkin_date: date, inputs: DailyCheckinInputs, time_to_complete=None):
+    def submit_checkin(
+        self,
+        client_id: str,
+        checkin_date: date,
+        inputs: DailyCheckinInputs,
+        time_to_complete=None,
+        trainer_id: str | None = None,
+        trainer_display_name: str | None = None,
+        trace_id: str | None = None,
+    ):
         self.last_submit = {
             "client_id": client_id,
             "date": checkin_date,
             "inputs": inputs.model_dump(),
             "time_to_complete": time_to_complete,
+            "trainer_id": trainer_id,
+            "trainer_display_name": trainer_display_name,
+            "trace_id": trace_id,
         }
         return DailyCheckinResult(
             id="checkin-new",
@@ -201,7 +216,7 @@ class FakeDailyCheckinService:
 
 
 class FailingDailyCheckinService(FakeDailyCheckinService):
-    def submit_checkin(self, client_id: str, checkin_date: date, inputs: DailyCheckinInputs, time_to_complete=None):
+    def submit_checkin(self, client_id: str, checkin_date: date, inputs: DailyCheckinInputs, time_to_complete=None, **_kwargs):
         raise RuntimeError("database unavailable")
 
 
@@ -470,6 +485,354 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertEqual(repository.calls[1]["assigned_mode"], "YELLOW")
         self.assertEqual(result.mode, "BUILD")
         self.assertEqual(result.score, 20)
+
+    def test_checkin_response_signal_classification_detects_contrast(self):
+        input_data = CheckinResponseInput(
+            sleep_score=4,
+            stress_score=3,
+            body_score=2,
+            nutrition_score=4,
+            motivation_score=5,
+            total_score=18,
+            mode="BUILD",
+            client_first_name="Ari",
+            client_goal="build strength",
+            client_why="Keep up with my kids on weekends.",
+            client_constraints="none stated",
+            client_experience_level="intermediate",
+            trainer_name="Coach Lee",
+            trainer_programming_philosophy="progressive overload, form first",
+            trainer_nutrition_approach="protein at every meal",
+            trainer_tone="direct and encouraging",
+        )
+
+        classification = classify_signals(input_data)
+
+        self.assertEqual(classification.signals["body"], "low")
+        self.assertEqual(classification.standout_low, "body")
+        self.assertEqual(classification.contrast_pair, "high_motivation_low_body")
+
+    def test_client_why_validation_rejects_short_and_junk_values(self):
+        self.assertFalse(is_meaningful_client_why("idk"))
+        self.assertFalse(is_meaningful_client_why("nothing much"))
+        self.assertFalse(is_meaningful_client_why("12345678901"))
+        self.assertTrue(is_meaningful_client_why("Keep up with my kids on weekends."))
+
+    def test_submit_checkin_generates_persists_and_returns_structured_response(self):
+        class FakeProfileService:
+            def get_or_create_profile(self, _client_id):
+                return {
+                    "primary_goal": "build strength",
+                    "user_why": "Keep up with my kids on weekends without feeling wiped out.",
+                    "experience_level": "intermediate",
+                    "injury_notes": "right knee gets cranky with jumps",
+                }
+
+        class FakeOpenAIClient:
+            def __init__(self):
+                self.last_kwargs = None
+
+            def create_chat_completion_with_usage(self, **kwargs):
+                self.last_kwargs = kwargs
+                return TextCompletion(
+                    text=(
+                        "Build day - 18/25. Nutrition is the low signal today, while motivation is high.\n\n"
+                        "Today's workout\n"
+                        "3-4 sets, 8-10 reps, at about 70% of your normal push. Stop each set with 2 reps left so your knee gets clean work without extra irritation. That controlled effort still supports stronger weekends with your kids.\n\n"
+                        "Before you train\n"
+                        "Eat eggs and toast, Greek yogurt with fruit, or rice and chicken 60-90 minutes before training. That fuel keeps your energy from dipping halfway through.\n\n"
+                        "Your why\n"
+                        "Today is a steady deposit into being able to play hard and still have energy left.\n\n"
+                        "Which lift will you keep the cleanest today?"
+                    ),
+                    token_usage=TokenUsage(prompt_tokens=120, completion_tokens=95, total_tokens=215),
+                )
+
+        class FakeRepository:
+            def __init__(self):
+                self.calls = []
+                self.saved_response = None
+
+            def upsert_checkin(self, payload):
+                self.calls.append("upsert")
+                return {
+                    "id": "checkin-structured",
+                    "client_id": payload["client_id"],
+                    "date": payload["date"],
+                    "inputs": payload["inputs"],
+                    "total_score": payload["total_score"],
+                    "assigned_mode": payload["assigned_mode"],
+                    "time_to_complete": payload["time_to_complete"],
+                    "completion_timestamp": payload["completion_timestamp"],
+                }
+
+            def mark_checkin_response_attempted(self, *, client_id, checkin_id):
+                self.calls.append("mark_attempted")
+                return {
+                    "id": checkin_id,
+                    "client_id": client_id,
+                    "checkin_response_attempted": True,
+                }
+
+            def update_checkin_response(self, *, client_id, checkin_id, checkin_response):
+                self.calls.append("update_response")
+                self.saved_response = checkin_response
+                return {
+                    "id": checkin_id,
+                    "client_id": client_id,
+                    "checkin_response": checkin_response,
+                    "checkin_response_attempted": True,
+                }
+
+            def get_previous_checkin(self, _client_id, _parsed_date):
+                return None
+
+            def get_client_name(self, _client_id):
+                return "Ari Mode"
+
+            def get_default_trainer_persona(self, _trainer_id):
+                return {
+                    "persona_name": "Coach Lee",
+                    "tone_description": "direct and encouraging, no fluff",
+                    "coaching_philosophy": "strength-first, form before load",
+                }
+
+            def list_active_trainer_knowledge_entries(self, _trainer_id, *, limit=12):
+                return [
+                    {
+                        "knowledge_type": "nutrition_principle",
+                        "structured_summary": "Anchor meals around protein and simple carbs before training.",
+                        "tags": ["nutrition"],
+                    }
+                ]
+
+            def list_client_coach_memory(self, *_args, **_kwargs):
+                return []
+
+        repository = FakeRepository()
+        openai_client = FakeOpenAIClient()
+        service = DailyCheckinService(
+            repository=repository,
+            profile_service=FakeProfileService(),
+            checkin_response_openai_client=openai_client,
+        )
+
+        result = service.submit_checkin(
+            client_id="client-1",
+            checkin_date=date(2026, 4, 7),
+            inputs=DailyCheckinInputs(sleep=4, stress=3, soreness=4, nutrition=2, motivation=5),
+            time_to_complete=12,
+            trainer_id="trainer-1",
+            trainer_display_name="Coach Lee",
+            trace_id="trace-1",
+        )
+
+        self.assertEqual(repository.calls, ["upsert", "mark_attempted", "update_response"])
+        self.assertIsNotNone(result.checkin_response)
+        self.assertIsNone(result.training)
+        self.assertEqual(result.checkin_response.sections[1].label, "Today's workout")
+        self.assertEqual(repository.saved_response["model_used"], "gpt-5.4-mini")
+        self.assertEqual(openai_client.last_kwargs["response_format"], "text")
+        self.assertEqual(openai_client.last_kwargs["temperature"], 0.7)
+
+    def test_submit_checkin_falls_back_static_when_client_why_is_junk(self):
+        class FakeProfileService:
+            def get_or_create_profile(self, _client_id):
+                return {
+                    "primary_goal": "strength",
+                    "user_why": "nothing much",
+                }
+
+        class FakeOpenAIClient:
+            def create_chat_completion_with_usage(self, **_kwargs):
+                raise AssertionError("LLM should not be called for junk why")
+
+        class FakeRepository:
+            def __init__(self):
+                self.calls = []
+
+            def upsert_checkin(self, payload):
+                self.calls.append("upsert")
+                return {
+                    "id": "checkin-static",
+                    "client_id": payload["client_id"],
+                    "date": payload["date"],
+                    "inputs": payload["inputs"],
+                    "total_score": payload["total_score"],
+                    "assigned_mode": payload["assigned_mode"],
+                    "time_to_complete": payload["time_to_complete"],
+                    "completion_timestamp": payload["completion_timestamp"],
+                }
+
+            def mark_checkin_response_attempted(self, *, client_id, checkin_id):
+                self.calls.append("mark_attempted")
+                return {
+                    "id": checkin_id,
+                    "client_id": client_id,
+                    "checkin_response_attempted": True,
+                }
+
+            def get_previous_checkin(self, _client_id, _parsed_date):
+                return None
+
+        repository = FakeRepository()
+        service = DailyCheckinService(
+            repository=repository,
+            profile_service=FakeProfileService(),
+            checkin_response_openai_client=FakeOpenAIClient(),
+        )
+
+        result = service.submit_checkin(
+            client_id="client-1",
+            checkin_date=date(2026, 4, 7),
+            inputs=DailyCheckinInputs(sleep=4, stress=3, soreness=4, nutrition=2, motivation=5),
+            trainer_id="trainer-1",
+        )
+
+        self.assertIsNone(result.checkin_response)
+        self.assertEqual(result.training.type, "Moderate cardio or controlled strength")
+        self.assertEqual(repository.calls, ["upsert", "mark_attempted"])
+
+    def test_ensure_checkin_response_backfills_once_when_not_attempted(self):
+        class FakeProfileService:
+            def get_or_create_profile(self, _client_id):
+                return {
+                    "primary_goal": "build strength",
+                    "user_why": "Have enough energy to play with my kids after work.",
+                    "experience_level": "intermediate",
+                }
+
+        class FakeOpenAIClient:
+            def create_chat_completion_with_usage(self, **_kwargs):
+                return TextCompletion(
+                    text=(
+                        "Build day - 18/25. Nutrition is the low signal today.\n\n"
+                        "Today's workout\n"
+                        "3 sets of 8 controlled reps at a steady effort.\n\n"
+                        "Before you train\n"
+                        "Eat Greek yogurt with berries or eggs and toast before training.\n\n"
+                        "Your why\n"
+                        "This steady work builds the energy you want after work.\n\n"
+                        "Which movement will you keep smooth today?"
+                    ),
+                    token_usage=TokenUsage(prompt_tokens=80, completion_tokens=60, total_tokens=140),
+                )
+
+        class FakeRepository:
+            def __init__(self):
+                self.calls = []
+
+            def mark_checkin_response_attempted(self, *, client_id, checkin_id):
+                self.calls.append(("mark_attempted", client_id, checkin_id))
+                return {"id": checkin_id, "client_id": client_id, "checkin_response_attempted": True}
+
+            def update_checkin_response(self, *, client_id, checkin_id, checkin_response):
+                self.calls.append(("update_response", client_id, checkin_id))
+                return {
+                    "id": checkin_id,
+                    "client_id": client_id,
+                    "checkin_response": checkin_response,
+                    "checkin_response_attempted": True,
+                }
+
+        repository = FakeRepository()
+        service = DailyCheckinService(
+            repository=repository,
+            profile_service=FakeProfileService(),
+            checkin_response_openai_client=FakeOpenAIClient(),
+        )
+
+        response = service.ensure_checkin_response(
+            client_id="client-1",
+            record={
+                "id": "checkin-backfill",
+                "date": "2026-04-07",
+                "inputs": {"sleep": 4, "stress": 3, "soreness": 4, "nutrition": 2, "motivation": 5},
+                "total_score": 18,
+                "assigned_mode": "BUILD",
+                "checkin_response": None,
+                "checkin_response_attempted": False,
+            },
+            trainer_id="trainer-1",
+        )
+
+        self.assertIsNotNone(response)
+        self.assertEqual(response["sections"][0]["id"], "opening")
+        self.assertEqual(
+            repository.calls,
+            [
+                ("mark_attempted", "client-1", "checkin-backfill"),
+                ("update_response", "client-1", "checkin-backfill"),
+            ],
+        )
+
+    def test_ensure_checkin_response_does_not_retry_after_attempt(self):
+        class FakeRepository:
+            def mark_checkin_response_attempted(self, **_kwargs):
+                raise AssertionError("attempted check-ins must not be marked again")
+
+            def update_checkin_response(self, **_kwargs):
+                raise AssertionError("attempted check-ins must not regenerate")
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+
+        response = service.ensure_checkin_response(
+            client_id="client-1",
+            record={
+                "id": "checkin-attempted",
+                "date": "2026-04-07",
+                "inputs": {"sleep": 4, "stress": 3, "soreness": 4, "nutrition": 2, "motivation": 5},
+                "total_score": 18,
+                "assigned_mode": "BUILD",
+                "checkin_response": None,
+                "checkin_response_attempted": True,
+            },
+            trainer_id="trainer-1",
+        )
+
+        self.assertIsNone(response)
+
+    def test_build_result_uses_persisted_checkin_response_without_static_copy(self):
+        record = self._build_record()
+        record["checkin_response"] = {
+            "mode": "BUILD",
+            "total_score": 18,
+            "sections": [
+                {"id": "opening", "label": None, "content": "Build day - 18/25."},
+                {"id": "workout", "label": "Today's workout", "content": "3-4 sets at steady effort."},
+                {"id": "nutrition", "label": "Before you train", "content": "Eat eggs and toast."},
+                {"id": "why", "label": "Your why", "content": "This builds durable energy."},
+                {"id": "question", "label": None, "content": "What will you keep smooth today?"},
+            ],
+            "signal_classification": {
+                "signals": {
+                    "sleep": "high",
+                    "stress": "neutral",
+                    "body": "high",
+                    "nutrition": "low",
+                    "motivation": "high",
+                },
+                "standout_low": "nutrition",
+                "standout_low_score": 2,
+                "contrast_pair": None,
+                "all_neutral": False,
+            },
+            "generated_at": "2026-04-07T16:00:00+00:00",
+            "model_used": "gpt-5.4-mini",
+            "tokens_used": {"input": 100, "output": 80, "total": 180},
+        }
+
+        class FakeRepository:
+            def get_previous_checkin(self, _client_id, _parsed_date):
+                return None
+
+        service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
+
+        result = service._build_result(record)
+
+        self.assertIsNotNone(result.checkin_response)
+        self.assertEqual(result.checkin_response.sections[0].content, "Build day - 18/25.")
+        self.assertIsNone(result.training)
 
     def test_get_status_returns_zero_streak_when_no_checkin_exists(self):
         class FakeRepository:

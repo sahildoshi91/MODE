@@ -38,6 +38,56 @@ def flag_review_briefs(text: str) -> list[str]:
     ]
 
 
+def dynamic_checkin_response() -> dict:
+    return {
+        "mode": "BUILD",
+        "total_score": 20,
+        "sections": [
+            {
+                "id": "opening",
+                "label": None,
+                "content": "Build day - 20/25. Your readiness is solid, with motivation doing the heavy lifting.",
+            },
+            {
+                "id": "workout",
+                "label": "Today's workout",
+                "content": "Do three steady strength rounds at a pace where your last two reps stay clean.",
+            },
+            {
+                "id": "nutrition",
+                "label": "Before you train",
+                "content": "Have Greek yogurt with berries or eggs and toast, then keep water nearby.",
+            },
+            {
+                "id": "why",
+                "label": "Your why",
+                "content": "Today's controlled work is another deposit toward feeling capable with your family.",
+            },
+            {
+                "id": "question",
+                "label": None,
+                "content": "Which lift do you want to anchor today's session around?",
+            },
+        ],
+        "signal_classification": {
+            "signals": {
+                "sleep": "high",
+                "stress": "neutral",
+                "body": "high",
+                "nutrition": "neutral",
+                "motivation": "high",
+            },
+            "standout_low": "stress",
+            "standout_low_score": 3,
+            "contrast_pair": None,
+            "all_neutral": False,
+        },
+        "generated_at": "2026-05-30T16:00:00+00:00",
+        "model_used": "gpt-5.4-mini",
+        "tokens_used": {"input": 120, "output": 80, "total": 200},
+    }
+
+
 class FakeChatSessionRepository:
     def __init__(self):
         self.sessions = []
@@ -258,6 +308,16 @@ class FakeConversationService:
         return "legacy-conversation-1", ["Here is the next best step."], {}, None
 
 
+class FakeDailyCheckinService:
+    def __init__(self, response=None):
+        self.response = response
+        self.calls = []
+
+    def ensure_checkin_response(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
+
+
 class FakeOpenAIClient:
     def __init__(self):
         self.calls = []
@@ -460,6 +520,110 @@ class ChatSessionServiceTests(unittest.TestCase):
         self.assertIn("Build me a nutrition plan", response.suggested_actions)
         self.assertEqual(response.session.client_name, "Taylor")
 
+    def test_client_opening_summary_prefers_persisted_checkin_response_sections(self):
+        self.repository.today_checkin["checkin_response"] = dynamic_checkin_response()
+        daily_checkin_service = FakeDailyCheckinService(response=dynamic_checkin_response())
+        self.service = ChatSessionService(
+            self.repository,
+            conversation_service=self.conversation_service,
+            daily_checkin_service=daily_checkin_service,
+        )
+        self.service._today = lambda: TODAY
+
+        response = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY),
+        )
+
+        opening = response.messages[0]
+        self.assertEqual(opening.metadata["summary_source"], "client_daily_checkin_response_v1")
+        self.assertEqual(opening.metadata["checkin_response_generated_at"], "2026-05-30T16:00:00+00:00")
+        self.assertEqual(opening.metadata["model_used"], "gpt-5.4-mini")
+        self.assertEqual(opening.metadata["checkin_id"], "checkin-1")
+        self.assertEqual(opening.metadata["checkin_response"]["sections"][1]["id"], "workout")
+        self.assertIn("Build day - 20/25", opening.content)
+        self.assertIn("Today's workout: Do three steady strength rounds", opening.content)
+        self.assertIn("Which lift do you want to anchor today's session around?", opening.content)
+        self.assertNotIn("Stable readiness.", opening.content)
+        self.assertNotIn("Training: 30-45 min", opening.content)
+        self.assertEqual(daily_checkin_service.calls, [])
+
+    def test_client_opening_summary_backfills_missing_checkin_response_once(self):
+        self.repository.today_checkin["checkin_response"] = None
+        self.repository.today_checkin["checkin_response_attempted"] = False
+        daily_checkin_service = FakeDailyCheckinService(response=dynamic_checkin_response())
+        self.service = ChatSessionService(
+            self.repository,
+            conversation_service=self.conversation_service,
+            daily_checkin_service=daily_checkin_service,
+        )
+        self.service._today = lambda: TODAY
+
+        response = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY),
+        )
+
+        opening = response.messages[0]
+        self.assertEqual(len(daily_checkin_service.calls), 1)
+        self.assertEqual(daily_checkin_service.calls[0]["client_id"], CLIENT_ID)
+        self.assertEqual(daily_checkin_service.calls[0]["record"]["id"], "checkin-1")
+        self.assertEqual(opening.metadata["summary_source"], "client_daily_checkin_response_v1")
+        self.assertTrue(opening.metadata["checkin_response_attempted"])
+        self.assertIn("Build day - 20/25", opening.content)
+        self.assertNotIn("Stable readiness.", opening.content)
+
+    def test_client_opening_summary_does_not_backfill_when_attempted(self):
+        self.repository.today_checkin["checkin_response"] = None
+        self.repository.today_checkin["checkin_response_attempted"] = True
+        daily_checkin_service = FakeDailyCheckinService(response=dynamic_checkin_response())
+        self.service = ChatSessionService(
+            self.repository,
+            conversation_service=self.conversation_service,
+            daily_checkin_service=daily_checkin_service,
+        )
+        self.service._today = lambda: TODAY
+
+        response = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY),
+        )
+
+        opening = response.messages[0]
+        self.assertEqual(daily_checkin_service.calls, [])
+        self.assertEqual(opening.metadata["summary_source"], "client_daily_mode_brief_v1")
+        self.assertTrue(opening.metadata["checkin_response_attempted"])
+        self.assertIn("Stable readiness.", opening.content)
+        self.assertIn("Training: 30-45 min", opening.content)
+
+    def test_client_opening_summary_falls_back_when_checkin_response_is_malformed(self):
+        malformed = dynamic_checkin_response()
+        malformed["sections"] = malformed["sections"][:2]
+        self.repository.today_checkin["checkin_response"] = malformed
+        daily_checkin_service = FakeDailyCheckinService(response=dynamic_checkin_response())
+        self.service = ChatSessionService(
+            self.repository,
+            conversation_service=self.conversation_service,
+            daily_checkin_service=daily_checkin_service,
+        )
+        self.service._today = lambda: TODAY
+
+        response = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY),
+        )
+
+        opening = response.messages[0]
+        self.assertEqual(opening.metadata["summary_source"], "client_daily_mode_brief_v1")
+        self.assertNotIn("checkin_response", opening.metadata)
+        self.assertIn("BUILD MODE", opening.content)
+        self.assertIn("Training: 30-45 min", opening.content)
+        self.assertEqual(daily_checkin_service.calls, [])
+
     def test_client_opening_summary_mindset_names_user_why(self):
         self.repository.profile["user_why"] = "Dance until I am 100 and never tell my kids I am tired."
 
@@ -547,6 +711,30 @@ class ChatSessionServiceTests(unittest.TestCase):
         self.assertIn("BUILD MODE", second.messages[0].content)
         self.assertEqual(second.messages[0].metadata["summary_source"], "client_daily_mode_brief_v1")
         self.assertEqual(second.messages[0].metadata["checkin_id"], "checkin-2")
+
+    def test_client_opening_summary_refreshes_static_message_when_checkin_response_arrives(self):
+        request = ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY)
+        first = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=request,
+        )
+        self.assertEqual(first.messages[0].metadata["summary_source"], "client_daily_mode_brief_v1")
+        self.assertIn("Stable readiness.", first.messages[0].content)
+
+        self.repository.today_checkin["checkin_response"] = dynamic_checkin_response()
+        second = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=request,
+        )
+
+        self.assertEqual(first.session.id, second.session.id)
+        self.assertEqual(len(self.repository.messages[first.session.id]), 1)
+        self.assertEqual(second.messages[0].metadata["summary_source"], "client_daily_checkin_response_v1")
+        self.assertEqual(second.messages[0].metadata["checkin_response"]["sections"][0]["id"], "opening")
+        self.assertIn("Build day - 20/25", second.messages[0].content)
+        self.assertNotIn("Stable readiness.", second.messages[0].content)
 
     def test_trainer_opening_summary_uses_recent_missed_and_low_readiness_counts(self):
         self.service = ChatSessionService(

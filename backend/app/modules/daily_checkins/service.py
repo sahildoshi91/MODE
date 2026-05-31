@@ -7,6 +7,8 @@ from typing import Any
 
 from app.modules.daily_checkins.repository import DailyCheckinRepository, DailyCheckinRepositoryError
 from app.modules.daily_checkins.schemas import (
+    CheckinResponseInput,
+    CheckinResponseOutput,
     CheckinProgressResponse,
     DailyCheckinInputs,
     DailyCheckinResult,
@@ -30,8 +32,16 @@ from app.modules.daily_checkins.schemas import (
     TrainingRecommendation,
     YesterdayCheckinSummary,
 )
+from app.modules.daily_checkins.checkin_response import (
+    CheckinResponseError,
+    build_checkin_response_prompt,
+    classify_signals,
+    is_meaningful_client_why,
+    parse_checkin_response,
+)
 from app.modules.motivation import build_mindset_why_cue, resolve_motivation_baseline
-from app.ai.client import GPT_5_4_MINI_MODEL, OpenAIClient
+from app.modules.observability.metrics import emit_metric
+from app.ai.client import GEMINI_FLASH_LITE_MODEL, GPT_5_4_MINI_MODEL, GeminiClient, OpenAIClient, TextCompletion
 
 
 logger = logging.getLogger(__name__)
@@ -207,10 +217,19 @@ TRAINING_CONSTRAINT_RULES = (
 class DailyCheckinService:
     CLIENT_MEMORY_LIMIT = 24
 
-    def __init__(self, repository: DailyCheckinRepository, profile_service=None, llm_client=None):
+    def __init__(
+        self,
+        repository: DailyCheckinRepository,
+        profile_service=None,
+        llm_client=None,
+        checkin_response_openai_client=None,
+        checkin_response_gemini_client=None,
+    ):
         self.repository = repository
         self.profile_service = profile_service
         self.llm_client = llm_client or OpenAIClient()
+        self.checkin_response_openai_client = checkin_response_openai_client
+        self.checkin_response_gemini_client = checkin_response_gemini_client
 
     def get_status(self, client_id: str, checkin_date: date) -> DailyCheckinStatusResponse:
         record = self.repository.get_by_client_and_date(client_id, checkin_date)
@@ -387,6 +406,9 @@ class DailyCheckinService:
         checkin_date: date,
         inputs: DailyCheckinInputs,
         time_to_complete: int | None = None,
+        trainer_id: str | None = None,
+        trainer_display_name: str | None = None,
+        trace_id: str | None = None,
     ) -> DailyCheckinResult:
         score = self._calculate_total_score(inputs)
         mode = self._assign_mode(score)
@@ -416,7 +438,378 @@ class DailyCheckinService:
             )
             payload["assigned_mode"] = legacy_mode
             record = self.repository.upsert_checkin(payload)
+        response_payload = self._try_generate_and_persist_checkin_response(
+            client_id=client_id,
+            record=record,
+            trainer_id=trainer_id,
+            trainer_display_name=trainer_display_name,
+            trace_id=trace_id,
+            mark_attempted=True,
+        )
+        if response_payload:
+            record = {**record, "checkin_response": response_payload}
+        record = {**record, "checkin_response_attempted": True}
         return self._build_result(record)
+
+    def ensure_checkin_response(
+        self,
+        *,
+        client_id: str,
+        record: dict[str, Any],
+        trainer_id: str | None = None,
+        trainer_display_name: str | None = None,
+        trace_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        existing_response = self._coerce_checkin_response(record.get("checkin_response"))
+        if existing_response:
+            return existing_response.model_dump(mode="json")
+
+        if bool(record.get("checkin_response_attempted")):
+            return None
+
+        marked_record = self._mark_checkin_response_attempted(
+            client_id=client_id,
+            record=record,
+            trainer_id=trainer_id,
+            trace_id=trace_id,
+        )
+        if marked_record is None:
+            return None
+
+        return self._try_generate_and_persist_checkin_response(
+            client_id=client_id,
+            record={**record, **marked_record, "checkin_response_attempted": True},
+            trainer_id=trainer_id,
+            trainer_display_name=trainer_display_name,
+            trace_id=trace_id,
+            mark_attempted=False,
+        )
+
+    def _try_generate_and_persist_checkin_response(
+        self,
+        *,
+        client_id: str,
+        record: dict[str, Any],
+        trainer_id: str | None,
+        trainer_display_name: str | None,
+        trace_id: str | None,
+        mark_attempted: bool = True,
+    ) -> dict[str, Any] | None:
+        mode = self._normalize_mode(str(record.get("assigned_mode") or ""))
+        if mark_attempted:
+            marked_record = self._mark_checkin_response_attempted(
+                client_id=client_id,
+                record=record,
+                trainer_id=trainer_id,
+                trace_id=trace_id,
+            )
+            if marked_record is None:
+                return None
+            record = {**record, **marked_record, "checkin_response_attempted": True}
+
+        try:
+            inputs = DailyCheckinInputs(**record["inputs"])
+        except Exception as exc:
+            self._record_checkin_response_fallback(
+                reason="incomplete_or_invalid_signals",
+                trace_id=trace_id,
+                client_id=client_id,
+                trainer_id=trainer_id,
+                mode=mode,
+                exc=exc,
+            )
+            return None
+
+        profile = self._load_profile_for_checkin_response(client_id)
+        if profile is None:
+            self._record_checkin_response_fallback(
+                reason="profile_unavailable",
+                trace_id=trace_id,
+                client_id=client_id,
+                trainer_id=trainer_id,
+                mode=mode,
+            )
+            return None
+
+        client_why = str(profile.get("user_why") or "").strip()
+        if not is_meaningful_client_why(client_why):
+            self._record_checkin_response_fallback(
+                reason="client_why_missing_or_junk",
+                trace_id=trace_id,
+                client_id=client_id,
+                trainer_id=trainer_id,
+                mode=mode,
+            )
+            return None
+
+        try:
+            input_data = self._build_checkin_response_input(
+                client_id=client_id,
+                trainer_id=trainer_id,
+                trainer_display_name=trainer_display_name,
+                record=record,
+                inputs=inputs,
+                profile=profile,
+                client_why=client_why,
+            )
+            classification = classify_signals(input_data)
+            prompt = build_checkin_response_prompt(input_data, classification)
+            completion, model_used = self._execute_checkin_response_prompt(prompt)
+            parsed = parse_checkin_response(
+                completion.text,
+                input_data=input_data,
+                classification=classification,
+                model_used=model_used,
+                token_usage=completion.token_usage,
+            )
+            payload = parsed.model_dump(mode="json")
+            saved = self.repository.update_checkin_response(
+                client_id=client_id,
+                checkin_id=str(record["id"]),
+                checkin_response=payload,
+            )
+            saved_response = saved.get("checkin_response") if isinstance(saved, dict) else None
+            return saved_response if isinstance(saved_response, dict) else payload
+        except Exception as exc:
+            reason = "malformed_output" if isinstance(exc, CheckinResponseError) else "generation_or_persistence_failed"
+            self._record_checkin_response_fallback(
+                reason=reason,
+                trace_id=trace_id,
+                client_id=client_id,
+                trainer_id=trainer_id,
+                mode=mode,
+                exc=exc,
+            )
+            return None
+
+    def _mark_checkin_response_attempted(
+        self,
+        *,
+        client_id: str,
+        record: dict[str, Any],
+        trainer_id: str | None,
+        trace_id: str | None,
+    ) -> dict[str, Any] | None:
+        if bool(record.get("checkin_response_attempted")):
+            return {"checkin_response_attempted": True}
+        if not self.repository or not hasattr(self.repository, "mark_checkin_response_attempted"):
+            return {"checkin_response_attempted": True}
+        mode = self._normalize_mode(str(record.get("assigned_mode") or ""))
+        try:
+            marked = self.repository.mark_checkin_response_attempted(
+                client_id=client_id,
+                checkin_id=str(record["id"]),
+            )
+        except Exception as exc:
+            self._record_checkin_response_fallback(
+                reason="attempt_marker_failed",
+                trace_id=trace_id,
+                client_id=client_id,
+                trainer_id=trainer_id,
+                mode=mode,
+                exc=exc,
+            )
+            return None
+        return marked if isinstance(marked, dict) else {"checkin_response_attempted": True}
+
+    def _load_profile_for_checkin_response(self, client_id: str) -> dict[str, Any] | None:
+        if not self.profile_service:
+            return None
+        try:
+            profile = self.profile_service.get_or_create_profile(client_id) or {}
+        except Exception as exc:
+            logger.warning(
+                "Check-in response profile lookup failed client_id=%s: %s",
+                client_id,
+                exc,
+            )
+            return None
+        return profile if isinstance(profile, dict) else {}
+
+    def _build_checkin_response_input(
+        self,
+        *,
+        client_id: str,
+        trainer_id: str | None,
+        trainer_display_name: str | None,
+        record: dict[str, Any],
+        inputs: DailyCheckinInputs,
+        profile: dict[str, Any],
+        client_why: str,
+    ) -> CheckinResponseInput:
+        mode = self._normalize_mode(str(record.get("assigned_mode") or ""))
+        trainer_persona = self._load_trainer_persona(trainer_id)
+        trainer_knowledge = self._load_trainer_knowledge(trainer_id)
+        client_memory = self._load_ai_usable_client_memory(
+            trainer_id=trainer_id,
+            client_id=client_id,
+        )
+        trainer_name = (
+            self._clean_text(trainer_display_name)
+            or self._clean_text((trainer_persona or {}).get("persona_name"))
+            or "your coach"
+        )
+        return CheckinResponseInput(
+            sleep_score=inputs.sleep,
+            stress_score=inputs.stress,
+            body_score=inputs.soreness,
+            nutrition_score=inputs.nutrition,
+            motivation_score=inputs.motivation,
+            total_score=int(record.get("total_score") or self._calculate_total_score(inputs)),
+            mode=mode,
+            client_first_name=self._first_name(self._load_client_name(client_id)) or "there",
+            client_goal=self._clean_text(profile.get("primary_goal")) or "general fitness",
+            client_why=client_why,
+            client_constraints=self._build_client_constraints(profile, client_memory),
+            client_experience_level=self._clean_text(profile.get("experience_level")) or "beginner",
+            trainer_name=trainer_name,
+            trainer_programming_philosophy=(
+                self._clean_text((trainer_persona or {}).get("coaching_philosophy"))
+                or "progressive overload, form first"
+            ),
+            trainer_nutrition_approach=self._derive_trainer_nutrition_approach(trainer_knowledge),
+            trainer_tone=(
+                self._clean_text((trainer_persona or {}).get("tone_description"))
+                or "direct, encouraging, no fluff"
+            ),
+            trainer_kb_summary=self._summarize_trainer_kb(trainer_knowledge),
+        )
+
+    def _execute_checkin_response_prompt(self, prompt: str) -> tuple[TextCompletion, str]:
+        try:
+            openai_client = self._get_checkin_response_openai_client()
+            completion = openai_client.create_chat_completion_with_usage(
+                model=GPT_5_4_MINI_MODEL,
+                messages=[{"role": "user", "content": prompt}],
+                max_output_tokens=200,
+                response_format="text",
+                temperature=0.7,
+            )
+            return completion, GPT_5_4_MINI_MODEL
+        except Exception:
+            logger.warning("Check-in response OpenAI fast path failed; trying Gemini fallback", exc_info=True)
+
+        gemini_client = self._get_checkin_response_gemini_client()
+        gemini_completion = gemini_client.create_chat_completion(
+            prompt,
+            model=GEMINI_FLASH_LITE_MODEL,
+            max_output_tokens=200,
+        )
+        return (
+            TextCompletion(
+                text=gemini_completion.text,
+                token_usage=gemini_completion.token_usage,
+            ),
+            GEMINI_FLASH_LITE_MODEL,
+        )
+
+    def _get_checkin_response_openai_client(self):
+        if self.checkin_response_openai_client is None:
+            self.checkin_response_openai_client = OpenAIClient(timeout_seconds=8.0)
+        return self.checkin_response_openai_client
+
+    def _get_checkin_response_gemini_client(self):
+        if self.checkin_response_gemini_client is None:
+            self.checkin_response_gemini_client = GeminiClient()
+        return self.checkin_response_gemini_client
+
+    def _load_client_name(self, client_id: str) -> str | None:
+        if not self.repository or not hasattr(self.repository, "get_client_name"):
+            return None
+        try:
+            return self.repository.get_client_name(client_id)
+        except Exception as exc:
+            logger.warning("Check-in response client-name lookup failed client_id=%s: %s", client_id, exc)
+            return None
+
+    def _load_trainer_persona(self, trainer_id: str | None) -> dict[str, Any] | None:
+        if not trainer_id or not self.repository or not hasattr(self.repository, "get_default_trainer_persona"):
+            return None
+        try:
+            persona = self.repository.get_default_trainer_persona(trainer_id)
+        except Exception as exc:
+            logger.warning("Check-in response trainer persona lookup failed trainer_id=%s: %s", trainer_id, exc)
+            return None
+        return persona if isinstance(persona, dict) else None
+
+    def _load_trainer_knowledge(self, trainer_id: str | None) -> list[dict[str, Any]]:
+        if not trainer_id or not self.repository or not hasattr(self.repository, "list_active_trainer_knowledge_entries"):
+            return []
+        try:
+            rows = self.repository.list_active_trainer_knowledge_entries(trainer_id, limit=12)
+        except Exception as exc:
+            logger.warning("Check-in response trainer knowledge lookup failed trainer_id=%s: %s", trainer_id, exc)
+            return []
+        return [row for row in rows or [] if isinstance(row, dict)]
+
+    def _build_client_constraints(self, profile: dict[str, Any], client_memory: list[dict[str, Any]]) -> str:
+        parts = [
+            self._clean_text(profile.get("injury_notes")),
+            self._clean_text(profile.get("equipment_access")),
+            self._clean_text(profile.get("training_location")),
+            self._clean_text(profile.get("minimum_win")),
+        ]
+        for memory in client_memory[:6]:
+            tags = " ".join(str(tag) for tag in memory.get("tags") or [])
+            text = self._clean_text(memory.get("summary") or memory.get("text") or memory.get("memory_key"))
+            memory_type = str(memory.get("memory_type") or "")
+            if text and (
+                memory_type == "constraint"
+                or any(keyword in tags.lower() for keyword in ("injury", "constraint", "equipment", "nutrition", "diet"))
+            ):
+                parts.append(text)
+        return self._clip_words("; ".join(part for part in parts if part), 40) or "none stated"
+
+    def _derive_trainer_nutrition_approach(self, knowledge_rows: list[dict[str, Any]]) -> str:
+        for row in knowledge_rows:
+            knowledge_type = str(row.get("knowledge_type") or "").lower()
+            tags = " ".join(str(tag) for tag in row.get("tags") or []).lower()
+            if "nutrition" not in knowledge_type and "nutrition" not in tags:
+                continue
+            text = self._clean_text(row.get("structured_summary") or row.get("raw_content") or row.get("title"))
+            if text:
+                return self._clip_words(text, 24)
+        return "protein at every meal, don't overcomplicate it"
+
+    def _summarize_trainer_kb(self, knowledge_rows: list[dict[str, Any]]) -> str:
+        snippets = []
+        for row in knowledge_rows[:6]:
+            text = self._clean_text(row.get("structured_summary") or row.get("raw_content") or row.get("title"))
+            if text:
+                snippets.append(text)
+        return self._clip_words(" ".join(snippets), 160)
+
+    def _record_checkin_response_fallback(
+        self,
+        *,
+        reason: str,
+        trace_id: str | None,
+        client_id: str,
+        trainer_id: str | None,
+        mode: str,
+        exc: Exception | None = None,
+    ) -> None:
+        logger.warning(
+            "checkin_response_fallback_triggered trace_id=%s client_id=%s trainer_id=%s mode=%s reason=%s error=%s",
+            trace_id,
+            client_id,
+            trainer_id,
+            mode,
+            reason,
+            str(exc) if exc else "",
+        )
+        try:
+            emit_metric(
+                "checkin_response_fallback_triggered",
+                1.0,
+                tags={
+                    "mode": mode or "unknown",
+                    "reason": reason,
+                    "trainer_id": trainer_id or "",
+                },
+            )
+        except Exception:
+            logger.debug("checkin_response_fallback_metric_failed", exc_info=True)
 
     def generate_plan(
         self,
@@ -657,6 +1050,21 @@ class DailyCheckinService:
                     exc,
                 )
 
+        checkin_response = self._coerce_checkin_response(record.get("checkin_response"))
+        if checkin_response:
+            return DailyCheckinResult(
+                id=record["id"],
+                date=parsed_date,
+                score=record["total_score"],
+                mode=mode,
+                inputs=inputs,
+                checkin_response=checkin_response,
+                time_to_complete=record.get("time_to_complete"),
+                completion_timestamp=parsed_completion_timestamp,
+                primary_goal=primary_goal,
+                yesterday_checkin_summary=self._build_yesterday_summary(yesterday_record),
+            )
+
         return DailyCheckinResult(
             id=record["id"],
             date=parsed_date,
@@ -674,6 +1082,16 @@ class DailyCheckinService:
             primary_goal=primary_goal,
             yesterday_checkin_summary=self._build_yesterday_summary(yesterday_record),
         )
+
+    def _coerce_checkin_response(self, value: Any) -> CheckinResponseOutput | None:
+        if not isinstance(value, dict):
+            return None
+        try:
+            response = CheckinResponseOutput(**value)
+        except Exception as exc:
+            logger.warning("Ignoring malformed persisted check-in response: %s", exc)
+            return None
+        return response if response.sections else None
 
     def _build_yesterday_summary(self, record: dict | None) -> YesterdayCheckinSummary | None:
         if not record:
@@ -779,6 +1197,27 @@ class DailyCheckinService:
         if not text:
             return "your goal"
         return GOAL_LABELS.get(text, text)
+
+    def _clean_text(self, value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        normalized = re.sub(r"\s+", " ", value).strip()
+        return normalized or None
+
+    def _first_name(self, value: Any) -> str | None:
+        text = self._clean_text(value)
+        if not text:
+            return None
+        return text.split(" ", 1)[0].strip() or None
+
+    def _clip_words(self, value: Any, limit: int) -> str:
+        text = self._clean_text(value)
+        if not text:
+            return ""
+        words = text.split()
+        if len(words) <= limit:
+            return text
+        return " ".join(words[:limit])
 
     def _load_ai_usable_client_memory(
         self,

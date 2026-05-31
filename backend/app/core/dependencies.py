@@ -617,11 +617,13 @@ def get_chat_session_service(
     repository: ChatSessionRepository = Depends(get_chat_session_repository),
     conversation_service: ConversationService = Depends(get_conversation_service),
     trainer_home_service: TrainerHomeService = Depends(get_trainer_home_service),
+    daily_checkin_service: DailyCheckinService = Depends(get_daily_checkin_service),
 ) -> ChatSessionService:
     return ChatSessionService(
         repository,
         conversation_service=conversation_service,
         trainer_home_service=trainer_home_service,
+        daily_checkin_service=daily_checkin_service,
     )
 
 

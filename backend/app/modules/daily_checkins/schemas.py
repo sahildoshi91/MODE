@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -34,15 +34,60 @@ class YesterdayCheckinSummary(BaseModel):
     inputs: DailyCheckinInputs
 
 
+class CheckinSignalClassification(BaseModel):
+    signals: dict[str, Literal["low", "neutral", "high"]]
+    standout_low: str
+    standout_low_score: int
+    contrast_pair: str | None = None
+    all_neutral: bool = False
+
+
+class CheckinResponseSection(BaseModel):
+    id: Literal["opening", "workout", "nutrition", "why", "question"]
+    label: str | None = None
+    content: str
+
+
+class CheckinResponseOutput(BaseModel):
+    mode: str
+    total_score: int
+    sections: list[CheckinResponseSection] = Field(default_factory=list)
+    signal_classification: CheckinSignalClassification
+    generated_at: datetime
+    model_used: str
+    tokens_used: dict[str, int] = Field(default_factory=dict)
+
+
+class CheckinResponseInput(BaseModel):
+    sleep_score: int = Field(ge=1, le=5)
+    stress_score: int = Field(ge=1, le=5)
+    body_score: int = Field(ge=1, le=5)
+    nutrition_score: int = Field(ge=1, le=5)
+    motivation_score: int = Field(ge=1, le=5)
+    total_score: int = Field(ge=5, le=25)
+    mode: str
+    client_first_name: str
+    client_goal: str
+    client_why: str
+    client_constraints: str
+    client_experience_level: str
+    trainer_name: str
+    trainer_programming_philosophy: str
+    trainer_nutrition_approach: str
+    trainer_tone: str
+    trainer_kb_summary: str = ""
+
+
 class DailyCheckinResult(BaseModel):
     id: str
     date: date
     score: int
     mode: str
     inputs: DailyCheckinInputs
-    training: TrainingRecommendation
-    nutrition: NutritionRecommendation
-    mindset: MindsetRecommendation
+    training: TrainingRecommendation | None = None
+    nutrition: NutritionRecommendation | None = None
+    mindset: MindsetRecommendation | None = None
+    checkin_response: CheckinResponseOutput | None = None
     time_to_complete: int | None = None
     completion_timestamp: datetime | None = None
     mode_tagline: str | None = None

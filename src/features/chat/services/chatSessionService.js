@@ -6,7 +6,7 @@ export const CHAT_SESSIONS_ROUTE_NOT_FOUND_CODE = 'CHAT_SESSIONS_ROUTE_NOT_FOUND
 export const CHAT_SESSION_SCHEMA_MISSING_CODE = 'CHAT_SESSION_SCHEMA_MISSING';
 
 const CHAT_SESSION_TIMEOUT_MS = 60000;
-const CHAT_SESSION_BOOTSTRAP_TIMEOUT_MS = 5000;
+const CHAT_SESSION_BOOTSTRAP_TIMEOUT_MS = 15000;
 
 export function getLocalDateString(date = new Date()) {
   const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);

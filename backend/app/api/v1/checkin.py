@@ -278,6 +278,9 @@ async def submit_daily_checkin(
             checkin_date=request.date,
             inputs=request.inputs,
             time_to_complete=request.time_to_complete,
+            trainer_id=trainer_context.trainer_id,
+            trainer_display_name=trainer_context.trainer_display_name,
+            trace_id=request_id,
         )
         logger.info(
             "Daily check-in submit service completed for client_id=%s date=%s checkin_id=%s",

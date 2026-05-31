@@ -10,6 +10,7 @@ const LEGACY_MODE_LABELS = {
   BLUE: 'RECOVER',
   RED: 'REST',
 };
+const OPENING_SECTION_IDS = ['opening', 'workout', 'nutrition', 'why', 'question'];
 
 const OPENING_MODE_BUNDLES = {
   BEAST: {
@@ -85,6 +86,62 @@ function normalizeOpeningSummaryText(value) {
     .replace(/\bBuild Today:\s*tap training routine or nutrition plan\.?/i, 'What do you want to achieve today?');
 }
 
+function normalizeStructuredOpeningResponse(metadata) {
+  const response = metadata?.checkin_response;
+  const sections = response?.sections;
+  if (!response || !Array.isArray(sections)) {
+    return null;
+  }
+  const sectionsById = sections.reduce((acc, section) => {
+    const id = String(section?.id || '').trim();
+    const content = String(section?.content || '').trim();
+    if (OPENING_SECTION_IDS.includes(id) && content) {
+      acc[id] = {
+        id,
+        label: section?.label ? String(section.label).trim() : null,
+        content,
+      };
+    }
+    return acc;
+  }, {});
+  if (!OPENING_SECTION_IDS.every((id) => sectionsById[id])) {
+    return null;
+  }
+  return {
+    mode: response.mode ? normalizeModeLabel(response.mode) : '',
+    total_score: response.total_score,
+    generated_at: response.generated_at,
+    model_used: response.model_used,
+    sections: OPENING_SECTION_IDS.map((id) => sectionsById[id]),
+  };
+}
+
+function formatStructuredOpeningText(response, fallbackText = '') {
+  if (!response) {
+    return String(fallbackText || '');
+  }
+  const sectionsById = response.sections.reduce((acc, section) => {
+    acc[section.id] = section;
+    return acc;
+  }, {});
+  const lines = [
+    response.mode ? `${response.mode} MODE` : '',
+    sectionsById.opening?.content || '',
+  ];
+  ['workout', 'nutrition', 'why'].forEach((id) => {
+    const section = sectionsById[id];
+    if (!section) {
+      return;
+    }
+    lines.push(section.label ? `${section.label}: ${section.content}` : section.content);
+  });
+  if (sectionsById.question?.content) {
+    lines.push('', sectionsById.question.content);
+  }
+  const text = lines.map((line) => String(line || '').trim()).join('\n').trim();
+  return text || String(fallbackText || '');
+}
+
 function useCopyFeedback() {
   const [feedback, setFeedback] = useState(null);
   const timerRef = useRef(null);
@@ -127,6 +184,9 @@ export default function ChatMessageBubble({
     ? message.metadata
     : {};
   const isOpeningSummary = Boolean(metadata.auto_generated_opening_summary);
+  const openingSummaryResponse = isOpeningSummary
+    ? normalizeStructuredOpeningResponse(metadata)
+    : null;
   const flaggedClientReview = metadata.flagged_client_review_v3
     && typeof metadata.flagged_client_review_v3 === 'object'
     ? metadata.flagged_client_review_v3
@@ -134,9 +194,12 @@ export default function ChatMessageBubble({
   const messageKind = isOpeningSummary
     ? 'assistant_opening_summary'
     : (flaggedClientReview ? 'assistant_flagged_client_review' : (message.isStreaming ? 'assistant_stream' : null));
+  const rawText = message.text ?? message.content ?? '';
   const text = isOpeningSummary
-    ? normalizeOpeningSummaryText(message.text ?? message.content ?? '')
-    : (message.text ?? message.content ?? '');
+    ? (openingSummaryResponse
+      ? formatStructuredOpeningText(openingSummaryResponse, rawText)
+      : normalizeOpeningSummaryText(rawText))
+    : rawText;
   const copyableText = String(text || '').trim();
   const canCopyMessage = copyableText.length > 0;
   const handleCopyText = async (value = copyableText) => {
@@ -171,6 +234,7 @@ export default function ChatMessageBubble({
       copyFeedbackTone={copyFeedback === 'Unable to copy' ? 'error' : 'secondary'}
       assistantContent={flaggedClientReviewContent}
       assistantWide={Boolean(flaggedClientReviewContent)}
+      openingSummaryResponse={openingSummaryResponse}
     />
   );
 }

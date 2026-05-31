@@ -14,6 +14,7 @@ import {
   getLocalDateString,
   getPreviousCheckin,
   getTodayCheckin,
+  submitTodayCheckin,
 } from '../checkinApi';
 
 function createOkResponse(payload = {}) {
@@ -123,6 +124,29 @@ describe('checkinApi date defaults', () => {
       '/api/v1/checkin/last-nutrition-setup?exclude_checkin_id=checkin-1',
       expect.objectContaining({
         method: 'GET',
+      }),
+    );
+  });
+
+  it('submits daily check-ins with a 15 second timeout for inline coaching response generation', async () => {
+    await submitTodayCheckin({
+      accessToken: 'token',
+      date: '2026-04-10',
+      inputs: {
+        sleep: 4,
+        stress: 4,
+        soreness: 3,
+        nutrition: 4,
+        motivation: 3,
+      },
+      timeToComplete: 9,
+    });
+
+    expect(fetchWithApiFallback).toHaveBeenCalledWith(
+      '/api/v1/checkin',
+      expect.objectContaining({
+        method: 'POST',
+        timeoutMs: 15000,
       }),
     );
   });

@@ -10,6 +10,37 @@ import { parseAIResponseText, sanitizeAssistantDisplayText } from '../utils/aiRe
 
 const OPENING_LABEL_PATTERN = /^(Training|Nutrition|Mindset):\s*(.*)$/i;
 const OPENING_QUESTION_PATTERN = /what do you want to achieve today\??/i;
+const STRUCTURED_OPENING_LABELS = {
+  workout: "Today's workout",
+  nutrition: 'Before you train',
+  why: 'Your why',
+};
+
+function normalizeStructuredOpeningResponse(response) {
+  const sections = response?.sections;
+  if (!response || !Array.isArray(sections)) {
+    return null;
+  }
+  const sectionsById = sections.reduce((acc, section) => {
+    const id = String(section?.id || '').trim();
+    const content = String(section?.content || '').trim();
+    if (id && content) {
+      acc[id] = {
+        id,
+        label: section?.label ? String(section.label).trim() : null,
+        content,
+      };
+    }
+    return acc;
+  }, {});
+  if (!sectionsById.opening || !sectionsById.workout || !sectionsById.nutrition || !sectionsById.why || !sectionsById.question) {
+    return null;
+  }
+  return {
+    mode: response.mode ? String(response.mode).trim().toUpperCase() : '',
+    sectionsById,
+  };
+}
 
 function parseOpeningSummary(text) {
   const lines = String(text || '').split(/\n/);
@@ -82,6 +113,33 @@ function OpeningSummaryContent({ text }) {
   );
 }
 
+function StructuredOpeningSummaryContent({ response }) {
+  const summary = normalizeStructuredOpeningResponse(response);
+  if (!summary) {
+    return null;
+  }
+  const { sectionsById } = summary;
+  const title = summary.mode ? `${summary.mode} MODE` : "TODAY'S COACH BRIEF";
+
+  return (
+    <View style={styles.openingSummary} testID="structured-opening-summary">
+      <Text style={styles.openingTitle}>{title}</Text>
+      <Text style={styles.openingSubtitle}>{sectionsById.opening.content}</Text>
+      {['workout', 'nutrition', 'why'].map((sectionId) => {
+        const section = sectionsById[sectionId];
+        const label = section.label || STRUCTURED_OPENING_LABELS[sectionId];
+        return (
+          <View key={sectionId} style={styles.structuredOpeningSection}>
+            <Text style={styles.structuredOpeningLabel}>{label}</Text>
+            <Text style={styles.openingBodyText}>{section.content}</Text>
+          </View>
+        );
+      })}
+      <Text style={styles.openingQuestion}>{sectionsById.question.content}</Text>
+    </View>
+  );
+}
+
 export default function ChatBubble({
   role,
   text,
@@ -96,6 +154,7 @@ export default function ChatBubble({
   copyFeedbackTone = 'secondary',
   assistantContent = null,
   assistantWide = false,
+  openingSummaryResponse = null,
 }) {
   const isUser = role === 'user';
   const resolvedSpeakerLabel = speakerLabel || (isUser ? 'You' : 'Coach');
@@ -122,6 +181,9 @@ export default function ChatBubble({
     if (assistantContent) {
       return assistantContent;
     }
+    if (messageKind === 'assistant_opening_summary' && openingSummaryResponse) {
+      return <StructuredOpeningSummaryContent response={openingSummaryResponse} />;
+    }
     if (messageKind === 'assistant_opening_summary') {
       return <OpeningSummaryContent text={safeAssistantText} />;
     }
@@ -134,7 +196,7 @@ export default function ChatBubble({
         testIDPrefix="chat-ai-response"
       />
     );
-  }, [assistantContent, messageKind, safeAssistantText, structuredModel]);
+  }, [assistantContent, messageKind, openingSummaryResponse, safeAssistantText, structuredModel]);
 
   return (
     <View style={[styles.row, isUser ? styles.userRow : styles.assistantRow]}>
@@ -237,6 +299,16 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.94)',
   },
   openingLabel: {
+    fontWeight: '800',
+    color: 'rgba(255, 255, 255, 0.96)',
+  },
+  structuredOpeningSection: {
+    gap: 2,
+  },
+  structuredOpeningLabel: {
+    fontFamily: theme.typography.fontFamily,
+    fontSize: theme.typography.body1.fontSize,
+    lineHeight: theme.typography.body1.lineHeight,
     fontWeight: '800',
     color: 'rgba(255, 255, 255, 0.96)',
   },

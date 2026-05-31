@@ -63,6 +63,33 @@ class OpenAIClientTests(unittest.TestCase):
         self.assertEqual(completion.text, '{"title":"Builder"}')
         self.assertEqual(completion.token_usage.total_tokens, 18)
 
+    def test_create_chat_completion_plain_text_is_opt_in(self):
+        fake_response = FakeOpenAIResponse("Build day - 18/25.")
+        create_mock = unittest.mock.Mock(return_value=fake_response)
+        fake_sdk_client = SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(create=create_mock),
+            )
+        )
+
+        with patch("app.ai.client.OpenAI", return_value=fake_sdk_client):
+            client = OpenAIClient()
+            completion = client.create_chat_completion_with_usage(
+                model="gpt-5.4-mini",
+                messages=[{"role": "user", "content": "Return plain text"}],
+                response_format="text",
+                max_output_tokens=200,
+                temperature=0.7,
+            )
+
+        create_mock.assert_called_once_with(
+            model="gpt-5.4-mini",
+            messages=[{"role": "user", "content": "Return plain text"}],
+            max_completion_tokens=200,
+            temperature=0.7,
+        )
+        self.assertEqual(completion.text, "Build day - 18/25.")
+
     def test_create_chat_completion_normalizes_text_content_blocks(self):
         fake_response = FakeOpenAIResponse(
             [

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 from supabase import Client
@@ -82,6 +82,45 @@ class DailyCheckinRepository:
         )
         return response.data[0] if response.data else None
 
+    def get_client_name(self, client_id: str) -> str | None:
+        response = (
+            self.supabase
+            .table("clients")
+            .select("client_name")
+            .eq("id", client_id)
+            .limit(1)
+            .execute()
+        )
+        row = response.data[0] if response.data else None
+        name = row.get("client_name") if isinstance(row, dict) else None
+        return name.strip() if isinstance(name, str) and name.strip() else None
+
+    def get_default_trainer_persona(self, trainer_id: str) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table("trainer_personas")
+            .select("*")
+            .eq("trainer_id", trainer_id)
+            .eq("is_default", True)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def list_active_trainer_knowledge_entries(self, trainer_id: str, *, limit: int = 12) -> list[dict[str, Any]]:
+        response = (
+            self.supabase
+            .table("trainer_knowledge_entries")
+            .select("title, raw_content, structured_summary, knowledge_type, tags")
+            .eq("trainer_id", trainer_id)
+            .eq("status", "active")
+            .eq("ai_enabled", True)
+            .order("updated_at", desc=True)
+            .limit(max(1, min(int(limit), 50)))
+            .execute()
+        )
+        return response.data or []
+
     def get_previous_checkin(self, client_id: str, before_date: date) -> dict[str, Any] | None:
         response = (
             self.supabase
@@ -140,6 +179,70 @@ class DailyCheckinRepository:
         raise DailyCheckinRepositoryError(
             "Daily check-in save completed without a readable row",
             details="The write returned no row and a follow-up lookup by client and date found no daily_checkins record.",
+        )
+
+    def update_checkin_response(
+        self,
+        *,
+        client_id: str,
+        checkin_id: str,
+        checkin_response: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            response = (
+                self.supabase
+                .table("daily_checkins")
+                .update(
+                    {
+                        "checkin_response": checkin_response,
+                        "checkin_response_attempted": True,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                .eq("client_id", client_id)
+                .eq("id", checkin_id)
+                .execute()
+            )
+        except Exception as exc:
+            raise DailyCheckinRepositoryError.from_exception("Failed to persist check-in response", exc) from exc
+
+        if response.data:
+            return response.data[0]
+
+        raise DailyCheckinRepositoryError(
+            "Check-in response update completed without a readable row",
+            details="The update returned no row for daily_checkins.checkin_response.",
+        )
+
+    def mark_checkin_response_attempted(
+        self,
+        *,
+        client_id: str,
+        checkin_id: str,
+    ) -> dict[str, Any]:
+        try:
+            response = (
+                self.supabase
+                .table("daily_checkins")
+                .update(
+                    {
+                        "checkin_response_attempted": True,
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                )
+                .eq("client_id", client_id)
+                .eq("id", checkin_id)
+                .execute()
+            )
+        except Exception as exc:
+            raise DailyCheckinRepositoryError.from_exception("Failed to mark check-in response attempted", exc) from exc
+
+        if response.data:
+            return response.data[0]
+
+        raise DailyCheckinRepositoryError(
+            "Check-in response attempted marker completed without a readable row",
+            details="The update returned no row for daily_checkins.checkin_response_attempted.",
         )
 
     def upsert_generated_plan(self, payload: dict[str, Any]) -> dict[str, Any]:

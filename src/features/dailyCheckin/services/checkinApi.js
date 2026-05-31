@@ -107,7 +107,7 @@ export async function submitTodayCheckin({ accessToken, date, inputs, timeToComp
           inputs,
           time_to_complete: timeToComplete,
         }),
-        timeoutMs: 8000,
+        timeoutMs: 15000,
       },
     ));
   } catch (error) {

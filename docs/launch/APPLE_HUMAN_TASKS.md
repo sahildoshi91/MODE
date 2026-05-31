@@ -11,9 +11,9 @@ These tasks require Apple Developer/App Store Connect access, business records, 
 | D-U-N-S number | D-U-N-S verified or Apple accepted alternative path | Founder | Open |
 | Apple Team ID | Team ID recorded for signing and CI/export setup | Founder/Mobile owner | Open |
 | App Store Connect app record | App name, SKU, bundle ID, category, and availability created | App Store owner | Open |
-| Privacy Policy URL | Public URL live and matching shipped data practices | Legal/privacy owner | Open |
-| Terms URL | Public URL live and matching v1 free beta scope | Legal/privacy owner | Open |
-| Support URL | Public support/contact URL live | Support owner | Open |
+| Privacy Policy URL | Verified 2026-05-31: `https://modefit.ai/privacy.html` redirects to `/privacy` and returns 200 | Legal/privacy owner | Done |
+| Terms URL | Verified 2026-05-31: `https://modefit.ai/terms.html` redirects to `/terms` and returns 200 | Legal/privacy owner | Done |
+| Support URL | Verified 2026-05-31: `https://modefit.ai/support.html` redirects to `/support` and returns 200 | Support owner | Done |
 | App Privacy labels | Health/fitness, identifiers, diagnostics, usage data, tracking, deletion, and retention answers reviewed | Legal/privacy owner | Open |
 | Age rating | App Store age questionnaire completed honestly | Product owner | Open |
 | Reviewer demo credentials | Credentials or deterministic invite/onboarding path prepared | QA/App Store owner | Open |

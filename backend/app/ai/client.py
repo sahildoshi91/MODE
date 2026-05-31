@@ -127,11 +127,11 @@ def _observe_stream_timing(
 
 
 class OpenAIClient:
-    def __init__(self) -> None:
+    def __init__(self, *, timeout_seconds: float | None = None) -> None:
         openai_class = _load_openai_class()
         self.client = openai_class(
             api_key=settings.openai_api_key,
-            timeout=_chat_provider_timeout_seconds(),
+            timeout=timeout_seconds if timeout_seconds is not None else _chat_provider_timeout_seconds(),
         )
 
     def create_chat_completion(
@@ -140,11 +140,15 @@ class OpenAIClient:
         messages: list[dict[str, str]],
         *,
         max_output_tokens: int | None = None,
+        response_format: str = "json",
+        temperature: float | None = None,
     ) -> str:
         return self.create_chat_completion_with_usage(
             model=model,
             messages=messages,
             max_output_tokens=max_output_tokens,
+            response_format=response_format,
+            temperature=temperature,
         ).text
 
     def create_chat_completion_with_usage(
@@ -153,15 +157,22 @@ class OpenAIClient:
         messages: list[dict[str, str]],
         *,
         max_output_tokens: int | None = None,
+        response_format: str = "json",
+        temperature: float | None = None,
     ) -> TextCompletion:
         _ensure_llm_provider_enabled()
         request_payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
-            "response_format": {"type": "json_object"},
         }
+        if response_format == "json":
+            request_payload["response_format"] = {"type": "json_object"}
+        elif response_format != "text":
+            raise ValueError("response_format must be 'json' or 'text'")
         if max_output_tokens:
             request_payload["max_completion_tokens"] = max_output_tokens
+        if temperature is not None:
+            request_payload["temperature"] = temperature
         response = _run_with_retries(
             "openai",
             model,

@@ -11,11 +11,11 @@ jest.mock('../../services/chatMessageService', () => ({
 
 import { useChatMessages } from '../useChatMessages';
 
-function HookHarness({ session, onState }) {
+function HookHarness({ session, initialMessages = [], onState }) {
   const state = useChatMessages({
     accessToken: 'token',
     session,
-    initialMessages: [],
+    initialMessages,
   });
   useEffect(() => {
     onState(state);
@@ -26,6 +26,137 @@ function HookHarness({ session, onState }) {
 describe('useChatMessages', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+  });
+
+  it('replaces stale opening summary on same-session reload', async () => {
+    let latestState = null;
+    let tree;
+    const staticOpening = {
+      id: 'opening-1',
+      sender_type: 'ai',
+      content: 'BUILD MODE\n19/25. Stable readiness.',
+      metadata: {
+        auto_generated_opening_summary: true,
+        summary_source: 'client_daily_mode_brief_v1',
+      },
+    };
+    const dynamicOpening = {
+      id: 'opening-1',
+      sender_type: 'ai',
+      content: 'BUILD MODE\nBuild day - 19/25. Nutrition is the signal to support.',
+      metadata: {
+        auto_generated_opening_summary: true,
+        summary_source: 'client_daily_checkin_response_v1',
+        checkin_response: {
+          mode: 'BUILD',
+          total_score: 19,
+          sections: [
+            { id: 'opening', label: null, content: 'Build day - 19/25. Nutrition is the signal to support.' },
+            { id: 'workout', label: "Today's workout", content: 'Keep the session controlled.' },
+            { id: 'nutrition', label: 'Before you train', content: 'Eat before training.' },
+            { id: 'why', label: 'Your why', content: 'This supports your bigger goal.' },
+            { id: 'question', label: null, content: 'What will you keep smooth today?' },
+          ],
+        },
+      },
+    };
+
+    await act(async () => {
+      tree = renderer.create(
+        <HookHarness
+          session={{ id: 'session-1', session_date: '2026-05-03' }}
+          initialMessages={[staticOpening]}
+          onState={(state) => {
+            latestState = state;
+          }}
+        />,
+      );
+    });
+    expect(latestState.messages[0].text).toContain('Stable readiness.');
+
+    await act(async () => {
+      tree.update(
+        <HookHarness
+          session={{ id: 'session-1', session_date: '2026-05-03' }}
+          initialMessages={[dynamicOpening]}
+          onState={(state) => {
+            latestState = state;
+          }}
+        />,
+      );
+    });
+
+    expect(latestState.messages).toHaveLength(1);
+    expect(latestState.messages[0].text).toContain('Build day - 19/25');
+    expect(latestState.messages[0].metadata.summary_source).toBe('client_daily_checkin_response_v1');
+  });
+
+  it('preserves conversation messages when same-session opening summary refreshes', async () => {
+    let latestState = null;
+    let tree;
+    const staticOpening = {
+      id: 'opening-1',
+      sender_type: 'ai',
+      content: 'BUILD MODE\n19/25. Stable readiness.',
+      metadata: {
+        auto_generated_opening_summary: true,
+        summary_source: 'client_daily_mode_brief_v1',
+      },
+    };
+    const dynamicOpening = {
+      ...staticOpening,
+      content: 'BUILD MODE\nBuild day - 19/25. Hydration needs attention.',
+      metadata: {
+        auto_generated_opening_summary: true,
+        summary_source: 'client_daily_checkin_response_v1',
+      },
+    };
+
+    await act(async () => {
+      tree = renderer.create(
+        <HookHarness
+          session={{ id: 'session-1', session_date: '2026-05-03' }}
+          initialMessages={[staticOpening]}
+          onState={(state) => {
+            latestState = state;
+          }}
+        />,
+      );
+    });
+
+    mockStreamChatSessionMessage.mockImplementationOnce(async ({ onEvent }) => {
+      onEvent?.({
+        type: 'completed',
+        assistant_message: 'Keep it simple today.',
+      });
+    });
+    await act(async () => {
+      await latestState.sendMessage('Need a simple plan');
+    });
+    expect(latestState.messages.map((message) => message.text)).toEqual(expect.arrayContaining([
+      'Need a simple plan',
+      'Keep it simple today.',
+    ]));
+
+    await act(async () => {
+      tree.update(
+        <HookHarness
+          session={{ id: 'session-1', session_date: '2026-05-03' }}
+          initialMessages={[dynamicOpening]}
+          onState={(state) => {
+            latestState = state;
+          }}
+        />,
+      );
+    });
+
+    const renderedTexts = latestState.messages.map((message) => message.text);
+    expect(renderedTexts[0]).toContain('Build day - 19/25');
+    expect(renderedTexts).toEqual(expect.arrayContaining([
+      'Need a simple plan',
+      'Keep it simple today.',
+    ]));
+    expect(renderedTexts).not.toContain('BUILD MODE\n19/25. Stable readiness.');
   });
 
   it('passes the active session date to stream sends', async () => {

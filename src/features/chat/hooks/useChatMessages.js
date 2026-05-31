@@ -26,6 +26,39 @@ function replaceMessageById(messages, id, updater) {
   });
 }
 
+function isOpeningSummaryMessage(message) {
+  return Boolean(message?.metadata?.auto_generated_opening_summary);
+}
+
+function openingSummaryFingerprint(message) {
+  if (!message) {
+    return '';
+  }
+  return JSON.stringify({
+    id: message.id || null,
+    text: message.text || '',
+    content: message.content || '',
+    metadata: message.metadata || {},
+  });
+}
+
+function replaceOpeningSummaryMessage(currentMessages, nextOpening) {
+  if (!nextOpening) {
+    return currentMessages;
+  }
+  const currentIndex = currentMessages.findIndex(isOpeningSummaryMessage);
+  if (currentIndex < 0) {
+    return [nextOpening, ...currentMessages];
+  }
+  const currentOpening = currentMessages[currentIndex];
+  if (openingSummaryFingerprint(currentOpening) === openingSummaryFingerprint(nextOpening)) {
+    return currentMessages;
+  }
+  return currentMessages.map((message, index) => (
+    index === currentIndex ? nextOpening : message
+  ));
+}
+
 function appendDelta(currentText, delta) {
   return `${currentText || ''}${delta || ''}`;
 }
@@ -62,11 +95,16 @@ export function useChatMessages({
   const activeAbortControllerRef = useRef(null);
 
   useEffect(() => {
+    const normalizedInitialMessages = (initialMessages || []).map((message) => normalizeChatMessage(message));
     if (lastHydratedSessionIdRef.current === sessionId) {
+      const nextOpening = normalizedInitialMessages.find(isOpeningSummaryMessage);
+      if (nextOpening) {
+        setMessages((currentMessages) => replaceOpeningSummaryMessage(currentMessages, nextOpening));
+      }
       return;
     }
     lastHydratedSessionIdRef.current = sessionId;
-    setMessages((initialMessages || []).map((message) => normalizeChatMessage(message)));
+    setMessages(normalizedInitialMessages);
   }, [initialMessages, sessionId]);
 
   const canSend = Boolean(accessToken && sessionId && !readOnly && !sending);

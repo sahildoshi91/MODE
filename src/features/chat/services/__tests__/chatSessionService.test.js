@@ -38,6 +38,32 @@ describe('chatSessionService errors', () => {
     warnSpy?.mockRestore();
   });
 
+  it('uses a 15 second bootstrap timeout for today sessions', async () => {
+    mockFetchWithApiFallback.mockResolvedValueOnce({
+      baseUrl: 'http://127.0.0.1:8000',
+      response: {
+        ok: true,
+        json: async () => ({
+          session: { id: 'session-1' },
+          messages: [],
+          suggested_actions: [],
+          read_only: false,
+        }),
+      },
+    });
+
+    await getTodayChatSession({
+      accessToken: 'token',
+      role: 'client',
+      sessionType: 'client_chat',
+      sessionDate: '2026-05-04',
+    });
+
+    expect(mockFetchWithApiFallback).toHaveBeenCalledWith('/api/v1/chat/sessions/today', expect.objectContaining({
+      timeoutMs: 15000,
+    }));
+  });
+
   it('maps structured missing-schema responses to a migration-specific error', async () => {
     mockFetchWithApiFallback.mockResolvedValueOnce({
       baseUrl: 'http://127.0.0.1:8000',

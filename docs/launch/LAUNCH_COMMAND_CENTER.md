@@ -2,9 +2,9 @@
 
 ## Last Updated
 
-2026-05-26 staging deploy drift validation
+2026-05-31 legal/support URL verification
 
-Source posture: repo docs/configs/artifacts only. Local secret/env values were not inspected.
+Source posture: repo docs/configs/artifacts plus live public URL verification for `modefit.ai`. Local secret/env values were not inspected.
 
 Status markers: `BLOCKED`, `REMEDIATION PR PENDING`, `AT RISK`, `UNKNOWN`, `READY`, `DONE`, `DEFERRED`.
 
@@ -17,7 +17,7 @@ Status markers: `BLOCKED`, `REMEDIATION PR PENDING`, `AT RISK`, `UNKNOWN`, `READ
 | Staging validation | `BLOCKED` | Backend/QA/DevOps | Render `mode-backend-staging` is serving `efa167c2c05139c3a1da43b5ae0793f848ede1b5` from `pr6-ai-chat-memory-scaling`, not `origin/main` `0dc04119b39a0f597adec8127ad82cd2f9514071`; `/healthz` is degraded with queue lag `APIError`. |
 | Production deployment | `UNKNOWN` | Backend/DevOps | No production API host, production worker, or production release-gate pass is evidenced in repo docs. |
 | iOS/TestFlight | `BLOCKED` | Mobile release + App Store owner | Bundle ID is still `com.anonymous.mode`; no signed/exported release path is evidenced. |
-| Apple/legal ops | `BLOCKED` | Founder + Legal/App Store owners | Apple human tasks and production legal/support URLs remain open in launch docs. |
+| Apple/legal ops | `BLOCKED` | Founder + Legal/App Store owners | Production legal/support URLs are live; Apple enrollment, bundle/signing, App Privacy labels, age rating, reviewer metadata, screenshots, demo path, and tester plans remain open. |
 
 Next operational action: deploy `origin/main` to Render `mode-backend-staging`, recheck `/healthz`, and only reapply `backend/sql/20260516a_worker_queue_lag_view.sql` to Supabase staging if the current-main build still reports queue lag `APIError`.
 
@@ -27,7 +27,7 @@ Next operational action: deploy `origin/main` to Render `mode-backend-staging`, 
 2. Finalize Apple org, bundle ID, and signing authority.
 3. Produce first signed TestFlight-capable IPA.
 4. Execute and archive staging launch verification evidence.
-5. Finalize legal, support, and public URLs.
+5. Finish remaining Apple/App Store metadata and reviewer preparation.
 6. Assign launch monitoring and rollback ownership.
 
 ## P0 Launch Blockers
@@ -40,7 +40,7 @@ Next operational action: deploy `origin/main` to Render `mode-backend-staging`, 
 | Tenant isolation/RLS runtime evidence | `BLOCKED` | DB owner | `docs/launch/LAUNCH_RISK_REGISTER.md` LSR-006; launch checklist still requires mixed-tenant RLS and staging DB security proof |
 | Staging launch gate evidence | `BLOCKED` | Backend/QA/DevOps | Staging is not yet on current `main`; `/healthz` is degraded through queue lag `APIError`, and full no-skip verification must wait |
 | Production release security evidence | `UNKNOWN` | Security/DevOps | Latest recorded release-mode artifacts show environment gate failures; local-mode passes are not production release evidence |
-| App Store/legal readiness | `BLOCKED` | Founder + Legal/App Store owners | Privacy Policy, Terms, Support, App Privacy labels, age rating, reviewer notes, screenshots, demo path, and tester plans are open |
+| App Store/legal readiness | `BLOCKED` | Founder + Legal/App Store owners | Privacy Policy, Terms, and Support URLs are live; App Privacy labels, age rating, reviewer notes, screenshots, demo path, and tester plans remain open |
 
 ## Deployment Status
 
@@ -79,7 +79,7 @@ Launch is `NO-GO` if any are true:
 - Staging concurrency/load evidence is missing.
 - Production API/runtime verification is missing.
 - Rollback owner and launch monitoring owner are unassigned.
-- Apple/legal/App Store submission tasks remain open.
+- Apple Developer/App Store submission tasks remain open.
 
 Launch becomes `GO` only when all are true:
 
@@ -107,7 +107,7 @@ Launch becomes `GO` only when all are true:
 | Record queue lag p95 < 30s under burst | `UNKNOWN` | NONE | `docs/load_test_results/YYYY-MM-DD.md` with worker queue lag | Backend/QA |
 | Record zero cross-tenant RLS observations | `UNKNOWN` | NONE for current launch gate | Staging DB security/RLS evidence artifact | DB/QA |
 | Confirm account deletion enqueue smoke with sacrificial account | `UNKNOWN` | NONE | Staging launch verification log with `202 queued` outcome | Privacy/QA |
-| Publish production Privacy Policy, Terms, and Support URLs | `BLOCKED` | Apple human tasks open | Live URL list approved by Legal/Support | Legal/Support |
+| Publish production Privacy Policy, Terms, and Support URLs | `DONE` | 2026-05-31 verified: `https://modefit.ai/` returned 200; `.html` legal/support URLs redirect to canonical paths and final 200 | Approved URLs: `https://modefit.ai/privacy.html`, `https://modefit.ai/terms.html`, `https://modefit.ai/support.html` | Legal/Support |
 | Prepare reviewer notes, demo account path, screenshots, age rating, export compliance | `BLOCKED` | Apple human tasks open | App Store Connect submission checklist evidence | App Store owner |
 | Assign crash/log monitoring owner and TestFlight watch schedule | `UNKNOWN` | NONE | Launch watch roster with owner, window, and escalation path | Founder/DevOps |
 | Complete staging rollback exercise | `UNKNOWN` | NONE | Dated rollback exercise record | Backend/DevOps |
@@ -122,8 +122,8 @@ Launch becomes `GO` only when all are true:
 | Streaming reliability and event/RLS drift | `AT RISK` | Backend/DB owners | LSR-004 mitigating; staging launch evidence incomplete. |
 | AI spend/cost controls | `AT RISK` | Backend owner | LSR-005 mitigating; live load/fallback validation open. |
 | Tenant isolation | `BLOCKED` | DB owner | LSR-006 open; cross-tenant runtime proof required. |
-| Account deletion/privacy | `AT RISK` | Privacy owner | LSR-007 mitigating; policy/legal review and sacrificial smoke open. |
-| App Review | `BLOCKED` | App Store owner | LSR-008 mitigating but Apple human tasks are open. |
+| Account deletion/privacy | `AT RISK` | Privacy owner | LSR-007 mitigating; Privacy URL is live, but sacrificial account deletion smoke remains open. |
+| App Review | `BLOCKED` | App Store owner | LSR-008 mitigating; legal/support URLs are live, but remaining Apple human tasks are open. |
 | Observability ownership | `UNKNOWN` | Backend/DevOps owner | LSR-009 mitigating; dashboard/alert owner not evidenced. |
 | Weak network/TestFlight resilience | `UNKNOWN` | QA owner | LSR-010 open. |
 
@@ -135,7 +135,7 @@ Launch becomes `GO` only when all are true:
 | Track `docs/launch/LAUNCH_COMMAND_CENTER.md` in git | `DONE` | Backend/DevOps |
 | Approve final Bundle ID, Apple org account, D-U-N-S, Team ID | `BLOCKED` | Founder/App Store owner |
 | Create App Store Connect record and TestFlight groups | `BLOCKED` | App Store owner |
-| Publish Privacy Policy, Terms, Support URL | `BLOCKED` | Legal/Support |
+| Publish Privacy Policy, Terms, Support URL | `DONE` | Legal/Support |
 | Prepare App Privacy labels, age rating, export compliance, reviewer notes | `BLOCKED` | Legal/App Store owner |
 | Prepare reviewer demo account or deterministic invite/onboarding path | `UNKNOWN` | QA/App Store owner |
 | Approve exact DB/RLS migration diff before any apply | `BLOCKED` | DB owner |
@@ -151,14 +151,20 @@ Launch becomes `GO` only when all are true:
 | What is the approved iOS bundle identifier and Apple Team ID? | `BLOCKED` | Founder/App Store owner |
 | What production API origin and Supabase project are approved for the release build? | `UNKNOWN` | Backend/DevOps |
 | Who can approve and schedule DB/RLS launch migrations? | `UNKNOWN` | DB owner/Founder |
-| What exact privacy/terms/support URLs are approved for App Store submission? | `BLOCKED` | Legal/Support |
+| Approved App Store URLs: Privacy `https://modefit.ai/privacy.html`, Terms `https://modefit.ai/terms.html`, Support `https://modefit.ai/support.html` | `DONE` | Legal/Support |
 | What reviewer demo path will Apple receive? | `UNKNOWN` | QA/App Store owner |
 | Who owns internal/external TestFlight monitoring and rollback authority? | `UNKNOWN` | Founder |
 | Will launch proceed only after dated staging load/RLS evidence is recorded? | `UNKNOWN` | Founder |
 
 ## Evidence / Links
 
-This file is repo-evidence based. The next version should be operationally hydrated from Render, Supabase, Apple Connect, TestFlight, monitoring dashboards, and live release artifacts.
+This file is primarily repo-evidence based. The 2026-05-31 legal/support URL status includes live public HTTP verification; the next version should be further hydrated from Render, Supabase, Apple Connect, TestFlight, monitoring dashboards, and live release artifacts.
+
+Verified public legal/support URLs:
+
+- `https://modefit.ai/privacy.html`
+- `https://modefit.ai/terms.html`
+- `https://modefit.ai/support.html`
 
 Primary launch docs:
 

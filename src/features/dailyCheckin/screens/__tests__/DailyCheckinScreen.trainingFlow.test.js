@@ -320,6 +320,91 @@ describe('DailyCheckinScreen training routine flow', () => {
     probeTodayCheckin.mockResolvedValue({});
   });
 
+  it('renders structured check-in response sections when they are present', async () => {
+    getTodayCheckin.mockResolvedValueOnce({
+      completed: true,
+      date: '2026-04-11',
+      checkin: buildInitialResult({
+        training: null,
+        nutrition: null,
+        mindset: null,
+        checkin_response: {
+          mode: 'BUILD',
+          total_score: 18,
+          sections: [
+            { id: 'opening', label: null, content: 'Build day - 18/25. Nutrition is the low signal today.' },
+            { id: 'workout', label: "Today's workout", content: '3-4 sets, 8-10 reps, at about 70% of your normal push.' },
+            { id: 'nutrition', label: 'Before you train', content: 'Eat eggs and toast or Greek yogurt with fruit before training.' },
+            { id: 'why', label: 'Your why', content: 'Today builds the energy you want for weekends.' },
+            { id: 'question', label: null, content: 'Which lift will you keep the cleanest today?' },
+          ],
+          signal_classification: {
+            signals: {
+              sleep: 'high',
+              stress: 'neutral',
+              body: 'neutral',
+              nutrition: 'low',
+              motivation: 'high',
+            },
+            standout_low: 'nutrition',
+            standout_low_score: 2,
+            contrast_pair: null,
+            all_neutral: false,
+          },
+          generated_at: '2026-04-11T16:00:00+00:00',
+          model_used: 'gpt-5.4-mini',
+          tokens_used: { input: 120, output: 80, total: 200 },
+        },
+      }),
+    });
+
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <DailyCheckinScreen accessToken="client-token" bottomInset={0} floatingNavClearance={74} />
+        </SafeAreaProvider>,
+      );
+    });
+    await flushEffects();
+
+    const hasText = (value) => tree.root.findAll((node) => (
+      node.type === Text && node.props?.children === value
+    )).length > 0;
+
+    expect(hasText('Build day - 18/25. Nutrition is the low signal today.')).toBe(true);
+    expect(hasText('3-4 sets, 8-10 reps, at about 70% of your normal push.')).toBe(true);
+    expect(hasText('Which lift will you keep the cleanest today?')).toBe(true);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('falls back to static summary rendering when structured sections are absent', async () => {
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <SafeAreaProvider>
+          <DailyCheckinScreen accessToken="client-token" bottomInset={0} floatingNavClearance={74} />
+        </SafeAreaProvider>,
+      );
+    });
+    await flushEffects();
+
+    const hasStaticTraining = tree.root.findAll((node) => (
+      node.type === Text && node.props?.children === 'Moderate cardio or controlled strength'
+    )).length > 0;
+
+    expect(hasStaticTraining).toBe(true);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('renders the refreshed training setup and generated workout flow without training emojis', async () => {
     let tree;
 
