@@ -6,16 +6,19 @@ const LEGAL_LINK_DEFINITIONS = [
     id: 'privacy',
     label: 'Privacy Policy',
     envVar: 'EXPO_PUBLIC_PRIVACY_POLICY_URL',
+    defaultUrl: 'https://modefit.ai/privacy',
   },
   {
     id: 'terms',
     label: 'Terms',
     envVar: 'EXPO_PUBLIC_TERMS_URL',
+    defaultUrl: 'https://modefit.ai/terms',
   },
   {
     id: 'support',
     label: 'Support',
     envVar: 'EXPO_PUBLIC_SUPPORT_URL',
+    defaultUrl: 'https://modefit.ai/support',
   },
 ];
 
@@ -38,11 +41,19 @@ function normalizeConfiguredUrl(value) {
 
 export function getLegalLinks(env = DEFAULT_LEGAL_LINK_ENV) {
   return LEGAL_LINK_DEFINITIONS.map((definition) => {
-    const url = normalizeConfiguredUrl(env?.[definition.envVar]);
+    const {
+      id,
+      label,
+      envVar,
+      defaultUrl,
+    } = definition;
+    const url = normalizeConfiguredUrl(env?.[envVar]) || defaultUrl;
     return {
-      ...definition,
+      id,
+      label,
+      envVar,
       url,
-      fallbackText: `${definition.envVar}=TODO`,
+      fallbackText: `${envVar}=TODO`,
       isConfigured: Boolean(url),
     };
   });

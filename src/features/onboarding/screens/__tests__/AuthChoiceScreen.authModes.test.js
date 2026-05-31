@@ -8,6 +8,7 @@ jest.mock('react-native-safe-area-context', () => {
 });
 
 import React from 'react';
+import { Linking } from 'react-native';
 import renderer, { act } from 'react-test-renderer';
 
 import AuthChoiceScreen from '../AuthChoiceScreen';
@@ -119,5 +120,24 @@ describe('AuthChoiceScreen password mode', () => {
     expect(tree.root.findByProps({ testID: 'auth-legal-link-privacy' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'auth-legal-link-terms' })).toBeTruthy();
     expect(tree.root.findByProps({ testID: 'auth-legal-link-support' })).toBeTruthy();
+  });
+
+  it('opens legal support links to production URLs', async () => {
+    Linking.openURL = jest.fn().mockResolvedValue(true);
+    const tree = createScreen({ showPasswordAuth: true });
+
+    const privacyLink = tree.root.findByProps({ testID: 'auth-legal-link-privacy' });
+    const termsLink = tree.root.findByProps({ testID: 'auth-legal-link-terms' });
+    const supportLink = tree.root.findByProps({ testID: 'auth-legal-link-support' });
+
+    await act(async () => {
+      await privacyLink.props.onPress();
+      await termsLink.props.onPress();
+      await supportLink.props.onPress();
+    });
+
+    expect(Linking.openURL).toHaveBeenCalledWith('https://modefit.ai/privacy');
+    expect(Linking.openURL).toHaveBeenCalledWith('https://modefit.ai/terms');
+    expect(Linking.openURL).toHaveBeenCalledWith('https://modefit.ai/support');
   });
 });

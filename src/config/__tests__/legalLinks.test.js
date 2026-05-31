@@ -5,39 +5,63 @@ import {
 } from '../legalLinks';
 
 describe('legalLinks config', () => {
-  it('resolves configured URLs and treats unset or TODO values as fallback links', () => {
+  it('uses production defaults when URLs are unset or TODO', () => {
     const links = getLegalLinks({
-      EXPO_PUBLIC_PRIVACY_POLICY_URL: ' https://mode.example/privacy ',
+      EXPO_PUBLIC_PRIVACY_POLICY_URL: '',
       EXPO_PUBLIC_TERMS_URL: 'TODO',
-      EXPO_PUBLIC_SUPPORT_URL: '',
+      EXPO_PUBLIC_SUPPORT_URL: 'TODO: add later',
     });
 
     expect(links).toEqual([
       expect.objectContaining({
         id: 'privacy',
         label: 'Privacy Policy',
-        url: 'https://mode.example/privacy',
+        url: 'https://modefit.ai/privacy',
         isConfigured: true,
       }),
       expect.objectContaining({
         id: 'terms',
         label: 'Terms',
-        url: null,
-        isConfigured: false,
-        fallbackText: 'EXPO_PUBLIC_TERMS_URL=TODO',
+        url: 'https://modefit.ai/terms',
+        isConfigured: true,
       }),
       expect.objectContaining({
         id: 'support',
         label: 'Support',
-        url: null,
-        isConfigured: false,
-        fallbackText: 'EXPO_PUBLIC_SUPPORT_URL=TODO',
+        url: 'https://modefit.ai/support',
+        isConfigured: true,
       }),
     ]);
 
-    expect(getLegalLinksFallbackText(links)).toBe(
-      'Configure EXPO_PUBLIC_TERMS_URL, EXPO_PUBLIC_SUPPORT_URL to enable these links.',
-    );
+    expect(getLegalLinksFallbackText(links)).toBeNull();
+  });
+
+  it('allows env URLs to override the production defaults', () => {
+    const links = getLegalLinks({
+      EXPO_PUBLIC_PRIVACY_POLICY_URL: ' https://mode.example/privacy ',
+      EXPO_PUBLIC_TERMS_URL: 'https://mode.example/terms',
+      EXPO_PUBLIC_SUPPORT_URL: 'https://mode.example/support',
+    });
+
+    expect(links).toEqual([
+      expect.objectContaining({
+        id: 'privacy',
+        url: 'https://mode.example/privacy',
+        isConfigured: true,
+      }),
+      expect.objectContaining({
+        id: 'terms',
+        url: 'https://mode.example/terms',
+        isConfigured: true,
+      }),
+      expect.objectContaining({
+        id: 'support',
+        url: 'https://mode.example/support',
+        isConfigured: true,
+      }),
+    ]);
+
+    expect(getLegalLinksFallbackText(links)).toBeNull();
   });
 
   it('keeps the AI fitness disclaimer concise and safety-oriented', () => {

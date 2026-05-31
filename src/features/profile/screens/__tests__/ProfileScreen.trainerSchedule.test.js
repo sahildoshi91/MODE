@@ -49,21 +49,21 @@ function buildLegalLinks({ includeSupport = true } = {}) {
       id: 'privacy',
       label: 'Privacy Policy',
       envVar: 'EXPO_PUBLIC_PRIVACY_POLICY_URL',
-      url: 'https://mode.example/privacy',
+      url: 'https://modefit.ai/privacy',
       isConfigured: true,
     },
     {
       id: 'terms',
       label: 'Terms',
       envVar: 'EXPO_PUBLIC_TERMS_URL',
-      url: 'https://mode.example/terms',
+      url: 'https://modefit.ai/terms',
       isConfigured: true,
     },
     {
       id: 'support',
       label: 'Support',
       envVar: 'EXPO_PUBLIC_SUPPORT_URL',
-      url: includeSupport ? 'https://mode.example/support' : null,
+      url: includeSupport ? 'https://modefit.ai/support' : null,
       isConfigured: includeSupport,
     },
   ];
@@ -340,11 +340,17 @@ describe('ProfileScreen trainer schedule', () => {
     expect(rendered).toContain('Support');
 
     const privacyLink = tree.root.findByProps({ testID: 'profile-legal-link-privacy' });
+    const termsLink = tree.root.findByProps({ testID: 'profile-legal-link-terms' });
+    const supportLink = tree.root.findByProps({ testID: 'profile-legal-link-support' });
     await act(async () => {
       await privacyLink.props.onPress();
+      await termsLink.props.onPress();
+      await supportLink.props.onPress();
     });
 
-    expect(Linking.openURL).toHaveBeenCalledWith('https://mode.example/privacy');
+    expect(Linking.openURL).toHaveBeenCalledWith('https://modefit.ai/privacy');
+    expect(Linking.openURL).toHaveBeenCalledWith('https://modefit.ai/terms');
+    expect(Linking.openURL).toHaveBeenCalledWith('https://modefit.ai/support');
   });
 
   it('does not render unconfigured legal link rows', async () => {
