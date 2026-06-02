@@ -28,7 +28,7 @@
         <key>CFBundleURLSchemes</key>
         <array>
           <string>mode</string>
-          <string>com.anonymous.mode</string>
+          <string>ai.modefit.app</string>
         </array>
       </dict>
     </array>

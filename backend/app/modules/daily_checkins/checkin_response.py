@@ -15,6 +15,7 @@ from app.modules.daily_checkins.schemas import (
 
 
 PROMPT_VERSION = "daily_checkin_response_v1"
+DETERMINISTIC_RESPONSE_MODEL = "deterministic_daily_checkin_v1"
 MAX_RESPONSE_WORDS = 160
 WHY_MIN_CHARS = 10
 
@@ -97,6 +98,15 @@ class CheckinResponseError(ValueError):
     pass
 
 
+SIGNAL_LABELS = {
+    "sleep": "sleep",
+    "stress": "stress",
+    "body": "soreness",
+    "nutrition": "nutrition",
+    "motivation": "motivation",
+}
+
+
 def is_meaningful_client_why(value: Any) -> bool:
     text = str(value or "").strip()
     normalized = re.sub(r"\s+", " ", text).lower()
@@ -152,6 +162,53 @@ def classify_signals(input_data: CheckinResponseInput) -> CheckinSignalClassific
         standout_low_score=scores[standout_low],
         contrast_pair=contrast_pair,
         all_neutral=all(value == "neutral" for value in signals.values()),
+    )
+
+
+def build_deterministic_checkin_response(
+    input_data: CheckinResponseInput,
+    classification: CheckinSignalClassification | None = None,
+    *,
+    generated_at: datetime | None = None,
+) -> CheckinResponseOutput:
+    classification = classification or classify_signals(input_data)
+    scores = {
+        "sleep": input_data.sleep_score,
+        "stress": input_data.stress_score,
+        "body": input_data.body_score,
+        "nutrition": input_data.nutrition_score,
+        "motivation": input_data.motivation_score,
+    }
+    strongest = max(scores, key=scores.get)
+    weakest = classification.standout_low
+    mode = str(input_data.mode or "RECOVER").strip().upper() or "RECOVER"
+    opening = _build_deterministic_opening(
+        mode=mode,
+        total_score=input_data.total_score,
+        strongest=strongest,
+        weakest=weakest,
+        scores=scores,
+        contrast_pair=classification.contrast_pair,
+    )
+    workout = _build_deterministic_workout(mode, input_data, classification)
+    nutrition_label, nutrition = _build_deterministic_nutrition(mode, input_data)
+    why = _build_deterministic_why(input_data.client_why)
+    question = _build_deterministic_question(classification)
+
+    return CheckinResponseOutput(
+        mode=mode,
+        total_score=input_data.total_score,
+        sections=[
+            CheckinResponseSection(id="opening", label=None, content=opening),
+            CheckinResponseSection(id="workout", label="Today's workout", content=workout),
+            CheckinResponseSection(id="nutrition", label=nutrition_label, content=nutrition),
+            CheckinResponseSection(id="why", label="Your why", content=why),
+            CheckinResponseSection(id="question", label=None, content=question),
+        ],
+        signal_classification=classification,
+        generated_at=generated_at or datetime.now(timezone.utc),
+        model_used=DETERMINISTIC_RESPONSE_MODEL,
+        tokens_used={"input": 0, "output": 0, "total": 0},
     )
 
 
@@ -281,6 +338,96 @@ RULES - follow every one of these:
 9. Output plain text only. No markdown, no bullet points, no asterisks.
    Section labels are plain text on their own line.
 """
+
+
+def _build_deterministic_opening(
+    *,
+    mode: str,
+    total_score: int,
+    strongest: str,
+    weakest: str,
+    scores: dict[str, int],
+    contrast_pair: str | None,
+) -> str:
+    strongest_label = SIGNAL_LABELS.get(strongest, strongest)
+    weakest_label = SIGNAL_LABELS.get(weakest, weakest)
+    lines = [
+        f"{mode.title()} day - {total_score}/25.",
+        (
+            f"{strongest_label.title()} is your strongest signal at {scores[strongest]}/5, "
+            f"while {weakest_label} needs the most care at {scores[weakest]}/5."
+        ),
+    ]
+    if contrast_pair in CONTRAST_PAIR_NOTES:
+        lines.append(CONTRAST_PAIR_NOTES[contrast_pair])
+    return " ".join(lines)
+
+
+def _build_deterministic_workout(
+    mode: str,
+    input_data: CheckinResponseInput,
+    classification: CheckinSignalClassification,
+) -> str:
+    guidance = EFFORT_GUIDANCE.get(mode) or EFFORT_GUIDANCE["RECOVER"]
+    if mode == "REST" or not guidance.get("sets"):
+        return (
+            "Skip formal training today. Keep movement easy with a 10-20 minute walk, mobility, "
+            "or light stretching so recovery can actually do its job."
+        )
+
+    text = (
+        f"Use {guidance['sets']} of {guidance['reps']} at {guidance['intensity']}. "
+        f"{guidance['feel']}"
+    )
+    if input_data.body_score <= 2 and guidance.get("modifier_if_body_low"):
+        text += f" {guidance['modifier_if_body_low']}"
+    elif input_data.sleep_score <= 2 or input_data.stress_score <= 2:
+        text += " Keep the pace controlled and leave one clean rep in reserve so fatigue does not run the session."
+    elif classification.contrast_pair == "fresh_body_low_motivation":
+        text += " Make the first set the win; starting clean matters more than chasing intensity."
+    return text
+
+
+def _build_deterministic_nutrition(mode: str, input_data: CheckinResponseInput) -> tuple[str, str]:
+    nutrition_level = get_nutrition_level(input_data.nutrition_score)
+    guidance = MEAL_EXAMPLES[nutrition_level]
+    examples = guidance["examples"][:3]
+    label = "How to eat today" if mode == "REST" else "Before you train"
+    if len(examples) == 1:
+        example_text = examples[0]
+    else:
+        example_text = ", ".join(examples[:-1]) + f", or {examples[-1]}"
+    return (
+        label,
+        f"Choose something simple like {example_text}. {guidance['timing']} {guidance['why']}",
+    )
+
+
+def _build_deterministic_why(client_why: str) -> str:
+    if is_meaningful_client_why(client_why):
+        why = str(client_why).strip().rstrip(".!?")
+        return f"Treat today's work as one small deposit toward {why}."
+    return "Treat today's work as one small deposit toward feeling stronger, steadier, and more capable in real life."
+
+
+def _build_deterministic_question(classification: CheckinSignalClassification) -> str:
+    if classification.contrast_pair == "high_motivation_low_body":
+        return "Which movement can you keep clean today without forcing intensity?"
+    if classification.contrast_pair == "high_motivation_poor_sleep":
+        return "What is the cleanest version of today's session you can finish without overreaching?"
+    if classification.contrast_pair == "fresh_body_low_motivation":
+        return "What is the first low-friction set you can start with?"
+    if classification.contrast_pair == "high_stress_high_motivation":
+        return "Where can you channel that energy into controlled reps instead of rushing?"
+
+    questions = {
+        "sleep": "What would make today's session feel clean without asking too much from low sleep?",
+        "stress": "What part of training can stay simple enough to lower stress instead of adding to it?",
+        "body": "Which movement feels safest and smoothest for your sore spots today?",
+        "nutrition": "What can you eat before training so energy does not dip halfway through?",
+        "motivation": "What is the smallest training win you can commit to right now?",
+    }
+    return questions.get(classification.standout_low, "What do you want to achieve today?")
 
 
 def parse_checkin_response(

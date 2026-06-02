@@ -559,6 +559,8 @@ class ChatSessionService:
 
     def _ensure_opening_summary(self, *, scope: ChatSessionScope, session: dict[str, Any]) -> dict[str, Any] | None:
         existing = self.repository.get_opening_summary_message(str(session["id"]))
+        if not existing:
+            existing = self.repository.get_first_assistant_message(str(session["id"]))
         opening = self._build_opening_summary(scope)
         opening_metadata = {
             "auto_generated_opening_summary": True,
@@ -568,11 +570,19 @@ class ChatSessionService:
         }
         if existing:
             if self._should_refresh_opening_summary(existing, opening, opening_metadata):
-                refreshed = self.repository.update_opening_summary_message(
-                    session_id=str(session["id"]),
-                    content=opening["text"],
-                    metadata=opening_metadata,
-                )
+                message_id = str(existing.get("id") or "")
+                if message_id:
+                    refreshed = self.repository.update_message_by_id(
+                        message_id=message_id,
+                        content=opening["text"],
+                        metadata=opening_metadata,
+                    )
+                else:
+                    refreshed = self.repository.update_opening_summary_message(
+                        session_id=str(session["id"]),
+                        content=opening["text"],
+                        metadata=opening_metadata,
+                    )
                 metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
                 self.repository.update_session(
                     str(session["id"]),
@@ -672,6 +682,39 @@ class ChatSessionService:
         if scope.session_type == "atlas_client_chat":
             assigned_mode = self._canonical_mode(today_checkin.get("assigned_mode"))
             score = today_checkin.get("total_score")
+            atlas_metadata = {
+                "checkin_id": str(today_checkin.get("id") or "") or None,
+                "checkin_date": str(today_checkin.get("date") or scope.session_date.isoformat()),
+                "assigned_mode": assigned_mode,
+                "checkin_score": score,
+                "has_checkin": True,
+                "atlas_client_chat": True,
+            }
+            atlas_suggested_actions = [
+                "Connect me to a trainer",
+                "Build me a training routine",
+                "Talk through today's focus",
+            ]
+            checkin_response = self._coerce_opening_checkin_response(today_checkin.get("checkin_response"))
+            if not checkin_response and self.daily_checkin_service:
+                generated = self._backfill_client_checkin_response(scope=scope, checkin=today_checkin)
+                if generated:
+                    checkin_response = self._coerce_opening_checkin_response(generated)
+            if checkin_response:
+                text = self._build_client_checkin_response_brief(checkin_response)
+                return {
+                    "text": text,
+                    "title": "Atlas Coach",
+                    "summary": self._clip_summary(text),
+                    "suggested_actions": atlas_suggested_actions,
+                    "source": CLIENT_CHECKIN_RESPONSE_BRIEF_SOURCE,
+                    "metadata": {
+                        **atlas_metadata,
+                        "checkin_response": checkin_response,
+                        "checkin_response_generated_at": checkin_response.get("generated_at"),
+                        "model_used": checkin_response.get("model_used"),
+                    },
+                }
             score_text = f"{score}/25" if score is not None else "today's readiness"
             text = (
                 f"Atlas is ready. Today's MODE is {assigned_mode or 'set'} at {score_text}. "
@@ -681,20 +724,9 @@ class ChatSessionService:
                 "text": text,
                 "title": "Atlas Coach",
                 "summary": self._clip_summary(text),
-                "suggested_actions": [
-                    "Connect me to a trainer",
-                    "Build me a training routine",
-                    "Talk through today's focus",
-                ],
+                "suggested_actions": atlas_suggested_actions,
                 "source": "atlas_client_mode_brief_v1",
-                "metadata": {
-                    "checkin_id": str(today_checkin.get("id") or "") or None,
-                    "checkin_date": str(today_checkin.get("date") or scope.session_date.isoformat()),
-                    "assigned_mode": assigned_mode,
-                    "checkin_score": score,
-                    "has_checkin": True,
-                    "atlas_client_chat": True,
-                },
+                "metadata": atlas_metadata,
             }
 
         profile = self._safe(lambda: self.repository.get_profile(scope.client_id)) or {}
@@ -712,8 +744,6 @@ class ChatSessionService:
         checkin_response = self._coerce_opening_checkin_response(raw_checkin_response)
         if (
             not checkin_response
-            and raw_checkin_response is None
-            and not metadata["checkin_response_attempted"]
             and self.daily_checkin_service
             and scope.session_type == "client_chat"
         ):
@@ -759,7 +789,7 @@ class ChatSessionService:
         scope: ChatSessionScope,
         checkin: dict[str, Any],
     ) -> dict[str, Any] | None:
-        if scope.session_type != "client_chat" or not scope.client_id or not self.daily_checkin_service:
+        if scope.session_type not in {"client_chat", "atlas_client_chat"} or not scope.client_id or not self.daily_checkin_service:
             return None
         try:
             response = self.daily_checkin_service.ensure_checkin_response(

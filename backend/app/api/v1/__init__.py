@@ -21,6 +21,7 @@ from app.api.v1.trainer_review import router as trainer_review_router
 from app.api.v1.trainer_coach import router as trainer_coach_router
 from app.api.v1.trainer_assistant import router as trainer_assistant_router
 from app.api.v1.trainer_settings import router as trainer_settings_router
+from app.api.v1.progress import router as progress_router
 from app.api.v1.workouts import router as workouts_router
 
 
@@ -33,6 +34,7 @@ api_router.include_router(chat_sessions_router, prefix="/chat/sessions", tags=["
 api_router.include_router(checkin_router, prefix="/checkin", tags=["checkin"])
 api_router.include_router(profiles_router, prefix="/profiles", tags=["profiles"])
 api_router.include_router(plans_router, prefix="/plans", tags=["plans"])
+api_router.include_router(progress_router, prefix="/progress", tags=["progress"])
 api_router.include_router(workouts_router, prefix="/workouts", tags=["workouts"])
 api_router.include_router(onboarding_router, prefix="/onboarding", tags=["onboarding"])
 api_router.include_router(analytics_router, prefix="/analytics", tags=["analytics"])

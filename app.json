@@ -20,7 +20,7 @@
           "NSExceptionDomains": {}
         }
       },
-      "bundleIdentifier": "com.anonymous.mode"
+      "bundleIdentifier": "ai.modefit.app"
     },
     "android": {
       "adaptiveIcon": {
@@ -35,6 +35,11 @@
       "expo-font",
       "expo-secure-store",
       "expo-web-browser"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "4b88ca46-7333-4c12-bd0d-65021f64bc42"
+      }
+    }
   }
 }

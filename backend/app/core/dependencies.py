@@ -27,6 +27,8 @@ from app.modules.conversation.repository import ConversationRepository
 from app.modules.conversation.service import ConversationService
 from app.modules.daily_checkins.repository import DailyCheckinRepository
 from app.modules.daily_checkins.service import DailyCheckinService
+from app.modules.progress.repository import ProgressRepository
+from app.modules.progress.service import ProgressService
 from app.modules.mobile_analytics.repository import MobileAnalyticsRepository
 from app.modules.mobile_analytics.service import MobileAnalyticsService
 from app.modules.onboarding.repository import OnboardingRepository
@@ -339,6 +341,18 @@ def get_daily_checkin_service(
     profile_service: ProfileService = Depends(get_profile_service),
 ) -> DailyCheckinService:
     return DailyCheckinService(repository, profile_service=profile_service)
+
+
+def get_progress_repository(
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+) -> ProgressRepository:
+    return ProgressRepository(supabase)
+
+
+def get_progress_service(
+    repository: ProgressRepository = Depends(get_progress_repository),
+) -> ProgressService:
+    return ProgressService(repository)
 
 
 def get_plan_repository(

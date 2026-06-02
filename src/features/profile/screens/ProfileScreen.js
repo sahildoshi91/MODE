@@ -27,7 +27,6 @@ import {
 } from '../../../config/legalLinks';
 import AccountSettingsScreen from './AccountSettingsScreen';
 import AIGuidanceScreen from './AIGuidanceScreen';
-import DeleteAccountScreen from './DeleteAccountScreen';
 import DiagnosticsScreen from './DiagnosticsScreen';
 import LegalSupportScreen from './LegalSupportScreen';
 import PersonalizationScreen from './PersonalizationScreen';
@@ -43,7 +42,6 @@ const PROFILE_SETTINGS_VIEW = {
   AI_GUIDANCE: 'ai_guidance',
   LEGAL_SUPPORT: 'legal_support',
   DIAGNOSTICS: 'diagnostics',
-  DELETE_ACCOUNT: 'delete_account',
 };
 
 const SHOW_ACCOUNT_DIAGNOSTICS = (
@@ -282,6 +280,12 @@ export default function ProfileScreen({
         {...commonChildProps}
         email={email}
         trainerName={trainerName}
+        deleteConfirmationText={deleteConfirmationText}
+        onDeleteConfirmationTextChange={setDeleteConfirmationText}
+        deleteAccountError={deleteAccountError}
+        deleteAccountNotice={deleteAccountNotice}
+        isDeletingAccount={isDeletingAccount}
+        onDeleteAccountPress={handleDeleteAccountPress}
       />
     );
   }
@@ -353,20 +357,6 @@ export default function ProfileScreen({
         environment={environment}
         appVersion={appVersion}
         apiBase={valueOrFallback(debugInfo.resolvedApiBaseUrl)}
-      />
-    );
-  }
-
-  if (currentView.key === PROFILE_SETTINGS_VIEW.DELETE_ACCOUNT) {
-    return (
-      <DeleteAccountScreen
-        {...commonChildProps}
-        deleteConfirmationText={deleteConfirmationText}
-        onDeleteConfirmationTextChange={setDeleteConfirmationText}
-        deleteAccountError={deleteAccountError}
-        deleteAccountNotice={deleteAccountNotice}
-        isDeletingAccount={isDeletingAccount}
-        onDeleteAccountPress={handleDeleteAccountPress}
       />
     );
   }
@@ -455,17 +445,6 @@ export default function ProfileScreen({
           ) : null}
         </SystemSectionCard>
 
-        <SystemSectionCard style={styles.dangerCard}>
-          <SystemSectionHeader title="Danger Zone" />
-          <SystemNavRow
-            icon="trash-2"
-            title="Delete Account"
-            subtitle="Permanent deletion request."
-            onPress={() => pushView(PROFILE_SETTINGS_VIEW.DELETE_ACCOUNT)}
-            testID="profile-settings-nav-delete-account"
-          />
-        </SystemSectionCard>
-
         <ModeButton
           title="Sign out"
           variant="ghost"
@@ -485,9 +464,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing[3],
     paddingTop: theme.spacing[3],
     gap: theme.spacing[3],
-  },
-  dangerCard: {
-    borderColor: theme.colors.feedback.errorBorder,
-    backgroundColor: theme.colors.feedback.errorBg,
   },
 });

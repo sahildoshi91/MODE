@@ -13,7 +13,6 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from fastapi.testclient import TestClient
 
-from app.ai.client import TextCompletion, TokenUsage
 from app.core.auth import AuthenticatedUser, require_user
 from app.core.dependencies import get_daily_checkin_service, get_trainer_context
 from app.core.tenancy import TrainerContext
@@ -518,7 +517,7 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertFalse(is_meaningful_client_why("12345678901"))
         self.assertTrue(is_meaningful_client_why("Keep up with my kids on weekends."))
 
-    def test_submit_checkin_generates_persists_and_returns_structured_response(self):
+    def test_submit_checkin_generates_persists_and_returns_deterministic_response(self):
         class FakeProfileService:
             def get_or_create_profile(self, _client_id):
                 return {
@@ -529,24 +528,8 @@ class DailyCheckinServiceTests(unittest.TestCase):
                 }
 
         class FakeOpenAIClient:
-            def __init__(self):
-                self.last_kwargs = None
-
-            def create_chat_completion_with_usage(self, **kwargs):
-                self.last_kwargs = kwargs
-                return TextCompletion(
-                    text=(
-                        "Build day - 18/25. Nutrition is the low signal today, while motivation is high.\n\n"
-                        "Today's workout\n"
-                        "3-4 sets, 8-10 reps, at about 70% of your normal push. Stop each set with 2 reps left so your knee gets clean work without extra irritation. That controlled effort still supports stronger weekends with your kids.\n\n"
-                        "Before you train\n"
-                        "Eat eggs and toast, Greek yogurt with fruit, or rice and chicken 60-90 minutes before training. That fuel keeps your energy from dipping halfway through.\n\n"
-                        "Your why\n"
-                        "Today is a steady deposit into being able to play hard and still have energy left.\n\n"
-                        "Which lift will you keep the cleanest today?"
-                    ),
-                    token_usage=TokenUsage(prompt_tokens=120, completion_tokens=95, total_tokens=215),
-                )
+            def create_chat_completion_with_usage(self, **_kwargs):
+                raise AssertionError("LLM should not be called for deterministic check-in response")
 
         class FakeRepository:
             def __init__(self):
@@ -627,15 +610,15 @@ class DailyCheckinServiceTests(unittest.TestCase):
             trace_id="trace-1",
         )
 
-        self.assertEqual(repository.calls, ["upsert", "mark_attempted", "update_response"])
+        self.assertEqual(repository.calls, ["upsert", "update_response"])
         self.assertIsNotNone(result.checkin_response)
         self.assertIsNone(result.training)
         self.assertEqual(result.checkin_response.sections[1].label, "Today's workout")
-        self.assertEqual(repository.saved_response["model_used"], "gpt-5.4-mini")
-        self.assertEqual(openai_client.last_kwargs["response_format"], "text")
-        self.assertEqual(openai_client.last_kwargs["temperature"], 0.7)
+        self.assertEqual(repository.saved_response["model_used"], "deterministic_daily_checkin_v1")
+        self.assertEqual(repository.saved_response["tokens_used"], {"input": 0, "output": 0, "total": 0})
+        self.assertIn("nutrition needs the most care", result.checkin_response.sections[0].content)
 
-    def test_submit_checkin_falls_back_static_when_client_why_is_junk(self):
+    def test_submit_checkin_returns_deterministic_response_when_client_why_is_junk(self):
         class FakeProfileService:
             def get_or_create_profile(self, _client_id):
                 return {
@@ -675,6 +658,15 @@ class DailyCheckinServiceTests(unittest.TestCase):
             def get_previous_checkin(self, _client_id, _parsed_date):
                 return None
 
+            def update_checkin_response(self, *, client_id, checkin_id, checkin_response):
+                self.calls.append("update_response")
+                return {
+                    "id": checkin_id,
+                    "client_id": client_id,
+                    "checkin_response": checkin_response,
+                    "checkin_response_attempted": True,
+                }
+
         repository = FakeRepository()
         service = DailyCheckinService(
             repository=repository,
@@ -689,9 +681,109 @@ class DailyCheckinServiceTests(unittest.TestCase):
             trainer_id="trainer-1",
         )
 
-        self.assertIsNone(result.checkin_response)
-        self.assertEqual(result.training.type, "Moderate cardio or controlled strength")
-        self.assertEqual(repository.calls, ["upsert", "mark_attempted"])
+        self.assertIsNotNone(result.checkin_response)
+        self.assertIsNone(result.training)
+        self.assertEqual(result.checkin_response.model_used, "deterministic_daily_checkin_v1")
+        self.assertIn("feeling stronger", result.checkin_response.sections[3].content)
+        self.assertEqual(repository.calls, ["upsert", "update_response"])
+
+    def test_submit_checkin_returns_deterministic_response_when_profile_lookup_fails(self):
+        class BrokenProfileService:
+            def get_or_create_profile(self, _client_id):
+                raise RuntimeError("profile unavailable")
+
+        class FakeRepository:
+            def __init__(self):
+                self.calls = []
+
+            def upsert_checkin(self, payload):
+                self.calls.append("upsert")
+                return {
+                    "id": "checkin-no-profile",
+                    "client_id": payload["client_id"],
+                    "date": payload["date"],
+                    "inputs": payload["inputs"],
+                    "total_score": payload["total_score"],
+                    "assigned_mode": payload["assigned_mode"],
+                    "time_to_complete": payload["time_to_complete"],
+                    "completion_timestamp": payload["completion_timestamp"],
+                }
+
+            def update_checkin_response(self, *, client_id, checkin_id, checkin_response):
+                self.calls.append("update_response")
+                return {
+                    "id": checkin_id,
+                    "client_id": client_id,
+                    "checkin_response": checkin_response,
+                    "checkin_response_attempted": True,
+                }
+
+            def get_previous_checkin(self, _client_id, _parsed_date):
+                return None
+
+        repository = FakeRepository()
+        service = DailyCheckinService(
+            repository=repository,
+            profile_service=BrokenProfileService(),
+        )
+
+        result = service.submit_checkin(
+            client_id="client-1",
+            checkin_date=date(2026, 4, 7),
+            inputs=DailyCheckinInputs(sleep=4, stress=2, soreness=4, nutrition=3, motivation=5),
+            trainer_id="trainer-1",
+        )
+
+        self.assertIsNotNone(result.checkin_response)
+        self.assertEqual(result.checkin_response.model_used, "deterministic_daily_checkin_v1")
+        self.assertEqual(repository.calls, ["upsert", "update_response"])
+
+    def test_submit_checkin_returns_generated_response_when_response_persistence_fails(self):
+        class FakeRepository:
+            def __init__(self):
+                self.calls = []
+
+            def upsert_checkin(self, payload):
+                self.calls.append("upsert")
+                return {
+                    "id": "checkin-response-persist-fails",
+                    "client_id": payload["client_id"],
+                    "date": payload["date"],
+                    "inputs": payload["inputs"],
+                    "total_score": payload["total_score"],
+                    "assigned_mode": payload["assigned_mode"],
+                    "time_to_complete": payload["time_to_complete"],
+                    "completion_timestamp": payload["completion_timestamp"],
+                }
+
+            def update_checkin_response(self, *, client_id, checkin_id, checkin_response):
+                self.calls.append("update_response")
+                raise DailyCheckinRepositoryError(
+                    "Failed to persist check-in response",
+                    status_code=400,
+                    code="PGRST204",
+                    details="Could not find the checkin_response column in the schema cache.",
+                )
+
+            def get_previous_checkin(self, _client_id, _parsed_date):
+                return None
+
+        repository = FakeRepository()
+        service = DailyCheckinService(repository=repository, profile_service=None)
+
+        with self.assertLogs("app.modules.daily_checkins.service", level="WARNING") as captured:
+            result = service.submit_checkin(
+                client_id="client-1",
+                checkin_date=date(2026, 4, 7),
+                inputs=DailyCheckinInputs(sleep=4, stress=2, soreness=4, nutrition=3, motivation=5),
+                trainer_id="trainer-1",
+            )
+
+        self.assertEqual(repository.calls, ["upsert", "update_response"])
+        self.assertIsNotNone(result.checkin_response)
+        self.assertIsNone(result.training)
+        self.assertEqual(result.checkin_response.model_used, "deterministic_daily_checkin_v1")
+        self.assertIn("Check-in response persistence failed", "\n".join(captured.output))
 
     def test_ensure_checkin_response_backfills_once_when_not_attempted(self):
         class FakeProfileService:
@@ -704,19 +796,7 @@ class DailyCheckinServiceTests(unittest.TestCase):
 
         class FakeOpenAIClient:
             def create_chat_completion_with_usage(self, **_kwargs):
-                return TextCompletion(
-                    text=(
-                        "Build day - 18/25. Nutrition is the low signal today.\n\n"
-                        "Today's workout\n"
-                        "3 sets of 8 controlled reps at a steady effort.\n\n"
-                        "Before you train\n"
-                        "Eat Greek yogurt with berries or eggs and toast before training.\n\n"
-                        "Your why\n"
-                        "This steady work builds the energy you want after work.\n\n"
-                        "Which movement will you keep smooth today?"
-                    ),
-                    token_usage=TokenUsage(prompt_tokens=80, completion_tokens=60, total_tokens=140),
-                )
+                raise AssertionError("LLM should not be called for deterministic check-in response")
 
         class FakeRepository:
             def __init__(self):
@@ -758,21 +838,24 @@ class DailyCheckinServiceTests(unittest.TestCase):
 
         self.assertIsNotNone(response)
         self.assertEqual(response["sections"][0]["id"], "opening")
+        self.assertEqual(response["model_used"], "deterministic_daily_checkin_v1")
         self.assertEqual(
             repository.calls,
-            [
-                ("mark_attempted", "client-1", "checkin-backfill"),
-                ("update_response", "client-1", "checkin-backfill"),
-            ],
+            [("update_response", "client-1", "checkin-backfill")],
         )
 
-    def test_ensure_checkin_response_does_not_retry_after_attempt(self):
+    def test_ensure_checkin_response_backfills_even_after_attempt(self):
         class FakeRepository:
             def mark_checkin_response_attempted(self, **_kwargs):
                 raise AssertionError("attempted check-ins must not be marked again")
 
-            def update_checkin_response(self, **_kwargs):
-                raise AssertionError("attempted check-ins must not regenerate")
+            def update_checkin_response(self, *, client_id, checkin_id, checkin_response):
+                return {
+                    "id": checkin_id,
+                    "client_id": client_id,
+                    "checkin_response": checkin_response,
+                    "checkin_response_attempted": True,
+                }
 
         service = DailyCheckinService(repository=FakeRepository(), profile_service=None)
 
@@ -790,7 +873,8 @@ class DailyCheckinServiceTests(unittest.TestCase):
             trainer_id="trainer-1",
         )
 
-        self.assertIsNone(response)
+        self.assertIsNotNone(response)
+        self.assertEqual(response["model_used"], "deterministic_daily_checkin_v1")
 
     def test_build_result_uses_persisted_checkin_response_without_static_copy(self):
         record = self._build_record()
@@ -918,6 +1002,137 @@ class DailyCheckinServiceTests(unittest.TestCase):
 
         self.assertTrue(result.completed)
         self.assertEqual(result.current_streak, 0)
+
+    def test_get_status_backfills_missing_checkin_response(self):
+        class FakeRepository:
+            def __init__(self):
+                self.persisted = {}
+
+            def get_by_client_and_date(self, _client_id, _checkin_date):
+                return {
+                    "id": "checkin-backfill",
+                    "client_id": "client-1",
+                    "date": "2026-04-07",
+                    "inputs": {"sleep": 4, "stress": 3, "soreness": 4, "nutrition": 3, "motivation": 5},
+                    "total_score": 19,
+                    "assigned_mode": "BUILD",
+                    "checkin_response": None,
+                    "time_to_complete": 10,
+                    "completion_timestamp": "2026-04-07T16:00:00+00:00",
+                }
+
+            def update_checkin_response(self, *, client_id, checkin_id, checkin_response):
+                self.persisted[checkin_id] = checkin_response
+                return {
+                    "id": checkin_id,
+                    "client_id": client_id,
+                    "checkin_response": checkin_response,
+                    "checkin_response_attempted": True,
+                }
+
+            def list_checkin_dates_on_or_before(self, _client_id, _checkin_date):
+                return [date(2026, 4, 7)]
+
+            def get_previous_checkin(self, _client_id, _parsed_date):
+                return None
+
+        repository = FakeRepository()
+        service = DailyCheckinService(repository=repository, profile_service=None)
+
+        result = service.get_status("client-1", date(2026, 4, 7))
+
+        self.assertTrue(result.completed)
+        self.assertIsNotNone(result.checkin.checkin_response)
+        self.assertEqual(result.checkin.checkin_response.sections[0].id, "opening")
+        self.assertIn("checkin-backfill", repository.persisted)
+
+    def test_get_status_backfills_malformed_checkin_response(self):
+        class FakeRepository:
+            def __init__(self):
+                self.persisted = {}
+
+            def get_by_client_and_date(self, _client_id, _checkin_date):
+                return {
+                    "id": "checkin-malformed",
+                    "client_id": "client-1",
+                    "date": "2026-04-07",
+                    "inputs": {"sleep": 4, "stress": 3, "soreness": 4, "nutrition": 3, "motivation": 5},
+                    "total_score": 19,
+                    "assigned_mode": "BUILD",
+                    "checkin_response": {},
+                    "time_to_complete": 10,
+                    "completion_timestamp": "2026-04-07T16:00:00+00:00",
+                }
+
+            def update_checkin_response(self, *, client_id, checkin_id, checkin_response):
+                self.persisted[checkin_id] = checkin_response
+                return {
+                    "id": checkin_id,
+                    "client_id": client_id,
+                    "checkin_response": checkin_response,
+                    "checkin_response_attempted": True,
+                }
+
+            def list_checkin_dates_on_or_before(self, _client_id, _checkin_date):
+                return [date(2026, 4, 7)]
+
+            def get_previous_checkin(self, _client_id, _parsed_date):
+                return None
+
+        repository = FakeRepository()
+        service = DailyCheckinService(repository=repository, profile_service=None)
+
+        result = service.get_status("client-1", date(2026, 4, 7))
+
+        self.assertTrue(result.completed)
+        self.assertIsNotNone(result.checkin.checkin_response)
+        self.assertEqual(result.checkin.checkin_response.sections[0].id, "opening")
+        self.assertIn("checkin-malformed", repository.persisted)
+
+    def test_get_status_backfill_does_not_call_llm(self):
+        class FakeLLMClient:
+            def create_chat_completion_with_usage(self, **_kwargs):
+                raise AssertionError("LLM must not be called in get_status backfill")
+
+        class FakeRepository:
+            def get_by_client_and_date(self, _client_id, _checkin_date):
+                return {
+                    "id": "checkin-no-llm",
+                    "client_id": "client-1",
+                    "date": "2026-04-07",
+                    "inputs": {"sleep": 4, "stress": 3, "soreness": 4, "nutrition": 3, "motivation": 5},
+                    "total_score": 19,
+                    "assigned_mode": "BUILD",
+                    "checkin_response": None,
+                    "time_to_complete": 10,
+                    "completion_timestamp": "2026-04-07T16:00:00+00:00",
+                }
+
+            def update_checkin_response(self, *, client_id, checkin_id, checkin_response):
+                return {
+                    "id": checkin_id,
+                    "client_id": client_id,
+                    "checkin_response": checkin_response,
+                    "checkin_response_attempted": True,
+                }
+
+            def list_checkin_dates_on_or_before(self, _client_id, _checkin_date):
+                return [date(2026, 4, 7)]
+
+            def get_previous_checkin(self, _client_id, _parsed_date):
+                return None
+
+        service = DailyCheckinService(
+            repository=FakeRepository(),
+            profile_service=None,
+            checkin_response_openai_client=FakeLLMClient(),
+            checkin_response_gemini_client=FakeLLMClient(),
+        )
+
+        result = service.get_status("client-1", date(2026, 4, 7))
+
+        self.assertIsNotNone(result.checkin.checkin_response)
+        self.assertEqual(result.checkin.checkin_response.sections[0].id, "opening")
 
     def test_progress_analytics_streak_and_last_7_count_are_correct(self):
         class FakeRepository:

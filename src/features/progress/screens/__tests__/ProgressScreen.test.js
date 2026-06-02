@@ -1,5 +1,4 @@
 import React from 'react';
-import { StyleSheet } from 'react-native';
 import renderer, { act } from 'react-test-renderer';
 
 jest.mock('react-native-safe-area-context', () => {
@@ -11,203 +10,202 @@ jest.mock('react-native-safe-area-context', () => {
   };
 });
 
-jest.mock('lucide-react-native', () => {
+jest.mock('@expo/vector-icons/Feather', () => {
   const React = require('react');
   const { View } = require('react-native');
+  return ({ name, ...props }) => React.createElement(View, { testID: `feather-${name}`, ...props });
+});
 
-  const MockIcon = ({ testID, ...props }) => React.createElement(View, {
-    ...props,
-    testID: testID || 'lucide-check',
-  });
-
+jest.mock('react-native-svg', () => {
+  const React = require('react');
+  const { View } = require('react-native');
+  const stub = (name) => ({ children, ...props }) => React.createElement(View, { testID: name, ...props }, children);
   return {
-    Check: MockIcon,
+    Svg: stub('svg'),
+    G: stub('g'),
+    Path: stub('path'),
+    Line: stub('line'),
+    Circle: stub('circle'),
   };
 });
 
-jest.mock('../../../dailyCheckin/services/checkinApi', () => ({
-  getCheckinProgress: jest.fn(),
+jest.mock('../../../../hooks/useProgressMetrics', () => ({
+  useProgressMetrics: jest.fn(),
+}), { virtual: true });
+
+jest.mock('../../hooks/useProgressMetrics', () => ({
+  useProgressMetrics: jest.fn(),
 }));
 
-import ProgressScreen, {
-  buildWeeklyCheckInDays,
-  getReadinessTrendInsight,
-} from '../ProgressScreen';
-import { getCheckinProgress } from '../../../dailyCheckin/services/checkinApi';
+const { useProgressMetrics } = require('../../hooks/useProgressMetrics');
 
-async function flushEffects() {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
+import ProgressScreen from '../ProgressScreen';
 
-function buildProgressPayload(overrides = {}) {
+function buildMetricsDimension(overrides = {}) {
   return {
-    as_of_date: '2026-04-10',
-    current_streak_days: 1,
-    total_checkins_count: 32,
-    checkins_last_7_days: 3,
-    avg_score_last_7_days: 18,
-    avg_mode_last_7_days: 'BUILD',
-    avg_score_last_30_days: 20,
-    avg_mode_last_30_days: 'BASE',
-    has_enough_for_30d: true,
-    score_change_7d: {
-      value: -5,
-      previous_average: 23,
-      has_previous_window_data: true,
-    },
-    score_change_30d: {
-      value: null,
-      previous_average: null,
-      has_previous_window_data: false,
-    },
-    recent_checkins: [
-      { date: '2026-04-10', score: 18, mode: 'BUILD' },
-      { date: '2026-04-08', score: 19, mode: 'BUILD' },
-      { date: '2026-04-04', score: 17, mode: 'BASE' },
-    ],
+    surface_value: 'Good',
+    surface_value_raw: 4.0,
+    trend_direction: 'stable',
+    trend_label: '→ stable',
+    status: 'good',
+    signals: [],
+    sparkline: [4, 4, 4, 4, 4, 4, 4],
+    coach_insight_triggered: false,
+    coach_insight_reason: null,
     ...overrides,
   };
 }
 
-async function renderScreen(payload = buildProgressPayload()) {
-  getCheckinProgress.mockResolvedValueOnce(payload);
+function buildMetricsData(overrides = {}) {
+  return {
+    metrics: {
+      readiness: buildMetricsDimension({ surface_value: '20/25', surface_value_raw: 20 }),
+      sleep: buildMetricsDimension(),
+      recovery: buildMetricsDimension(),
+      energy_mood: buildMetricsDimension(),
+      stress: buildMetricsDimension(),
+      nutrition: buildMetricsDimension(),
+    },
+    streak: {
+      current_weeks: 1,
+      days_this_week: 4,
+      days_target: 7,
+      personal_best_weeks: 2,
+      milestone_next: 2,
+    },
+    as_of_date: '2026-06-02',
+    period_days: 7,
+    ...overrides,
+  };
+}
+
+async function renderScreen(hookState = {}) {
+  useProgressMetrics.mockReturnValue({
+    data: null,
+    loading: false,
+    refreshing: false,
+    error: null,
+    period: 7,
+    setPeriod: jest.fn(),
+    refresh: jest.fn(),
+    reload: jest.fn(),
+    ...hookState,
+  });
 
   let tree;
   await act(async () => {
     tree = renderer.create(<ProgressScreen accessToken="token" />);
   });
-  await flushEffects();
   return tree;
-}
-
-function findByTestIDPattern(root, pattern) {
-  return root.findAll((node) => (
-    typeof node.props?.testID === 'string' && pattern.test(node.props.testID)
-  ));
-}
-
-function uniqueTestIDCount(nodes) {
-  return new Set(nodes.map((node) => node.props.testID)).size;
-}
-
-function findStyledNodeByTestID(root, testID) {
-  return root.findAllByProps({ testID }).find((node) => Boolean(node.props.style));
-}
-
-function findModeTextByTestID(root, testID) {
-  return root.findAllByProps({ testID }).find((node) => Boolean(node.props.variant));
-}
-
-function collectTestIDs(node) {
-  if (!node || typeof node === 'string') {
-    return [];
-  }
-
-  const current = typeof node.props?.testID === 'string' ? [node.props.testID] : [];
-  return current.concat((node.children || []).flatMap((child) => (
-    typeof child === 'string' ? [] : collectTestIDs(child)
-  )));
 }
 
 function readNodeText(node) {
   if (typeof node === 'string') {
     return node;
   }
-
   return (node.children || []).map(readNodeText).join('');
 }
 
-describe('ProgressScreen readiness summary', () => {
+describe('ProgressScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  it('builds the last 7 calendar days ending on as_of_date', () => {
-    const days = buildWeeklyCheckInDays({
-      asOfDate: '2026-04-10',
-      recentCheckins: [
-        { date: '2026-04-10' },
-        { date: '2026-04-08' },
-        { date: '2026-04-04' },
-      ],
-    });
-
-    expect(days).toEqual([
-      { date: '2026-04-04', completed: true },
-      { date: '2026-04-05', completed: false },
-      { date: '2026-04-06', completed: false },
-      { date: '2026-04-07', completed: false },
-      { date: '2026-04-08', completed: true },
-      { date: '2026-04-09', completed: false },
-      { date: '2026-04-10', completed: true },
-    ]);
+  it('shows loading state while data is loading', async () => {
+    const tree = await renderScreen({ loading: true, data: null });
+    const rendered = readNodeText(tree.root);
+    expect(rendered).toContain('Loading your metrics');
   });
 
-  it('renders compact weekly check-in streak copy and circles', async () => {
-    const tree = await renderScreen();
+  it('shows error message and retry button when load fails', async () => {
+    const tree = await renderScreen({
+      loading: false,
+      error: 'Unable to load progress metrics.',
+      data: null,
+    });
+    const rendered = readNodeText(tree.root);
+    expect(rendered).toContain('Unable to load progress metrics.');
+    expect(rendered).toContain('Retry');
+  });
+
+  it('renders all six metric labels when data is available', async () => {
+    const tree = await renderScreen({ loading: false, data: buildMetricsData() });
     const rendered = readNodeText(tree.root);
 
-    expect(rendered).toContain('43% (3 of 7) check-ins complete');
-    expect(rendered).not.toContain('Weekly readiness trend:');
-    expect(rendered).not.toContain('Weekly consistency chart');
-    expect(rendered).not.toContain("Today's quick wins");
-
-    expect(uniqueTestIDCount(findByTestIDPattern(tree.root, /^weekly-checkin-day-\d+$/))).toBe(7);
-    expect(uniqueTestIDCount(findByTestIDPattern(tree.root, /^weekly-checkin-day-check-\d+$/))).toBe(3);
+    expect(rendered).toContain('Readiness');
+    expect(rendered).toContain('Sleep');
+    expect(rendered).toContain('Recovery');
+    expect(rendered).toContain('Energy & Mood');
+    expect(rendered).toContain('Calm');
+    expect(rendered).toContain('Nutrition');
   });
 
-  it('places weekly check-in copy below circles with normal body styling', async () => {
-    const tree = await renderScreen();
-    const weeklyStreak = tree.root.findAllByProps({ testID: 'weekly-checkin-streak' }).find((node) => {
-      const testIDs = collectTestIDs(node);
-      return testIDs.includes('weekly-checkin-day-0') && testIDs.includes('weekly-checkin-copy');
-    });
-    const weeklyCopy = findModeTextByTestID(tree.root, 'weekly-checkin-copy');
-    const copyStyle = StyleSheet.flatten(weeklyCopy.props.style);
-    const orderedTestIDs = collectTestIDs(weeklyStreak);
-
-    expect(orderedTestIDs.indexOf('weekly-checkin-day-0')).toBeLessThan(
-      orderedTestIDs.indexOf('weekly-checkin-copy'),
-    );
-    expect(weeklyCopy.props.variant).toBe('bodySm');
-    expect(weeklyCopy.props.tone).toBe('secondary');
-    expect(copyStyle.fontWeight).toBeUndefined();
-  });
-
-  it('shows a human readiness insight near centered average cards', async () => {
-    const tree = await renderScreen();
+  it('never renders the word "Stress" in the metric labels', async () => {
+    const tree = await renderScreen({ loading: false, data: buildMetricsData() });
     const rendered = readNodeText(tree.root);
-
-    expect(rendered).toContain('Readiness is down 5 points this week');
-    expect(rendered).toContain('prioritize recovery');
-
-    const sevenDayCard = findStyledNodeByTestID(tree.root, 'readiness-average-7d');
-    const thirtyDayCard = findStyledNodeByTestID(tree.root, 'readiness-average-30d');
-    const sevenDayStyle = StyleSheet.flatten(sevenDayCard.props.style);
-    const thirtyDayStyle = StyleSheet.flatten(thirtyDayCard.props.style);
-
-    expect(sevenDayStyle.alignItems).toBe('center');
-    expect(sevenDayStyle.justifyContent).toBe('center');
-    expect(thirtyDayStyle.alignItems).toBe('center');
-    expect(thirtyDayStyle.justifyContent).toBe('center');
-    expect(sevenDayStyle.minHeight).toBe(thirtyDayStyle.minHeight);
+    expect(rendered).not.toContain('Stress');
   });
-});
 
-describe('getReadinessTrendInsight', () => {
-  it('maps trend ranges to short coaching copy', () => {
-    expect(getReadinessTrendInsight({ readinessScore: 18, weeklyTrend: -5 }))
-      .toContain('Readiness is down 5 points this week with your 7-day average at 18.0');
-    expect(getReadinessTrendInsight({ readinessScore: 18, weeklyTrend: -2 }))
-      .toContain('Readiness is slightly down this week with your 7-day average at 18.0');
-    expect(getReadinessTrendInsight({ readinessScore: 18, weeklyTrend: 0.4 }))
-      .toContain('Readiness is holding steady with your 7-day average at 18.0');
-    expect(getReadinessTrendInsight({ readinessScore: 18, weeklyTrend: 2 }))
-      .toContain('Readiness is trending up with your 7-day average at 18.0');
-    expect(getReadinessTrendInsight({ readinessScore: 18, weeklyTrend: 5 }))
-      .toContain('Readiness is up 5 points this week with your 7-day average at 18.0');
+  it('renders streak stats', async () => {
+    const tree = await renderScreen({ loading: false, data: buildMetricsData() });
+    const rendered = readNodeText(tree.root);
+    expect(rendered).toContain('week streak');
+    expect(rendered).toContain('personal best');
+  });
+
+  it('shows empty state when no data is available', async () => {
+    const tree = await renderScreen({ loading: false, data: null, error: null });
+    const rendered = readNodeText(tree.root);
+    expect(rendered).toContain('No check-ins yet');
+  });
+
+  it('shows coach insight indicator on metric row when triggered', async () => {
+    const data = buildMetricsData({
+      metrics: {
+        readiness: buildMetricsDimension({ surface_value: '20/25' }),
+        sleep: buildMetricsDimension({ coach_insight_triggered: true, coach_insight_reason: 'low_sleep_3_days' }),
+        recovery: buildMetricsDimension(),
+        energy_mood: buildMetricsDimension(),
+        stress: buildMetricsDimension(),
+        nutrition: buildMetricsDimension(),
+      },
+    });
+    const tree = await renderScreen({ loading: false, data });
+    const rendered = readNodeText(tree.root);
+    expect(rendered).toContain('Sleep');
+  });
+
+  it('calls onOpenMetricDetail when a metric row is tapped', async () => {
+    const onOpenMetricDetail = jest.fn();
+    const data = buildMetricsData();
+    useProgressMetrics.mockReturnValue({
+      data,
+      loading: false,
+      refreshing: false,
+      error: null,
+      period: 7,
+      setPeriod: jest.fn(),
+      refresh: jest.fn(),
+      reload: jest.fn(),
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <ProgressScreen accessToken="token" onOpenMetricDetail={onOpenMetricDetail} />,
+      );
+    });
+
+    const buttons = tree.root.findAll((node) => node.props.accessibilityRole === 'button');
+    const metricButton = buttons.find((b) => {
+      const label = b.props.accessibilityLabel || '';
+      return label.toLowerCase().includes('sleep');
+    });
+    expect(metricButton).toBeTruthy();
+
+    await act(async () => {
+      metricButton.props.onPress();
+    });
+    expect(onOpenMetricDetail).toHaveBeenCalledWith('sleep', data.metrics.sleep);
   });
 });

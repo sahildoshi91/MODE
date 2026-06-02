@@ -6,7 +6,7 @@ These tasks require Apple Developer/App Store Connect access, business records, 
 
 | Task | Required Evidence | Owner | Status |
 | --- | --- | --- | --- |
-| Final Bundle ID decision | Final identifier replaces `com.anonymous.mode` only after owner approval | Founder/App Store owner | Open |
+| Final Bundle ID decision | Repo config now uses `ai.modefit.app`; confirm the same identifier in Apple Developer/App Store Connect | Founder/App Store owner | Open |
 | Apple Developer Organization account | Active organization membership for MODE | Founder | Open |
 | D-U-N-S number | D-U-N-S verified or Apple accepted alternative path | Founder | Open |
 | Apple Team ID | Team ID recorded for signing and CI/export setup | Founder/Mobile owner | Open |

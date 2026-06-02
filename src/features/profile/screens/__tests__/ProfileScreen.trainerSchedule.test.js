@@ -144,7 +144,7 @@ describe('ProfileScreen trainer schedule', () => {
     expect(rendered).toContain('Trainer Schedule');
     expect(rendered).toContain('AI Fitness Guidance');
     expect(rendered).toContain('Legal & Support');
-    expect(rendered).toContain('Delete Account');
+    expect(rendered).not.toContain('Delete Account');
     expect(rendered).toContain('Sign out');
     expect(rendered).not.toContain('AI-generated fitness coaching');
     expect(rendered).not.toContain('Weekly Days:');
@@ -254,7 +254,7 @@ describe('ProfileScreen trainer schedule', () => {
     });
     await flushEffects();
 
-    pressByTestId(tree, 'profile-settings-nav-delete-account');
+    pressByTestId(tree, 'profile-settings-nav-account');
 
     let rendered = JSON.stringify(tree.toJSON());
     expect(rendered).toContain('Submits a permanent deletion request');

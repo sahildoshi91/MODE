@@ -33,15 +33,13 @@ from app.modules.daily_checkins.schemas import (
     YesterdayCheckinSummary,
 )
 from app.modules.daily_checkins.checkin_response import (
-    CheckinResponseError,
-    build_checkin_response_prompt,
+    build_deterministic_checkin_response,
     classify_signals,
     is_meaningful_client_why,
-    parse_checkin_response,
 )
 from app.modules.motivation import build_mindset_why_cue, resolve_motivation_baseline
 from app.modules.observability.metrics import emit_metric
-from app.ai.client import GEMINI_FLASH_LITE_MODEL, GPT_5_4_MINI_MODEL, GeminiClient, OpenAIClient, TextCompletion
+from app.ai.client import GPT_5_4_MINI_MODEL, OpenAIClient
 
 
 logger = logging.getLogger(__name__)
@@ -235,6 +233,11 @@ class DailyCheckinService:
         record = self.repository.get_by_client_and_date(client_id, checkin_date)
         if not record:
             return DailyCheckinStatusResponse(date=checkin_date, completed=False, current_streak=0)
+
+        if not self._coerce_checkin_response(record.get("checkin_response")):
+            backfilled = self.ensure_checkin_response(client_id=client_id, record=record)
+            if backfilled:
+                record = {**record, "checkin_response": backfilled}
 
         return DailyCheckinStatusResponse(
             date=checkin_date,
@@ -444,7 +447,6 @@ class DailyCheckinService:
             trainer_id=trainer_id,
             trainer_display_name=trainer_display_name,
             trace_id=trace_id,
-            mark_attempted=True,
         )
         if response_payload:
             record = {**record, "checkin_response": response_payload}
@@ -464,25 +466,12 @@ class DailyCheckinService:
         if existing_response:
             return existing_response.model_dump(mode="json")
 
-        if bool(record.get("checkin_response_attempted")):
-            return None
-
-        marked_record = self._mark_checkin_response_attempted(
+        return self._try_generate_and_persist_checkin_response(
             client_id=client_id,
             record=record,
             trainer_id=trainer_id,
-            trace_id=trace_id,
-        )
-        if marked_record is None:
-            return None
-
-        return self._try_generate_and_persist_checkin_response(
-            client_id=client_id,
-            record={**record, **marked_record, "checkin_response_attempted": True},
-            trainer_id=trainer_id,
             trainer_display_name=trainer_display_name,
             trace_id=trace_id,
-            mark_attempted=False,
         )
 
     def _try_generate_and_persist_checkin_response(
@@ -493,20 +482,8 @@ class DailyCheckinService:
         trainer_id: str | None,
         trainer_display_name: str | None,
         trace_id: str | None,
-        mark_attempted: bool = True,
     ) -> dict[str, Any] | None:
         mode = self._normalize_mode(str(record.get("assigned_mode") or ""))
-        if mark_attempted:
-            marked_record = self._mark_checkin_response_attempted(
-                client_id=client_id,
-                record=record,
-                trainer_id=trainer_id,
-                trace_id=trace_id,
-            )
-            if marked_record is None:
-                return None
-            record = {**record, **marked_record, "checkin_response_attempted": True}
-
         try:
             inputs = DailyCheckinInputs(**record["inputs"])
         except Exception as exc:
@@ -520,67 +497,57 @@ class DailyCheckinService:
             )
             return None
 
-        profile = self._load_profile_for_checkin_response(client_id)
-        if profile is None:
-            self._record_checkin_response_fallback(
-                reason="profile_unavailable",
-                trace_id=trace_id,
-                client_id=client_id,
-                trainer_id=trainer_id,
-                mode=mode,
-            )
-            return None
-
+        profile = self._load_profile_for_checkin_response(client_id) or {}
         client_why = str(profile.get("user_why") or "").strip()
         if not is_meaningful_client_why(client_why):
-            self._record_checkin_response_fallback(
-                reason="client_why_missing_or_junk",
-                trace_id=trace_id,
-                client_id=client_id,
-                trainer_id=trainer_id,
-                mode=mode,
-            )
-            return None
+            client_why = ""
+        input_data = self._build_checkin_response_input(
+            client_id=client_id,
+            trainer_id=trainer_id,
+            trainer_display_name=trainer_display_name,
+            record=record,
+            inputs=inputs,
+            profile=profile,
+            client_why=client_why,
+        )
+        classification = classify_signals(input_data)
+        payload = build_deterministic_checkin_response(
+            input_data=input_data,
+            classification=classification,
+        ).model_dump(mode="json")
+        saved_response = self._persist_checkin_response_payload(
+            client_id=client_id,
+            checkin_id=str(record["id"]),
+            payload=payload,
+        )
+        return saved_response if isinstance(saved_response, dict) else payload
 
+    def _persist_checkin_response_payload(
+        self,
+        *,
+        client_id: str,
+        checkin_id: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if not self.repository or not hasattr(self.repository, "update_checkin_response"):
+            return payload
         try:
-            input_data = self._build_checkin_response_input(
-                client_id=client_id,
-                trainer_id=trainer_id,
-                trainer_display_name=trainer_display_name,
-                record=record,
-                inputs=inputs,
-                profile=profile,
-                client_why=client_why,
-            )
-            classification = classify_signals(input_data)
-            prompt = build_checkin_response_prompt(input_data, classification)
-            completion, model_used = self._execute_checkin_response_prompt(prompt)
-            parsed = parse_checkin_response(
-                completion.text,
-                input_data=input_data,
-                classification=classification,
-                model_used=model_used,
-                token_usage=completion.token_usage,
-            )
-            payload = parsed.model_dump(mode="json")
             saved = self.repository.update_checkin_response(
                 client_id=client_id,
-                checkin_id=str(record["id"]),
+                checkin_id=checkin_id,
                 checkin_response=payload,
             )
-            saved_response = saved.get("checkin_response") if isinstance(saved, dict) else None
-            return saved_response if isinstance(saved_response, dict) else payload
         except Exception as exc:
-            reason = "malformed_output" if isinstance(exc, CheckinResponseError) else "generation_or_persistence_failed"
-            self._record_checkin_response_fallback(
-                reason=reason,
-                trace_id=trace_id,
-                client_id=client_id,
-                trainer_id=trainer_id,
-                mode=mode,
-                exc=exc,
+            logger.warning(
+                "Check-in response persistence failed after primary check-in save client_id=%s checkin_id=%s: %s",
+                client_id,
+                checkin_id,
+                exc,
+                exc_info=True,
             )
-            return None
+            return payload
+        saved_response = saved.get("checkin_response") if isinstance(saved, dict) else None
+        return saved_response if isinstance(saved_response, dict) else payload
 
     def _mark_checkin_response_attempted(
         self,
@@ -674,44 +641,6 @@ class DailyCheckinService:
             ),
             trainer_kb_summary=self._summarize_trainer_kb(trainer_knowledge),
         )
-
-    def _execute_checkin_response_prompt(self, prompt: str) -> tuple[TextCompletion, str]:
-        try:
-            openai_client = self._get_checkin_response_openai_client()
-            completion = openai_client.create_chat_completion_with_usage(
-                model=GPT_5_4_MINI_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                max_output_tokens=200,
-                response_format="text",
-                temperature=0.7,
-            )
-            return completion, GPT_5_4_MINI_MODEL
-        except Exception:
-            logger.warning("Check-in response OpenAI fast path failed; trying Gemini fallback", exc_info=True)
-
-        gemini_client = self._get_checkin_response_gemini_client()
-        gemini_completion = gemini_client.create_chat_completion(
-            prompt,
-            model=GEMINI_FLASH_LITE_MODEL,
-            max_output_tokens=200,
-        )
-        return (
-            TextCompletion(
-                text=gemini_completion.text,
-                token_usage=gemini_completion.token_usage,
-            ),
-            GEMINI_FLASH_LITE_MODEL,
-        )
-
-    def _get_checkin_response_openai_client(self):
-        if self.checkin_response_openai_client is None:
-            self.checkin_response_openai_client = OpenAIClient(timeout_seconds=8.0)
-        return self.checkin_response_openai_client
-
-    def _get_checkin_response_gemini_client(self):
-        if self.checkin_response_gemini_client is None:
-            self.checkin_response_gemini_client = GeminiClient()
-        return self.checkin_response_gemini_client
 
     def _load_client_name(self, client_id: str) -> str | None:
         if not self.repository or not hasattr(self.repository, "get_client_name"):

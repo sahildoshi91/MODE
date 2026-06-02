@@ -16,7 +16,7 @@ Status markers: `BLOCKED`, `REMEDIATION PR PENDING`, `AT RISK`, `UNKNOWN`, `READ
 | Config drift | `READY` | Backend/DevOps + Security | `origin/main` has Redis-only workflow/env/schema remediation; release/staging reruns remain required. |
 | Staging validation | `BLOCKED` | Backend/QA/DevOps | Render `mode-backend-staging` is serving `efa167c2c05139c3a1da43b5ae0793f848ede1b5` from `pr6-ai-chat-memory-scaling`, not `origin/main` `0dc04119b39a0f597adec8127ad82cd2f9514071`; `/healthz` is degraded with queue lag `APIError`. |
 | Production deployment | `UNKNOWN` | Backend/DevOps | No production API host, production worker, or production release-gate pass is evidenced in repo docs. |
-| iOS/TestFlight | `BLOCKED` | Mobile release + App Store owner | Bundle ID is still `com.anonymous.mode`; no signed/exported release path is evidenced. |
+| iOS/TestFlight | `BLOCKED` | Mobile release + App Store owner | Repo iOS config now uses bundle ID `ai.modefit.app`; no signed/exported release path is evidenced. |
 | Apple/legal ops | `BLOCKED` | Founder + Legal/App Store owners | Production legal/support URLs are live; Apple enrollment, bundle/signing, App Privacy labels, age rating, reviewer metadata, screenshots, demo path, and tester plans remain open. |
 
 Next operational action: deploy `origin/main` to Render `mode-backend-staging`, recheck `/healthz`, and only reapply `backend/sql/20260516a_worker_queue_lag_view.sql` to Supabase staging if the current-main build still reports queue lag `APIError`.
@@ -95,7 +95,7 @@ Launch becomes `GO` only when all are true:
 | Gate | Status | Last verified evidence | Expected artifact | Owner |
 | --- | --- | --- | --- | --- |
 | Reconcile launch-critical config drift: `RATE_LIMIT_BACKEND=postgres` vs `redis` | `READY` | Redis-only remediation is on `origin/main`; no workflow `postgres` pins found | Release-mode and staging verification reruns | Backend/DevOps + Security |
-| Record final bundle ID and Apple Team ID | `BLOCKED` | Current repo still uses `com.anonymous.mode` | Founder-approved bundle ID + Apple Team ID record | Founder/App Store owner |
+| Record final bundle ID and Apple Team ID | `BLOCKED` | Repo iOS config uses `ai.modefit.app`; Apple Team ID is not recorded | Founder-approved bundle ID + Apple Team ID record | Founder/App Store owner |
 | Produce signed/exported IPA through approved release path | `BLOCKED` | NONE | Signed IPA path and export method record | Mobile release owner |
 | Pass IPA artifact scan against release candidate | `UNKNOWN` | NONE for release candidate | Passing `security_artifacts/release/<timestamp>/summary.json` | Mobile release owner |
 | Confirm production HTTPS API base and Supabase production project | `UNKNOWN` | NONE | Production API URL, Supabase project ref, `/healthz`, and route preflight evidence | Backend/DevOps |
@@ -183,7 +183,7 @@ Primary launch docs:
 Repo evidence:
 
 - `render.yaml`: staging web and worker services are defined.
-- `app.json` and `ios/MODE.xcodeproj/project.pbxproj`: bundle identifier remains `com.anonymous.mode`.
+- `app.json` and `ios/MODE.xcodeproj/project.pbxproj`: bundle identifier is `ai.modefit.app`.
 - `backend/app/core/startup_guards.py` and `backend/security/production_env_schema.json`: production expects Redis-backed rate limiting.
 - `.github/workflows/release-security.yml` and `.github/workflows/security-release-gates.yml`: `origin/main` sets `RATE_LIMIT_BACKEND=redis`; release-mode rerun remains required.
 - `backend/sql/20260516a_worker_queue_lag_view.sql`: queue lag view remediation now includes PostgREST schema reload tracking.

@@ -542,6 +542,33 @@ describe('DailyCheckinScreen training routine flow', () => {
       mindset: {
         cue: 'Build momentum with disciplined reps.',
       },
+      checkin_response: {
+        mode: 'BUILD',
+        total_score: 18,
+        sections: [
+          { id: 'opening', label: null, content: 'Build day - 18/25. Nutrition needs attention today.' },
+          { id: 'workout', label: "Today's workout", content: 'Use 3-4 controlled sets at moderate effort.' },
+          { id: 'nutrition', label: 'Before you train', content: 'Eat eggs and toast or Greek yogurt with fruit before training.' },
+          { id: 'why', label: 'Your why', content: 'This is one steady deposit toward real-life strength.' },
+          { id: 'question', label: null, content: 'What can you eat before training today?' },
+        ],
+        signal_classification: {
+          signals: {
+            sleep: 'high',
+            stress: 'high',
+            body: 'neutral',
+            nutrition: 'high',
+            motivation: 'neutral',
+          },
+          standout_low: 'body',
+          standout_low_score: 3,
+          contrast_pair: null,
+          all_neutral: false,
+        },
+        generated_at: '2026-04-11T16:00:00+00:00',
+        model_used: 'deterministic_daily_checkin_v1',
+        tokens_used: { input: 0, output: 0, total: 0 },
+      },
     });
     const onCheckinComplete = jest.fn();
     let tree;
@@ -584,11 +611,95 @@ describe('DailyCheckinScreen training routine flow', () => {
       id: 'checkin-new',
       mode: 'BUILD',
       score: 18,
+      checkin_response: expect.objectContaining({
+        model_used: 'deterministic_daily_checkin_v1',
+        sections: expect.arrayContaining([
+          expect.objectContaining({ id: 'opening' }),
+          expect.objectContaining({ id: 'question' }),
+        ]),
+      }),
     }));
 
     await act(async () => {
       tree.unmount();
     });
+  });
+
+  it('shows a retry error instead of a fallback summary when check-in save fails', async () => {
+    getTodayCheckin.mockResolvedValueOnce({
+      completed: false,
+      date: '2026-04-11',
+      current_streak: 0,
+      checkin: null,
+    });
+    submitTodayCheckin
+      .mockRejectedValueOnce(Object.assign(new Error('Daily check-in save failed'), {
+        status: 500,
+        stage: 'persist_checkin',
+      }))
+      .mockResolvedValueOnce(buildInitialResult({ id: 'checkin-retry' }));
+
+    const onCheckinComplete = jest.fn();
+    const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    let tree;
+
+    const hasText = (value) => tree.root.findAll((node) => (
+      node.type === Text && node.props?.children === value
+    )).length > 0;
+    const pressText = async (label) => {
+      const textNode = tree.root.findAll((node) => (
+        node.type === Text && node.props?.children === label
+      ))[0];
+      let target = textNode;
+      while (target && typeof target.props?.onPress !== 'function') {
+        target = target.parent;
+      }
+      await act(async () => {
+        target.props.onPress();
+      });
+      await flushEffects();
+    };
+
+    try {
+      await act(async () => {
+        tree = renderer.create(
+          <SafeAreaProvider>
+            <DailyCheckinScreen
+              accessToken="client-token"
+              bottomInset={0}
+              floatingNavClearance={74}
+              onCheckinComplete={onCheckinComplete}
+            />
+          </SafeAreaProvider>,
+        );
+      });
+      await flushEffects();
+
+      await pressText('Good sleep');
+      await pressText('Mostly calm');
+      await pressText('Some soreness');
+      await pressText('Solid nutrition');
+      await pressText('I can show up');
+
+      expect(hasText('We couldn\'t save today\'s check-in.')).toBe(true);
+      expect(hasText('BUILD mode')).toBe(false);
+      expect(hasText('Save still pending')).toBe(false);
+      expect(hasText('Moderate cardio or controlled strength')).toBe(false);
+
+      await pressText('Try again');
+
+      expect(submitTodayCheckin).toHaveBeenCalledTimes(2);
+      expect(onCheckinComplete).toHaveBeenCalledWith(expect.objectContaining({
+        id: 'checkin-retry',
+      }));
+    } finally {
+      consoleErrorSpy.mockRestore();
+      if (tree) {
+        await act(async () => {
+          tree.unmount();
+        });
+      }
+    }
   });
 
   it('applies the last training setup when the setup toggle is enabled', async () => {

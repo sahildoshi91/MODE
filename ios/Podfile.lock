@@ -1,12 +1,12 @@
 PODS:
-  - EXApplication (55.0.14):
+  - EXApplication (55.0.15):
     - ExpoModulesCore
   - EXConstants (55.0.16):
     - ExpoModulesCore
   - EXJSONUtils (55.0.2)
-  - EXManifests (55.0.16):
+  - EXManifests (55.0.17):
     - ExpoModulesCore
-  - Expo (55.0.23):
+  - Expo (55.0.26):
     - ExpoModulesCore
     - hermes-engine
     - RCTRequired
@@ -31,15 +31,15 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - expo-dev-client (55.0.32):
+  - expo-dev-client (55.0.35):
     - EXManifests
     - expo-dev-launcher
     - expo-dev-menu
     - expo-dev-menu-interface
     - EXUpdatesInterface
-  - expo-dev-launcher (55.0.33):
+  - expo-dev-launcher (55.0.36):
     - EXManifests
-    - expo-dev-launcher/Main (= 55.0.33)
+    - expo-dev-launcher/Main (= 55.0.36)
     - expo-dev-menu
     - expo-dev-menu-interface
     - ExpoModulesCore
@@ -68,7 +68,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - expo-dev-launcher/Main (55.0.33):
+  - expo-dev-launcher/Main (55.0.36):
     - EXManifests
     - expo-dev-launcher/Unsafe
     - expo-dev-menu
@@ -99,7 +99,7 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - expo-dev-launcher/Unsafe (55.0.33):
+  - expo-dev-launcher/Unsafe (55.0.36):
     - EXManifests
     - expo-dev-menu
     - expo-dev-menu-interface
@@ -129,8 +129,8 @@ PODS:
     - ReactCommon/turbomodule/core
     - ReactNativeDependencies
     - Yoga
-  - expo-dev-menu (55.0.27):
-    - expo-dev-menu/Main (= 55.0.27)
+  - expo-dev-menu (55.0.30):
+    - expo-dev-menu/Main (= 55.0.30)
     - hermes-engine
     - RCTRequired
     - RCTTypeSafety
@@ -153,7 +153,7 @@ PODS:
     - ReactNativeDependencies
     - Yoga
   - expo-dev-menu-interface (55.0.2)
-  - expo-dev-menu/Main (55.0.27):
+  - expo-dev-menu/Main (55.0.30):
     - EXManifests
     - expo-dev-menu-interface
     - ExpoModulesCore
@@ -185,17 +185,17 @@ PODS:
     - ExpoModulesCore
   - ExpoClipboard (55.0.13):
     - ExpoModulesCore
-  - ExpoCrypto (55.0.14):
+  - ExpoCrypto (55.0.15):
     - ExpoModulesCore
   - ExpoDomWebView (55.0.6):
     - ExpoModulesCore
-  - ExpoFileSystem (55.0.19):
+  - ExpoFileSystem (55.0.22):
     - ExpoModulesCore
-  - ExpoFont (55.0.7):
+  - ExpoFont (55.0.8):
     - ExpoModulesCore
   - ExpoKeepAwake (55.0.8):
     - ExpoModulesCore
-  - ExpoLinearGradient (55.0.13):
+  - ExpoLinearGradient (55.0.14):
     - ExpoModulesCore
   - ExpoLinking (55.0.15):
     - ExpoModulesCore
@@ -231,9 +231,9 @@ PODS:
     - React-Core
     - React-runtimescheduler
     - ReactCommon
-  - ExpoSecureStore (55.0.13):
+  - ExpoSecureStore (55.0.14):
     - ExpoModulesCore
-  - ExpoWebBrowser (55.0.15):
+  - ExpoWebBrowser (55.0.16):
     - ExpoModulesCore
   - EXUpdatesInterface (55.1.6):
     - ExpoModulesCore
@@ -2317,7 +2317,7 @@ DEPENDENCIES:
   - ExpoClipboard (from `../node_modules/expo-clipboard/ios`)
   - ExpoCrypto (from `../node_modules/expo-auth-session/node_modules/expo-crypto/ios`)
   - "ExpoDomWebView (from `../node_modules/@expo/dom-webview/ios`)"
-  - ExpoFileSystem (from `../node_modules/expo-file-system/ios`)
+  - ExpoFileSystem (from `../node_modules/expo/node_modules/expo-file-system/ios`)
   - ExpoFont (from `../node_modules/expo-font/ios`)
   - ExpoKeepAwake (from `../node_modules/expo-keep-awake/ios`)
   - ExpoLinearGradient (from `../node_modules/expo-linear-gradient/ios`)
@@ -2438,7 +2438,7 @@ EXTERNAL SOURCES:
   ExpoDomWebView:
     :path: "../node_modules/@expo/dom-webview/ios"
   ExpoFileSystem:
-    :path: "../node_modules/expo-file-system/ios"
+    :path: "../node_modules/expo/node_modules/expo-file-system/ios"
   ExpoFont:
     :path: "../node_modules/expo-font/ios"
   ExpoKeepAwake:
@@ -2618,30 +2618,30 @@ EXTERNAL SOURCES:
     :path: "../node_modules/react-native/ReactCommon/yoga"
 
 SPEC CHECKSUMS:
-  EXApplication: ab5a9ca485adce8be81309a5172d1565e9d7467f
+  EXApplication: 82a44fa8236bb644a805ee21e64054eeb01d22ea
   EXConstants: dadbeba983acc30f855a919658a2b34fbd86615d
   EXJSONUtils: 04bc3807d351331a5fe154ce1da596ec15d99169
-  EXManifests: f4e50a54115948e206f4c2391bdea755a1aa74ec
-  Expo: 51ac8f3473586b2634d9dfe52324793b086acb5a
-  expo-dev-client: 3541acbf4b009c36c2509038eba98d2d041b8f1e
-  expo-dev-launcher: 230776e4791fc5c33aa48aa7cefa69c2221e1a6f
-  expo-dev-menu: 4d2d466f722275263e8e8ea543916de39178ce36
+  EXManifests: 35b26ca30c8a6bd427d1cba20348cd3c43684bb2
+  Expo: a74260e921728e06b81d3811a508acd5858812d6
+  expo-dev-client: f65f51def820b8c6d4b249942c98538fc42a68b4
+  expo-dev-launcher: f61d325756363aa4622b09d189955659f1afe297
+  expo-dev-menu: ff595953daf028b6bd9f0fa9b77bf58fbc41fa66
   expo-dev-menu-interface: 833795f4c98a674d36cbc12b11b21756c38e01e8
   ExpoAsset: 7721c5c4ae2a7c3c8147a046727ac6c020b05648
   ExpoBlur: 7a86e84e7728108fa6908d7103fa527705a3dbbf
   ExpoClipboard: 5d1b0cd2686406f21e616f2d9b3431259dee2e6a
-  ExpoCrypto: 9fd0b78215cffa1aa20de026d452242401aa37dc
+  ExpoCrypto: e7f4a14eaa6d6a6a2196cd7391d171c84be0b1aa
   ExpoDomWebView: b2e9d601f9cb77d3c97da73234e175b64be91928
-  ExpoFileSystem: 0b73b097e67c83622640168f620defc65a1a6f70
-  ExpoFont: a95606f106a6394df8edf6d0d87aab9020af5ad4
+  ExpoFileSystem: 61e663d0bbd1a973d324530d1d6ee559a5e5192c
+  ExpoFont: a7e34a75bdfb703fa07a0e87807f836236608c76
   ExpoKeepAwake: d0eb7a0719500d2a43fbf29b6f79e84d70c75ebf
-  ExpoLinearGradient: c654e92d726a6d64c588a0988bb22bea331d5e79
+  ExpoLinearGradient: dcbc1ca46ebfeb9d7646f49595057d161dae208e
   ExpoLinking: 40f36cf134ea6930f37867858c0643877b865d53
   ExpoLogBox: a678d36477ab9544fe63e0b5328a0716539b6774
   ExpoModulesCore: 5e1ad569ce7cf8d35c0737585f34cc299fc3f0ca
   ExpoModulesJSI: 964334271fc77832736f66ee1785761cdc778dbe
-  ExpoSecureStore: 38954f6bcef1287aa04c06fba3b86e8af3291ccd
-  ExpoWebBrowser: 231c91ddd1e445d81d4a4cac364360354200c32f
+  ExpoSecureStore: 0e7959ad3a9fa59306d55f26a37854640dd334c2
+  ExpoWebBrowser: 5847267c496125abe38afccae97d34cb6ecc5340
   EXUpdatesInterface: 4c11f4d1594526258f14d09817dc407acbf24e3b
   FBLazyVector: 427fa1856a481856091061293ce865a75aa4f20f
   hermes-engine: ca6e4ba2b843215730a1690863ecf0eebb943b5d

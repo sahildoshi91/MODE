@@ -35,6 +35,7 @@ import {
 } from '../features/onboarding/services/onboardingApi';
 import { deleteMyAccount } from '../features/profile/services/profileApi';
 import ProfileScreen from '../features/profile/screens/ProfileScreen';
+import MetricDrillDownScreen from '../features/progress/screens/MetricDrillDownScreen';
 import ProgressScreen from '../features/progress/screens/ProgressScreen';
 import TrainerClientsScreen from '../features/trainerClients/screens/TrainerClientsScreen';
 import TrainerHomeScreen from '../features/trainerHome/screens/TrainerHomeScreen';
@@ -414,6 +415,7 @@ function AppShell() {
   const [chatLaunchContext, setChatLaunchContext] = useState(null);
   const [coachOverlayContext, setCoachOverlayContext] = useState(null);
   const [progressRoute, setProgressRoute] = useState('progress');
+  const [progressMetricDetail, setProgressMetricDetail] = useState(null);
   const [insightsOrigin, setInsightsOrigin] = useState('progress');
   const [shellLoadingState, setShellLoadingState] = useState(null);
   const [algorithmMemoryRefreshToken, setAlgorithmMemoryRefreshToken] = useState(0);
@@ -1063,6 +1065,16 @@ function AppShell() {
     setProgressRoute('insights');
   };
 
+  const handleOpenMetricDetail = (dimensionKey, metricData) => {
+    setProgressMetricDetail({ dimensionKey, metricData });
+    setProgressRoute('metric-detail');
+  };
+
+  const handleBackFromMetricDetail = () => {
+    setProgressRoute('progress');
+    setProgressMetricDetail(null);
+  };
+
   const handleBackFromInsights = () => {
     if (insightsOrigin === 'home') {
       setActiveTab('home');
@@ -1628,7 +1640,18 @@ function AppShell() {
                 accessToken={session.access_token}
                 bottomInset={contentBottomInset}
                 onOpenInsights={handleOpenProgressInsights}
+                onOpenMetricDetail={handleOpenMetricDetail}
                 initialSection="habits"
+              />
+            ) : null}
+
+            {!isTrainerViewer && activeTab === 'progress' && progressRoute === 'metric-detail' ? (
+              <MetricDrillDownScreen
+                accessToken={session.access_token}
+                dimensionKey={progressMetricDetail?.dimensionKey}
+                initialDimension={progressMetricDetail?.metricData}
+                onBack={handleBackFromMetricDetail}
+                bottomInset={contentBottomInset}
               />
             ) : null}
 

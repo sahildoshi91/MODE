@@ -251,6 +251,36 @@ class ChatSessionRepository:
             return response.data[0]
         return self.get_opening_summary_message(session_id)
 
+    def get_first_assistant_message(self, session_id: str) -> dict[str, Any] | None:
+        response = (
+            self.supabase
+            .table(self._MESSAGES_TABLE)
+            .select("*")
+            .eq("session_id", session_id)
+            .eq("sender_type", "ai")
+            .order("created_at", desc=False)
+            .limit(1)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
+    def update_message_by_id(
+        self,
+        *,
+        message_id: str,
+        content: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        client = self.admin_supabase or self.supabase
+        response = (
+            client
+            .table(self._MESSAGES_TABLE)
+            .update({"content": content, "metadata": metadata})
+            .eq("id", message_id)
+            .execute()
+        )
+        return response.data[0] if response.data else None
+
     def append_message(
         self,
         *,

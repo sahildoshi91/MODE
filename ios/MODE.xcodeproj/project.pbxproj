@@ -365,7 +365,7 @@
 					"-lc++",
 				);
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_DEBUG";
-				PRODUCT_BUNDLE_IDENTIFIER = com.anonymous.mode;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.modefit.app;
 				PRODUCT_NAME = MODE;
 				SWIFT_OBJC_BRIDGING_HEADER = "MODE/MODE-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
@@ -396,7 +396,7 @@
 					"-lc++",
 				);
 				OTHER_SWIFT_FLAGS = "$(inherited) -D EXPO_CONFIGURATION_RELEASE";
-				PRODUCT_BUNDLE_IDENTIFIER = com.anonymous.mode;
+				PRODUCT_BUNDLE_IDENTIFIER = ai.modefit.app;
 				PRODUCT_NAME = MODE;
 				SWIFT_OBJC_BRIDGING_HEADER = "MODE/MODE-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
