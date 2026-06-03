@@ -60,14 +60,36 @@ class FakeSupabaseClient:
 class FakeAdminAuth:
     def __init__(self):
         self.sign_out_calls = []
+        self.update_user_by_id_calls = []
 
     def sign_out(self, jwt, scope="global"):
         self.sign_out_calls.append((jwt, scope))
+
+    def update_user_by_id(self, user_id, payload):
+        self.update_user_by_id_calls.append((user_id, payload))
 
 
 class FakeAdminClient:
     def __init__(self):
         self.auth = type("FakeAdminNamespace", (), {"admin": FakeAdminAuth()})()
+
+
+class FakePublicAuth:
+    def __init__(self, user, *, sign_in_error=None):
+        self.user = user
+        self.sign_in_error = sign_in_error
+        self.sign_in_payloads = []
+
+    def sign_in_with_password(self, payload):
+        self.sign_in_payloads.append(payload)
+        if self.sign_in_error:
+            raise self.sign_in_error
+        return FakeAuthResponse(self.user)
+
+
+class FakePublicClient:
+    def __init__(self, auth_user, *, sign_in_error=None):
+        self.auth = FakePublicAuth(auth_user, sign_in_error=sign_in_error)
 
 
 class FakeAccountRepository:
@@ -329,6 +351,38 @@ class AccountApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(fake_supabase.auth.tokens, ["token-123"])
         self.assertEqual(fake_admin.auth.admin.sign_out_calls, [("token-123", "others")])
+
+    def test_change_password_falls_back_to_verified_admin_update_when_user_update_fails(self):
+        fake_supabase = FakeSupabaseClient(
+            {"id": "user-123", "email": "confirmed@example.com"},
+            update_error=RuntimeError("current_password_update_unsupported"),
+        )
+        fake_public = FakePublicClient({"id": "user-123", "email": "confirmed@example.com"})
+        fake_admin = FakeAdminClient()
+        app.dependency_overrides[get_request_scoped_supabase_client] = lambda: fake_supabase
+
+        with (
+            patch("app.api.v1.account.get_supabase_public_client", return_value=fake_public),
+            patch("app.api.v1.account.get_supabase_admin_client", return_value=fake_admin),
+        ):
+            response = self.client.patch(
+                "/api/v1/account/password",
+                json={
+                    "current_password": "currentpassword123",
+                    "new_password": "newpassword1234",
+                },
+                headers={"Authorization": "Bearer ignored"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(fake_public.auth.sign_in_payloads, [{
+            "email": "confirmed@example.com",
+            "password": "currentpassword123",
+        }])
+        self.assertEqual(fake_admin.auth.admin.update_user_by_id_calls, [(
+            "user-123",
+            {"password": "newpassword1234"},
+        )])
 
     def test_change_password_succeeds_even_when_session_revocation_fails(self):
         fake_supabase = FakeSupabaseClient({"id": "user-123", "email": "confirmed@example.com"})

@@ -21,6 +21,7 @@ from app.core.dependencies import (
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext
 from app.db.client import get_supabase_admin_client
+from app.db.client import get_supabase_public_client
 from app.modules.account_deletion.repository import AccountDeletionRequestRepository
 from app.modules.account_deletion.service import AccountDeletionService
 from app.modules.intelligence_jobs.queue import enqueue_intelligence_job
@@ -283,6 +284,38 @@ def _revoke_other_sessions(supabase: Client, user: AuthenticatedUser) -> None:
     get_supabase_admin_client().auth.admin.sign_out(user.access_token, "others")
 
 
+def _change_password_with_verified_admin_fallback(
+    *,
+    supabase: Client,
+    user: AuthenticatedUser,
+    current_password: str,
+    new_password: str,
+) -> None:
+    auth_user = _get_auth_user_object(supabase, user)
+    if _auth_user_id(auth_user) != user.id:
+        raise RuntimeError("credential_password_subject_mismatch")
+
+    email = _optional_text(_object_value(auth_user, "email")) or user.email
+    if not email:
+        raise RuntimeError("credential_password_email_unavailable")
+
+    public_client = get_supabase_public_client()
+    sign_in_payload = public_client.auth.sign_in_with_password(
+        {
+            "email": email,
+            "password": current_password,
+        }
+    )
+    signed_in_user = _object_value(sign_in_payload, "user")
+    if _auth_user_id(signed_in_user) != user.id:
+        raise RuntimeError("credential_password_reauth_subject_mismatch")
+
+    get_supabase_admin_client().auth.admin.update_user_by_id(
+        user.id,
+        {"password": new_password},
+    )
+
+
 def _resolve_account_viewer_role(
     *,
     trainer_context: TrainerContext,
@@ -383,9 +416,17 @@ async def change_account_password(
                 "current_password": current_password,
             }
         )
-    except Exception as exc:
-        _record_password_failure(user, http_request, reason="invalid_current")
-        raise _password_update_error() from exc
+    except Exception:
+        try:
+            _change_password_with_verified_admin_fallback(
+                supabase=supabase,
+                user=user,
+                current_password=current_password,
+                new_password=new_password,
+            )
+        except Exception as fallback_exc:
+            _record_password_failure(user, http_request, reason="invalid_current")
+            raise _password_update_error() from fallback_exc
 
     _reset_password_failures(user.id)
     _emit_credential_audit("credential.password_changed", user=user, request=http_request)
