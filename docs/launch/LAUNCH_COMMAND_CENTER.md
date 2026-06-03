@@ -99,6 +99,7 @@ Launch becomes `GO` only when all are true:
 | Produce signed/exported IPA through approved release path | `BLOCKED` | NONE | Signed IPA path and export method record | Mobile release owner |
 | Pass IPA artifact scan against release candidate | `UNKNOWN` | NONE for release candidate | Passing `security_artifacts/release/<timestamp>/summary.json` | Mobile release owner |
 | Confirm production HTTPS API base and Supabase production project | `UNKNOWN` | NONE | Production API URL, Supabase project ref, `/healthz`, and route preflight evidence | Backend/DevOps |
+| Verify Supabase secure email change before enabling `AUTH_PASSWORD_PROXY_ENABLED=true` in staging | `UNKNOWN` | NONE | Screenshot or written confirmation that secure/double-confirm email change is enabled in the Supabase Auth dashboard | Backend/DevOps + Security |
 | Run production release security gates in release mode | `BLOCKED` | 2026-05-26 release-mode environment gates failed, including missing `REDIS_URL` | Release-mode `GO` summary artifact | Security/DevOps |
 | Apply approved staging launch migrations | `BLOCKED` | Do not reapply queue lag SQL until Render staging is deployed from current `main` and health is rechecked | DB owner approval plus migration apply log | DB owner |
 | Pass staging launch verification without skipped launch gates | `BLOCKED` | 2026-05-26 staging `/healthz` degraded on stale Render build `efa167c2c05139c3a1da43b5ae0793f848ede1b5`; full gates were not run | Dated staging verification result with no skipped launch gates | Backend/QA |

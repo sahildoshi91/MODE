@@ -216,9 +216,16 @@ _LIMITS_BY_GROUP = {
     "login": lambda: settings.rate_limit_login_per_window,
     "signup": lambda: settings.rate_limit_signup_per_window,
     "password_reset": lambda: settings.rate_limit_password_reset_per_window,
+    "credential_password_change": lambda: settings.rate_limit_credential_password_change_per_window,
+    "credential_email_change": lambda: settings.rate_limit_credential_email_change_per_window,
     "memory_create": lambda: settings.rate_limit_memory_create_per_window,
     "file_upload": lambda: settings.rate_limit_file_upload_per_window,
     "expensive_ai": lambda: settings.rate_limit_expensive_ai_per_window,
+}
+
+_WINDOWS_BY_GROUP = {
+    "credential_password_change": lambda: settings.rate_limit_credential_password_change_window_seconds,
+    "credential_email_change": lambda: settings.rate_limit_credential_email_change_window_seconds,
 }
 
 _rate_limiter = _InMemoryRateLimiter()
@@ -341,7 +348,12 @@ def enforce_rate_limit(
         if callable(group_limit_resolver)
         else int(settings.rate_limit_default_per_window)
     )
-    window_seconds = int(settings.rate_limit_window_seconds)
+    group_window_resolver = _WINDOWS_BY_GROUP.get(group)
+    window_seconds = (
+        int(group_window_resolver())
+        if callable(group_window_resolver)
+        else int(settings.rate_limit_window_seconds)
+    )
     context_bits = []
     if isinstance(context, dict):
         for key in sorted(context.keys()):

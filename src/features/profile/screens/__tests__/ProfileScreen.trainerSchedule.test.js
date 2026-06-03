@@ -3,14 +3,8 @@ jest.mock('../../services/profileApi', () => ({
   getMyTrainerSchedule: jest.fn(),
   getTrainerSettingsMe: jest.fn(),
   patchTrainerSettingsMe: jest.fn(),
-}));
-
-jest.mock('../../../../services/supabaseClient', () => ({
-  supabase: {
-    auth: {
-      updateUser: jest.fn(),
-    },
-  },
+  updateAccountEmail: jest.fn(),
+  updateAccountPassword: jest.fn(),
 }));
 
 jest.mock('../../../trainerAssignment/services/trainerAssignmentApi', () => ({
@@ -48,12 +42,13 @@ import renderer, { act } from 'react-test-renderer';
 
 import ProfileScreen from '../ProfileScreen';
 import { getLegalLinks, getLegalLinksFallbackText } from '../../../../config/legalLinks';
-import { supabase } from '../../../../services/supabaseClient';
 import {
   getAccountMe,
   getMyTrainerSchedule,
   getTrainerSettingsMe,
   patchTrainerSettingsMe,
+  updateAccountEmail,
+  updateAccountPassword,
 } from '../../services/profileApi';
 import {
   assignTrainerByInvite,
@@ -152,7 +147,8 @@ describe('ProfileScreen trainer schedule', () => {
       assigned_trainer_display_name: 'Coach Alex',
       is_self_guided: false,
     });
-    supabase.auth.updateUser.mockResolvedValue({ data: {}, error: null });
+    updateAccountEmail.mockResolvedValue({ success: true });
+    updateAccountPassword.mockResolvedValue({ success: true });
     assignTrainerByInvite.mockResolvedValue({
       needs_assignment: false,
       assigned_trainer_id: 'trainer-2',
@@ -341,7 +337,7 @@ describe('ProfileScreen trainer schedule', () => {
     expect(rendered).toContain('Account deletion request submitted');
   });
 
-  it('renders pending email copy and submits email and password updates through Supabase Auth', async () => {
+  it('renders pending email copy and submits email and password updates through backend account APIs', async () => {
     getAccountMe.mockResolvedValue({
       email: 'client@example.com',
       pending_email_change: true,
@@ -388,7 +384,10 @@ describe('ProfileScreen trainer schedule', () => {
       await tree.root.findByProps({ testID: 'account-change-email-button' }).props.onPress();
     });
 
-    expect(supabase.auth.updateUser).toHaveBeenCalledWith({ email: 'next@example.com' });
+    expect(updateAccountEmail).toHaveBeenCalledWith({
+      accessToken: 'client-token',
+      email: 'next@example.com',
+    });
 
     act(() => {
       tree.root.findByProps({ accessibilityLabel: 'Go back' }).props.onPress();
@@ -397,14 +396,19 @@ describe('ProfileScreen trainer schedule', () => {
     pressByTestId(tree, 'account-nav-password');
 
     act(() => {
-      tree.root.findByProps({ testID: 'account-password-input' }).props.onChangeText('newpassword1');
-      tree.root.findByProps({ testID: 'account-password-confirmation-input' }).props.onChangeText('newpassword1');
+      tree.root.findByProps({ testID: 'account-current-password-input' }).props.onChangeText('currentpassword1');
+      tree.root.findByProps({ testID: 'account-password-input' }).props.onChangeText('newpassword123');
+      tree.root.findByProps({ testID: 'account-password-confirmation-input' }).props.onChangeText('newpassword123');
     });
     await act(async () => {
       await tree.root.findByProps({ testID: 'account-update-password-button' }).props.onPress();
     });
 
-    expect(supabase.auth.updateUser).toHaveBeenCalledWith({ password: 'newpassword1' });
+    expect(updateAccountPassword).toHaveBeenCalledWith({
+      accessToken: 'client-token',
+      currentPassword: 'currentpassword1',
+      newPassword: 'newpassword123',
+    });
   });
 
   it('changes coach by invite and confirms self-detach', async () => {

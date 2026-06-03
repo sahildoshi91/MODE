@@ -98,6 +98,31 @@ export async function getAccountMe({ accessToken }) {
   return requestProfileApi('/api/v1/account/me', { accessToken });
 }
 
+export async function updateAccountEmail({ accessToken, email }) {
+  return requestProfileApi('/api/v1/account/email', {
+    accessToken,
+    method: 'PATCH',
+    body: {
+      email,
+    },
+  });
+}
+
+export async function updateAccountPassword({
+  accessToken,
+  currentPassword,
+  newPassword,
+}) {
+  return requestProfileApi('/api/v1/account/password', {
+    accessToken,
+    method: 'PATCH',
+    body: {
+      current_password: currentPassword,
+      new_password: newPassword,
+    },
+  });
+}
+
 export async function deleteMyAccount({ accessToken, confirmation }) {
   return requestProfileApi('/api/v1/account/me', {
     accessToken,

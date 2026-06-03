@@ -351,6 +351,20 @@ class ChatPipelinePrimitiveTests(unittest.TestCase):
         self.assertTrue(candidate.should_write)
         self.assertEqual(candidate.category, "injury")
 
+    def test_credential_like_messages_are_not_persisted_to_memory(self):
+        examples = [
+            "My new pass is CorrectHorseBatteryStaple and I prefer morning workouts.",
+            "The reset code was 123456 and my goal is to get stronger.",
+            "Here is my auth token eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturetext",
+            "I pasted this secret abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/== and I have knee pain.",
+        ]
+
+        for message in examples:
+            with self.subTest(message=message):
+                candidate = evaluate_memory_write(message)
+                self.assertFalse(candidate.should_write)
+                self.assertEqual(candidate.reason, "credential_secret")
+
     def test_memory_write_failure_does_not_block_response(self):
         service = ConversationService.__new__(ConversationService)
         service.repository = ExplodingMemoryRepository()

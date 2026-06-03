@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import {
@@ -169,10 +169,13 @@ function ChangeEmailSubView({
 
 function ChangePasswordSubView({
   isLoadingAccount,
+  accountCurrentPasswordDraft,
+  onAccountCurrentPasswordDraftChange,
   accountPasswordDraft,
   onAccountPasswordDraftChange,
   accountPasswordConfirmationDraft,
   onAccountPasswordConfirmationDraftChange,
+  onClearAccountPasswordDrafts,
   onUpdateAccountPasswordPress,
   isUpdatingAccountPassword,
   accountError,
@@ -180,6 +183,10 @@ function ChangePasswordSubView({
   bottomInset,
   onBack,
 }) {
+  useEffect(() => () => {
+    onClearAccountPasswordDrafts?.();
+  }, [onClearAccountPasswordDrafts]);
+
   return (
     <SettingsScreenShell
       title="Password"
@@ -187,6 +194,14 @@ function ChangePasswordSubView({
       onBack={onBack}
     >
       <ModeCard variant="surface">
+        <ModeInput
+          value={accountCurrentPasswordDraft}
+          onChangeText={onAccountCurrentPasswordDraftChange}
+          placeholder="Current password"
+          secureTextEntry
+          style={styles.input}
+          testID="account-current-password-input"
+        />
         <ModeInput
           value={accountPasswordDraft}
           onChangeText={onAccountPasswordDraftChange}

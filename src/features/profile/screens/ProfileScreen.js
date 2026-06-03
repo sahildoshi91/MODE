@@ -12,12 +12,13 @@ import {
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { getApiDebugInfo } from '../../../services/apiBaseUrl';
-import { supabase } from '../../../services/supabaseClient';
 import {
   getAccountMe,
   getMyTrainerSchedule,
   getTrainerSettingsMe,
   patchTrainerSettingsMe,
+  updateAccountEmail,
+  updateAccountPassword,
 } from '../services/profileApi';
 import {
   assignTrainerByInvite,
@@ -101,6 +102,7 @@ export default function ProfileScreen({
   const [deleteAccountNotice, setDeleteAccountNotice] = useState(null);
   const [accountDetails, setAccountDetails] = useState(null);
   const [accountEmailDraft, setAccountEmailDraft] = useState(email === 'No email found' ? '' : email);
+  const [accountCurrentPasswordDraft, setAccountCurrentPasswordDraft] = useState('');
   const [accountPasswordDraft, setAccountPasswordDraft] = useState('');
   const [accountPasswordConfirmationDraft, setAccountPasswordConfirmationDraft] = useState('');
   const [accountInviteCodeDraft, setAccountInviteCodeDraft] = useState('');
@@ -158,6 +160,12 @@ export default function ProfileScreen({
 
   const popView = useCallback(() => {
     setViewStack((current) => (current.length > 1 ? current.slice(0, -1) : current));
+  }, []);
+
+  const clearAccountPasswordDrafts = useCallback(() => {
+    setAccountCurrentPasswordDraft('');
+    setAccountPasswordDraft('');
+    setAccountPasswordConfirmationDraft('');
   }, []);
 
   const handleToggleTonePreference = useCallback(() => {
@@ -322,10 +330,7 @@ export default function ProfileScreen({
     setAccountError(null);
     setAccountNotice(null);
     try {
-      const { error } = await supabase.auth.updateUser({ email: normalizedEmail });
-      if (error) {
-        throw error;
-      }
+      await updateAccountEmail({ accessToken, email: normalizedEmail });
       const updatedAccount = await loadAccountDetails();
       setAccountNotice(`Confirmation sent to ${updatedAccount?.pending_email || normalizedEmail}.`);
     } catch (error) {
@@ -339,10 +344,15 @@ export default function ProfileScreen({
     if (isUpdatingAccountPassword) {
       return;
     }
+    const currentPassword = String(accountCurrentPasswordDraft || '');
     const nextPassword = String(accountPasswordDraft || '');
     const confirmation = String(accountPasswordConfirmationDraft || '');
-    if (nextPassword.length < 8) {
-      setAccountError('Use at least 8 characters for your new password.');
+    if (!currentPassword) {
+      setAccountError('Enter your current password to continue.');
+      return;
+    }
+    if (nextPassword.length < 12) {
+      setAccountError('Use at least 12 characters for your new password.');
       return;
     }
     if (nextPassword !== confirmation) {
@@ -354,12 +364,12 @@ export default function ProfileScreen({
     setAccountError(null);
     setAccountNotice(null);
     try {
-      const { error } = await supabase.auth.updateUser({ password: nextPassword });
-      if (error) {
-        throw error;
-      }
-      setAccountPasswordDraft('');
-      setAccountPasswordConfirmationDraft('');
+      await updateAccountPassword({
+        accessToken,
+        currentPassword,
+        newPassword: nextPassword,
+      });
+      clearAccountPasswordDrafts();
       setAccountNotice('Password updated.');
     } catch (error) {
       setAccountError(error?.message || 'Unable to update password.');
@@ -465,10 +475,13 @@ export default function ProfileScreen({
         onAccountEmailDraftChange={setAccountEmailDraft}
         onUpdateAccountEmailPress={handleUpdateAccountEmailPress}
         isUpdatingAccountEmail={isUpdatingAccountEmail}
+        accountCurrentPasswordDraft={accountCurrentPasswordDraft}
+        onAccountCurrentPasswordDraftChange={setAccountCurrentPasswordDraft}
         accountPasswordDraft={accountPasswordDraft}
         onAccountPasswordDraftChange={setAccountPasswordDraft}
         accountPasswordConfirmationDraft={accountPasswordConfirmationDraft}
         onAccountPasswordConfirmationDraftChange={setAccountPasswordConfirmationDraft}
+        onClearAccountPasswordDrafts={clearAccountPasswordDrafts}
         onUpdateAccountPasswordPress={handleUpdateAccountPasswordPress}
         isUpdatingAccountPassword={isUpdatingAccountPassword}
         accountInviteCodeDraft={accountInviteCodeDraft}

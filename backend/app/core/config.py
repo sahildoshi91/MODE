@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     account_deletion_disabled_sink_categories: str = (
         "vector_indexes,embedding_stores,logs,notification_providers,email_providers,ai_memory_retrieval_systems"
     )
-    auth_password_proxy_enabled: bool = True
+    auth_password_proxy_enabled: bool = False
     auth_local_jwt_verify_enabled: bool = True
     auth_context_cache_ttl_seconds: int = Field(default=120, ge=1, le=120)
     tenant_context_cache_ttl_seconds: int = Field(default=90, ge=1, le=120)
@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     rate_limit_login_per_window: int = 10
     rate_limit_signup_per_window: int = 8
     rate_limit_password_reset_per_window: int = 6
+    rate_limit_credential_password_change_per_window: int = 5
+    rate_limit_credential_password_change_window_seconds: int = 900
+    rate_limit_credential_email_change_per_window: int = 3
+    rate_limit_credential_email_change_window_seconds: int = 3600
     rate_limit_memory_create_per_window: int = 20
     rate_limit_file_upload_per_window: int = 20
     rate_limit_expensive_ai_per_window: int = 8
