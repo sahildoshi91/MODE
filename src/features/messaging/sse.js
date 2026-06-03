@@ -1,3 +1,13 @@
+export const DEFAULT_SSE_INACTIVITY_TIMEOUT_MS = 30000;
+
+function createSseProtocolError(message, options = {}) {
+  const error = new Error(message);
+  error.name = options.name || 'SseProtocolError';
+  error.code = options.code || 'sse_protocol_error';
+  error.retryable = true;
+  return error;
+}
+
 function splitSseBlocks(buffer) {
   const normalized = buffer.replace(/\r\n/g, '\n');
   const parts = normalized.split('\n\n');
@@ -50,7 +60,7 @@ function parseSseBlock(block) {
   };
 }
 
-function toPayload(rawData) {
+function toPayload(rawData, { allowLegacyPlainText = false } = {}) {
   const trimmed = String(rawData || '').trim();
   if (!trimmed || trimmed === '[DONE]') {
     return null;
@@ -58,10 +68,15 @@ function toPayload(rawData) {
   try {
     return JSON.parse(trimmed);
   } catch (_error) {
-    return {
-      type: 'message',
-      text: trimmed,
-    };
+    if (allowLegacyPlainText) {
+      return {
+        type: 'message',
+        text: trimmed,
+      };
+    }
+    throw createSseProtocolError('Malformed SSE payload received from stream.', {
+      code: 'sse_malformed_json',
+    });
   }
 }
 
@@ -80,20 +95,51 @@ async function consumeTextStream(reader, onChunk) {
 export async function consumeSseStream(response, {
   onEvent,
   onRawData,
+  allowLegacyPlainText = false,
+  inactivityTimeoutMs = DEFAULT_SSE_INACTIVITY_TIMEOUT_MS,
 } = {}) {
   let buffer = '';
+  let timeoutId = null;
+  let timeoutReject = null;
+
+  const clearWatchdog = () => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  };
+
+  const resetWatchdog = (reader = null) => {
+    clearWatchdog();
+    const timeoutMs = Number(inactivityTimeoutMs);
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return;
+    }
+    timeoutId = setTimeout(() => {
+      const error = createSseProtocolError('Streaming response timed out before the next event.', {
+        name: 'SseInactivityTimeoutError',
+        code: 'sse_inactivity_timeout',
+      });
+      if (reader && typeof reader.cancel === 'function') {
+        reader.cancel(error).catch(() => {});
+      }
+      if (typeof timeoutReject === 'function') {
+        timeoutReject(error);
+      }
+    }, timeoutMs);
+  };
 
   const dispatchBlock = (block) => {
     const parsed = parseSseBlock(block);
     if (!parsed) {
-      return;
+      return false;
     }
     if (typeof onRawData === 'function') {
       onRawData(parsed.data);
     }
-    const payload = toPayload(parsed.data);
+    const payload = toPayload(parsed.data, { allowLegacyPlainText });
     if (!payload) {
-      return;
+      return false;
     }
     if (typeof onEvent === 'function') {
       onEvent(payload, {
@@ -101,22 +147,40 @@ export async function consumeSseStream(response, {
         id: parsed.id,
       });
     }
+    return true;
   };
 
   const flushBuffer = () => {
     const split = splitSseBlocks(buffer);
-    split.blocks.forEach(dispatchBlock);
+    const dispatchedCount = split.blocks.reduce((count, block) => (
+      dispatchBlock(block) ? count + 1 : count
+    ), 0);
     buffer = split.rest;
+    return dispatchedCount;
   };
 
   if (response?.body && typeof response.body.getReader === 'function') {
     const reader = response.body.getReader();
-    await consumeTextStream(reader, (chunk) => {
-      buffer += chunk;
-      flushBuffer();
-    });
-    if (buffer.trim()) {
-      dispatchBlock(buffer);
+    try {
+      resetWatchdog(reader);
+      await Promise.race([
+        consumeTextStream(reader, (chunk) => {
+          buffer += chunk;
+          if (flushBuffer() > 0) {
+            resetWatchdog(reader);
+          }
+        }),
+        new Promise((_resolve, reject) => {
+          timeoutReject = reject;
+        }),
+      ]);
+      clearWatchdog();
+      if (buffer.trim()) {
+        dispatchBlock(buffer);
+      }
+    } finally {
+      timeoutReject = null;
+      clearWatchdog();
     }
     return;
   }

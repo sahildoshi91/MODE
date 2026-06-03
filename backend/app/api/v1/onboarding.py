@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.core.auth import AuthenticatedUser, CurrentUser
-from app.core.dependencies import get_onboarding_service
+from app.core.dependencies import get_internal_onboarding_service
 from app.core.rate_limit import enforce_rate_limit
 from app.modules.onboarding.schemas import (
     OnboardingBootstrapResponse,
@@ -18,7 +18,7 @@ router = APIRouter()
 @router.get("/bootstrap", response_model=OnboardingBootstrapResponse)
 async def get_onboarding_bootstrap(
     user: AuthenticatedUser = CurrentUser,
-    service: OnboardingService = Depends(get_onboarding_service),
+    service: OnboardingService = Depends(get_internal_onboarding_service),
 ):
     return service.get_bootstrap(user)
 
@@ -28,7 +28,7 @@ async def post_onboarding_role(
     request: OnboardingRoleRequest,
     http_request: Request,
     user: AuthenticatedUser = CurrentUser,
-    service: OnboardingService = Depends(get_onboarding_service),
+    service: OnboardingService = Depends(get_internal_onboarding_service),
 ):
     enforce_rate_limit(group="onboarding", user=user, request=http_request)
     try:
@@ -42,7 +42,7 @@ async def patch_onboarding_state(
     request: OnboardingStatePatchRequest,
     http_request: Request,
     user: AuthenticatedUser = CurrentUser,
-    service: OnboardingService = Depends(get_onboarding_service),
+    service: OnboardingService = Depends(get_internal_onboarding_service),
 ):
     enforce_rate_limit(group="onboarding", user=user, request=http_request)
     try:
@@ -56,7 +56,7 @@ async def complete_onboarding(
     request: OnboardingCompleteRequest,
     http_request: Request,
     user: AuthenticatedUser = CurrentUser,
-    service: OnboardingService = Depends(get_onboarding_service),
+    service: OnboardingService = Depends(get_internal_onboarding_service),
 ):
     enforce_rate_limit(group="onboarding", user=user, request=http_request)
     try:

@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.core.auth import AuthenticatedUser, require_user
 from app.core.config import settings
-from app.core.dependencies import get_mobile_analytics_service, get_onboarding_service
+from app.core.dependencies import get_internal_onboarding_service, get_mobile_analytics_service
 from app.core.rate_limit import _rate_limiter
 from app.main import app
 from app.modules.onboarding.service import OnboardingServiceError
@@ -116,7 +116,7 @@ class OnboardingApiTests(unittest.TestCase):
             email="user@example.com",
             access_token="token-123",
         )
-        app.dependency_overrides[get_onboarding_service] = lambda: self.fake_onboarding
+        app.dependency_overrides[get_internal_onboarding_service] = lambda: self.fake_onboarding
         app.dependency_overrides[get_mobile_analytics_service] = lambda: self.fake_analytics
         self.client = TestClient(app)
 

@@ -31,20 +31,28 @@ async function attachConnectivityProbe(error, path) {
 }
 
 async function parseError(response) {
+  let text = null;
   try {
-    const payload = await response.json();
+    const payload = await (typeof response.clone === 'function' ? response.clone() : response).json();
     return {
       message: payload?.detail || payload?.message || 'Request failed',
       code: payload?.code || null,
       hint: payload?.hint || null,
       details: payload?.details || null,
+      text: null,
     };
   } catch (_error) {
+    try {
+      text = await (typeof response.clone === 'function' ? response.clone() : response).text();
+    } catch (_textError) {
+      text = null;
+    }
     return {
-      message: 'Request failed',
+      message: text || 'Request failed',
       code: null,
       hint: null,
       details: null,
+      text,
     };
   }
 }
@@ -75,11 +83,19 @@ async function requestOnboarding(path, { accessToken, method = 'GET', body, time
 
   if (!response.ok) {
     const parsed = await parseError(response);
-    const error = new Error(parsed.message || 'Request failed');
+    const parsedMessage = parsed.message || 'Request failed';
+    const isGenericMessage = parsedMessage === 'Request failed';
+    const error = new Error(
+      isGenericMessage
+        ? `Request failed (HTTP ${response.status}) for ${path}`
+        : parsedMessage,
+    );
     error.status = response.status;
     error.code = parsed.code;
     error.hint = parsed.hint;
     error.details = parsed.details;
+    error.response_text = parsed.text;
+    error.request_path = path;
     error.request_id = response.headers.get('x-request-id');
     error.api_base_url = baseUrl;
     throw error;

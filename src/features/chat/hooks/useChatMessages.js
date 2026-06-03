@@ -78,6 +78,16 @@ function isAbortError(error) {
   );
 }
 
+function isTerminalStreamError(error) {
+  const code = String(error?.code || '').trim().toLowerCase();
+  const name = String(error?.name || '').trim();
+  return (
+    code.startsWith('sse_')
+    || name === 'SseProtocolError'
+    || name === 'SseInactivityTimeoutError'
+  );
+}
+
 export function useChatMessages({
   accessToken,
   session,
@@ -248,12 +258,18 @@ export function useChatMessages({
             return;
           }
           if (eventType === CHAT_STREAM_EVENT_TYPES.ERROR) {
-            throw new Error(payload?.message || payload?.detail || CHAT_STREAM_FRIENDLY_ERROR_MESSAGE);
+            const streamEventError = new Error(payload?.message || payload?.detail || CHAT_STREAM_FRIENDLY_ERROR_MESSAGE);
+            streamEventError.code = 'sse_error_event';
+            streamEventError.retryable = payload?.retry !== false;
+            throw streamEventError;
           }
         },
       });
-      if (!receivedStreamText && !receivedCompleted) {
-        throw new Error('Streaming ended before Coach returned a response.');
+      if (!receivedCompleted) {
+        const terminalError = new Error('Streaming ended before Coach returned a response.');
+        terminalError.code = 'sse_missing_done';
+        terminalError.retryable = true;
+        throw terminalError;
       }
       setMessages((currentMessages) => replaceMessageById(currentMessages, aiLocalId, (message) => ({
         ...message,
@@ -271,7 +287,7 @@ export function useChatMessages({
           return false;
         }
         canceledWithPartial = true;
-      } else if (!receivedStreamText && !receivedBackendSignal) {
+      } else if (!receivedStreamText && !receivedBackendSignal && !isTerminalStreamError(streamError)) {
         try {
           const fallbackPayload = await sendChatSessionMessage({
             accessToken,
@@ -309,7 +325,7 @@ export function useChatMessages({
         setMessages((currentMessages) => replaceMessageById(currentMessages, aiLocalId, (message) => ({
           ...message,
           isStreaming: false,
-          isError: !message.text || Boolean(message.metadata?.stream_status_stage),
+          isError: true,
           text: message.metadata?.stream_status_stage ? failureMessage : (message.text || failureMessage),
           content: message.metadata?.stream_status_stage
             ? failureMessage

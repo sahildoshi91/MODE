@@ -235,24 +235,8 @@ describe('useChatMessages', () => {
     }));
   });
 
-  it('falls back instead of leaving an empty assistant bubble when a stream has no response events', async () => {
+  it('shows a retryable error when a stream has no response events or done', async () => {
     mockStreamChatSessionMessage.mockResolvedValueOnce(undefined);
-    mockSendChatSessionMessage.mockResolvedValueOnce({
-      user_message: {
-        id: 'user-1',
-        sender_type: 'user',
-        content: 'Reach step goal',
-        message_index: 1,
-        metadata: {},
-      },
-      ai_message: {
-        id: 'ai-1',
-        sender_type: 'ai',
-        content: 'Good next move.',
-        message_index: 2,
-        metadata: {},
-      },
-    });
     let latestState = null;
 
     await act(async () => {
@@ -270,8 +254,14 @@ describe('useChatMessages', () => {
       await latestState.sendMessage('Reach step goal');
     });
 
-    expect(mockSendChatSessionMessage).toHaveBeenCalledTimes(1);
-    expect(latestState.messages.some((message) => message.text === 'Good next move.')).toBe(true);
+    expect(mockSendChatSessionMessage).not.toHaveBeenCalled();
+    expect(latestState.sending).toBe(false);
+    expect(latestState.error?.message).toBe('Streaming ended before Coach returned a response.');
+    expect(latestState.messages.some((message) => (
+      message.role === 'assistant'
+      && message.isError
+      && message.text === 'Streaming ended before Coach returned a response.'
+    ))).toBe(true);
   });
 
   it('shows an error message when a started stream ends before any coach text', async () => {
@@ -353,6 +343,41 @@ describe('useChatMessages', () => {
     expect(finalAssistantMessage.role).toBe('assistant');
     expect(finalAssistantMessage.text).toBe('Good next move.');
     expect(finalAssistantMessage.metadata?.stream_status_stage).toBeFalsy();
+  });
+
+  it('does not finalize partial session stream text without done', async () => {
+    mockStreamChatSessionMessage.mockImplementationOnce(async ({ onEvent }) => {
+      onEvent?.({
+        type: 'message_delta',
+        delta: 'Partial session response.',
+      });
+    });
+    let latestState = null;
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness
+          session={{ id: 'session-1', session_date: '2026-05-03' }}
+          onState={(state) => {
+            latestState = state;
+          }}
+        />,
+      );
+    });
+
+    await act(async () => {
+      await latestState.sendMessage('Reach step goal');
+    });
+
+    expect(mockSendChatSessionMessage).not.toHaveBeenCalled();
+    expect(latestState.sending).toBe(false);
+    expect(latestState.error?.message).toBe('Streaming ended before Coach returned a response.');
+    const assistantMessage = latestState.messages.find((message) => message.role === 'assistant');
+    expect(assistantMessage).toEqual(expect.objectContaining({
+      text: 'Partial session response.',
+      isError: true,
+      isStreaming: false,
+    }));
   });
 
   it('aborts an active stream and removes status-only assistant row', async () => {

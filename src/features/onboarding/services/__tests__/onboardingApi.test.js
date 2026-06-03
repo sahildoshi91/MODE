@@ -96,4 +96,56 @@ describe('onboardingApi', () => {
 
     expect(mockProbeBackendConnectivity).not.toHaveBeenCalled();
   });
+
+  it('adds request context to generic bootstrap HTTP failures', async () => {
+    mockFetchWithApiFallback.mockResolvedValueOnce({
+      baseUrl: 'http://127.0.0.1:8000',
+      response: {
+        ok: false,
+        status: 500,
+        headers: createHeaders('req-bootstrap-500'),
+        clone: jest.fn(function clone() {
+          return this;
+        }),
+        json: jest.fn().mockRejectedValue(new Error('not json')),
+        text: jest.fn().mockResolvedValue('Internal Server Error'),
+      },
+    });
+
+    await expect(getOnboardingBootstrap({ accessToken: 'token' })).rejects.toMatchObject({
+      message: 'Internal Server Error',
+      status: 500,
+      request_path: '/api/v1/onboarding/bootstrap',
+      request_id: 'req-bootstrap-500',
+      api_base_url: 'http://127.0.0.1:8000',
+      response_text: 'Internal Server Error',
+    });
+
+    expect(mockProbeBackendConnectivity).not.toHaveBeenCalled();
+  });
+
+  it('uses status and path when bootstrap HTTP failures have no readable body', async () => {
+    mockFetchWithApiFallback.mockResolvedValueOnce({
+      baseUrl: 'http://127.0.0.1:8000',
+      response: {
+        ok: false,
+        status: 502,
+        headers: createHeaders('req-bootstrap-502'),
+        clone: jest.fn(function clone() {
+          return this;
+        }),
+        json: jest.fn().mockRejectedValue(new Error('not json')),
+        text: jest.fn().mockResolvedValue(''),
+      },
+    });
+
+    await expect(getOnboardingBootstrap({ accessToken: 'token' })).rejects.toMatchObject({
+      message: 'Request failed (HTTP 502) for /api/v1/onboarding/bootstrap',
+      status: 502,
+      request_path: '/api/v1/onboarding/bootstrap',
+      request_id: 'req-bootstrap-502',
+      api_base_url: 'http://127.0.0.1:8000',
+      response_text: '',
+    });
+  });
 });

@@ -275,21 +275,40 @@ export async function executeTrainerAssistantActionStream({
   let completedPayload = null;
   let streamError = null;
 
-  await consumeSseStream(response, {
-    onEvent: (eventPayload, meta) => {
-      if (typeof onEvent === 'function') {
-        onEvent(eventPayload, meta);
-      }
-      const payloadType = String(eventPayload?.type || '').toLowerCase();
-      if (payloadType === 'completed' || payloadType === 'done') {
-        completedPayload = eventPayload;
-        return;
-      }
-      if (payloadType === 'failed' || payloadType === 'error') {
-        streamError = new Error(eventPayload?.detail || 'Unable to generate trainer assistant draft.');
-      }
-    },
-  });
+  try {
+    await consumeSseStream(response, {
+      onEvent: (eventPayload, meta) => {
+        if (typeof onEvent === 'function') {
+          onEvent(eventPayload, meta);
+        }
+        const payloadType = String(eventPayload?.type || '').toLowerCase();
+        if (payloadType === 'completed' || payloadType === 'done') {
+          completedPayload = eventPayload;
+          return;
+        }
+        if (payloadType === 'failed' || payloadType === 'error') {
+          streamError = new Error(eventPayload?.detail || 'Unable to generate trainer assistant draft.');
+        }
+      },
+    });
+  } catch (error) {
+    if (error && typeof error === 'object') {
+      error.request_path = error.request_path || path;
+      error.path = error.path || path;
+      error.api_base_url = error.api_base_url || baseUrl || null;
+      error.retryable = error.retryable !== false;
+    }
+    if (typeof onEvent === 'function') {
+      onEvent({
+        type: 'error',
+        detail: error?.message || 'Unable to generate trainer assistant draft.',
+      }, {
+        event: 'error',
+        id: null,
+      });
+    }
+    throw error;
+  }
 
   if (streamError) {
     throw streamError;

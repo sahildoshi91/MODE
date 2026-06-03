@@ -24,7 +24,7 @@ describe('supabaseClient secure session config', () => {
     const [, , options] = mockCreateClient.mock.calls[0]
     expect(options.auth.storage).toBe(secureSessionStorage)
     expect(options.auth.storageKey).toBe('sb-example-auth-token')
-    expect(options.auth.autoRefreshToken).toBe(false)
+    expect(options.auth.autoRefreshToken).toBe(true)
     expect(options.auth.persistSession).toBe(true)
   })
 

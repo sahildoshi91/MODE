@@ -51,7 +51,7 @@ export const supabase = createClient(resolvedSupabaseUrl, resolvedSupabaseAnonKe
   auth: {
     storage: secureSessionStorage,
     storageKey: supabaseAuthStorageKey,
-    autoRefreshToken: false,
+    autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: false,
   },

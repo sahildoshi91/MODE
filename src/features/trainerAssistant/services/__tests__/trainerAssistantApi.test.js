@@ -24,6 +24,7 @@ import {
   approveTrainerAssistantDraft,
   editTrainerAssistantDraft,
   executeTrainerAssistantAction,
+  executeTrainerAssistantActionStream,
   getTrainerAssistantBootstrap,
   rejectTrainerAssistantDraft,
   runTrainerAssistantBackground,
@@ -321,5 +322,35 @@ describe('trainerAssistantApi', () => {
 
     expect(probeBackendConnectivity).toHaveBeenCalledTimes(1);
     expect(selectRecommendedApiBaseUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces malformed trainer assistant stream payloads through error events', async () => {
+    fetchWithApiFallback.mockResolvedValueOnce({
+      response: createTextResponse('data: {not-json}\n\n', { ok: true, status: 200 }),
+      baseUrl: 'http://127.0.0.1:8000',
+    });
+    const onEvent = jest.fn();
+
+    await expect(executeTrainerAssistantActionStream({
+      accessToken: 'trainer-token',
+      actionType: 'message_client',
+      message: 'Draft a check-in note.',
+      onEvent,
+    })).rejects.toEqual(expect.objectContaining({
+      code: 'sse_malformed_json',
+      request_path: '/api/v1/trainer-assistant/execute/stream',
+      api_base_url: 'http://127.0.0.1:8000',
+      message: 'Malformed SSE payload received from stream.',
+    }));
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'error',
+        detail: 'Malformed SSE payload received from stream.',
+      }),
+      expect.objectContaining({
+        event: 'error',
+      }),
+    );
   });
 });

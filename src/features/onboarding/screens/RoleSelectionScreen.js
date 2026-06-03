@@ -19,6 +19,7 @@ export default function RoleSelectionScreen({ onSelectClient, onSelectTrainer, i
             Daily decisions, quick check-ins, and a simple plan that adapts.
           </ModeText>
           <ModeButton
+            testID="role-selection-client-button"
             title={isSubmitting ? 'Please wait...' : 'Continue as Client'}
             onPress={onSelectClient}
             disabled={isSubmitting}
@@ -32,6 +33,7 @@ export default function RoleSelectionScreen({ onSelectClient, onSelectTrainer, i
             Trainer tooling is in progress. You can join the early waitlist flow.
           </ModeText>
           <ModeButton
+            testID="role-selection-trainer-button"
             variant="secondary"
             title={isSubmitting ? 'Please wait...' : 'Continue as Trainer'}
             onPress={onSelectTrainer}
@@ -40,7 +42,13 @@ export default function RoleSelectionScreen({ onSelectClient, onSelectTrainer, i
           />
         </ModeCard>
 
-        {errorMessage ? <InlineFeedback type="error" message={errorMessage} /> : null}
+        {errorMessage ? (
+          <InlineFeedback
+            testID="role-selection-error"
+            type="error"
+            message={errorMessage}
+          />
+        ) : null}
       </View>
     </SafeScreen>
   );

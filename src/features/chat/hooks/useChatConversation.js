@@ -80,6 +80,16 @@ function isAbortError(error) {
   );
 }
 
+function isTerminalStreamError(error) {
+  const code = String(error?.code || '').trim().toLowerCase();
+  const name = String(error?.name || '').trim();
+  return (
+    code.startsWith('sse_')
+    || name === 'SseProtocolError'
+    || name === 'SseInactivityTimeoutError'
+  );
+}
+
 function normalizeOnboardingAction(value) {
   if (typeof value !== 'string') {
     return null;
@@ -749,6 +759,39 @@ export function useChatConversation(accessToken, launchContext = null) {
     let streamFailure = null;
     let responsePayload = null;
     let responseConversationId = conversationIdRef.current;
+    let receivedDone = false;
+
+    const failStreamMessage = (failureError, { keepPartial = false } = {}) => {
+      const message = failureError?.message || CHAT_STREAM_FRIENDLY_ERROR_MESSAGE;
+      if (keepPartial) {
+        removeTransientAssistantRows(requestId, null);
+        updateMessageById(streamMessageId, {
+          status: 'failed',
+          isError: true,
+          text: sanitizeAssistantDisplayText(collectedAssistantText) || message,
+        });
+      } else {
+        removeTransientAssistantRows(requestId, streamMessageId);
+        setMessages((current) => [
+          ...current,
+          {
+            id: `assistant-error-${requestId}`,
+            role: 'assistant',
+            text: message,
+            isError: true,
+            requestId,
+          },
+        ]);
+      }
+      updateMessageById(messageEntry.id, { status: 'failed' });
+      setError(message);
+      setErrorDetails(failureError && typeof failureError === 'object' ? failureError : null);
+      setFailedRequest({
+        type: 'message',
+        messageId: messageEntry.id,
+        message: messageEntry.text,
+      });
+    };
 
     const consumeStreamPayload = (rawPayload, meta = {}) => {
       const eventPayload = normalizeChatStreamEvent(rawPayload, meta);
@@ -787,6 +830,7 @@ export function useChatConversation(accessToken, launchContext = null) {
       }
       if (payloadType === CHAT_STREAM_EVENT_TYPES.DONE) {
         allowStatusUpdates = false;
+        receivedDone = true;
         responsePayload = eventPayload;
         if (typeof eventPayload?.assistant_message === 'string' && eventPayload.assistant_message.trim().length > 0) {
           collectedAssistantText = eventPayload.assistant_message.trim();
@@ -796,6 +840,8 @@ export function useChatConversation(accessToken, launchContext = null) {
       if (payloadType === CHAT_STREAM_EVENT_TYPES.ERROR) {
         allowStatusUpdates = false;
         streamFailure = new Error(eventPayload?.message || eventPayload?.detail || CHAT_STREAM_FRIENDLY_ERROR_MESSAGE);
+        streamFailure.code = 'sse_error_event';
+        streamFailure.retryable = eventPayload?.retry !== false;
         streamFailure.detail = eventPayload?.detail || null;
       }
     };
@@ -819,6 +865,12 @@ export function useChatConversation(accessToken, launchContext = null) {
       if (streamFailure) {
         throw streamFailure;
       }
+      if (!receivedDone) {
+        const terminalError = new Error('Streaming ended before Coach returned a complete response.');
+        terminalError.code = 'sse_missing_done';
+        terminalError.retryable = true;
+        throw terminalError;
+      }
     } catch (streamError) {
       const streamWasAborted = isAbortError(streamError);
       if (streamWasAborted) {
@@ -841,7 +893,7 @@ export function useChatConversation(accessToken, launchContext = null) {
           conversation_id: responseConversationId,
           quick_replies: [],
         };
-      } else if (!collectedAssistantText.trim()) {
+      } else if (!collectedAssistantText.trim() && !isTerminalStreamError(streamError)) {
         try {
           responsePayload = await sendChatMessage({
             accessToken,
@@ -891,7 +943,8 @@ export function useChatConversation(accessToken, launchContext = null) {
           return false;
         }
       } else {
-        removeTransientAssistantRows(requestId, null);
+        failStreamMessage(streamError, { keepPartial: Boolean(collectedAssistantText.trim()) });
+        return false;
       }
     } finally {
       if (activeAbortControllerRef.current === abortController) {
@@ -966,6 +1019,10 @@ export function useChatConversation(accessToken, launchContext = null) {
         const sent = await executeOutboundMessage(messageEntry);
         if (!sent) {
           allSucceeded = false;
+          queueRef.current.shift();
+          if (queueRef.current.length > 0) {
+            continue;
+          }
           break;
         }
         queueRef.current.shift();

@@ -99,12 +99,15 @@ class ChatSessionRepository:
             raise
 
     def update_session(self, session_id: str, fields: dict[str, Any]) -> dict[str, Any] | None:
+        return self._update_session_with_client(self.supabase, session_id, fields)
+
+    def _update_session_with_client(self, client: Client, session_id: str, fields: dict[str, Any]) -> dict[str, Any] | None:
         payload = {
             **fields,
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         response = (
-            self.supabase
+            client
             .table(self._SESSIONS_TABLE)
             .update(payload)
             .eq("id", session_id)
@@ -325,15 +328,57 @@ class ChatSessionRepository:
                 return response.data
             if isinstance(response.data, list) and response.data:
                 return response.data[0]
-        except Exception:
+        except Exception as exc:
             if normalized_metadata.get("auto_generated_opening_summary"):
                 existing = self.get_opening_summary_message(session_id)
                 if existing:
                     return existing
+            if self._is_rpc_execute_permission_error(exc):
+                return self._append_message_direct(
+                    self.opening_summary_admin_supabase or self.supabase,
+                    session_id=session_id,
+                    sender_type=sender_type,
+                    content=content,
+                    metadata=normalized_metadata,
+                )
             raise
 
+        return self._append_message_direct(
+            self.supabase,
+            session_id=session_id,
+            sender_type=sender_type,
+            content=content,
+            metadata=normalized_metadata,
+        )
+
+    @staticmethod
+    def _is_rpc_execute_permission_error(exc: Exception) -> bool:
+        current: BaseException | None = exc
+        while current is not None:
+            code = getattr(current, "code", None)
+            if str(code or "").upper() == "42501":
+                return True
+            for arg in getattr(current, "args", ()):
+                if isinstance(arg, dict) and str(arg.get("code") or "").upper() == "42501":
+                    return True
+                if "permission denied for function append_chat_message" in str(arg).lower():
+                    return True
+            if "permission denied for function append_chat_message" in str(current).lower():
+                return True
+            current = current.__cause__
+        return False
+
+    def _append_message_direct(
+        self,
+        client: Client,
+        *,
+        session_id: str,
+        sender_type: str,
+        content: str,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
         latest_response = (
-            self.supabase
+            client
             .table(self._MESSAGES_TABLE)
             .select("message_index")
             .eq("session_id", session_id)
@@ -344,7 +389,7 @@ class ChatSessionRepository:
         latest_row = latest_response.data[0] if latest_response.data else {}
         next_index = int(latest_row.get("message_index", -1)) + 1
         response = (
-            self.supabase
+            client
             .table(self._MESSAGES_TABLE)
             .insert(
                 {
@@ -352,13 +397,13 @@ class ChatSessionRepository:
                     "sender_type": sender_type,
                     "content": content,
                     "message_index": next_index,
-                    "metadata": normalized_metadata,
+                    "metadata": metadata,
                 }
             )
             .execute()
         )
         row = response.data[0]
-        self.update_session(session_id, {"last_message_at": row.get("created_at")})
+        self._update_session_with_client(client, session_id, {"last_message_at": row.get("created_at")})
         return row
 
     def get_client_for_trainer(self, *, trainer_id: str, client_id: str) -> dict[str, Any] | None:

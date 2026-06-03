@@ -3,6 +3,7 @@ import { ActivityIndicator, Animated, AppState, Easing, Linking, StyleSheet, Vie
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
 
+import ErrorBoundary from './ErrorBoundary';
 import {
   ModeButton,
   ModeCard,
@@ -67,6 +68,7 @@ const COACH_CHAT_NAV_GAP = 10;
 const COACH_CHAT_DOCK_CLEARANCE =
   FLOATING_NAV_BOTTOM_OFFSET + FLOATING_NAV_PILL_HEIGHT + COACH_CHAT_NAV_GAP;
 const ASSIGNMENT_STATUS_AUTO_RETRY_DELAY_MS = 900;
+const SESSION_REFRESH_SKEW_SECONDS = 60;
 const SESSION_EXPIRED_MESSAGE = 'Your previous sign-in expired. Please sign in again.';
 const ONBOARDING_BOOTSTRAP_PATH = '/api/v1/onboarding/bootstrap';
 const SHOW_ACCOUNT_DIAGNOSTICS = (
@@ -304,11 +306,20 @@ function formatBootstrapError(error, fallbackMessage) {
   const isNetworkError = error?.stage === 'network';
   const requestPath = error?.request_path || error?.path || ONBOARDING_BOOTSTRAP_PATH;
   const connectivityProbe = connectivityProbeFromError(error);
+  const requestId = error?.request_id || null;
+  const httpStatus = error?.status || null;
+  const messageHasHttpContext = (
+    typeof message === 'string'
+    && (message.includes(requestPath) || message.includes(`HTTP ${httpStatus}`))
+  );
+  const nonNetworkDisplayMessage = httpStatus && !messageHasHttpContext
+    ? `${message || 'Request failed'} for ${requestPath} (HTTP ${httpStatus})${requestId ? ` Request ID: ${requestId}` : ''}`
+    : `${message}${requestId && !message.includes('Request ID') ? ` Request ID: ${requestId}` : ''}`;
   return {
     message,
     displayMessage: isNetworkError
       ? `Unable to reach the backend for ${requestPath}. Check that the FastAPI server is running and reachable from your device.`
-      : message,
+      : nonNetworkDisplayMessage,
     isNetworkError,
     showDetails: SHOW_ACCOUNT_DIAGNOSTICS,
     stage: error?.stage || null,
@@ -316,15 +327,31 @@ function formatBootstrapError(error, fallbackMessage) {
     code: error?.code || null,
     hint: error?.hint || null,
     details: error?.details || null,
-    requestId: error?.request_id || null,
+    requestId,
     requestPath,
     apiBase: error?.api_base_url || error?.resolved_api_base_url || null,
     attemptedBases: Array.isArray(error?.attempted_base_urls) ? error.attempted_base_urls : [],
-    rawNetworkMessage: error?.raw_error_message || null,
+    rawNetworkMessage: error?.raw_error_message || error?.response_text || null,
     connectivityProbe,
     recommendedApiBase: recommendedApiBaseFromError(error, connectivityProbe),
     recoveryHint: buildBootstrapRecoveryHint(connectivityProbe),
   };
+}
+
+function formatRoleSelectionError(error) {
+  const message = error?.message || 'Unable to save your role right now.';
+  const requestPath = error?.request_path || error?.path || null;
+  const requestId = error?.request_id || null;
+  const networkDetail = error?.stage === 'network' && error?.raw_error_message
+    ? error.raw_error_message
+    : null;
+
+  return [
+    message,
+    requestPath ? `Path: ${requestPath}.` : null,
+    networkDetail ? `Network detail: ${networkDetail}.` : null,
+    requestId ? `Request ID: ${requestId}.` : null,
+  ].filter(Boolean).join(' ');
 }
 
 function buildBootstrapDiagnosticsBundle(errorDetails) {
@@ -367,6 +394,17 @@ function getMillisecondsUntilNextLocalDay(now = new Date()) {
   return Math.max(1000, next.getTime() - now.getTime() + 1000);
 }
 
+function shouldRefreshRestoredSession(session, nowSeconds = Math.floor(Date.now() / 1000)) {
+  if (!session?.refresh_token || typeof session.expires_at !== 'number') {
+    return false;
+  }
+  return session.expires_at <= nowSeconds + SESSION_REFRESH_SKEW_SECONDS;
+}
+
+function isUnauthorizedSessionError(error) {
+  return error?.status === 401;
+}
+
 function buildTodayCheckinContext(source) {
   const container = source?.checkin && typeof source.checkin === 'object'
     ? source.checkin
@@ -406,6 +444,7 @@ function AppShell() {
   const [bootstrapError, setBootstrapError] = useState(null);
   const [bootstrapDiagnosticsCopyStatus, setBootstrapDiagnosticsCopyStatus] = useState(null);
   const [isRoleSubmitting, setIsRoleSubmitting] = useState(false);
+  const [roleSelectionError, setRoleSelectionError] = useState(null);
 
   const [isAssignmentStatusLoading, setIsAssignmentStatusLoading] = useState(false);
   const [assignmentStatus, setAssignmentStatus] = useState(null);
@@ -446,6 +485,7 @@ function AppShell() {
     setBootstrap(null);
     setBootstrapError(null);
     setBootstrapDiagnosticsCopyStatus(null);
+    setRoleSelectionError(null);
     setAuthStage('welcome');
     setAuthEmail('');
     setAuthPassword('');
@@ -508,11 +548,12 @@ function AppShell() {
     }
   }, [flushAnalyticsQueue, session?.access_token]);
 
-  const loadBootstrap = useCallback(async ({ accessToken }) => {
+  const loadBootstrap = useCallback(async ({ accessToken, allowSessionRefresh = true } = {}) => {
     if (!accessToken) {
       setBootstrap(null);
       setBootstrapError(null);
       setBootstrapDiagnosticsCopyStatus(null);
+      setRoleSelectionError(null);
       return null;
     }
     setIsBootstrapLoading(true);
@@ -521,14 +562,44 @@ function AppShell() {
     try {
       const response = await getOnboardingBootstrap({ accessToken });
       setBootstrap(response);
+      setRoleSelectionError(null);
       return response;
     } catch (error) {
+      if (
+        allowSessionRefresh
+        && isUnauthorizedSessionError(error)
+        && typeof supabase.auth.refreshSession === 'function'
+      ) {
+        try {
+          const { data, error: refreshError } = await supabase.auth.refreshSession();
+          if (refreshError) {
+            throw refreshError;
+          }
+          const refreshedSession = data.session || null;
+          if (!refreshedSession?.access_token) {
+            await clearSupabaseAuthSessionStorage();
+            resetSignedOutState({ infoMessage: SESSION_EXPIRED_MESSAGE });
+            return null;
+          }
+          setSession(refreshedSession);
+          return loadBootstrap({
+            accessToken: refreshedSession.access_token,
+            allowSessionRefresh: false,
+          });
+        } catch (refreshError) {
+          if (isInvalidRefreshTokenError(refreshError)) {
+            await clearSupabaseAuthSessionStorage();
+            resetSignedOutState({ infoMessage: SESSION_EXPIRED_MESSAGE });
+            return null;
+          }
+        }
+      }
       setBootstrapError(formatBootstrapError(error, 'Unable to load onboarding bootstrap.'));
       return null;
     } finally {
       setIsBootstrapLoading(false);
     }
-  }, []);
+  }, [resetSignedOutState]);
 
   useEffect(() => {
     let isMounted = true;
@@ -558,11 +629,23 @@ function AppShell() {
           await handleSessionRestoreError(error);
           return;
         }
+        let restoredSession = data.session || null;
+        if (
+          shouldRefreshRestoredSession(restoredSession)
+          && typeof supabase.auth.refreshSession === 'function'
+        ) {
+          const { data: refreshedData, error: refreshError } = await supabase.auth.refreshSession(restoredSession);
+          if (refreshError) {
+            await handleSessionRestoreError(refreshError);
+            return;
+          }
+          restoredSession = refreshedData.session || null;
+        }
         if (!isMounted) {
           return;
         }
-        setSession(data.session || null);
-        if (!data.session) {
+        setSession(restoredSession);
+        if (!restoredSession) {
           setAuthStage('welcome');
         }
       } catch (error) {
@@ -659,6 +742,7 @@ function AppShell() {
   }, [clientLocalDate]);
 
   useEffect(() => {
+    let isActive = true;
     const handleUrlAuthCallback = async (url) => {
       if (!isExpectedAuthCallbackUrl(url)) {
         return;
@@ -693,9 +777,15 @@ function AppShell() {
       if (url) {
         handleUrlAuthCallback(url);
       }
+    }).catch((error) => {
+      if (!isActive) {
+        return;
+      }
+      setAuthUiError(error?.message || 'Unable to complete sign-in.');
     });
 
     return () => {
+      isActive = false;
       if (typeof subscription?.remove === 'function') {
         subscription.remove();
       }
@@ -707,6 +797,7 @@ function AppShell() {
       setBootstrap(null);
       setBootstrapError(null);
       setBootstrapDiagnosticsCopyStatus(null);
+      setRoleSelectionError(null);
       return;
     }
     loadBootstrap({ accessToken: session.access_token });
@@ -1262,7 +1353,7 @@ function AppShell() {
       return;
     }
     setIsRoleSubmitting(true);
-    setBootstrapError(null);
+    setRoleSelectionError(null);
     trackEvent('role_selected', { role });
     try {
       const updated = await setOnboardingRole({
@@ -1270,9 +1361,10 @@ function AppShell() {
         role,
       });
       setBootstrap(updated);
+      setRoleSelectionError(null);
       setActiveTab('coach');
     } catch (error) {
-      setBootstrapError(error?.message || 'Unable to save your role right now.');
+      setRoleSelectionError(formatRoleSelectionError(error));
     } finally {
       setIsRoleSubmitting(false);
     }
@@ -1469,7 +1561,7 @@ function AppShell() {
         onSelectClient={() => handleSelectRole('client')}
         onSelectTrainer={() => handleSelectRole('trainer')}
         isSubmitting={isRoleSubmitting}
-        errorMessage={bootstrapError?.displayMessage || null}
+        errorMessage={roleSelectionError}
       />
     );
   }
@@ -1726,13 +1818,15 @@ function AppShell() {
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      {__DEV__ && BREATHING_TRANSITION_DEMO_ENABLED ? (
-        <BreathingTransitionDemoScreen />
-      ) : (
-        <AppShell />
-      )}
-    </SafeAreaProvider>
+    <ErrorBoundary>
+      <SafeAreaProvider>
+        {__DEV__ && BREATHING_TRANSITION_DEMO_ENABLED ? (
+          <BreathingTransitionDemoScreen />
+        ) : (
+          <AppShell />
+        )}
+      </SafeAreaProvider>
+    </ErrorBoundary>
   );
 }
 

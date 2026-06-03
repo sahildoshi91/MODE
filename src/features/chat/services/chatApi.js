@@ -1,11 +1,12 @@
 import { fetchWithApiFallback } from '../../../services/apiRequest';
 import { buildApiNetworkError } from '../../../services/apiNetworkError';
-import { consumeSseStream } from '../../messaging';
+import { DEFAULT_SSE_INACTIVITY_TIMEOUT_MS, consumeSseStream } from '../../messaging';
 
 const CHAT_SEND_PATH = '/api/v1/chat';
 const CHAT_STREAM_PATH = '/api/v1/chat/stream';
 const CHAT_SEND_TIMEOUT_MS = 60000;
 const CHAT_STREAM_TIMEOUT_MS = 120000;
+const CHAT_STREAM_INACTIVITY_TIMEOUT_MS = DEFAULT_SSE_INACTIVITY_TIMEOUT_MS;
 
 async function parseError(response) {
   try {
@@ -77,6 +78,16 @@ function buildChatRequestBody({
     ...(requestId ? { request_id: requestId } : {}),
     ...(typeof sinceSeq === 'number' ? { since_seq: sinceSeq } : {}),
   };
+}
+
+function attachStreamErrorContext(error, path, baseUrl) {
+  if (error && typeof error === 'object') {
+    error.request_path = error.request_path || path;
+    error.path = error.path || path;
+    error.api_base_url = error.api_base_url || baseUrl || null;
+    error.retryable = error.retryable !== false;
+  }
+  return error;
 }
 
 export async function sendChatMessage({
@@ -167,7 +178,15 @@ export async function streamChatMessage({
     await throwHttpError(response, CHAT_STREAM_PATH, baseUrl);
   }
 
-  await consumeSseStream(response, { onEvent });
+  try {
+    await consumeSseStream(response, {
+      onEvent,
+      inactivityTimeoutMs: CHAT_STREAM_INACTIVITY_TIMEOUT_MS,
+      allowLegacyPlainText: false,
+    });
+  } catch (error) {
+    throw attachStreamErrorContext(error, CHAT_STREAM_PATH, baseUrl);
+  }
 }
 
 export async function getChatHistory({

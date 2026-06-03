@@ -619,4 +619,240 @@ describe('useChatConversation', () => {
     const staleWarningMessage = latestState.messages.find((item) => item.id === 'assistant-stale-chat-history-route');
     expect(staleWarningMessage).toBeUndefined();
   });
+
+  it('surfaces retryable failure when a stream ends without events or done', async () => {
+    streamChatMessage.mockResolvedValueOnce(undefined);
+    let latestState;
+    const onState = (state) => {
+      latestState = state;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness accessToken="trainer-token" launchContext={null} onState={onState} />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await latestState.sendMessage('Need help today');
+    });
+    await flushEffects();
+    await flushEffects();
+
+    expect(sendChatMessage).not.toHaveBeenCalled();
+    expect(latestState.isSending).toBe(false);
+    expect(latestState.hasRetryableFailure).toBe(true);
+    expect(latestState.error).toBe('Streaming ended before Coach returned a complete response.');
+    expect(latestState.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: 'user',
+        text: 'Need help today',
+        status: 'failed',
+      }),
+      expect.objectContaining({
+        role: 'assistant',
+        isError: true,
+        text: 'Streaming ended before Coach returned a complete response.',
+      }),
+    ]));
+  });
+
+  it('does not finalize partial stream text as success when done is missing', async () => {
+    streamChatMessage.mockImplementationOnce(async ({ onEvent }) => {
+      onEvent({
+        type: 'message_delta',
+        conversation_id: 'convo-partial',
+        delta: 'Partial coaching text',
+      });
+    });
+    let latestState;
+    const onState = (state) => {
+      latestState = state;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness accessToken="trainer-token" launchContext={null} onState={onState} />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await latestState.sendMessage('Need help today');
+    });
+    await flushEffects();
+    await flushEffects();
+
+    expect(sendChatMessage).not.toHaveBeenCalled();
+    expect(latestState.isSending).toBe(false);
+    expect(latestState.hasRetryableFailure).toBe(true);
+    expect(latestState.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: 'user',
+        text: 'Need help today',
+        status: 'failed',
+      }),
+      expect.objectContaining({
+        role: 'assistant',
+        kind: 'assistant_stream',
+        status: 'failed',
+        isError: true,
+        text: 'Partial coaching text',
+      }),
+    ]));
+    expect(latestState.messages).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: 'assistant',
+        text: 'Partial coaching text',
+        kind: undefined,
+      }),
+    ]));
+  });
+
+  it('still finalizes a normal stream that receives done', async () => {
+    streamChatMessage.mockImplementationOnce(async ({ onEvent }) => {
+      onEvent({
+        type: 'message_delta',
+        conversation_id: 'convo-complete',
+        delta: 'Complete coaching text',
+      });
+      onEvent({
+        type: 'done',
+        conversation_id: 'convo-complete',
+        assistant_message: 'Complete coaching text',
+        quick_replies: ['Thanks'],
+      });
+    });
+    let latestState;
+    const onState = (state) => {
+      latestState = state;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness accessToken="trainer-token" launchContext={null} onState={onState} />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await latestState.sendMessage('Need help today');
+    });
+    await flushEffects();
+    await flushEffects();
+
+    expect(latestState.isSending).toBe(false);
+    expect(latestState.hasRetryableFailure).toBe(false);
+    expect(latestState.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: 'user',
+        text: 'Need help today',
+        status: 'sent',
+      }),
+      expect.objectContaining({
+        role: 'assistant',
+        text: 'Complete coaching text',
+        requestId: expect.any(String),
+      }),
+    ]));
+  });
+
+  it('surfaces malformed SSE JSON as retryable chat failure', async () => {
+    const malformedError = new Error('Malformed SSE payload received from stream.');
+    malformedError.name = 'SseProtocolError';
+    malformedError.code = 'sse_malformed_json';
+    streamChatMessage.mockRejectedValueOnce(malformedError);
+    let latestState;
+    const onState = (state) => {
+      latestState = state;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness accessToken="trainer-token" launchContext={null} onState={onState} />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await latestState.sendMessage('Need help today');
+    });
+    await flushEffects();
+    await flushEffects();
+
+    expect(sendChatMessage).not.toHaveBeenCalled();
+    expect(latestState.isSending).toBe(false);
+    expect(latestState.hasRetryableFailure).toBe(true);
+    expect(latestState.error).toBe('Malformed SSE payload received from stream.');
+    expect(latestState.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: 'assistant',
+        isError: true,
+        text: 'Malformed SSE payload received from stream.',
+      }),
+    ]));
+  });
+
+  it('continues to a queued second message after the first stream fails while open', async () => {
+    let rejectFirstStream;
+    streamChatMessage
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectFirstStream = reject;
+      }))
+      .mockImplementationOnce(async ({ onEvent }) => {
+        onEvent({
+          type: 'done',
+          conversation_id: 'convo-second',
+          assistant_message: 'Second response completed.',
+          quick_replies: [],
+        });
+      });
+    let latestState;
+    const onState = (state) => {
+      latestState = state;
+    };
+
+    await act(async () => {
+      renderer.create(
+        <HookHarness accessToken="trainer-token" launchContext={null} onState={onState} />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await latestState.sendMessage('First message');
+      await latestState.sendMessage('Second message');
+    });
+    expect(streamChatMessage).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      const timeoutError = new Error('Streaming response timed out before the next event.');
+      timeoutError.name = 'SseInactivityTimeoutError';
+      timeoutError.code = 'sse_inactivity_timeout';
+      rejectFirstStream(timeoutError);
+      await Promise.resolve();
+    });
+    await flushEffects();
+    await flushEffects();
+
+    expect(streamChatMessage).toHaveBeenCalledTimes(2);
+    expect(latestState.isSending).toBe(false);
+    expect(latestState.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: 'user',
+        text: 'First message',
+        status: 'failed',
+      }),
+      expect.objectContaining({
+        role: 'user',
+        text: 'Second message',
+        status: 'sent',
+      }),
+      expect.objectContaining({
+        role: 'assistant',
+        text: 'Second response completed.',
+      }),
+    ]));
+  });
 });
