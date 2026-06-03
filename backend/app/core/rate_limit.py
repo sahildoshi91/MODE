@@ -212,6 +212,7 @@ _LIMITS_BY_GROUP = {
     "onboarding": lambda: settings.rate_limit_onboarding_per_window,
     "mobile_events": lambda: settings.rate_limit_mobile_events_per_window,
     "invite_redeem": lambda: settings.rate_limit_invite_redeem_per_window,
+    "trainer_assignment_mutation": lambda: settings.rate_limit_trainer_assignment_mutation_per_window,
     "login": lambda: settings.rate_limit_login_per_window,
     "signup": lambda: settings.rate_limit_signup_per_window,
     "password_reset": lambda: settings.rate_limit_password_reset_per_window,

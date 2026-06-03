@@ -73,6 +73,21 @@ def clear_trainer_context_cache() -> None:
         _trainer_context_locks.clear()
 
 
+def invalidate_trainer_context_cache(user_id: str) -> None:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return
+    _trainer_context_cache.pop(normalized_user_id, None)
+    with _trainer_context_locks_guard:
+        _trainer_context_locks.pop(normalized_user_id, None)
+    try:
+        from app.modules.conversation.cache import get_chat_cache
+
+        get_chat_cache().delete(_trainer_context_shared_cache_key(normalized_user_id))
+    except Exception:
+        return
+
+
 def _trainer_context_cache_ttl_seconds() -> int:
     return max(1, min(int(settings.tenant_context_cache_ttl_seconds), 120))
 
@@ -306,8 +321,18 @@ def get_onboarding_repository(
     return OnboardingRepository(supabase)
 
 
+def get_internal_onboarding_repository() -> OnboardingRepository:
+    return OnboardingRepository(get_supabase_admin_client())
+
+
 def get_onboarding_service(
     repository: OnboardingRepository = Depends(get_onboarding_repository),
+) -> OnboardingService:
+    return OnboardingService(repository)
+
+
+def get_internal_onboarding_service(
+    repository: OnboardingRepository = Depends(get_internal_onboarding_repository),
 ) -> OnboardingService:
     return OnboardingService(repository)
 

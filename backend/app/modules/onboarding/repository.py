@@ -474,6 +474,42 @@ class OnboardingRepository:
         ).data or []
         return rows[0] if rows else None
 
+    def self_detach_trainer_assignment(self, *, user_id: str) -> dict[str, Any] | None:
+        rows = (
+            self.supabase_admin
+            .rpc(
+                "account_self_detach_trainer_assignment",
+                {
+                    "p_user_id": user_id,
+                },
+            )
+            .execute()
+        ).data or []
+        return rows[0] if rows else None
+
+    def reassign_client_by_invite(
+        self,
+        *,
+        user_id: str,
+        invite_id: str,
+        trainer_id: str,
+        tenant_id: str,
+    ) -> dict[str, Any] | None:
+        rows = (
+            self.supabase_admin
+            .rpc(
+                "account_reassign_trainer_by_invite",
+                {
+                    "p_user_id": user_id,
+                    "p_invite_id": invite_id,
+                    "p_trainer_id": trainer_id,
+                    "p_tenant_id": tenant_id,
+                },
+            )
+            .execute()
+        ).data or []
+        return rows[0] if rows else None
+
     def get_trainer_by_id(self, *, trainer_id: str) -> dict[str, Any] | None:
         rows = (
             self.supabase_admin
