@@ -686,7 +686,7 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertIsNotNone(result.checkin_response)
         self.assertIsNone(result.training)
         self.assertEqual(result.checkin_response.model_used, "deterministic_daily_checkin_v1")
-        self.assertIn("feeling stronger", result.checkin_response.sections[3].content)
+        self.assertIn("brick", result.checkin_response.sections[3].content)
         self.assertEqual(repository.calls, ["upsert", "update_response"])
 
     def test_submit_checkin_returns_deterministic_response_when_profile_lookup_fails(self):

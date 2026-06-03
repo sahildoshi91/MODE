@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.ai.client import TokenUsage
-from app.modules.daily_checkins.meal_library import EFFORT_GUIDANCE, MEAL_EXAMPLES, get_nutrition_level
+from app.modules.daily_checkins.meal_library import EFFORT_GUIDANCE, MEAL_EXAMPLES, get_meal_examples, get_nutrition_level
 from app.modules.daily_checkins.schemas import (
     CheckinResponseInput,
     CheckinResponseOutput,
@@ -192,7 +192,7 @@ def build_deterministic_checkin_response(
     )
     workout = _build_deterministic_workout(mode, input_data, classification)
     nutrition_label, nutrition = _build_deterministic_nutrition(mode, input_data)
-    why = _build_deterministic_why(input_data.client_why)
+    why = _build_deterministic_why(input_data.client_why, mode)
     question = _build_deterministic_question(classification)
 
     return CheckinResponseOutput(
@@ -219,6 +219,7 @@ def build_checkin_response_prompt(
 ) -> str:
     nutrition_level = get_nutrition_level(input_data.nutrition_score)
     meal_guidance = MEAL_EXAMPLES[nutrition_level]
+    filtered_meal_examples = get_meal_examples(nutrition_level, input_data.dietary_flags)
     effort_guidance = EFFORT_GUIDANCE[input_data.mode]
     modifier = (
         effort_guidance.get("modifier_if_body_low")
@@ -275,7 +276,7 @@ WORKOUT GUIDANCE TO USE:
 ---
 NUTRITION GUIDANCE TO USE:
 - Fueling level today: {nutrition_level}
-- Meal examples: {", ".join(meal_guidance["examples"])}
+- Meal examples: {", ".join(filtered_meal_examples)}
 - Timing: {meal_guidance["timing"]}
 - Why it matters: {meal_guidance["why"]}
 
@@ -392,7 +393,7 @@ def _build_deterministic_workout(
 def _build_deterministic_nutrition(mode: str, input_data: CheckinResponseInput) -> tuple[str, str]:
     nutrition_level = get_nutrition_level(input_data.nutrition_score)
     guidance = MEAL_EXAMPLES[nutrition_level]
-    examples = guidance["examples"][:3]
+    examples = get_meal_examples(nutrition_level, input_data.dietary_flags)[:3]
     label = "How to eat today" if mode == "REST" else "Before you train"
     if len(examples) == 1:
         example_text = examples[0]
@@ -404,11 +405,70 @@ def _build_deterministic_nutrition(mode: str, input_data: CheckinResponseInput) 
     )
 
 
-def _build_deterministic_why(client_why: str) -> str:
+_WHY_THEME_KEYWORDS = {
+    "family": ("kid", "kids", "child", "children", "family", "spouse", "partner", "parent", "parents", "loved one", "loved ones", "son", "daughter", "husband", "wife"),
+    "energy": ("tired", "energy", "energized", "exhausted", "fatigue", "fatigued", "worn out", "keep up"),
+    "appearance": ("look", "body", "weight", "fat", "lean", "physique", "shape", "fit into", "confidence", "confident"),
+    "performance": ("lift", "run", "race", "sport", "compete", "competition", "strength", "stronger", "faster", "athletic"),
+    "presence": ("show up", "be there", "present", "available", "there for"),
+}
+
+_WHY_TEMPLATES: dict[str, dict[str, str]] = {
+    "family": {
+        "BUILD": "The energy you're building here shows up at home — this session is for them too.",
+        "BEAST": "Today's intensity is what makes you unshakeable for the people counting on you.",
+        "RECOVER": "Taking care of yourself today is how you have more to give tomorrow.",
+        "REST": "Rest is part of the equation — you can't show up for others running on empty.",
+    },
+    "energy": {
+        "BUILD": "You're building the kind of stamina that holds up when life demands it.",
+        "BEAST": "Each hard session adds to the reserve you draw from on the hard days.",
+        "RECOVER": "Recovery is where energy gets rebuilt — this is the work.",
+        "REST": "Rest is not lost time — it's where the energy you've earned gets deposited.",
+    },
+    "appearance": {
+        "BUILD": "The body you're building is forged in sessions exactly like this one.",
+        "BEAST": "Today's output is the difference between wishing and building.",
+        "RECOVER": "Recovery is not optional — it's where the adaptation you're after actually happens.",
+        "REST": "Rest is part of the transformation. It's doing its job right now.",
+    },
+    "performance": {
+        "BUILD": "Progress is built in reps, not intentions — today counts.",
+        "BEAST": "This is the session that raises the floor for everything that comes next.",
+        "RECOVER": "Repair today so you can perform at the level you're after tomorrow.",
+        "REST": "Recovery earns the next performance. You're investing, not stalling.",
+    },
+    "presence": {
+        "BUILD": "Showing up consistently is the whole game — today is one more day you did it.",
+        "BEAST": "You're proving to yourself today that the goal is real and within reach.",
+        "RECOVER": "Showing up for recovery is still showing up — that matters.",
+        "REST": "Rest is part of doing this right. You're here for the long run.",
+    },
+    "general": {
+        "BUILD": "Treat today as one more brick — you're building something worth finishing.",
+        "BEAST": "Today you're proving to yourself that the goal is real.",
+        "RECOVER": "Showing up for recovery is still showing up for yourself.",
+        "REST": "Rest is part of doing this right.",
+    },
+}
+
+
+def _classify_why_theme(client_why: str) -> str:
+    text = client_why.lower()
+    for theme, keywords in _WHY_THEME_KEYWORDS.items():
+        if any(kw in text for kw in keywords):
+            return theme
+    return "general"
+
+
+def _build_deterministic_why(client_why: str, mode: str) -> str:
+    normalized_mode = str(mode or "").strip().upper()
+    if normalized_mode not in ("BUILD", "BEAST", "RECOVER", "REST"):
+        normalized_mode = "BUILD"
     if is_meaningful_client_why(client_why):
-        why = str(client_why).strip().rstrip(".!?")
-        return f"Treat today's work as one small deposit toward {why}."
-    return "Treat today's work as one small deposit toward feeling stronger, steadier, and more capable in real life."
+        theme = _classify_why_theme(client_why)
+        return _WHY_TEMPLATES[theme][normalized_mode]
+    return _WHY_TEMPLATES["general"][normalized_mode]
 
 
 def _build_deterministic_question(classification: CheckinSignalClassification) -> str:

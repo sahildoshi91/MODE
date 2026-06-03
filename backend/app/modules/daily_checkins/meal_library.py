@@ -1,3 +1,38 @@
+VEGETARIAN_MEAL_EXAMPLES = {
+    "low": [
+        "eggs and toast",
+        "Greek yogurt with fruit and a handful of nuts",
+        "peanut butter on whole grain bread with a banana",
+    ],
+    "neutral": [
+        "eggs and toast",
+        "Greek yogurt with fruit",
+        "lentil soup with rice",
+        "a protein shake with oats blended in",
+    ],
+    "high": [
+        "a bigger meal works here — tofu scramble with rice, eggs with oatmeal",
+        "a substantial smoothie with protein powder and fruit",
+    ],
+}
+
+VEGAN_MEAL_EXAMPLES = {
+    "low": [
+        "peanut butter on whole grain bread with a banana",
+        "oats with almond butter and fruit",
+        "hummus and whole grain crackers",
+    ],
+    "neutral": [
+        "lentil soup with rice",
+        "tofu scramble with toast",
+        "a protein shake with oats blended in",
+    ],
+    "high": [
+        "a bigger meal — rice and black beans, tofu with oatmeal",
+        "a substantial smoothie with plant protein and fruit",
+    ],
+}
+
 MEAL_EXAMPLES = {
     "low": {
         "examples": [
@@ -59,6 +94,15 @@ EFFORT_GUIDANCE = {
         "modifier_if_body_low": None,
     },
 }
+
+
+def get_meal_examples(nutrition_level: str, dietary_flags: list[str]) -> list[str]:
+    flags = {f.lower() for f in dietary_flags}
+    if "vegan" in flags:
+        return VEGAN_MEAL_EXAMPLES[nutrition_level]
+    if "vegetarian" in flags:
+        return VEGETARIAN_MEAL_EXAMPLES[nutrition_level]
+    return MEAL_EXAMPLES[nutrition_level]["examples"]
 
 
 def get_nutrition_level(score: int) -> str:

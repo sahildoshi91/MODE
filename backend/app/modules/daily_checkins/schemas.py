@@ -77,6 +77,7 @@ class CheckinResponseInput(BaseModel):
     trainer_nutrition_approach: str
     trainer_tone: str
     trainer_kb_summary: str = ""
+    dietary_flags: list[str] = []
 
 
 class DailyCheckinResult(BaseModel):

@@ -630,6 +630,7 @@ class DailyCheckinService:
             client_why=client_why,
             client_constraints=self._build_client_constraints(profile, client_memory),
             client_experience_level=self._clean_text(profile.get("experience_level")) or "beginner",
+            dietary_flags=self._extract_dietary_flags(client_memory, profile),
             trainer_name=trainer_name,
             trainer_programming_philosophy=(
                 self._clean_text((trainer_persona or {}).get("coaching_philosophy"))
@@ -671,6 +672,30 @@ class DailyCheckinService:
             logger.warning("Check-in response trainer knowledge lookup failed trainer_id=%s: %s", trainer_id, exc)
             return []
         return [row for row in rows or [] if isinstance(row, dict)]
+
+    _DIETARY_KEYWORDS = (
+        "vegetarian", "vegan", "dairy-free", "gluten-free", "pescatarian",
+        "halal", "kosher", "no meat", "no dairy",
+    )
+
+    def _extract_dietary_flags(self, client_memory: list[dict[str, Any]], profile: dict[str, Any]) -> list[str]:
+        found: set[str] = set()
+        search_texts = []
+        for memory in client_memory:
+            for field in ("text", "summary", "memory_key"):
+                val = str(memory.get(field) or "").lower()
+                if val:
+                    search_texts.append(val)
+            for tag in memory.get("tags") or []:
+                search_texts.append(str(tag).lower())
+        pref = str(profile.get("dietary_preferences") or "").lower()
+        if pref:
+            search_texts.append(pref)
+        combined = " ".join(search_texts)
+        for keyword in self._DIETARY_KEYWORDS:
+            if keyword in combined:
+                found.add(keyword)
+        return sorted(found)
 
     def _build_client_constraints(self, profile: dict[str, Any], client_memory: list[dict[str, Any]]) -> str:
         parts = [
