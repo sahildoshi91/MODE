@@ -76,3 +76,10 @@ export function assignTrainerByInvite({ accessToken, inviteCode }) {
     body: { invite_code: inviteCode },
   });
 }
+
+export function removeCurrentTrainerAssignment({ accessToken }) {
+  return requestTrainerAssignment('/api/v1/trainer-assignment/current', {
+    accessToken,
+    method: 'DELETE',
+  });
+}

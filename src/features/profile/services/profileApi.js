@@ -94,6 +94,10 @@ export async function getMyTrainerSchedule({ accessToken }) {
   return requestProfileApi('/api/v1/profiles/me/trainer-schedule', { accessToken });
 }
 
+export async function getAccountMe({ accessToken }) {
+  return requestProfileApi('/api/v1/account/me', { accessToken });
+}
+
 export async function deleteMyAccount({ accessToken, confirmation }) {
   return requestProfileApi('/api/v1/account/me', {
     accessToken,

@@ -48,6 +48,7 @@ class FakeOnboardingRepository:
         self.assignment_history = []
         self.onboarding_state_by_account = {}
         self.deactivation_calls = []
+        self.reassign_calls = []
 
     def hash_invite_code(self, code: str) -> str:
         return _hash_invite(code)
@@ -126,6 +127,59 @@ class FakeOnboardingRepository:
             "trainer_id": trainer_id,
         })
 
+    def reassign_client_by_invite(self, *, user_id, invite_id, trainer_id, tenant_id):
+        consumed = self.deactivate_invite_code(
+            invite_id=invite_id,
+            trainer_id=trainer_id,
+            tenant_id=tenant_id,
+            used_by_user_id=user_id,
+        )
+        if not consumed:
+            return []
+
+        target_client = self.get_client_for_user_and_tenant(user_id=user_id, tenant_id=tenant_id)
+        if not target_client:
+            target_client = self.create_client(tenant_id=tenant_id, user_id=user_id)
+
+        previous_rows = []
+        for user_clients in self.clients_by_user.values():
+            for row in user_clients:
+                if row.get("user_id") != user_id:
+                    continue
+                if row.get("assigned_trainer_id"):
+                    previous_rows.append({
+                        "client_id": row["id"],
+                        "trainer_id": row["assigned_trainer_id"],
+                        "event_type": "unassigned_for_reassign",
+                        "previous_trainer_id": row["assigned_trainer_id"],
+                        "target_client_id": target_client["id"],
+                        "target_trainer_id": trainer_id,
+                    })
+                row["assigned_trainer_id"] = trainer_id if row["id"] == target_client["id"] else None
+
+        target_client = self.update_client(
+            client_id=target_client["id"],
+            fields={"assigned_trainer_id": trainer_id},
+        )
+        self.insert_assignment_history(client_id=target_client["id"], trainer_id=trainer_id)
+        self.reassign_calls.append({
+            "user_id": user_id,
+            "invite_id": invite_id,
+            "trainer_id": trainer_id,
+            "tenant_id": tenant_id,
+        })
+        return [
+            *previous_rows,
+            {
+                "client_id": target_client["id"],
+                "trainer_id": trainer_id,
+                "event_type": "assigned_by_invite",
+                "previous_trainer_id": None,
+                "target_client_id": target_client["id"],
+                "target_trainer_id": trainer_id,
+            },
+        ]
+
     def ensure_client_profile(self, *, client_id):
         del client_id
         return None
@@ -199,6 +253,26 @@ class OnboardingAssignByInviteServiceTests(unittest.TestCase):
 
         self.assertEqual(str(raised.exception), "Invite code is inactive")
         self.assertEqual(raised.exception.status_code, 409)
+
+    def test_assign_by_invite_allows_reassignment_from_existing_coach(self):
+        self.repository.clients_by_user["user-123"] = [
+            {
+                "id": "client-old",
+                "tenant_id": "tenant-old",
+                "user_id": "user-123",
+                "assigned_trainer_id": "trainer-old",
+            }
+        ]
+
+        response = self.service.assign_by_invite(user=self.user, invite_code="MODE1234")
+
+        self.assertEqual(response["assigned_trainer_id"], "trainer-1")
+        clients = self.repository.clients_by_user["user-123"]
+        old_client = next(row for row in clients if row["id"] == "client-old")
+        new_client = next(row for row in clients if row["tenant_id"] == "tenant-1")
+        self.assertIsNone(old_client["assigned_trainer_id"])
+        self.assertEqual(new_client["assigned_trainer_id"], "trainer-1")
+        self.assertEqual(self.repository.reassign_calls[0]["trainer_id"], "trainer-1")
 
     def test_assign_by_invite_rejects_when_atomic_consume_fails(self):
         class NonAtomicDeactivationRepository(FakeOnboardingRepository):

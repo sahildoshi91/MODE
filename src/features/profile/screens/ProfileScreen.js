@@ -12,11 +12,17 @@ import {
 } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
 import { getApiDebugInfo } from '../../../services/apiBaseUrl';
+import { supabase } from '../../../services/supabaseClient';
 import {
+  getAccountMe,
   getMyTrainerSchedule,
   getTrainerSettingsMe,
   patchTrainerSettingsMe,
 } from '../services/profileApi';
+import {
+  assignTrainerByInvite,
+  removeCurrentTrainerAssignment,
+} from '../../trainerAssignment/services/trainerAssignmentApi';
 import {
   prepareAssistantDisplayNameForSave,
   resolveAssistantDisplayName,
@@ -62,11 +68,11 @@ export default function ProfileScreen({
   accessToken,
   onSignOut,
   onDeleteAccount,
+  onAccountSelfServiceChanged,
   bottomInset = 0,
 }) {
   const debugInfo = useMemo(() => getApiDebugInfo(), []);
   const email = valueOrFallback(session?.user?.email, 'No email found');
-  const trainerName = valueOrFallback(assignmentStatus?.assigned_trainer_display_name, 'No trainer assigned');
   const appVersion = valueOrFallback(Constants.expoConfig?.version, 'dev');
   const environment = __DEV__ ? 'Development' : 'Production';
   const showDiagnostics = SHOW_ACCOUNT_DIAGNOSTICS;
@@ -93,6 +99,19 @@ export default function ProfileScreen({
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [deleteAccountError, setDeleteAccountError] = useState(null);
   const [deleteAccountNotice, setDeleteAccountNotice] = useState(null);
+  const [accountDetails, setAccountDetails] = useState(null);
+  const [accountEmailDraft, setAccountEmailDraft] = useState(email === 'No email found' ? '' : email);
+  const [accountPasswordDraft, setAccountPasswordDraft] = useState('');
+  const [accountPasswordConfirmationDraft, setAccountPasswordConfirmationDraft] = useState('');
+  const [accountInviteCodeDraft, setAccountInviteCodeDraft] = useState('');
+  const [accountError, setAccountError] = useState(null);
+  const [accountNotice, setAccountNotice] = useState(null);
+  const [isLoadingAccount, setIsLoadingAccount] = useState(false);
+  const [isUpdatingAccountEmail, setIsUpdatingAccountEmail] = useState(false);
+  const [isUpdatingAccountPassword, setIsUpdatingAccountPassword] = useState(false);
+  const [isChangingCoach, setIsChangingCoach] = useState(false);
+  const [isRemovingCoach, setIsRemovingCoach] = useState(false);
+  const [isConfirmingCoachRemoval, setIsConfirmingCoachRemoval] = useState(false);
   const [legalLinksError, setLegalLinksError] = useState(null);
   const legalLinks = useMemo(() => getLegalLinks(), []);
   const legalLinksFallbackText = useMemo(() => getLegalLinksFallbackText(legalLinks), [legalLinks]);
@@ -104,6 +123,34 @@ export default function ProfileScreen({
     trainerSettingsDraft.assistantDisplayName || '',
   ).trim().length;
   const currentView = viewStack[viewStack.length - 1] || { key: PROFILE_SETTINGS_VIEW.ROOT, params: null };
+
+  const loadAccountDetails = useCallback(async () => {
+    if (!accessToken) {
+      setAccountDetails(null);
+      setAccountError(null);
+      return null;
+    }
+    setIsLoadingAccount(true);
+    setAccountError(null);
+    try {
+      const payload = await getAccountMe({ accessToken });
+      setAccountDetails(payload);
+      setAccountEmailDraft(String(payload?.email || ''));
+      return payload;
+    } catch (error) {
+      setAccountError(error?.message || 'Unable to load account settings.');
+      return null;
+    } finally {
+      setIsLoadingAccount(false);
+    }
+  }, [accessToken]);
+
+  useEffect(() => {
+    if (currentView.key !== PROFILE_SETTINGS_VIEW.ACCOUNT) {
+      return;
+    }
+    loadAccountDetails();
+  }, [currentView.key, loadAccountDetails]);
 
   const pushView = useCallback((key, params = null) => {
     setViewStack((current) => [...current, { key, params }]);
@@ -256,6 +303,124 @@ export default function ProfileScreen({
     }
   };
 
+  const handleUpdateAccountEmailPress = async () => {
+    if (isUpdatingAccountEmail) {
+      return;
+    }
+    const normalizedEmail = String(accountEmailDraft || '').trim().toLowerCase();
+    const currentEmail = String(accountDetails?.email || email || '').trim().toLowerCase();
+    if (!normalizedEmail) {
+      setAccountError('Enter the email you want to use.');
+      return;
+    }
+    if (normalizedEmail === currentEmail) {
+      setAccountError('Enter a different email to start a change.');
+      return;
+    }
+
+    setIsUpdatingAccountEmail(true);
+    setAccountError(null);
+    setAccountNotice(null);
+    try {
+      const { error } = await supabase.auth.updateUser({ email: normalizedEmail });
+      if (error) {
+        throw error;
+      }
+      const updatedAccount = await loadAccountDetails();
+      setAccountNotice(`Confirmation sent to ${updatedAccount?.pending_email || normalizedEmail}.`);
+    } catch (error) {
+      setAccountError(error?.message || 'Unable to start email change.');
+    } finally {
+      setIsUpdatingAccountEmail(false);
+    }
+  };
+
+  const handleUpdateAccountPasswordPress = async () => {
+    if (isUpdatingAccountPassword) {
+      return;
+    }
+    const nextPassword = String(accountPasswordDraft || '');
+    const confirmation = String(accountPasswordConfirmationDraft || '');
+    if (nextPassword.length < 8) {
+      setAccountError('Use at least 8 characters for your new password.');
+      return;
+    }
+    if (nextPassword !== confirmation) {
+      setAccountError('Password confirmation does not match.');
+      return;
+    }
+
+    setIsUpdatingAccountPassword(true);
+    setAccountError(null);
+    setAccountNotice(null);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: nextPassword });
+      if (error) {
+        throw error;
+      }
+      setAccountPasswordDraft('');
+      setAccountPasswordConfirmationDraft('');
+      setAccountNotice('Password updated.');
+    } catch (error) {
+      setAccountError(error?.message || 'Unable to update password.');
+    } finally {
+      setIsUpdatingAccountPassword(false);
+    }
+  };
+
+  const refreshAccountSelfServiceState = async () => {
+    await Promise.all([
+      loadAccountDetails(),
+      onAccountSelfServiceChanged?.(),
+    ]);
+  };
+
+  const handleChangeCoachByInvitePress = async () => {
+    if (!accessToken || isChangingCoach) {
+      return;
+    }
+    const inviteCode = String(accountInviteCodeDraft || '').trim().toUpperCase();
+    if (!inviteCode) {
+      setAccountError('Enter your coach invite code.');
+      return;
+    }
+
+    setIsChangingCoach(true);
+    setAccountError(null);
+    setAccountNotice(null);
+    try {
+      await assignTrainerByInvite({ accessToken, inviteCode });
+      setAccountInviteCodeDraft('');
+      setIsConfirmingCoachRemoval(false);
+      await refreshAccountSelfServiceState();
+      setAccountNotice('Coach updated.');
+    } catch (error) {
+      setAccountError(error?.message || 'Unable to update coach.');
+    } finally {
+      setIsChangingCoach(false);
+    }
+  };
+
+  const handleConfirmRemoveCoachPress = async () => {
+    if (!accessToken || isRemovingCoach) {
+      return;
+    }
+
+    setIsRemovingCoach(true);
+    setAccountError(null);
+    setAccountNotice(null);
+    try {
+      await removeCurrentTrainerAssignment({ accessToken });
+      setIsConfirmingCoachRemoval(false);
+      await refreshAccountSelfServiceState();
+      setAccountNotice('Coach removed. Atlas will handle chat until you add a new coach.');
+    } catch (error) {
+      setAccountError(error?.message || 'Unable to remove coach.');
+    } finally {
+      setIsRemovingCoach(false);
+    }
+  };
+
   const handleLegalLinkPress = async (link) => {
     if (!link?.url) {
       setLegalLinksError(`Set ${link?.envVar || 'the link URL'} to open ${link?.label || 'this link'}.`);
@@ -275,11 +440,48 @@ export default function ProfileScreen({
   };
 
   if (currentView.key === PROFILE_SETTINGS_VIEW.ACCOUNT) {
+    const resolvedAccount = accountDetails || {};
+    const hasLoadedAccount = Boolean(accountDetails);
+    const accountCoachName = valueOrFallback(
+      hasLoadedAccount
+        ? resolvedAccount.assigned_trainer_display_name
+        : assignmentStatus?.assigned_trainer_display_name,
+      'No coach assigned',
+    );
+    const hasAssignedCoach = hasLoadedAccount
+      ? Boolean(resolvedAccount.assigned_trainer_id)
+      : Boolean(assignmentStatus?.assigned_trainer_id);
     return (
       <AccountSettingsScreen
         {...commonChildProps}
-        email={email}
-        trainerName={trainerName}
+        email={resolvedAccount.email || email}
+        pendingEmailChange={Boolean(resolvedAccount.pending_email_change)}
+        pendingEmail={resolvedAccount.pending_email || null}
+        trainerName={accountCoachName}
+        hasAssignedCoach={hasAssignedCoach}
+        isSelfGuided={Boolean(resolvedAccount.is_self_guided)}
+        isLoadingAccount={isLoadingAccount}
+        accountEmailDraft={accountEmailDraft}
+        onAccountEmailDraftChange={setAccountEmailDraft}
+        onUpdateAccountEmailPress={handleUpdateAccountEmailPress}
+        isUpdatingAccountEmail={isUpdatingAccountEmail}
+        accountPasswordDraft={accountPasswordDraft}
+        onAccountPasswordDraftChange={setAccountPasswordDraft}
+        accountPasswordConfirmationDraft={accountPasswordConfirmationDraft}
+        onAccountPasswordConfirmationDraftChange={setAccountPasswordConfirmationDraft}
+        onUpdateAccountPasswordPress={handleUpdateAccountPasswordPress}
+        isUpdatingAccountPassword={isUpdatingAccountPassword}
+        accountInviteCodeDraft={accountInviteCodeDraft}
+        onAccountInviteCodeDraftChange={setAccountInviteCodeDraft}
+        onChangeCoachByInvitePress={handleChangeCoachByInvitePress}
+        isChangingCoach={isChangingCoach}
+        onRequestRemoveCoachPress={() => setIsConfirmingCoachRemoval(true)}
+        onCancelRemoveCoachPress={() => setIsConfirmingCoachRemoval(false)}
+        onConfirmRemoveCoachPress={handleConfirmRemoveCoachPress}
+        isConfirmingCoachRemoval={isConfirmingCoachRemoval}
+        isRemovingCoach={isRemovingCoach}
+        accountError={accountError}
+        accountNotice={accountNotice}
         deleteConfirmationText={deleteConfirmationText}
         onDeleteConfirmationTextChange={setDeleteConfirmationText}
         deleteAccountError={deleteAccountError}

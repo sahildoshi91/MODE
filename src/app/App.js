@@ -831,6 +831,19 @@ function AppShell() {
     resetSignedOutState({ infoMessage: 'Your account deletion request was submitted and is processing.' });
   };
 
+  const handleAccountSelfServiceChanged = useCallback(async () => {
+    if (!session?.access_token) {
+      return;
+    }
+    setChatLaunchContext(null);
+    setCoachOverlayContext(null);
+    setAlgorithmMemoryRefreshToken((current) => current + 1);
+    await Promise.all([
+      loadBootstrap({ accessToken: session.access_token }),
+      loadAssignmentStatus({ accessTokenOverride: session.access_token }),
+    ]);
+  }, [loadAssignmentStatus, loadBootstrap, session?.access_token]);
+
   const handleCopyBootstrapDiagnostics = useCallback(async () => {
     if (!bootstrapError) {
       return;
@@ -1678,6 +1691,7 @@ function AppShell() {
                 accessToken={session.access_token}
                 onSignOut={handleSignOut}
                 onDeleteAccount={handleDeleteAccount}
+                onAccountSelfServiceChanged={handleAccountSelfServiceChanged}
                 bottomInset={contentBottomInset}
               />
             ) : null}

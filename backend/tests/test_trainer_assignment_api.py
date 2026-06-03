@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.core.auth import AuthenticatedUser, require_user
 from app.core.config import settings
-from app.core.dependencies import get_onboarding_service, get_request_scoped_supabase_client, get_trainer_context
+from app.core.dependencies import get_internal_onboarding_service, get_request_scoped_supabase_client, get_trainer_context
 from app.core.rate_limit import _rate_limiter
 from app.core.tenancy import TrainerContext
 from app.main import app
@@ -333,7 +333,7 @@ class TrainerAssignmentApiTests(unittest.TestCase):
             trainer_display_name=None,
             client_id="client-123",
         )
-        app.dependency_overrides[get_onboarding_service] = lambda: _FailingOnboardingService()
+        app.dependency_overrides[get_internal_onboarding_service] = lambda: _FailingOnboardingService()
 
         response = self.client.post(
             "/api/v1/trainer-assignment/assign-by-invite",

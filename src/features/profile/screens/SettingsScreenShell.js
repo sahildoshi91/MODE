@@ -1,6 +1,7 @@
 import React from 'react';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import Feather from '@expo/vector-icons/Feather';
 
 import {
   GlassSurface,
@@ -73,6 +74,55 @@ export function SettingsDivider() {
       end={{ x: 1, y: 0 }}
       style={styles.divider}
     />
+  );
+}
+
+export function SettingsNavDivider() {
+  return <View style={styles.navDivider} />;
+}
+
+function SettingsBadge({ label, variant }) {
+  const colors = variant === 'warning'
+    ? { bg: theme.colors.feedback.warningBg, border: theme.colors.feedback.warningBorder, text: theme.colors.status.warning }
+    : { bg: theme.colors.feedback.successBg, border: theme.colors.feedback.successBorder, text: theme.colors.status.success };
+  return (
+    <View style={[styles.pill, { backgroundColor: colors.bg, borderColor: colors.border }]}>
+      <ModeText variant="caption" style={[styles.pillText, { color: colors.text }]}>{label}</ModeText>
+    </View>
+  );
+}
+
+export function SettingsNavRow({
+  title,
+  subtitle = null,
+  badge = null,
+  badgeVariant = 'success',
+  onPress,
+  titleStyle,
+  testID,
+}) {
+  return (
+    <Pressable
+      testID={testID}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      style={({ pressed }) => [
+        styles.navRow,
+        pressed && styles.navRowPressed,
+      ]}
+    >
+      <View style={styles.navRowCopy}>
+        <ModeText variant="bodySm" style={[styles.navRowTitle, titleStyle]}>{title}</ModeText>
+        {subtitle ? (
+          <ModeText variant="caption" tone="secondary" numberOfLines={1}>{subtitle}</ModeText>
+        ) : null}
+      </View>
+      <View style={styles.navRowTrailing}>
+        {badge ? <SettingsBadge label={badge} variant={badgeVariant} /> : null}
+        <Feather name="chevron-right" size={14} color={theme.colors.text.tertiary} />
+      </View>
+    </Pressable>
   );
 }
 
@@ -153,5 +203,44 @@ const styles = StyleSheet.create({
   },
   toggleCopy: {
     flex: 1,
+  },
+  navDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: theme.colors.border.soft,
+    marginHorizontal: 14,
+  },
+  navRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+    gap: theme.spacing[2],
+  },
+  navRowPressed: {
+    backgroundColor: theme.colors.surface.elevated,
+    borderRadius: theme.radii.xs,
+  },
+  navRowCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  navRowTitle: {
+    fontSize: 13.5,
+    fontWeight: '500',
+  },
+  navRowTrailing: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: theme.radii.pill,
+    borderWidth: 1,
+  },
+  pillText: {
+    fontSize: 11,
+    fontWeight: '600',
   },
 });

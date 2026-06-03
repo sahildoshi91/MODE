@@ -1,7 +1,21 @@
 jest.mock('../../services/profileApi', () => ({
+  getAccountMe: jest.fn(),
   getMyTrainerSchedule: jest.fn(),
   getTrainerSettingsMe: jest.fn(),
   patchTrainerSettingsMe: jest.fn(),
+}));
+
+jest.mock('../../../../services/supabaseClient', () => ({
+  supabase: {
+    auth: {
+      updateUser: jest.fn(),
+    },
+  },
+}));
+
+jest.mock('../../../trainerAssignment/services/trainerAssignmentApi', () => ({
+  assignTrainerByInvite: jest.fn(),
+  removeCurrentTrainerAssignment: jest.fn(),
 }));
 
 jest.mock('../../../../config/legalLinks', () => ({
@@ -34,7 +48,17 @@ import renderer, { act } from 'react-test-renderer';
 
 import ProfileScreen from '../ProfileScreen';
 import { getLegalLinks, getLegalLinksFallbackText } from '../../../../config/legalLinks';
-import { getMyTrainerSchedule, getTrainerSettingsMe, patchTrainerSettingsMe } from '../../services/profileApi';
+import { supabase } from '../../../../services/supabaseClient';
+import {
+  getAccountMe,
+  getMyTrainerSchedule,
+  getTrainerSettingsMe,
+  patchTrainerSettingsMe,
+} from '../../services/profileApi';
+import {
+  assignTrainerByInvite,
+  removeCurrentTrainerAssignment,
+} from '../../../trainerAssignment/services/trainerAssignmentApi';
 
 async function flushEffects() {
   await act(async () => {
@@ -116,6 +140,30 @@ describe('ProfileScreen trainer schedule', () => {
       default_meeting_location: 'My Gym',
       auto_fill_meeting_location: true,
       assistant_display_name: 'Atlas',
+    });
+    getAccountMe.mockResolvedValue({
+      email: 'client@example.com',
+      pending_email_change: false,
+      pending_email: null,
+      user_account_id: 'account-1',
+      viewer_role: 'client',
+      client_id: 'client-1',
+      assigned_trainer_id: 'trainer-1',
+      assigned_trainer_display_name: 'Coach Alex',
+      is_self_guided: false,
+    });
+    supabase.auth.updateUser.mockResolvedValue({ data: {}, error: null });
+    assignTrainerByInvite.mockResolvedValue({
+      needs_assignment: false,
+      assigned_trainer_id: 'trainer-2',
+      assigned_trainer_display_name: 'Coach Morgan',
+      viewer_role: 'client',
+    });
+    removeCurrentTrainerAssignment.mockResolvedValue({
+      needs_assignment: true,
+      assigned_trainer_id: null,
+      assigned_trainer_display_name: null,
+      viewer_role: 'client',
     });
   });
 
@@ -255,6 +303,9 @@ describe('ProfileScreen trainer schedule', () => {
     await flushEffects();
 
     pressByTestId(tree, 'profile-settings-nav-account');
+    await flushEffects();
+
+    pressByTestId(tree, 'account-nav-delete');
 
     let rendered = JSON.stringify(tree.toJSON());
     expect(rendered).toContain('Submits a permanent deletion request');
@@ -288,6 +339,171 @@ describe('ProfileScreen trainer schedule', () => {
     expect(onDeleteAccount).toHaveBeenCalledWith({ confirmation: 'DELETE' });
     rendered = JSON.stringify(tree.toJSON());
     expect(rendered).toContain('Account deletion request submitted');
+  });
+
+  it('renders pending email copy and submits email and password updates through Supabase Auth', async () => {
+    getAccountMe.mockResolvedValue({
+      email: 'client@example.com',
+      pending_email_change: true,
+      pending_email: 'pending@example.com',
+      user_account_id: 'account-1',
+      viewer_role: 'client',
+      client_id: 'client-1',
+      assigned_trainer_id: 'trainer-1',
+      assigned_trainer_display_name: 'Coach Alex',
+      is_self_guided: false,
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <ProfileScreen
+          session={{ user: { email: 'client@example.com' } }}
+          assignmentStatus={{
+            viewer_role: 'client',
+            assigned_trainer_id: 'trainer-1',
+            assigned_trainer_display_name: 'Coach Alex',
+          }}
+          accessToken="client-token"
+          onSignOut={() => {}}
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    pressByTestId(tree, 'profile-settings-nav-account');
+    await flushEffects();
+
+    pressByTestId(tree, 'account-nav-email');
+
+    const pendingCopy = tree.root.findByProps({ testID: 'account-pending-email-copy' });
+    expect(JSON.stringify(pendingCopy.props.children)).toContain('pending@example.com');
+
+    const emailInput = tree.root.findByProps({ testID: 'account-email-input' });
+    act(() => {
+      emailInput.props.onChangeText('next@example.com');
+    });
+    await act(async () => {
+      await tree.root.findByProps({ testID: 'account-change-email-button' }).props.onPress();
+    });
+
+    expect(supabase.auth.updateUser).toHaveBeenCalledWith({ email: 'next@example.com' });
+
+    act(() => {
+      tree.root.findByProps({ accessibilityLabel: 'Go back' }).props.onPress();
+    });
+
+    pressByTestId(tree, 'account-nav-password');
+
+    act(() => {
+      tree.root.findByProps({ testID: 'account-password-input' }).props.onChangeText('newpassword1');
+      tree.root.findByProps({ testID: 'account-password-confirmation-input' }).props.onChangeText('newpassword1');
+    });
+    await act(async () => {
+      await tree.root.findByProps({ testID: 'account-update-password-button' }).props.onPress();
+    });
+
+    expect(supabase.auth.updateUser).toHaveBeenCalledWith({ password: 'newpassword1' });
+  });
+
+  it('changes coach by invite and confirms self-detach', async () => {
+    const onAccountSelfServiceChanged = jest.fn().mockResolvedValue(undefined);
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <ProfileScreen
+          session={{ user: { email: 'client@example.com' } }}
+          assignmentStatus={{
+            viewer_role: 'client',
+            assigned_trainer_id: 'trainer-1',
+            assigned_trainer_display_name: 'Coach Alex',
+          }}
+          accessToken="client-token"
+          onSignOut={() => {}}
+          onAccountSelfServiceChanged={onAccountSelfServiceChanged}
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    pressByTestId(tree, 'profile-settings-nav-account');
+    await flushEffects();
+
+    pressByTestId(tree, 'account-nav-coach');
+    await flushEffects();
+
+    expect(JSON.stringify(tree.toJSON())).toContain('Current coach');
+    expect(JSON.stringify(tree.toJSON())).toContain('Coach Alex');
+
+    act(() => {
+      tree.root.findByProps({ testID: 'account-coach-invite-input' }).props.onChangeText('mode2026');
+    });
+    await act(async () => {
+      await tree.root.findByProps({ testID: 'account-change-coach-button' }).props.onPress();
+    });
+
+    expect(assignTrainerByInvite).toHaveBeenCalledWith({
+      accessToken: 'client-token',
+      inviteCode: 'MODE2026',
+    });
+    expect(onAccountSelfServiceChanged).toHaveBeenCalled();
+
+    act(() => {
+      tree.root.findByProps({ testID: 'account-remove-coach-button' }).props.onPress();
+    });
+    expect(JSON.stringify(tree.toJSON())).toContain('Confirm Remove Coach');
+
+    await act(async () => {
+      await tree.root.findByProps({ testID: 'account-confirm-remove-coach-button' }).props.onPress();
+    });
+
+    expect(removeCurrentTrainerAssignment).toHaveBeenCalledWith({ accessToken: 'client-token' });
+    expect(onAccountSelfServiceChanged).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders unassigned account coach state without remove option', async () => {
+    getAccountMe.mockResolvedValue({
+      email: 'client@example.com',
+      pending_email_change: false,
+      pending_email: null,
+      user_account_id: 'account-1',
+      viewer_role: 'client',
+      client_id: 'client-1',
+      assigned_trainer_id: null,
+      assigned_trainer_display_name: null,
+      is_self_guided: true,
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <ProfileScreen
+          session={{ user: { email: 'client@example.com' } }}
+          assignmentStatus={{
+            viewer_role: 'client',
+            assigned_trainer_id: null,
+            assigned_trainer_display_name: null,
+          }}
+          accessToken="client-token"
+          onSignOut={() => {}}
+          bottomInset={0}
+        />,
+      );
+    });
+    await flushEffects();
+
+    pressByTestId(tree, 'profile-settings-nav-account');
+    await flushEffects();
+
+    pressByTestId(tree, 'account-nav-coach');
+    await flushEffects();
+
+    const rendered = JSON.stringify(tree.toJSON());
+    expect(rendered).toContain('No coach assigned');
+    expect(rendered).toContain('Assign Coach');
+    expect(rendered).not.toContain('Remove Coach');
   });
 
   it('renders AI guidance in its own drill-down screen', async () => {

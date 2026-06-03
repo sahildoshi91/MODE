@@ -297,6 +297,7 @@ class OnboardingService:
         user: AuthenticatedUser,
         invite_code: str,
     ) -> OnboardingBootstrapResponse:
+        self._last_assignment_mutation_rows = []
         normalized_code = invite_code.strip().upper()
         if not normalized_code:
             raise OnboardingServiceError("Invite code is required", status_code=422)
@@ -341,55 +342,21 @@ class OnboardingService:
         if role and role != "client":
             raise OnboardingServiceError("Trainer-role accounts cannot attach to a trainer", status_code=409)
 
-        clients = self.repository.list_clients_for_user(user_id=user.id)
-        assigned_to_other = [
-            row for row in clients
-            if row.get("assigned_trainer_id") and row.get("assigned_trainer_id") != trainer["id"]
-        ]
-        if assigned_to_other:
-            raise OnboardingServiceError(
-                "You are already linked to a different trainer",
-                status_code=409,
-            )
-
-        existing_same_assignment = next(
-            (
-                row for row in clients
-                if row.get("assigned_trainer_id") == trainer["id"]
-            ),
-            None,
-        )
-
-        if existing_same_assignment:
-            target_client = existing_same_assignment
-        else:
-            target_client = self.repository.get_client_for_user_and_tenant(
+        mutation_rows = self._normalize_mutation_rows(
+            self.repository.reassign_client_by_invite(
                 user_id=user.id,
-                tenant_id=trainer["tenant_id"],
+                invite_id=str(code_row.get("id") or ""),
+                trainer_id=str(code_row.get("trainer_id") or ""),
+                tenant_id=str(code_row.get("tenant_id") or ""),
             )
-            if not target_client:
-                target_client = self.repository.create_client(
-                    tenant_id=trainer["tenant_id"],
-                    user_id=user.id,
-                )
-            if target_client.get("assigned_trainer_id") != trainer["id"]:
-                target_client = self.repository.update_client(
-                    client_id=target_client["id"],
-                    fields={"assigned_trainer_id": trainer["id"]},
-                )
-                self.repository.insert_assignment_history(
-                    client_id=target_client["id"],
-                    trainer_id=trainer["id"],
-                )
+        )
+        self._last_assignment_mutation_rows = mutation_rows
+        if not mutation_rows:
+            raise OnboardingServiceError("Invite code is inactive", status_code=409)
 
-        self.repository.ensure_client_profile(client_id=target_client["id"])
-
-        self_guided = self._find_self_guided_client(clients)
-        if self_guided:
-            self.repository.copy_profile_to_client_if_missing(
-                source_client_id=self_guided["id"],
-                target_client_id=target_client["id"],
-            )
+        target_client_id = self._target_client_id_from_assignment_rows(mutation_rows)
+        if not target_client_id:
+            raise OnboardingServiceError("Unable to attach trainer with invite code", status_code=500)
 
         existing_state = self.repository.get_onboarding_state(user_account_id=account["id"])
         existing_payload = existing_state.get("payload") if isinstance(existing_state, dict) else {}
@@ -405,33 +372,53 @@ class OnboardingService:
                 "trainer_invite_attached": True,
                 "assigned_trainer_id": trainer["id"],
                 "assigned_trainer_display_name": trainer.get("display_name"),
+                "assigned_client_id": target_client_id,
             },
             completed_at=(existing_state or {}).get("completed_at"),
         )
 
-        try:
-            consumed = self.repository.deactivate_invite_code(
-                invite_id=str(code_row.get("id") or ""),
-                trainer_id=str(code_row.get("trainer_id") or ""),
-                tenant_id=str(code_row.get("tenant_id") or ""),
-                used_by_user_id=user.id,
-            )
-        except TypeError:
-            consumed = self.repository.deactivate_invite_code(
-                invite_id=str(code_row.get("id") or ""),
-                trainer_id=str(code_row.get("trainer_id") or ""),
-                tenant_id=str(code_row.get("tenant_id") or ""),
-            )
-        if not consumed:
-            raise OnboardingServiceError("Invite code is inactive", status_code=409)
-
         return self.get_bootstrap(user)
+
+    def self_detach_current_assignment(self, *, user: AuthenticatedUser) -> list[dict[str, Any]]:
+        self._last_assignment_mutation_rows = []
+        account = self.repository.ensure_user_account(user_id=user.id, email=user.email)
+        role = self.repository.get_user_role(user_account_id=account["id"])
+        if role and role not in ROLE_VALUES:
+            role = None
+        if role and role != "client":
+            raise OnboardingServiceError("Trainer-role accounts cannot remove a trainer assignment", status_code=409)
+        mutation_rows = self._normalize_mutation_rows(
+            self.repository.self_detach_trainer_assignment(user_id=user.id)
+        )
+        self._last_assignment_mutation_rows = mutation_rows
+        return mutation_rows
 
     def _hash_invite_code(self, code: str) -> str:
         normalized = code.strip().lower()
         if not normalized:
             return ""
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    def _normalize_mutation_rows(self, value: Any) -> list[dict[str, Any]]:
+        if isinstance(value, list):
+            return [dict(row) for row in value if isinstance(row, dict)]
+        if isinstance(value, dict):
+            return [dict(value)]
+        return []
+
+    def _target_client_id_from_assignment_rows(self, rows: list[dict[str, Any]]) -> str | None:
+        for row in rows:
+            event_type = str(row.get("event_type") or "").strip()
+            if event_type != "assigned_by_invite":
+                continue
+            target_client_id = self._coerce_optional_text(row.get("target_client_id") or row.get("client_id"))
+            if target_client_id:
+                return target_client_id
+        for row in rows:
+            target_client_id = self._coerce_optional_text(row.get("target_client_id") or row.get("client_id"))
+            if target_client_id:
+                return target_client_id
+        return None
 
     def _normalize_onboarding_status(self, state: dict[str, Any] | None) -> str:
         status = str((state or {}).get("status") or "not_started").strip().lower()

@@ -7,9 +7,15 @@ from supabase import Client
 
 from app.core.auth import AuthenticatedUser, CurrentUser
 from app.core.config import settings
-from app.core.dependencies import get_onboarding_service, get_request_scoped_supabase_client, get_trainer_context
+from app.core.dependencies import (
+    get_internal_onboarding_service,
+    get_request_scoped_supabase_client,
+    get_trainer_context,
+    invalidate_trainer_context_cache,
+)
 from app.core.rate_limit import enforce_rate_limit
 from app.core.tenancy import TrainerContext, resolve_trainer_context
+from app.modules.conversation.cache import invalidate_chat_context
 from app.modules.onboarding.service import OnboardingService, OnboardingServiceError
 
 
@@ -143,6 +149,25 @@ def _build_status_response(
     )
 
 
+def _invalidate_assignment_contexts(user_id: str, rows: list[dict]) -> None:
+    invalidate_trainer_context_cache(user_id)
+    for row in rows:
+        client_id = str(row.get("client_id") or row.get("target_client_id") or "").strip()
+        trainer_id = str(
+            row.get("trainer_id")
+            or row.get("previous_trainer_id")
+            or row.get("target_trainer_id")
+            or ""
+        ).strip()
+        if not client_id or not trainer_id:
+            continue
+        invalidate_chat_context(
+            trainer_id,
+            client_id,
+            reason=str(row.get("event_type") or "trainer_assignment_mutation"),
+        )
+
+
 @router.get("/status", response_model=TrainerAssignmentStatus)
 async def get_assignment_status(
     user: AuthenticatedUser = CurrentUser,
@@ -179,14 +204,18 @@ async def assign_trainer_by_invite(
     http_request: Request,
     user: AuthenticatedUser = CurrentUser,
     trainer_context: TrainerContext = Depends(get_trainer_context),
-    onboarding_service: OnboardingService = Depends(get_onboarding_service),
+    onboarding_service: OnboardingService = Depends(get_internal_onboarding_service),
     supabase: Client = Depends(get_request_scoped_supabase_client),
 ):
     enforce_rate_limit(
-        group="invite_redeem",
+        group="trainer_assignment_mutation",
         user=user,
         request=http_request,
-        context={"tenant_id": trainer_context.tenant_id},
+        context={
+            "tenant_id": trainer_context.tenant_id,
+            "trainer_id": trainer_context.trainer_id,
+            "client_id": trainer_context.client_id,
+        },
     )
     if trainer_context.trainer_id and not trainer_context.client_id:
         raise HTTPException(
@@ -195,6 +224,7 @@ async def assign_trainer_by_invite(
         )
     try:
         onboarding_service.assign_by_invite(user=user, invite_code=request.invite_code)
+        mutation_rows = getattr(onboarding_service, "_last_assignment_mutation_rows", [])
     except OnboardingServiceError as exc:
         logger.info(
             "Invite assignment rejected user_id=%s status_code=%s reason=%s",
@@ -207,5 +237,43 @@ async def assign_trainer_by_invite(
             detail="Unable to attach trainer with invite code",
         ) from exc
 
+    if isinstance(mutation_rows, list):
+        _invalidate_assignment_contexts(user.id, mutation_rows)
+    else:
+        invalidate_trainer_context_cache(user.id)
+    updated_context = resolve_trainer_context(supabase, user.id)
+    return _build_status_response(updated_context, user)
+
+
+@router.delete("/current", response_model=TrainerAssignmentStatus)
+async def delete_current_trainer_assignment(
+    http_request: Request,
+    user: AuthenticatedUser = CurrentUser,
+    trainer_context: TrainerContext = Depends(get_trainer_context),
+    onboarding_service: OnboardingService = Depends(get_internal_onboarding_service),
+    supabase: Client = Depends(get_request_scoped_supabase_client),
+):
+    enforce_rate_limit(
+        group="trainer_assignment_mutation",
+        user=user,
+        request=http_request,
+        context={
+            "tenant_id": trainer_context.tenant_id,
+            "trainer_id": trainer_context.trainer_id,
+            "client_id": trainer_context.client_id,
+        },
+    )
+    if trainer_context.trainer_id and not trainer_context.client_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trainer accounts cannot remove a trainer assignment",
+        )
+
+    try:
+        mutation_rows = onboarding_service.self_detach_current_assignment(user=user)
+    except OnboardingServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+    _invalidate_assignment_contexts(user.id, mutation_rows)
     updated_context = resolve_trainer_context(supabase, user.id)
     return _build_status_response(updated_context, user)
