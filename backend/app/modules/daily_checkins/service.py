@@ -33,6 +33,7 @@ from app.modules.daily_checkins.schemas import (
     YesterdayCheckinSummary,
 )
 from app.modules.daily_checkins.checkin_response import (
+    PROMPT_VERSION as CHECKIN_RESPONSE_TEMPLATE_VERSION,
     build_deterministic_checkin_response,
     classify_signals,
     is_meaningful_client_why,
@@ -1019,6 +1020,13 @@ class DailyCheckinService:
             response = CheckinResponseOutput(**value)
         except Exception as exc:
             logger.warning("Ignoring malformed persisted check-in response: %s", exc)
+            return None
+        if response.template_version != CHECKIN_RESPONSE_TEMPLATE_VERSION:
+            logger.warning(
+                "Ignoring stale persisted check-in response template_version=%s expected=%s",
+                response.template_version,
+                CHECKIN_RESPONSE_TEMPLATE_VERSION,
+            )
             return None
         return response if response.sections else None
 

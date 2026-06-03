@@ -12,33 +12,6 @@ const LEGACY_MODE_LABELS = {
 };
 const OPENING_SECTION_IDS = ['opening', 'workout', 'nutrition', 'why', 'question'];
 
-const OPENING_MODE_BUNDLES = {
-  BEAST: {
-    tagline: 'Full-send readiness.',
-    training: '45-60 min, High, Strength or HIIT',
-    nutrition: 'Protein early, carbs around training, steady fluids.',
-    mindset: 'Attack the day. You are cleared to push.',
-  },
-  BUILD: {
-    tagline: 'Stable readiness.',
-    training: '30-45 min, Moderate, Moderate cardio or controlled strength',
-    nutrition: 'Protein each meal, balanced carbs, intentional snacks.',
-    mindset: 'Build momentum with disciplined reps.',
-  },
-  RECOVER: {
-    tagline: 'Recovery-leaning day.',
-    training: '20-30 min, Low, Light movement or recovery',
-    nutrition: 'Protein at each meal, simple whole-food meals (minimally processed, easy to prep), hydrate first.',
-    mindset: 'Recovery done well is progress.',
-  },
-  REST: {
-    tagline: 'Restore and protect tomorrow.',
-    training: '10-20 min, Very low, Mobility, walking, or restorative movement',
-    nutrition: 'Protein, colorful plants, and fluids for recovery.',
-    mindset: 'Rest with intent so you can return stronger.',
-  },
-};
-
 function normalizeModeLabel(value) {
   const mode = String(value || '').trim().toUpperCase();
   if (!mode) {
@@ -53,36 +26,9 @@ function normalizeOpeningSummaryText(value) {
     return text;
   }
 
-  const modeMatch = /\bMODE:\s*(BEAST|BUILD|RECOVER|REST|GREEN|YELLOW|BLUE|RED)(?:,\s*([^.\n]+))?\./i.exec(text);
-  const mode = normalizeModeLabel(modeMatch?.[1]);
-  const shouldRebuildBrief = Boolean(
-    mode
-    && OPENING_MODE_BUNDLES[mode]
-    && /\bMODE:\s*(BEAST|BUILD|RECOVER|REST|GREEN|YELLOW|BLUE|RED)\b/i.test(text),
-  );
-
-  if (shouldRebuildBrief) {
-    const scoreLine = modeMatch?.[2]
-      ? `${String(modeMatch[2]).trim()}. ${OPENING_MODE_BUNDLES[mode].tagline}`
-      : OPENING_MODE_BUNDLES[mode].tagline;
-    const bundle = OPENING_MODE_BUNDLES[mode];
-    return (
-      `${mode} MODE\n`
-      + `${scoreLine}\n`
-      + `Training: ${bundle.training}.\n`
-      + `Nutrition: ${bundle.nutrition}\n`
-      + `Mindset: ${bundle.mindset}\n\n`
-      + 'What do you want to achieve today?'
-    );
-  }
-
   return text
     .replace(/\bMODE:\s*(GREEN|YELLOW|BLUE|RED)\b/gi, (_match, legacyMode) => `MODE: ${normalizeModeLabel(legacyMode)}`)
     .replace(/\.\s+Nutrition:/g, '.\nNutrition:')
-    .replace(
-      /\bNutrition:\s*Protein steady,\s*easy whole-food meals,\s*hydrate first\.?/i,
-      `Nutrition: ${OPENING_MODE_BUNDLES.RECOVER.nutrition}`,
-    )
     .replace(/\bBuild Today:\s*tap training routine or nutrition plan\.?/i, 'What do you want to achieve today?');
 }
 
@@ -110,6 +56,7 @@ function normalizeStructuredOpeningResponse(metadata) {
   return {
     mode: response.mode ? normalizeModeLabel(response.mode) : '',
     total_score: response.total_score,
+    template_version: response.template_version,
     generated_at: response.generated_at,
     model_used: response.model_used,
     sections: OPENING_SECTION_IDS.map((id) => sectionsById[id]),

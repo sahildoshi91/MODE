@@ -1,5 +1,6 @@
 import React from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 
 import {
   GlassSurface,
@@ -64,7 +65,15 @@ export function SettingsDetailRow({
 }
 
 export function SettingsDivider() {
-  return <View style={styles.divider} />;
+  return (
+    <LinearGradient
+      colors={['transparent', theme.colors.border.soft, 'transparent']}
+      locations={[0, 0.5, 1]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 0 }}
+      style={styles.divider}
+    />
+  );
 }
 
 export function SettingToggle({
@@ -127,7 +136,6 @@ const styles = StyleSheet.create({
   },
   divider: {
     height: 1,
-    backgroundColor: theme.colors.border.soft,
     marginVertical: theme.spacing[2],
   },
   toggleRow: {

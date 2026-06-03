@@ -42,6 +42,7 @@ def dynamic_checkin_response() -> dict:
     return {
         "mode": "BUILD",
         "total_score": 20,
+        "template_version": "daily_checkin_response_v1",
         "sections": [
             {
                 "id": "opening",
@@ -123,6 +124,9 @@ class FakeChatSessionRepository:
             "primary_goal": "lean out and feel more in control",
             "user_why": None,
         }
+        self.update_message_calls = []
+        self.race_update_message_id = None
+        self.race_latest_message = None
 
     def get_session(self, session_id):
         return next((row for row in self.sessions if row["id"] == session_id), None)
@@ -201,9 +205,21 @@ class FakeChatSessionRepository:
             None,
         )
 
-    def update_opening_summary_message(self, *, session_id, content, metadata):
+    def update_opening_summary_message(
+        self,
+        *,
+        session_id,
+        content,
+        metadata,
+        expected_content=None,
+        expected_metadata=None,
+    ):
         row = self.get_opening_summary_message(session_id)
         if not row:
+            return None
+        if expected_content is not None and row.get("content") != expected_content:
+            return None
+        if expected_metadata is not None and (row.get("metadata") or {}) != expected_metadata:
             return None
         row["content"] = content
         row["metadata"] = metadata or {}
@@ -215,10 +231,33 @@ class FakeChatSessionRepository:
             None,
         )
 
-    def update_message_by_id(self, *, message_id, content, metadata):
+    def update_message_by_id(
+        self,
+        *,
+        message_id,
+        content,
+        metadata,
+        expected_content=None,
+        expected_metadata=None,
+    ):
+        self.update_message_calls.append({
+            "message_id": message_id,
+            "content": content,
+            "metadata": metadata,
+            "expected_content": expected_content,
+            "expected_metadata": expected_metadata,
+        })
         for session_messages in self.messages.values():
             for row in session_messages:
                 if row.get("id") == message_id:
+                    if self.race_update_message_id == message_id:
+                        if self.race_latest_message:
+                            row.update(self.race_latest_message)
+                        return None
+                    if expected_content is not None and row.get("content") != expected_content:
+                        return None
+                    if expected_metadata is not None and (row.get("metadata") or {}) != expected_metadata:
+                        return None
                     row["content"] = content
                     row["metadata"] = metadata or {}
                     return row
@@ -516,21 +555,22 @@ class ChatSessionServiceTests(unittest.TestCase):
         self.assertEqual(opening["message_index"], 0)
         self.assertTrue(opening["metadata"]["auto_generated_opening_summary"])
 
-    def test_client_opening_summary_is_compact_mode_brief(self):
+    def test_client_opening_summary_uses_degraded_fallback_without_structured_response(self):
         response = self.service.get_or_create_today_session(
             user_id=USER_ID,
             trainer_context=client_context(),
             request=ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY),
         )
 
-        opening = response.messages[0].content
-        self.assertLessEqual(len(opening.split()), 75)
-        for label in ["BUILD MODE", "\nTraining:", "\nNutrition:", "\nMindset:"]:
-            self.assertIn(label, opening)
-        self.assertNotIn("Build Today:", opening)
-        self.assertIn("What do you want to achieve today?", opening)
-        self.assertIn("20/25", opening)
-        self.assertIn("30-45 min", opening)
+        opening = response.messages[0]
+        self.assertEqual(opening.metadata["summary_source"], "client_daily_checkin_response_degraded_v1")
+        self.assertEqual(opening.metadata["template_version"], "daily_checkin_response_v1")
+        self.assertTrue(opening.metadata["degraded_opening_summary"])
+        self.assertIn("Coach brief is still generating.", opening.content)
+        self.assertIn("structured opening could not be refreshed", opening.content)
+        self.assertIn("20/25", opening.content)
+        self.assertNotIn("Stable readiness.", opening.content)
+        self.assertNotIn("\nTraining:", opening.content)
         self.assertIn("Build me a training routine", response.suggested_actions)
         self.assertIn("Build me a nutrition plan", response.suggested_actions)
         self.assertEqual(response.session.client_name, "Taylor")
@@ -553,6 +593,8 @@ class ChatSessionServiceTests(unittest.TestCase):
 
         opening = response.messages[0]
         self.assertEqual(opening.metadata["summary_source"], "client_daily_checkin_response_v1")
+        self.assertEqual(opening.metadata["template_version"], "daily_checkin_response_v1")
+        self.assertEqual(opening.metadata["checkin_response"]["template_version"], "daily_checkin_response_v1")
         self.assertEqual(opening.metadata["checkin_response_generated_at"], "2026-05-30T16:00:00+00:00")
         self.assertEqual(opening.metadata["model_used"], "gpt-5.4-mini")
         self.assertEqual(opening.metadata["checkin_id"], "checkin-1")
@@ -639,7 +681,7 @@ class ChatSessionServiceTests(unittest.TestCase):
         self.assertIn("Build day - 20/25", opening.content)
         self.assertNotIn("Training: 30-45 min", opening.content)
 
-    def test_client_opening_summary_mindset_names_user_why(self):
+    def test_client_opening_summary_metadata_tracks_user_why_when_degraded(self):
         self.repository.profile["user_why"] = "Dance until I am 100 and never tell my kids I am tired."
 
         response = self.service.get_or_create_today_session(
@@ -648,10 +690,9 @@ class ChatSessionServiceTests(unittest.TestCase):
             request=ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY),
         )
 
-        opening = response.messages[0].content
-        self.assertLessEqual(len(opening.split()), 75)
-        self.assertIn("Mindset: Build momentum with disciplined reps.", opening)
-        self.assertIn("Remember why: Dance until I am 100", opening)
+        opening = response.messages[0]
+        self.assertEqual(opening.metadata["summary_source"], "client_daily_checkin_response_degraded_v1")
+        self.assertNotIn("Mindset: Build momentum with disciplined reps.", opening.content)
         self.assertTrue(response.messages[0].metadata["has_user_why"])
 
     def test_client_mode_brief_word_cap_applies_to_all_modes(self):
@@ -723,19 +764,19 @@ class ChatSessionServiceTests(unittest.TestCase):
 
         self.assertEqual(first.session.id, second.session.id)
         self.assertEqual(len(self.repository.messages[first.session.id]), 1)
-        self.assertIn("BUILD MODE", second.messages[0].content)
-        self.assertEqual(second.messages[0].metadata["summary_source"], "client_daily_mode_brief_v1")
+        self.assertIn("Coach brief is still generating.", second.messages[0].content)
+        self.assertEqual(second.messages[0].metadata["summary_source"], "client_daily_checkin_response_degraded_v1")
         self.assertEqual(second.messages[0].metadata["checkin_id"], "checkin-2")
 
-    def test_client_opening_summary_refreshes_static_message_when_checkin_response_arrives(self):
+    def test_client_opening_summary_refreshes_degraded_message_when_checkin_response_arrives(self):
         request = ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY)
         first = self.service.get_or_create_today_session(
             user_id=USER_ID,
             trainer_context=client_context(),
             request=request,
         )
-        self.assertEqual(first.messages[0].metadata["summary_source"], "client_daily_mode_brief_v1")
-        self.assertIn("Stable readiness.", first.messages[0].content)
+        self.assertEqual(first.messages[0].metadata["summary_source"], "client_daily_checkin_response_degraded_v1")
+        self.assertIn("Coach brief is still generating.", first.messages[0].content)
 
         self.repository.today_checkin["checkin_response"] = dynamic_checkin_response()
         second = self.service.get_or_create_today_session(
@@ -749,7 +790,226 @@ class ChatSessionServiceTests(unittest.TestCase):
         self.assertEqual(second.messages[0].metadata["summary_source"], "client_daily_checkin_response_v1")
         self.assertEqual(second.messages[0].metadata["checkin_response"]["sections"][0]["id"], "opening")
         self.assertIn("Build day - 20/25", second.messages[0].content)
+        self.assertNotIn("Coach brief is still generating.", second.messages[0].content)
+
+    def test_client_opening_summary_refreshes_legacy_mode_brief_row_on_load(self):
+        request = ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY)
+        first = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=request,
+        )
+        existing = self.repository.messages[first.session.id][0]
+        existing["content"] = (
+            "BUILD MODE\n"
+            "20/25. Stable readiness.\n"
+            "Training: 30-45 min, Moderate, controlled strength.\n"
+            "Nutrition: Protein each meal.\n"
+            "Mindset: Build momentum.\n\n"
+            "What do you want to achieve today?"
+        )
+        existing["metadata"] = {
+            "auto_generated_opening_summary": True,
+            "summary_source": "client_daily_mode_brief_v1",
+            "suggested_action_chips": ["Old chip"],
+        }
+
+        self.repository.today_checkin["checkin_response"] = dynamic_checkin_response()
+        daily_checkin_service = FakeDailyCheckinService(response=dynamic_checkin_response())
+        self.service = ChatSessionService(
+            self.repository,
+            conversation_service=self.conversation_service,
+            daily_checkin_service=daily_checkin_service,
+        )
+        self.service._today = lambda: TODAY
+
+        second = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=request,
+        )
+
+        self.assertEqual(first.session.id, second.session.id)
+        self.assertEqual(len(self.repository.messages[first.session.id]), 1)
+        self.assertEqual(second.messages[0].metadata["summary_source"], "client_daily_checkin_response_v1")
+        self.assertEqual(second.messages[0].metadata["template_version"], "daily_checkin_response_v1")
+        self.assertIn("Build day - 20/25", second.messages[0].content)
         self.assertNotIn("Stable readiness.", second.messages[0].content)
+
+    def test_client_opening_summary_regenerates_version_mismatch(self):
+        stale_response = dynamic_checkin_response()
+        stale_response["template_version"] = "daily_checkin_response_v0"
+        self.repository.today_checkin["checkin_response"] = stale_response
+        daily_checkin_service = FakeDailyCheckinService(response=dynamic_checkin_response())
+        self.service = ChatSessionService(
+            self.repository,
+            conversation_service=self.conversation_service,
+            daily_checkin_service=daily_checkin_service,
+        )
+        self.service._today = lambda: TODAY
+
+        response = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY),
+        )
+
+        opening = response.messages[0]
+        self.assertEqual(len(daily_checkin_service.calls), 1)
+        self.assertEqual(opening.metadata["summary_source"], "client_daily_checkin_response_v1")
+        self.assertEqual(opening.metadata["template_version"], "daily_checkin_response_v1")
+        self.assertEqual(opening.metadata["checkin_response"]["template_version"], "daily_checkin_response_v1")
+
+    def test_client_opening_summary_refetches_latest_after_refresh_race(self):
+        request = ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY)
+        first = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=request,
+        )
+        existing = self.repository.messages[first.session.id][0]
+        repaired_response = dynamic_checkin_response()
+        repaired_response = {
+            "mode": repaired_response["mode"],
+            "total_score": repaired_response["total_score"],
+            "template_version": repaired_response["template_version"],
+            "sections": repaired_response["sections"],
+            "generated_at": repaired_response["generated_at"],
+            "model_used": repaired_response["model_used"],
+        }
+        latest = {
+            "content": "Already repaired elsewhere.",
+            "metadata": {
+                "auto_generated_opening_summary": True,
+                "summary_source": "client_daily_checkin_response_v1",
+                "template_version": "daily_checkin_response_v1",
+                "checkin_id": "checkin-1",
+                "checkin_date": TODAY.isoformat(),
+                "assigned_mode": "BUILD",
+                "checkin_score": 20,
+                "has_checkin": True,
+                "has_user_why": False,
+                "checkin_response_attempted": False,
+                "checkin_response": repaired_response,
+                "checkin_response_generated_at": "2026-05-30T16:00:00+00:00",
+                "model_used": "gpt-5.4-mini",
+            },
+        }
+        self.repository.race_update_message_id = existing["id"]
+        self.repository.race_latest_message = latest
+        self.repository.today_checkin["checkin_response"] = dynamic_checkin_response()
+        daily_checkin_service = FakeDailyCheckinService(response=dynamic_checkin_response())
+        self.service = ChatSessionService(
+            self.repository,
+            conversation_service=self.conversation_service,
+            daily_checkin_service=daily_checkin_service,
+        )
+        self.service._today = lambda: TODAY
+
+        second = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=request,
+        )
+
+        self.assertEqual(second.messages[0].content, "Already repaired elsewhere.")
+        self.assertEqual(second.messages[0].metadata["summary_source"], "client_daily_checkin_response_v1")
+
+    def test_client_opening_summary_degrades_when_generation_fails(self):
+        class BrokenDailyCheckinService:
+            def __init__(self):
+                self.calls = []
+
+            def ensure_checkin_response(self, **kwargs):
+                self.calls.append(kwargs)
+                raise RuntimeError("generation unavailable")
+
+        self.repository.today_checkin["checkin_response"] = None
+        daily_checkin_service = BrokenDailyCheckinService()
+        self.service = ChatSessionService(
+            self.repository,
+            conversation_service=self.conversation_service,
+            daily_checkin_service=daily_checkin_service,
+        )
+        self.service._today = lambda: TODAY
+
+        response = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY),
+        )
+
+        opening = response.messages[0]
+        self.assertEqual(len(daily_checkin_service.calls), 1)
+        self.assertEqual(opening.metadata["summary_source"], "client_daily_checkin_response_degraded_v1")
+        self.assertTrue(opening.metadata["degraded_opening_summary"])
+        self.assertIn("Coach brief is still generating.", opening.content)
+        self.assertNotIn("Stable readiness.", opening.content)
+
+    def test_client_opening_summary_does_not_replace_valid_structured_opening_with_degraded(self):
+        request = ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY)
+        self.repository.today_checkin["checkin_response"] = dynamic_checkin_response()
+        daily_checkin_service = FakeDailyCheckinService(response=dynamic_checkin_response())
+        self.service = ChatSessionService(
+            self.repository,
+            conversation_service=self.conversation_service,
+            daily_checkin_service=daily_checkin_service,
+        )
+        self.service._today = lambda: TODAY
+        first = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=request,
+        )
+        self.assertEqual(first.messages[0].metadata["summary_source"], "client_daily_checkin_response_v1")
+
+        self.repository.today_checkin["checkin_response"] = None
+        self.service = ChatSessionService(
+            self.repository,
+            conversation_service=self.conversation_service,
+            daily_checkin_service=FakeDailyCheckinService(response=None),
+        )
+        self.service._today = lambda: TODAY
+        second = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=request,
+        )
+
+        self.assertEqual(second.messages[0].metadata["summary_source"], "client_daily_checkin_response_v1")
+        self.assertIn("Build day - 20/25", second.messages[0].content)
+        self.assertNotIn("Coach brief is still generating.", second.messages[0].content)
+
+    def test_client_opening_summary_does_not_refresh_for_chips_only(self):
+        request = ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY)
+        self.repository.today_checkin["checkin_response"] = dynamic_checkin_response()
+        daily_checkin_service = FakeDailyCheckinService(response=dynamic_checkin_response())
+        self.service = ChatSessionService(
+            self.repository,
+            conversation_service=self.conversation_service,
+            daily_checkin_service=daily_checkin_service,
+        )
+        self.service._today = lambda: TODAY
+        first = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=request,
+        )
+        existing = self.repository.messages[first.session.id][0]
+        existing["metadata"] = {
+            **existing["metadata"],
+            "suggested_action_chips": ["Old chip"],
+        }
+        update_count = len(self.repository.update_message_calls)
+
+        second = self.service.get_or_create_today_session(
+            user_id=USER_ID,
+            trainer_context=client_context(),
+            request=request,
+        )
+
+        self.assertEqual(len(self.repository.update_message_calls), update_count)
+        self.assertEqual(second.messages[0].metadata["suggested_action_chips"], ["Old chip"])
 
     def test_trainer_opening_summary_uses_recent_missed_and_low_readiness_counts(self):
         self.service = ChatSessionService(
@@ -1510,7 +1770,7 @@ class ChatSessionServiceTests(unittest.TestCase):
         self.assertIn("Build day - 20/25", opening.content)
         self.assertNotIn("Atlas is ready", opening.content)
 
-    def test_atlas_opening_falls_back_to_static_brief_when_no_daily_checkin_service(self):
+    def test_atlas_opening_uses_degraded_fallback_when_no_daily_checkin_service(self):
         self.repository.today_checkin["checkin_response"] = None
         # Default service has no daily_checkin_service wired
 
@@ -1521,8 +1781,9 @@ class ChatSessionServiceTests(unittest.TestCase):
         )
 
         opening = response.messages[0]
-        self.assertIn("Atlas is ready", opening.content)
-        self.assertEqual(opening.metadata["summary_source"], "atlas_client_mode_brief_v1")
+        self.assertIn("Coach brief is still generating.", opening.content)
+        self.assertEqual(opening.metadata["summary_source"], "client_daily_checkin_response_degraded_v1")
+        self.assertTrue(opening.metadata["atlas_client_chat"])
 
     def test_legacy_first_assistant_message_is_replaced_in_place_not_appended(self):
         request = ChatSessionTodayRequest(role="client", session_type="client_chat", session_date=TODAY)

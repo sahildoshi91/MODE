@@ -198,6 +198,7 @@ def build_deterministic_checkin_response(
     return CheckinResponseOutput(
         mode=mode,
         total_score=input_data.total_score,
+        template_version=PROMPT_VERSION,
         sections=[
             CheckinResponseSection(id="opening", label=None, content=opening),
             CheckinResponseSection(id="workout", label="Today's workout", content=workout),
@@ -477,6 +478,7 @@ def parse_checkin_response(
     return CheckinResponseOutput(
         mode=input_data.mode,
         total_score=input_data.total_score,
+        template_version=PROMPT_VERSION,
         sections=sections,
         signal_classification=classification,
         generated_at=generated_at or datetime.now(timezone.utc),

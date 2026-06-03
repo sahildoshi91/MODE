@@ -24,6 +24,7 @@ from app.modules.chat_sessions.schemas import (
 from app.modules.conversation.schemas import ChatRequest
 from app.modules.conversation.service import ConversationService
 from app.modules.daily_checkins.schemas import CheckinResponseOutput
+from app.modules.daily_checkins.checkin_response import PROMPT_VERSION as CHECKIN_RESPONSE_TEMPLATE_VERSION
 from app.modules.motivation import build_mindset_why_cue
 from app.modules.trainer_home.service import TrainerHomeService
 
@@ -57,9 +58,21 @@ TRAINER_FLAG_REVIEW_LLM_MODEL = "gpt-5.4"
 LEGACY_LOCAL_DAY_SEND_GRACE = timedelta(hours=12)
 CLIENT_MODE_BRIEF_SOURCE = "client_daily_mode_brief_v1"
 CLIENT_CHECKIN_RESPONSE_BRIEF_SOURCE = "client_daily_checkin_response_v1"
+CLIENT_CHECKIN_RESPONSE_DEGRADED_SOURCE = "client_daily_checkin_response_degraded_v1"
 CLIENT_NO_CHECKIN_SOURCE = "client_daily_no_checkin_v1"
 CLIENT_MODE_BRIEF_WORD_LIMIT = 75
 CLIENT_CHECKIN_RESPONSE_SECTION_IDS = ("opening", "workout", "nutrition", "why", "question")
+CLIENT_REFRESHABLE_OPENING_SOURCES = {
+    CLIENT_MODE_BRIEF_SOURCE,
+    CLIENT_CHECKIN_RESPONSE_DEGRADED_SOURCE,
+}
+CLIENT_OPENING_SOURCES = {
+    CLIENT_MODE_BRIEF_SOURCE,
+    CLIENT_CHECKIN_RESPONSE_BRIEF_SOURCE,
+    CLIENT_CHECKIN_RESPONSE_DEGRADED_SOURCE,
+    CLIENT_NO_CHECKIN_SOURCE,
+    "atlas_client_mode_brief_v1",
+}
 LEGACY_TO_CANONICAL_MODE = {
     "GREEN": "BEAST",
     "YELLOW": "BUILD",
@@ -174,8 +187,8 @@ class ChatSessionService:
             )
         opening = self._ensure_opening_summary(scope=scope, session=session)
         messages = self.repository.list_messages(str(session["id"]), limit=250)
-        if not messages and opening:
-            messages = [opening]
+        if opening:
+            messages = self._merge_opening_summary_message(messages, opening)
         session = self.repository.get_session(str(session["id"])) or session
         suggested_actions = self._suggested_actions_from_messages(messages, scope.role)
         session = self._with_client_name(scope, session)
@@ -570,33 +583,14 @@ class ChatSessionService:
         }
         if existing:
             if self._should_refresh_opening_summary(existing, opening, opening_metadata):
-                message_id = str(existing.get("id") or "")
-                if message_id:
-                    refreshed = self.repository.update_message_by_id(
-                        message_id=message_id,
-                        content=opening["text"],
-                        metadata=opening_metadata,
-                    )
-                else:
-                    refreshed = self.repository.update_opening_summary_message(
-                        session_id=str(session["id"]),
-                        content=opening["text"],
-                        metadata=opening_metadata,
-                    )
-                metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
-                self.repository.update_session(
-                    str(session["id"]),
-                    {
-                        "title": opening["title"],
-                        "summary": opening["summary"],
-                        "metadata": {
-                            **metadata,
-                            "opening_summary_generated_at": datetime.now(timezone.utc).isoformat(),
-                            "suggested_action_chips": opening["suggested_actions"],
-                        },
-                    },
+                refreshed = self._refresh_opening_summary_message(
+                    session=session,
+                    existing=existing,
+                    opening=opening,
+                    opening_metadata=opening_metadata,
                 )
-                return refreshed or existing
+                self._sync_opening_summary_session_metadata(session=session, opening=opening)
+                return refreshed
             return existing
         message = self.repository.append_message(
             session_id=str(session["id"]),
@@ -604,20 +598,117 @@ class ChatSessionService:
             content=opening["text"],
             metadata=opening_metadata,
         )
-        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
-        self.repository.update_session(
-            str(session["id"]),
-            {
-                "title": opening["title"],
-                "summary": opening["summary"],
-                "metadata": {
-                    **metadata,
-                    "opening_summary_generated_at": datetime.now(timezone.utc).isoformat(),
-                    "suggested_action_chips": opening["suggested_actions"],
-                },
-            },
-        )
+        self._sync_opening_summary_session_metadata(session=session, opening=opening)
         return message
+
+    def _merge_opening_summary_message(
+        self,
+        messages: list[dict[str, Any]],
+        opening: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        if not opening:
+            return messages
+        opening_id = str(opening.get("id") or "")
+        merged = False
+        next_messages: list[dict[str, Any]] = []
+        for message in messages:
+            metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+            is_opening = bool(metadata.get("auto_generated_opening_summary"))
+            if not is_opening and opening_id:
+                is_opening = str(message.get("id") or "") == opening_id
+            if is_opening and not merged:
+                next_messages.append(opening)
+                merged = True
+            elif not is_opening:
+                next_messages.append(message)
+        if merged:
+            return next_messages
+        return [opening, *messages]
+
+    def _refresh_opening_summary_message(
+        self,
+        *,
+        session: dict[str, Any],
+        existing: dict[str, Any],
+        opening: dict[str, Any],
+        opening_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        session_id = str(session["id"])
+        expected_content = str(existing.get("content") or "")
+        expected_metadata = existing.get("metadata") if isinstance(existing.get("metadata"), dict) else {}
+        try:
+            message_id = str(existing.get("id") or "")
+            if message_id:
+                refreshed = self.repository.update_message_by_id(
+                    message_id=message_id,
+                    content=opening["text"],
+                    metadata=opening_metadata,
+                    expected_content=expected_content,
+                    expected_metadata=expected_metadata,
+                )
+            else:
+                refreshed = self.repository.update_opening_summary_message(
+                    session_id=session_id,
+                    content=opening["text"],
+                    metadata=opening_metadata,
+                    expected_content=expected_content,
+                    expected_metadata=expected_metadata,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Opening summary refresh failed session_id=%s message_id=%s: %s",
+                session_id,
+                existing.get("id"),
+                exc,
+            )
+            return self._synthetic_opening_summary_row(existing, opening, opening_metadata)
+
+        if refreshed:
+            return refreshed
+
+        latest = (
+            self.repository.get_opening_summary_message(session_id)
+            or self.repository.get_first_assistant_message(session_id)
+        )
+        if latest and not self._should_refresh_opening_summary(latest, opening, opening_metadata):
+            return latest
+
+        return self._synthetic_opening_summary_row(existing, opening, opening_metadata)
+
+    def _synthetic_opening_summary_row(
+        self,
+        existing: dict[str, Any],
+        opening: dict[str, Any],
+        opening_metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            **existing,
+            "sender_type": existing.get("sender_type") or "ai",
+            "content": opening["text"],
+            "metadata": opening_metadata,
+        }
+
+    def _sync_opening_summary_session_metadata(self, *, session: dict[str, Any], opening: dict[str, Any]) -> None:
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        try:
+            self.repository.update_session(
+                str(session["id"]),
+                {
+                    "title": opening["title"],
+                    "summary": opening["summary"],
+                    "metadata": {
+                        **metadata,
+                        "opening_summary_generated_at": datetime.now(timezone.utc).isoformat(),
+                        "suggested_action_chips": opening["suggested_actions"],
+                    },
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "Opening summary session metadata update failed session_id=%s: %s",
+                session.get("id"),
+                exc,
+            )
 
     def _should_refresh_opening_summary(
         self,
@@ -626,25 +717,77 @@ class ChatSessionService:
         opening_metadata: dict[str, Any],
     ) -> bool:
         metadata = existing.get("metadata") if isinstance(existing.get("metadata"), dict) else {}
-        if str(existing.get("content") or "") != str(opening.get("text") or ""):
+        existing_source = metadata.get("summary_source")
+        opening_source = opening_metadata.get("summary_source")
+        existing_content = str(existing.get("content") or "")
+
+        if (
+            existing_source == CLIENT_CHECKIN_RESPONSE_BRIEF_SOURCE
+            and opening_source == CLIENT_CHECKIN_RESPONSE_DEGRADED_SOURCE
+            and self._is_current_structured_opening_metadata(metadata)
+        ):
+            return False
+
+        if existing_source != opening_source:
             return True
-        if metadata.get("summary_source") != opening_metadata.get("summary_source"):
+
+        if existing_source in CLIENT_OPENING_SOURCES:
+            if existing_source in CLIENT_REFRESHABLE_OPENING_SOURCES and opening_source != existing_source:
+                return True
+            if self._is_stale_client_opening_content(existing_content):
+                return True
+            expected_template = opening_metadata.get("template_version")
+            if expected_template and metadata.get("template_version") != expected_template:
+                return True
+            for key in (
+                "checkin_id",
+                "checkin_response_attempted",
+                "checkin_response_generated_at",
+                "model_used",
+                "checkin_response",
+            ):
+                if metadata.get(key) != opening_metadata.get(key):
+                    return True
+            return False
+
+        if str(existing.get("content") or "") != str(opening.get("text") or ""):
             return True
         if metadata.get("analytics_fingerprint") != opening_metadata.get("analytics_fingerprint"):
             return True
-        if metadata.get("checkin_id") != opening_metadata.get("checkin_id"):
-            return True
-        if metadata.get("checkin_response_attempted") != opening_metadata.get("checkin_response_attempted"):
-            return True
-        if metadata.get("checkin_response_generated_at") != opening_metadata.get("checkin_response_generated_at"):
-            return True
-        if metadata.get("model_used") != opening_metadata.get("model_used"):
-            return True
-        if metadata.get("checkin_response") != opening_metadata.get("checkin_response"):
-            return True
-        if metadata.get("suggested_action_chips") != opening_metadata.get("suggested_action_chips"):
-            return True
         return False
+
+    def _is_current_structured_opening_metadata(self, metadata: dict[str, Any]) -> bool:
+        if metadata.get("summary_source") != CLIENT_CHECKIN_RESPONSE_BRIEF_SOURCE:
+            return False
+        if metadata.get("template_version") != CHECKIN_RESPONSE_TEMPLATE_VERSION:
+            return False
+        response = metadata.get("checkin_response") if isinstance(metadata.get("checkin_response"), dict) else None
+        if not response or response.get("template_version") != CHECKIN_RESPONSE_TEMPLATE_VERSION:
+            return False
+        return bool(response.get("sections"))
+
+    def _is_stale_client_opening_content(self, content: str) -> bool:
+        normalized = " ".join(str(content or "").strip().split())
+        lowered = normalized.lower()
+        if not lowered:
+            return False
+        if "mode:" in lowered and "build today:" in lowered:
+            return True
+        if (
+            lowered.startswith(("beast mode ", "build mode ", "recover mode ", "rest mode "))
+            or lowered.startswith(("beast mode", "build mode", "recover mode", "rest mode"))
+        ) and "training:" in lowered and "nutrition:" in lowered and "mindset:" in lowered:
+            return True
+        return any(
+            stale in lowered
+            for stale in (
+                "stable readiness.",
+                "full-send readiness.",
+                "recovery-leaning day.",
+                "restore and protect tomorrow.",
+                "protein steady, easy whole-food meals",
+            )
+        )
 
     def _build_opening_summary(self, scope: ChatSessionScope) -> dict[str, Any]:
         if scope.role == "trainer":
@@ -710,24 +853,18 @@ class ChatSessionService:
                     "source": CLIENT_CHECKIN_RESPONSE_BRIEF_SOURCE,
                     "metadata": {
                         **atlas_metadata,
+                        "template_version": checkin_response.get("template_version"),
                         "checkin_response": checkin_response,
                         "checkin_response_generated_at": checkin_response.get("generated_at"),
                         "model_used": checkin_response.get("model_used"),
                     },
                 }
-            score_text = f"{score}/25" if score is not None else "today's readiness"
-            text = (
-                f"Atlas is ready. Today's MODE is {assigned_mode or 'set'} at {score_text}. "
-                "I can help you work from this check-in or request a trainer connection for approval."
+            return self._build_client_degraded_opening_summary(
+                title="Atlas Coach",
+                suggested_actions=atlas_suggested_actions,
+                metadata=atlas_metadata,
+                checkin=today_checkin,
             )
-            return {
-                "text": text,
-                "title": "Atlas Coach",
-                "summary": self._clip_summary(text),
-                "suggested_actions": atlas_suggested_actions,
-                "source": "atlas_client_mode_brief_v1",
-                "metadata": atlas_metadata,
-            }
 
         profile = self._safe(lambda: self.repository.get_profile(scope.client_id)) or {}
         assigned_mode = self._canonical_mode(today_checkin.get("assigned_mode"))
@@ -767,20 +904,48 @@ class ChatSessionService:
                 "source": CLIENT_CHECKIN_RESPONSE_BRIEF_SOURCE,
                 "metadata": {
                     **metadata,
+                    "template_version": checkin_response.get("template_version"),
                     "checkin_response": checkin_response,
                     "checkin_response_generated_at": checkin_response.get("generated_at"),
                     "model_used": checkin_response.get("model_used"),
                 },
             }
 
-        text = self._build_client_mode_brief(today_checkin, profile=profile)
+        return self._build_client_degraded_opening_summary(
+            title="Today's Coach Brief",
+            suggested_actions=CLIENT_MODE_BRIEF_ACTIONS,
+            metadata=metadata,
+            checkin=today_checkin,
+        )
+
+    def _build_client_degraded_opening_summary(
+        self,
+        *,
+        title: str,
+        suggested_actions: list[str],
+        metadata: dict[str, Any],
+        checkin: dict[str, Any],
+    ) -> dict[str, Any]:
+        mode = self._canonical_mode(checkin.get("assigned_mode")) or "today's MODE"
+        score = checkin.get("total_score")
+        score_text = f", {score}/25" if score is not None else ""
+        text = (
+            "Coach brief is still generating.\n"
+            f"I have today's check-in ({mode}{score_text}), but the structured opening could not be refreshed yet. "
+            "I will try to repair it the next time this chat loads instead of using an old readiness template."
+        )
         return {
             "text": text,
-            "title": "Today's Coach Brief",
+            "title": title,
             "summary": self._clip_summary(text),
-            "suggested_actions": CLIENT_MODE_BRIEF_ACTIONS,
-            "source": CLIENT_MODE_BRIEF_SOURCE,
-            "metadata": metadata,
+            "suggested_actions": suggested_actions,
+            "source": CLIENT_CHECKIN_RESPONSE_DEGRADED_SOURCE,
+            "metadata": {
+                **metadata,
+                "template_version": CHECKIN_RESPONSE_TEMPLATE_VERSION,
+                "degraded_opening_summary": True,
+                "fallback_reason": "checkin_response_unavailable",
+            },
         }
 
     def _backfill_client_checkin_response(
@@ -865,6 +1030,13 @@ class ChatSessionService:
         except Exception as exc:
             logger.warning("Ignoring malformed check-in response for opening summary: %s", exc)
             return None
+        if response.template_version != CHECKIN_RESPONSE_TEMPLATE_VERSION:
+            logger.warning(
+                "Ignoring stale check-in response for opening summary template_version=%s expected=%s",
+                response.template_version,
+                CHECKIN_RESPONSE_TEMPLATE_VERSION,
+            )
+            return None
 
         sections_by_id: dict[str, dict[str, str | None]] = {}
         for section in response.sections:
@@ -883,6 +1055,7 @@ class ChatSessionService:
         return {
             "mode": self._canonical_mode(response.mode) or response.mode,
             "total_score": response.total_score,
+            "template_version": response.template_version,
             "sections": [sections_by_id[section_id] for section_id in CLIENT_CHECKIN_RESPONSE_SECTION_IDS],
             "generated_at": response.generated_at.isoformat(),
             "model_used": response.model_used,

@@ -11,6 +11,7 @@ const mockStreamChatSessionMessage = jest.fn();
 const mockCheckinPlanBuilder = jest.fn();
 const mockDailyCheckinScreen = jest.fn();
 const mockCreateMyMemory = jest.fn();
+let consoleDebugSpy;
 
 jest.mock('expo-linear-gradient', () => ({
   LinearGradient: ({ children, ...props }) => {
@@ -122,7 +123,23 @@ const openingMessage = {
   content: 'BUILD MODE\n20/25. Stable readiness.\nTraining: 30-45 min, Moderate, controlled strength.\nNutrition: Protein each meal.\nMindset: Build momentum.\n\nWhat do you want to achieve today?',
   metadata: {
     auto_generated_opening_summary: true,
+    summary_source: 'client_daily_checkin_response_v1',
+    template_version: 'daily_checkin_response_v1',
     suggested_action_chips: ['Build me a training routine', 'Build me a nutrition plan'],
+    checkin_response: {
+      mode: 'BUILD',
+      total_score: 20,
+      template_version: 'daily_checkin_response_v1',
+      generated_at: '2026-05-30T16:00:00+00:00',
+      model_used: 'gpt-5.4-mini',
+      sections: [
+        { id: 'opening', label: null, content: 'Build day - 20/25. Motivation is high.' },
+        { id: 'workout', label: "Today's workout", content: 'Keep reps controlled.' },
+        { id: 'nutrition', label: 'Before you train', content: 'Eat before training.' },
+        { id: 'why', label: 'Your why', content: 'This supports your bigger goal.' },
+        { id: 'question', label: null, content: 'What will you keep smooth today?' },
+      ],
+    },
   },
 };
 
@@ -163,6 +180,7 @@ describe('daily chat session components', () => {
   beforeEach(() => {
     jest.useFakeTimers();
     jest.clearAllMocks();
+    consoleDebugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
     mockGetTodayChatSession.mockResolvedValue({
       session: {
         id: 'session-today',
@@ -183,6 +201,8 @@ describe('daily chat session components', () => {
     act(() => {
       jest.runOnlyPendingTimers();
     });
+    consoleDebugSpy?.mockRestore();
+    consoleDebugSpy = null;
     jest.useRealTimers();
   });
 
@@ -300,6 +320,41 @@ describe('daily chat session components', () => {
     act(() => {
       tree.unmount();
     });
+  });
+
+  it('logs opening summary source and version in dev', async () => {
+    const previousDev = globalThis.__DEV__;
+    globalThis.__DEV__ = true;
+    consoleDebugSpy.mockClear();
+    let tree;
+
+    try {
+      await act(async () => {
+        tree = renderer.create(
+          <ChatShell
+            role="client"
+            sessionType="client_chat"
+            trainerId="trainer-1"
+            accessToken="token"
+          />,
+        );
+      });
+      await flushEffects();
+
+      expect(consoleDebugSpy).toHaveBeenCalledWith('[chatSession] opening summary', expect.objectContaining({
+        source: 'client_daily_checkin_response_v1',
+        template_version: 'daily_checkin_response_v1',
+        model_used: 'gpt-5.4-mini',
+        degraded: false,
+      }));
+    } finally {
+      globalThis.__DEV__ = previousDev;
+      if (tree) {
+        act(() => {
+          tree.unmount();
+        });
+      }
+    }
   });
 
   it('shows route-not-found recovery copy instead of silent loading', async () => {

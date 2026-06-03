@@ -43,6 +43,29 @@ function normalizePayload(payload) {
   };
 }
 
+function logOpeningSummaryDebug(messages) {
+  const isDev = (
+    (typeof __DEV__ === 'boolean' && __DEV__)
+    || Boolean(globalThis?.__DEV__)
+  );
+  if (!isDev || typeof console?.debug !== 'function') {
+    return;
+  }
+  const opening = (messages || []).find((message) => (
+    Boolean(message?.metadata?.auto_generated_opening_summary)
+  ));
+  if (!opening) {
+    return;
+  }
+  const metadata = opening.metadata || {};
+  console.debug('[chatSession] opening summary', {
+    source: metadata.summary_source || null,
+    template_version: metadata.template_version || metadata.checkin_response?.template_version || null,
+    model_used: metadata.model_used || metadata.checkin_response?.model_used || null,
+    degraded: Boolean(metadata.degraded_opening_summary),
+  });
+}
+
 export function useChatSession({
   accessToken,
   role,
@@ -97,6 +120,7 @@ export function useChatSession({
           metadata,
         });
       const normalized = normalizePayload(payload);
+      logOpeningSummaryDebug(normalized.messages);
       setState({
         loading: false,
         refreshing: false,
@@ -151,6 +175,7 @@ export function useChatSession({
         metadata,
       });
       const normalized = normalizePayload(payload);
+      logOpeningSummaryDebug(normalized.messages);
       setState({
         loading: false,
         refreshing: false,

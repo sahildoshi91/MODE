@@ -614,6 +614,8 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertIsNotNone(result.checkin_response)
         self.assertIsNone(result.training)
         self.assertEqual(result.checkin_response.sections[1].label, "Today's workout")
+        self.assertEqual(result.checkin_response.template_version, "daily_checkin_response_v1")
+        self.assertEqual(repository.saved_response["template_version"], "daily_checkin_response_v1")
         self.assertEqual(repository.saved_response["model_used"], "deterministic_daily_checkin_v1")
         self.assertEqual(repository.saved_response["tokens_used"], {"input": 0, "output": 0, "total": 0})
         self.assertIn("nutrition needs the most care", result.checkin_response.sections[0].content)
@@ -881,6 +883,7 @@ class DailyCheckinServiceTests(unittest.TestCase):
         record["checkin_response"] = {
             "mode": "BUILD",
             "total_score": 18,
+            "template_version": "daily_checkin_response_v1",
             "sections": [
                 {"id": "opening", "label": None, "content": "Build day - 18/25."},
                 {"id": "workout", "label": "Today's workout", "content": "3-4 sets at steady effort."},
@@ -917,6 +920,69 @@ class DailyCheckinServiceTests(unittest.TestCase):
         self.assertIsNotNone(result.checkin_response)
         self.assertEqual(result.checkin_response.sections[0].content, "Build day - 18/25.")
         self.assertIsNone(result.training)
+
+    def test_ensure_checkin_response_regenerates_stale_template_version(self):
+        stale_response = {
+            "mode": "BUILD",
+            "total_score": 18,
+            "template_version": "daily_checkin_response_v0",
+            "sections": [
+                {"id": "opening", "label": None, "content": "Build day - 18/25."},
+                {"id": "workout", "label": "Today's workout", "content": "3-4 sets at steady effort."},
+                {"id": "nutrition", "label": "Before you train", "content": "Eat eggs and toast."},
+                {"id": "why", "label": "Your why", "content": "This builds durable energy."},
+                {"id": "question", "label": None, "content": "What will you keep smooth today?"},
+            ],
+            "signal_classification": {
+                "signals": {
+                    "sleep": "high",
+                    "stress": "neutral",
+                    "body": "high",
+                    "nutrition": "low",
+                    "motivation": "high",
+                },
+                "standout_low": "nutrition",
+                "standout_low_score": 2,
+                "contrast_pair": None,
+                "all_neutral": False,
+            },
+            "generated_at": "2026-04-07T16:00:00+00:00",
+            "model_used": "gpt-5.4-mini",
+            "tokens_used": {"input": 100, "output": 80, "total": 180},
+        }
+
+        class FakeRepository:
+            def __init__(self):
+                self.updated = []
+
+            def update_checkin_response(self, *, client_id, checkin_id, checkin_response):
+                self.updated.append((client_id, checkin_id, checkin_response))
+                return {
+                    "id": checkin_id,
+                    "client_id": client_id,
+                    "checkin_response": checkin_response,
+                    "checkin_response_attempted": True,
+                }
+
+        repository = FakeRepository()
+        service = DailyCheckinService(repository=repository, profile_service=None)
+
+        response = service.ensure_checkin_response(
+            client_id="client-1",
+            record={
+                "id": "checkin-stale-version",
+                "date": "2026-04-07",
+                "inputs": {"sleep": 4, "stress": 3, "soreness": 4, "nutrition": 2, "motivation": 5},
+                "total_score": 18,
+                "assigned_mode": "BUILD",
+                "checkin_response": stale_response,
+                "checkin_response_attempted": True,
+            },
+            trainer_id="trainer-1",
+        )
+
+        self.assertEqual(response["template_version"], "daily_checkin_response_v1")
+        self.assertEqual(len(repository.updated), 1)
 
     def test_get_status_returns_zero_streak_when_no_checkin_exists(self):
         class FakeRepository:

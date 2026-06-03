@@ -51,6 +51,7 @@ class CheckinResponseSection(BaseModel):
 class CheckinResponseOutput(BaseModel):
     mode: str
     total_score: int
+    template_version: str
     sections: list[CheckinResponseSection] = Field(default_factory=list)
     signal_classification: CheckinSignalClassification
     generated_at: datetime

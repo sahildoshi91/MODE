@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timezone
+import json
 from typing import Any
 
 from supabase import Client
@@ -14,7 +15,7 @@ class ChatSessionRepository:
 
     def __init__(self, supabase: Client, admin_supabase: Client | None = None):
         self.supabase = supabase
-        self.admin_supabase = admin_supabase
+        self.opening_summary_admin_supabase = admin_supabase
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
         response = (
@@ -234,9 +235,13 @@ class ChatSessionRepository:
         session_id: str,
         content: str,
         metadata: dict[str, Any],
+        expected_content: str | None = None,
+        expected_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        client = self.admin_supabase or self.supabase
-        response = (
+        # Privilege boundary: opening summaries are server-owned rows, so stale-row repair uses
+        # the admin client when available instead of the user-scoped RLS client.
+        client = self.opening_summary_admin_supabase or self.supabase
+        query = (
             client
             .table(self._MESSAGES_TABLE)
             .update({
@@ -245,11 +250,15 @@ class ChatSessionRepository:
             })
             .eq("session_id", session_id)
             .contains("metadata", {"auto_generated_opening_summary": True})
-            .execute()
         )
+        if expected_content is not None:
+            query = query.eq("content", expected_content)
+        if expected_metadata is not None:
+            query = query.eq("metadata", json.dumps(expected_metadata, sort_keys=True))
+        response = query.execute()
         if response.data:
             return response.data[0]
-        return self.get_opening_summary_message(session_id)
+        return None
 
     def get_first_assistant_message(self, session_id: str) -> dict[str, Any] | None:
         response = (
@@ -270,15 +279,23 @@ class ChatSessionRepository:
         message_id: str,
         content: str,
         metadata: dict[str, Any],
+        expected_content: str | None = None,
+        expected_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        client = self.admin_supabase or self.supabase
-        response = (
+        # Privilege boundary: opening summaries are server-owned rows, so stale-row repair uses
+        # the admin client when available instead of the user-scoped RLS client.
+        client = self.opening_summary_admin_supabase or self.supabase
+        query = (
             client
             .table(self._MESSAGES_TABLE)
             .update({"content": content, "metadata": metadata})
             .eq("id", message_id)
-            .execute()
         )
+        if expected_content is not None:
+            query = query.eq("content", expected_content)
+        if expected_metadata is not None:
+            query = query.eq("metadata", json.dumps(expected_metadata, sort_keys=True))
+        response = query.execute()
         return response.data[0] if response.data else None
 
     def append_message(
@@ -357,9 +374,8 @@ class ChatSessionRepository:
         return response.data[0] if response.data else None
 
     def get_client_by_id(self, client_id: str) -> dict[str, Any] | None:
-        client = self.admin_supabase or self.supabase
         response = (
-            client
+            self.supabase
             .table("clients")
             .select("id, tenant_id, user_id, client_name, assigned_trainer_id, created_at")
             .eq("id", client_id)
@@ -369,9 +385,8 @@ class ChatSessionRepository:
         return response.data[0] if response.data else None
 
     def list_active_trainers_for_tenant(self, tenant_id: str) -> list[dict[str, Any]]:
-        client = self.admin_supabase or self.supabase
         trainers = (
-            client
+            self.supabase
             .table("trainers")
             .select("id, tenant_id, user_id, display_name, is_active")
             .eq("tenant_id", tenant_id)
@@ -386,7 +401,7 @@ class ChatSessionRepository:
         email_by_user_id: dict[str, str] = {}
         if user_ids:
             account_rows = (
-                client
+                self.supabase
                 .table("user_accounts")
                 .select("auth_user_id, email")
                 .in_("auth_user_id", user_ids)
@@ -406,9 +421,8 @@ class ChatSessionRepository:
         ]
 
     def find_pending_connection_request(self, *, client_id: str, trainer_id: str) -> dict[str, Any] | None:
-        client = self.admin_supabase or self.supabase
         response = (
-            client
+            self.supabase
             .table("client_trainer_connection_requests")
             .select("*")
             .eq("client_id", client_id)
@@ -421,8 +435,7 @@ class ChatSessionRepository:
         return response.data[0] if response.data else None
 
     def create_connection_request(self, payload: dict[str, Any]) -> dict[str, Any]:
-        client = self.admin_supabase or self.supabase
-        response = client.table("client_trainer_connection_requests").insert(payload).execute()
+        response = self.supabase.table("client_trainer_connection_requests").insert(payload).execute()
         return response.data[0]
 
     def get_client_names(self, *, trainer_id: str | None, client_ids: list[str]) -> dict[str, str]:

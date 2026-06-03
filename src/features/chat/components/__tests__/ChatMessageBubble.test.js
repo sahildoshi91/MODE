@@ -80,7 +80,7 @@ describe('ChatMessageBubble', () => {
     mockSetStringAsync.mockResolvedValue(undefined);
   });
 
-  it('renders auto-generated opening summaries as plain text', () => {
+  it('does not rewrite legacy opening summaries into a mode brief', () => {
     const staleOpeningText = (
       'MODE: YELLOW, 19/25. Recovery-leaning day. Training: 20-30 min, Low, Light movement or recovery. '
       + 'Nutrition: Protein steady, easy whole-food meals, hydrate first. '
@@ -106,27 +106,17 @@ describe('ChatMessageBubble', () => {
     expect(mockAIResponseRenderer).not.toHaveBeenCalled();
     expect(tree.root.findAllByProps({ testID: 'mock-ai-response-renderer' })).toHaveLength(0);
     const renderedText = collectRenderedText(tree.root);
-    expect(renderedText).toContain('BUILD MODE');
-    expect(renderedText).toContain('Stable readiness.');
-    expect(renderedText).toContain('30-45 min, Moderate, Moderate cardio or controlled strength.');
-    expect(renderedText).toContain('Protein each meal, balanced carbs, intentional snacks.');
-    expect(renderedText).toContain('Build momentum with disciplined reps.');
+    expect(renderedText).toContain('MODE: BUILD, 19/25. Recovery-leaning day.');
+    expect(renderedText).toContain('Training: 20-30 min, Low, Light movement or recovery.');
+    expect(renderedText).toContain('Protein steady, easy whole-food meals');
     expect(renderedText).toContain('What do you want to achieve today?');
+    expect(renderedText).not.toContain('BUILD MODE');
+    expect(renderedText).not.toContain('Stable readiness.');
+    expect(renderedText).not.toContain('30-45 min, Moderate, Moderate cardio or controlled strength.');
+    expect(renderedText).not.toContain('Protein each meal, balanced carbs, intentional snacks.');
+    expect(renderedText).not.toContain('Build momentum with disciplined reps.');
     expect(renderedText).not.toContain('YELLOW');
     expect(renderedText).not.toContain('Build Today:');
-    expect(renderedText).not.toContain('Protein steady');
-    expect(tree.root.find((node) => (
-      node.type === Text
-      && node.props?.children === 'BUILD MODE'
-      && node.props?.style?.fontWeight === '800'
-    ))).toBeTruthy();
-    ['Training', 'Nutrition', 'Mindset'].forEach((label) => {
-      expect(tree.root.find((node) => (
-        node.type === Text
-        && node.props?.children === label
-        && node.props?.style?.fontWeight === '800'
-      ))).toBeTruthy();
-    });
 
     act(() => {
       tree.unmount();
@@ -154,6 +144,7 @@ describe('ChatMessageBubble', () => {
               checkin_response: {
                 mode: 'BUILD',
                 total_score: 20,
+                template_version: 'daily_checkin_response_v1',
                 generated_at: '2026-05-30T16:00:00+00:00',
                 model_used: 'gpt-5.4-mini',
                 sections: [
@@ -206,6 +197,42 @@ describe('ChatMessageBubble', () => {
     expect(renderedText).not.toContain('Build momentum with disciplined reps.');
     expect(renderedText).not.toContain('Recovery-leaning day.');
     expect(renderedText).not.toContain('Protein steady');
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('renders degraded opening fallback text when structured data is missing', () => {
+    const degradedText = (
+      'Coach brief is still generating.\n'
+      + "I have today's check-in (BUILD, 20/25), but the structured opening could not be refreshed yet."
+    );
+    let tree;
+
+    act(() => {
+      tree = renderer.create(
+        <ChatMessageBubble
+          message={{
+            id: 'opening-degraded-1',
+            role: 'assistant',
+            text: degradedText,
+            metadata: {
+              auto_generated_opening_summary: true,
+              summary_source: 'client_daily_checkin_response_degraded_v1',
+              template_version: 'daily_checkin_response_v1',
+              degraded_opening_summary: true,
+            },
+          }}
+        />,
+      );
+    });
+
+    const renderedText = collectRenderedText(tree.root);
+    expect(renderedText).toContain('Coach brief is still generating.');
+    expect(renderedText).toContain('structured opening could not be refreshed');
+    expect(renderedText).not.toContain('Stable readiness.');
+    expect(tree.root.findAllByProps({ testID: 'structured-opening-summary' })).toHaveLength(0);
 
     act(() => {
       tree.unmount();
