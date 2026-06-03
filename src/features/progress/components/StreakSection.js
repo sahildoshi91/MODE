@@ -1,5 +1,6 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
+import Feather from '@expo/vector-icons/Feather';
 
 import { ModeText } from '../../../../lib/components';
 import { theme } from '../../../../lib/theme';
@@ -7,16 +8,30 @@ import { STREAK_MILESTONES } from '../config/metricConfig';
 
 const DAY_LABELS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
 
+// Maps JS getDay() (Sun=0) to M-S index (Mon=0, Sun=6)
+function getTodayIndex() {
+  return (new Date().getDay() + 6) % 7;
+}
+
 function DayBar({ daysThisWeek, daysTarget }) {
   const total = daysTarget || 7;
+  const todayIndex = getTodayIndex();
+
   return (
     <View style={styles.dayBarContainer}>
       <View style={styles.daySegments}>
         {DAY_LABELS.slice(0, total).map((label, i) => {
           const done = i < daysThisWeek;
+          const isToday = i === todayIndex;
           return (
             <View key={i} style={styles.daySegmentWrap}>
-              <View style={[styles.daySegment, done && styles.daySegmentDone]} />
+              <View
+                style={[
+                  styles.daySegment,
+                  done && styles.daySegmentDone,
+                  !done && isToday && styles.daySegmentToday,
+                ]}
+              />
               <ModeText variant="caption" tone="tertiary" style={styles.dayLabel}>
                 {label}
               </ModeText>
@@ -59,7 +74,7 @@ function MilestoneTiles({ currentWeeks, milestoneNext }) {
 function OutcomeCard() {
   return (
     <View style={styles.outcomeCard}>
-      <ModeText variant="caption" tone="accent" style={styles.outcomeIcon}>↗</ModeText>
+      <Feather name="trending-up" size={14} color={theme.colors.accent.primary} style={styles.outcomeIcon} />
       <ModeText variant="caption" tone="secondary" style={styles.outcomeText}>
         Your readiness has{' '}
         <ModeText variant="caption" tone="primary" style={styles.outcomeBold}>
@@ -81,19 +96,25 @@ export function StreakSection({ streak }) {
 
   return (
     <View style={styles.container} accessibilityRole="summary" accessibilityLabel="Streak summary">
-      {/* Hero row */}
+      {/* Hero row — days this week is primary, streak week badge is secondary */}
       <View style={styles.heroRow}>
         <View style={styles.heroLeft}>
           <ModeText variant="display" tone="primary" style={styles.heroNumber}>
-            {current_weeks}
+            {days_this_week}
           </ModeText>
-          <ModeText variant="body2" tone="tertiary" style={styles.heroLabel}>
-            week streak
+          <ModeText variant="body2" tone="tertiary" style={styles.heroSuffix}>
+            {' '}of {days_target || 7} days this week
           </ModeText>
         </View>
-        <ModeText variant="body2" tone="tertiary">
-          {days_this_week} of {days_target || 7} days this week
-        </ModeText>
+        {current_weeks > 0 ? (
+          <View style={styles.streakBadge}>
+            <ModeText variant="label" tone="tertiary" style={styles.streakBadgeText}>
+              {current_weeks}w streak
+            </ModeText>
+          </View>
+        ) : (
+          <ModeText variant="caption" tone="tertiary">Start your streak</ModeText>
+        )}
       </View>
 
       {/* Day bar */}
@@ -141,15 +162,27 @@ const styles = StyleSheet.create({
   heroLeft: {
     flexDirection: 'row',
     alignItems: 'baseline',
-    gap: 6,
+    flexShrink: 1,
+    gap: 0,
   },
   heroNumber: {
     fontSize: 48,
     fontWeight: '600',
     lineHeight: 52,
   },
-  heroLabel: {
+  heroSuffix: {
     marginBottom: 4,
+  },
+  streakBadge: {
+    backgroundColor: theme.colors.glass.base,
+    borderRadius: theme.radii.pill,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 4,
+    marginLeft: theme.spacing[2],
+    flexShrink: 0,
+  },
+  streakBadgeText: {
+    fontSize: 11,
   },
 
   // Day bar
@@ -167,13 +200,16 @@ const styles = StyleSheet.create({
   },
   daySegment: {
     width: '100%',
-    height: 4,
+    height: 6,
     borderRadius: theme.radii.pill,
     backgroundColor: theme.colors.glass.borderSoft,
   },
   daySegmentDone: {
     backgroundColor: theme.colors.accent.primary,
     opacity: 0.75,
+  },
+  daySegmentToday: {
+    backgroundColor: theme.colors.glass.borderDefault,
   },
   dayLabel: {
     fontSize: 10,
@@ -197,12 +233,12 @@ const styles = StyleSheet.create({
     gap: 2,
   },
   tileReached: {
-    borderColor: 'rgba(95,158,127,0.35)',
+    borderColor: theme.colors.status.success,
     backgroundColor: 'rgba(95,158,127,0.07)',
   },
   tileNext: {
-    borderColor: 'rgba(64,104,245,0.30)',
-    backgroundColor: 'rgba(64,104,245,0.06)',
+    borderColor: theme.colors.glass.borderActive,
+    backgroundColor: theme.colors.accent.soft,
   },
   tileWeeks: {
     fontSize: 12,
@@ -218,16 +254,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: theme.spacing[1],
-    backgroundColor: 'rgba(64,104,245,0.06)',
+    backgroundColor: theme.colors.accent.soft,
     borderWidth: 1,
-    borderColor: 'rgba(64,104,245,0.15)',
+    borderColor: theme.colors.glass.borderActive,
     borderRadius: theme.radii.s,
     padding: theme.spacing[2],
   },
   outcomeIcon: {
-    fontSize: 14,
-    lineHeight: 18,
     flexShrink: 0,
+    marginTop: 1,
   },
   outcomeText: {
     flex: 1,

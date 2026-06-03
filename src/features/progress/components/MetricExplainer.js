@@ -11,8 +11,8 @@ export function MetricExplainer({ description }) {
 
   return (
     <View style={styles.container}>
-      <ModeText variant="caption" tone="tertiary" style={styles.label}>
-        WHAT THIS MEASURES
+      <ModeText variant="label" tone="tertiary">
+        What this measures
       </ModeText>
       <ModeText variant="body2" tone="secondary" style={styles.body}>
         {description}
@@ -28,10 +28,5 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: theme.colors.glass.borderSoft,
   },
-  label: {
-    letterSpacing: 0.5,
-  },
-  body: {
-    lineHeight: 20,
-  },
+  body: {},
 });

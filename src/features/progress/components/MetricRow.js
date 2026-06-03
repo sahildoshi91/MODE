@@ -31,9 +31,7 @@ export function MetricRow({ dimensionKey, dimension, onPress }) {
       accessibilityHint="Tap for details"
     >
       <View style={styles.left}>
-        <View style={[styles.iconWrap, { backgroundColor: config.iconBg }]}>
-          <Feather name={config.icon} size={16} color={config.iconColor} />
-        </View>
+        <View style={[styles.colorDot, { backgroundColor: config.iconColor }]} />
         <View style={styles.labelBlock}>
           <View style={styles.labelRow}>
             <ModeText variant="body2" tone="primary" style={styles.label}>
@@ -58,7 +56,7 @@ export function MetricRow({ dimensionKey, dimension, onPress }) {
             {dimension.trend_label}
           </ModeText>
         </View>
-        <ModeText variant="body2" tone="tertiary" style={styles.chevronText}>›</ModeText>
+        <Feather name="chevron-right" size={16} color={theme.colors.text.muted} />
       </View>
     </TouchableOpacity>
   );
@@ -72,19 +70,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing[3],
     paddingVertical: theme.spacing[2],
     minHeight: 64,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: theme.radii.xs,
   },
   left: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: theme.spacing[2],
+    gap: 8,
   },
-  iconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
+  colorDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     flexShrink: 0,
   },
   labelBlock: {
@@ -121,10 +119,5 @@ const styles = StyleSheet.create({
   },
   trendLabel: {
     textAlign: 'right',
-  },
-  chevronText: {
-    fontSize: 18,
-    lineHeight: 22,
-    marginLeft: 2,
   },
 });

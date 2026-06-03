@@ -149,7 +149,7 @@ describe('ProgressScreen', () => {
   it('renders streak stats', async () => {
     const tree = await renderScreen({ loading: false, data: buildMetricsData() });
     const rendered = readNodeText(tree.root);
-    expect(rendered).toContain('week streak');
+    expect(rendered).toContain('streak');
     expect(rendered).toContain('personal best');
   });
 

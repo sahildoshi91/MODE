@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Pressable,
   ScrollView,
   StyleSheet,
-  TouchableOpacity,
   View,
   useWindowDimensions,
 } from 'react-native';
+import Feather from '@expo/vector-icons/Feather';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
-  HeaderBar,
   ModeButton,
   ModeText,
   SafeScreen,
@@ -22,15 +23,42 @@ import { MetricExplainer } from '../components/MetricExplainer';
 import { METRIC_CONFIG, SIGNAL_LABELS } from '../config/metricConfig';
 import { getProgressMetrics } from '../services/progressApi';
 
+const DAY_ABBREVS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+
+function buildDayLabels() {
+  const today = new Date();
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(today.getDate() - (6 - i));
+    return DAY_ABBREVS[d.getDay()];
+  });
+}
+
+function PlainHeader({ insetTop, onBack }) {
+  return (
+    <View style={[styles.header, { paddingTop: insetTop + theme.spacing[2] }]}>
+      <Pressable
+        style={styles.iconButton}
+        onPress={onBack}
+        accessibilityRole="button"
+        accessibilityLabel="Go back"
+      >
+        <Feather name="chevron-left" size={20} color={theme.colors.text.tertiary} />
+      </Pressable>
+      <ModeText variant="body2" tone="tertiary" style={styles.breadcrumb}>Progress</ModeText>
+      <View style={styles.iconButtonPlaceholder} />
+    </View>
+  );
+}
+
 function PeriodToggle({ period, onChange }) {
   return (
     <View style={styles.periodToggle}>
       {[7, 30].map((p) => (
-        <TouchableOpacity
+        <Pressable
           key={p}
           style={[styles.periodBtn, period === p && styles.periodBtnActive]}
           onPress={() => onChange(p)}
-          activeOpacity={0.7}
           hitSlop={{ top: 6, bottom: 6, left: 8, right: 8 }}
           accessibilityRole="button"
           accessibilityLabel={`${p}-day period`}
@@ -42,28 +70,30 @@ function PeriodToggle({ period, onChange }) {
           >
             {p}D
           </ModeText>
-        </TouchableOpacity>
+        </Pressable>
       ))}
     </View>
   );
 }
 
-function StatusBadge({ status }) {
-  const color = status === 'good'
-    ? theme.colors.status.success
-    : status === 'flagged'
-      ? theme.colors.status.error
-      : theme.colors.status.warning;
-  const label = status === 'good' ? 'Good' : status === 'flagged' ? 'Flagged' : 'Watch';
+function statusColor(status) {
+  if (status === 'good') {
+    return theme.colors.status.success;
+  }
+  if (status === 'flagged') {
+    return theme.colors.status.error;
+  }
+  return theme.colors.status.warning;
+}
 
-  return (
-    <View style={[styles.statusBadge, { borderColor: color }]}>
-      <View style={[styles.statusDot, { backgroundColor: color }]} />
-      <ModeText variant="label" style={[styles.statusLabel, { color }]}>
-        {label}
-      </ModeText>
-    </View>
-  );
+function statusLabel(status) {
+  if (status === 'good') {
+    return 'Good';
+  }
+  if (status === 'flagged') {
+    return 'Flagged';
+  }
+  return 'Watch';
 }
 
 function signalDotColor(value) {
@@ -100,8 +130,7 @@ function SignalList({ signals }) {
             </View>
             <View style={styles.signalRight}>
               <ModeText variant="body2" tone="primary" style={styles.signalValue}>
-                {labelStr}{' '}
-                <ModeText variant="body2" tone="tertiary">({rawVal}/5)</ModeText>
+                {rawVal !== null && rawVal !== undefined ? `${labelStr} (${rawVal}/5)` : labelStr}
               </ModeText>
               {signal.week_note ? (
                 <ModeText variant="caption" tone="tertiary" style={styles.weekNote}>
@@ -125,6 +154,7 @@ export default function MetricDrillDownScreen({
 }) {
   const config = METRIC_CONFIG[dimensionKey];
   const { width: windowWidth } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const chartWidth = windowWidth - theme.spacing[3] * 2;
   const [period, setPeriod] = useState(7);
   const [dimension, setDimension] = useState(initialDimension || null);
@@ -164,33 +194,20 @@ export default function MetricDrillDownScreen({
     return null;
   }
 
+  const heroMax = config.unit === '/25' ? 25 : 5;
   const heroSubtitle = dimension
-    ? (() => {
-        const firstSignal = dimension.signals?.[0];
-        const rawLabel = firstSignal
-          ? firstSignal.label.toLowerCase()
-          : config.subtitle.replace(' signal', '').replace(' combined', '');
-        const rawVal = Math.round(dimension.surface_value_raw ?? 0);
-        if (config.unit === '/25') {
-          return `${rawLabel} · ${rawVal} of 25 · ${period}D avg`;
-        }
-        return `${rawLabel} · raw ${rawVal} of 5 · today`;
-      })()
+    ? `${Math.round(dimension.surface_value_raw ?? 0)} of ${heroMax} · ${period}D avg`
     : null;
 
-  const heroValueColor = dimension?.status === 'flagged'
-    ? theme.colors.status.error
-    : dimension?.status === 'watch'
-      ? theme.colors.status.warning
-      : theme.colors.text.primary;
+  const dotColor = dimension ? statusColor(dimension.status) : theme.colors.text.disabled;
+  const statusText = dimension ? statusLabel(dimension.status) : '';
+
+  // Day-of-week labels for 7D chart
+  const xLabels = period === 7 ? buildDayLabels() : null;
 
   return (
     <SafeScreen includeTopInset={false} style={styles.screen} atmosphere="home">
-      <HeaderBar
-        title={config.label}
-        onBack={onBack}
-        backAccessibilityLabel={`Back from ${config.label}`}
-      />
+      <PlainHeader insetTop={insets.top} onBack={onBack} />
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: theme.spacing[4] + bottomInset }]}
@@ -211,36 +228,47 @@ export default function MetricDrillDownScreen({
 
         {!loading && dimension ? (
           <>
-            {/* Hero block — left-aligned, status badge top-right */}
+            {/* Hero block — status dot + label above metric name */}
             <View style={styles.heroBlock}>
-              <View style={styles.heroLeft}>
-                <ModeText variant="h1" style={[styles.heroValue, { color: heroValueColor }]}>
-                  {dimension.surface_value}
+              <View style={styles.statusRow}>
+                <View style={[styles.statusDot, { backgroundColor: dotColor }]} />
+                <ModeText variant="label" style={[styles.statusLabel, { color: dotColor }]}>
+                  {statusText}
                 </ModeText>
-                {heroSubtitle ? (
-                  <ModeText variant="body2" tone="tertiary" style={styles.heroSubtitle}>
-                    {heroSubtitle}
-                  </ModeText>
-                ) : null}
               </View>
-              <StatusBadge status={dimension.status} />
+              <ModeText variant="display" tone="primary" style={styles.heroTitle}>
+                {config.label}
+              </ModeText>
+              {heroSubtitle ? (
+                <ModeText variant="body2" tone="tertiary" style={styles.heroSubtitle}>
+                  {heroSubtitle}
+                </ModeText>
+              ) : null}
             </View>
 
-            <PeriodToggle period={period} onChange={handlePeriodChange} />
-
-            {/* Bar chart */}
+            {/* Chart section — "Daily score" label left, toggle right */}
             <View style={styles.chartBlock}>
-              <SectionHeader title={`Last ${period} days`} style={styles.chartSectionHeader} />
+              <View style={styles.chartHeader}>
+                <ModeText variant="caption" tone="tertiary" style={styles.chartHeaderLabel}>
+                  Daily score
+                </ModeText>
+                <PeriodToggle period={period} onChange={handlePeriodChange} />
+              </View>
               <MetricBarChart
                 sparkline={dimension.sparkline}
                 status={dimension.status}
                 width={chartWidth}
                 height={80}
+                xLabels={xLabels}
+                highlightToday
+                maxValue={config.unit === '/25' ? 25 : 5}
               />
-              <View style={[styles.chartLabels, { width: chartWidth }]}>
-                <ModeText variant="caption" tone="tertiary">{period}d ago</ModeText>
-                <ModeText variant="caption" tone="accent" style={styles.todayLabel}>today</ModeText>
-              </View>
+              {period !== 7 ? (
+                <View style={[styles.chartLabels, { width: chartWidth }]}>
+                  <ModeText variant="caption" tone="tertiary">{period}d ago</ModeText>
+                  <ModeText variant="caption" tone="accent" style={styles.todayLabel}>today</ModeText>
+                </View>
+              ) : null}
             </View>
 
             {/* Signals — "From your check-ins this week" */}
@@ -271,6 +299,32 @@ const styles = StyleSheet.create({
   screen: {
     backgroundColor: theme.colors.background.app,
   },
+
+  // Plain header
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: theme.spacing[3],
+    paddingBottom: theme.spacing[2],
+  },
+  iconButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: theme.colors.glass.base,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconButtonPlaceholder: {
+    width: 36,
+    height: 36,
+  },
+  breadcrumb: {
+    flex: 1,
+    textAlign: 'center',
+  },
+
   content: {
     paddingHorizontal: theme.spacing[3],
     paddingTop: theme.spacing[3],
@@ -279,43 +333,53 @@ const styles = StyleSheet.create({
 
   // Hero
   heroBlock: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    paddingTop: theme.spacing[2],
-  },
-  heroLeft: {
-    flex: 1,
     gap: 4,
-    paddingRight: theme.spacing[2],
+    paddingTop: theme.spacing[1],
   },
-  heroValue: {
-    ...theme.typography.display,
-    fontWeight: '700',
-  },
-  heroSubtitle: {
-    letterSpacing: 0.1,
-  },
-
-  // Status badge
-  statusBadge: {
+  statusRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[0],
-    borderRadius: theme.radii.pill,
-    borderWidth: 1,
-    marginTop: 4,
+    gap: 6,
+    marginBottom: 2,
   },
   statusDot: {
-    width: 5,
-    height: 5,
+    width: 6,
+    height: 6,
     borderRadius: 3,
   },
   statusLabel: {
     textTransform: 'uppercase',
     letterSpacing: 0.4,
+  },
+  heroTitle: {
+    ...theme.typography.display,
+  },
+  heroSubtitle: {
+    letterSpacing: 0.1,
+  },
+
+  // Chart
+  chartBlock: {
+    gap: 6,
+  },
+  chartHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 4,
+  },
+  chartHeaderLabel: {
+    flex: 1,
+    letterSpacing: 0.3,
+  },
+  chartLabels: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 4,
+    marginTop: 2,
+  },
+  todayLabel: {
+    color: theme.colors.accent.primary,
   },
 
   // Period toggle
@@ -340,24 +404,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   periodBtnTextActive: {
-    color: theme.colors.accent.primary,
-  },
-
-  // Chart
-  chartBlock: {
-    gap: 6,
-  },
-  chartSectionHeader: {
-    paddingHorizontal: 0,
-    paddingTop: 0,
-    paddingBottom: 2,
-  },
-  chartLabels: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 4,
-  },
-  todayLabel: {
     color: theme.colors.accent.primary,
   },
 
