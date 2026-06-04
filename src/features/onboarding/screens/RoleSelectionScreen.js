@@ -14,9 +14,9 @@ export default function RoleSelectionScreen({ onSelectClient, onSelectTrainer, i
         </ModeText>
 
         <ModeCard variant="tinted" style={styles.card}>
-          <ModeText variant="h3">I&apos;m a Client</ModeText>
+          <ModeText variant="h3">I&apos;m a go-getter</ModeText>
           <ModeText variant="bodySm" tone="secondary" style={styles.cardBody}>
-            Daily decisions, quick check-ins, and a simple plan that adapts.
+            Get a coach in your corner
           </ModeText>
           <ModeButton
             testID="role-selection-client-button"

@@ -99,6 +99,8 @@ function ChatConversationView({
   onContinueResolved,
   onOpenGeneratedPlanChat,
   onMemorySaved,
+  onboardingIntroPending = false,
+  onCaptureOnboardingIntro = null,
 }) {
   const [activePlanType, setActivePlanType] = useState(null);
   const [isDailyCheckinOpen, setIsDailyCheckinOpen] = useState(false);
@@ -106,6 +108,7 @@ function ChatConversationView({
   const savedMemoryKeysRef = useRef(new Set());
   const savingMemoryKeysRef = useRef(new Set());
   const memoryKeyMessageIdsRef = useRef(new Map());
+  const onboardingIntroCapturedRef = useRef(false);
   const sessionState = useChatSession({
     accessToken,
     role,
@@ -298,6 +301,20 @@ function ChatConversationView({
   }, [memorySaveStatuses, startMemorySave]);
 
   const handleSendMessage = useCallback(async (message) => {
+    if (
+      onboardingIntroPending
+      && !onboardingIntroCapturedRef.current
+      && typeof onCaptureOnboardingIntro === 'function'
+    ) {
+      onboardingIntroCapturedRef.current = true;
+      try {
+        await onCaptureOnboardingIntro(message.trim());
+      } catch (_captureError) {
+        onboardingIntroCapturedRef.current = false;
+        throw _captureError;
+      }
+    }
+
     const memoryIntent = (
       role === 'client'
       && sessionType === 'client_chat'
@@ -312,7 +329,7 @@ function ChatConversationView({
     const clientMessageId = createClientMessageId();
     startMemorySave(clientMessageId, memoryIntent);
     return messageState.sendMessage(message, { clientMessageId });
-  }, [isReadOnly, messageState, role, sessionType, startMemorySave]);
+  }, [isReadOnly, messageState, onCaptureOnboardingIntro, onboardingIntroPending, role, sessionType, startMemorySave]);
 
   const handleSuggestedAction = useCallback((action) => {
     if (role === 'client' && action === DAILY_CHECKIN_ACTION) {
@@ -442,6 +459,8 @@ export default function ChatShell({
   bottomInset = 0,
   onOpenGeneratedPlanChat,
   onMemorySaved,
+  onboardingIntroPending = false,
+  onCaptureOnboardingIntro = null,
   testID = 'chat-shell',
 }) {
   const [route, setRoute] = useState({ name: readOnly ? 'detail' : 'today', sessionId: null });
@@ -509,6 +528,8 @@ export default function ChatShell({
         onContinueResolved={backToToday}
         onOpenGeneratedPlanChat={onOpenGeneratedPlanChat}
         onMemorySaved={onMemorySaved}
+        onboardingIntroPending={onboardingIntroPending && route.name === 'today'}
+        onCaptureOnboardingIntro={onCaptureOnboardingIntro}
       />
     </View>
   );

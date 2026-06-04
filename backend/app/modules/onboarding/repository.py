@@ -514,7 +514,7 @@ class OnboardingRepository:
         rows = (
             self.supabase_admin
             .table("trainers")
-            .select("id, tenant_id, user_id, display_name, is_active")
+            .select("id, tenant_id, user_id, display_name, is_active, is_legacy")
             .eq("id", trainer_id)
             .limit(1)
             .execute()
@@ -525,12 +525,33 @@ class OnboardingRepository:
         rows = (
             self.supabase_admin
             .table("trainers")
-            .select("id, tenant_id, user_id, display_name, is_active")
+            .select("id, tenant_id, user_id, display_name, is_active, is_legacy")
             .eq("user_id", user_id)
             .limit(1)
             .execute()
         ).data or []
         return rows[0] if rows else None
+
+    def ensure_trainer_row(self, *, user_id: str, display_name: str | None = None) -> dict[str, Any]:
+        existing = self.get_trainer_for_user(user_id=user_id)
+        if existing:
+            return existing
+        tenant_id = self.ensure_self_guided_tenant()
+        name = display_name or "Trainer"
+        inserted = (
+            self.supabase_admin
+            .table("trainers")
+            .insert({
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+                "display_name": name,
+                "is_legacy": False,
+            })
+            .execute()
+        ).data or []
+        if not inserted:
+            return self.get_trainer_for_user(user_id=user_id) or {}
+        return inserted[0]
 
     def get_tenant_slug(self, *, tenant_id: str) -> str | None:
         rows = (

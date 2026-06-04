@@ -706,4 +706,85 @@ describe('daily chat session components', () => {
       tree.unmount();
     });
   });
+
+  it('calls onCaptureOnboardingIntro with trimmed message text on first send when onboardingIntroPending', async () => {
+    const onCaptureOnboardingIntro = jest.fn().mockResolvedValue(undefined);
+    mockSuccessfulCoachStream('Great to hear!');
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <ChatShell
+          role="client"
+          sessionType="atlas_client_chat"
+          trainerId={null}
+          accessToken="token"
+          onboardingIntroPending
+          onCaptureOnboardingIntro={onCaptureOnboardingIntro}
+        />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      await tree.root.findByType(ChatInputDock).props.onSend('  Tired but here  ');
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(onCaptureOnboardingIntro).toHaveBeenCalledTimes(1);
+    expect(onCaptureOnboardingIntro).toHaveBeenCalledWith('Tired but here');
+    expect(mockStreamChatSessionMessage).toHaveBeenCalledTimes(1);
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('resets onboarding intro captured flag and does not send message when onCaptureOnboardingIntro rejects', async () => {
+    const captureError = new Error('patch failed');
+    const onCaptureOnboardingIntro = jest.fn().mockRejectedValue(captureError);
+    let tree;
+
+    await act(async () => {
+      tree = renderer.create(
+        <ChatShell
+          role="client"
+          sessionType="atlas_client_chat"
+          trainerId={null}
+          accessToken="token"
+          onboardingIntroPending
+          onCaptureOnboardingIntro={onCaptureOnboardingIntro}
+        />,
+      );
+    });
+    await flushEffects();
+
+    await act(async () => {
+      try {
+        await tree.root.findByType(ChatInputDock).props.onSend('Motivated');
+      } catch (_err) {
+        // expected rejection
+      }
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(onCaptureOnboardingIntro).toHaveBeenCalledTimes(1);
+    expect(mockStreamChatSessionMessage).not.toHaveBeenCalled();
+
+    // retry succeeds — capture is called again because ref was reset
+    onCaptureOnboardingIntro.mockResolvedValueOnce(undefined);
+    mockSuccessfulCoachStream('Got it.');
+    await act(async () => {
+      await tree.root.findByType(ChatInputDock).props.onSend('Motivated');
+      await Promise.resolve();
+    });
+    await flushEffects();
+
+    expect(onCaptureOnboardingIntro).toHaveBeenCalledTimes(2);
+    expect(mockStreamChatSessionMessage).toHaveBeenCalledTimes(1);
+    act(() => {
+      tree.unmount();
+    });
+  });
 });

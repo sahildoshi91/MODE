@@ -574,7 +574,8 @@ class ChatSessionService:
         existing = self.repository.get_opening_summary_message(str(session["id"]))
         if not existing:
             existing = self.repository.get_first_assistant_message(str(session["id"]))
-        opening = self._build_opening_summary(scope)
+        session_metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        opening = self._build_opening_summary(scope, session_metadata=session_metadata)
         opening_metadata = {
             "auto_generated_opening_summary": True,
             "suggested_action_chips": opening["suggested_actions"],
@@ -789,13 +790,25 @@ class ChatSessionService:
             )
         )
 
-    def _build_opening_summary(self, scope: ChatSessionScope) -> dict[str, Any]:
+    def _build_opening_summary(self, scope: ChatSessionScope, *, session_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         if scope.role == "trainer":
             return self._build_trainer_opening_summary(scope)
-        return self._build_client_opening_summary(scope)
+        return self._build_client_opening_summary(scope, session_metadata=session_metadata or {})
 
-    def _build_client_opening_summary(self, scope: ChatSessionScope) -> dict[str, Any]:
+    def _build_client_opening_summary(self, scope: ChatSessionScope, *, session_metadata: dict[str, Any] | None = None) -> dict[str, Any]:
         assert scope.client_id is not None
+        if (session_metadata or {}).get("onboarding_chat_intro_pending"):
+            return {
+                "text": (
+                    "Hey! Before we dive in — how are you feeling today? "
+                    "No wrong answers."
+                ),
+                "title": None,
+                "summary": None,
+                "suggested_actions": ["Tired but here", "Motivated", "A little off"],
+                "source": "onboarding_intro",
+                "metadata": {},
+            }
         if scope.session_type == "atlas_client_chat":
             client = self._safe(lambda: self.repository.get_client_by_id(scope.client_id)) or {}
         else:

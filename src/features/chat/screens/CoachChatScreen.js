@@ -694,6 +694,16 @@ export default function CoachChatScreen({
     cancelActiveResponse,
     retryFailedRequest,
   } = useChatConversation(accessToken, launchContext);
+
+  const isAwaitingTrainerEdit = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m?.role === 'assistant') {
+        return m?.profilePatch?.trainer_onboarding?.sample_review_state === 'awaiting_edit';
+      }
+    }
+    return false;
+  }, [messages]);
   const breathingTransitionsEnabled = Boolean(BREATHING_TRANSITIONS_ENABLED);
   const shouldDisableComposer = isSending || isConversationInitializing;
 
@@ -1322,6 +1332,9 @@ export default function CoachChatScreen({
           continue;
         }
         seenMemorySuggestionHashesRef.current.add(suggestionHash);
+        if (launchContext?.entrypoint === 'trainer_agent_training') {
+          continue;
+        }
         const resolvedAnchorId = (
           normalizedSuggestion.sourceMessageId
           && knownMessageIds.has(normalizedSuggestion.sourceMessageId)
@@ -1339,7 +1352,7 @@ export default function CoachChatScreen({
         return;
       }
     }
-  }, [memoryCapture.phase, messages, suggestMemoryForMessage]);
+  }, [memoryCapture.phase, messages, suggestMemoryForMessage, launchContext]);
 
   useEffect(() => {
     scrollToLatest(false);
@@ -1544,17 +1557,6 @@ export default function CoachChatScreen({
                       </View>
                     ) : null}
                   </Pressable>
-                  {stepPreview ? (
-                    <View style={styles.previewCard}>
-                      <ModeText variant="caption" tone="tertiary">Sample reply preview</ModeText>
-                      <ModeText variant="caption" tone="secondary" style={styles.previewScenario}>
-                        {stepPreview.scenario}
-                      </ModeText>
-                      <ModeText variant="bodySm" style={styles.previewResponse}>
-                        {stepPreview.sample_response}
-                      </ModeText>
-                    </View>
-                  ) : null}
                   {checklist ? (
                     <View style={styles.checklistCard}>
                       <View style={styles.checklistHeader}>
@@ -1740,7 +1742,7 @@ export default function CoachChatScreen({
                   isSending={isSending}
                   onFocus={handleComposerFocus}
                   disabled={shouldDisableComposer}
-                  placeholder={`Ask ${resolvedTrainerName} anything...`}
+                  placeholder={isAwaitingTrainerEdit ? "Type how you'd say it…" : `Ask ${resolvedTrainerName} anything...`}
                 />
                 <ModeText
                   testID="coach-chat-ai-fitness-disclaimer"

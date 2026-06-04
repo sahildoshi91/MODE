@@ -37,6 +37,18 @@ ONBOARDING_STEPS = [
 TOTAL_STEPS = len(ONBOARDING_STEPS)
 LOW_CONFIDENCE_THRESHOLD = 0.58
 
+SAMPLE_APPROVE_SIGNALS = frozenset({
+    "yeah, that's me", "yeah that's me", "looks good", "that's right",
+    "correct", "approved", "yes", "yep",
+})
+SAMPLE_EDIT_SIGNALS = frozenset({
+    "i'd say it differently", "id say it differently",
+    "i would change it", "i'd change this", "not quite", "not exactly",
+})
+SAMPLE_SKIP_SIGNALS = frozenset({
+    "skip", "skip this", "never mind, skip", "pass",
+})
+
 STATE_FIELD_KEYS = (
     "onboarding_status",
     "onboarding_progress",
@@ -389,6 +401,18 @@ class TrainerOnboardingService:
         cleaned_message = (user_message or "").strip()
         overlay_profile = self._state_overlay_profile(profile, state)
 
+        sample_review_state = progress.get("sample_review_state")
+        if sample_review_state in ("pending", "awaiting_edit"):
+            return self._handle_sample_review_response(
+                trainer_context,
+                profile,
+                state,
+                conversation_id=conversation_id,
+                source_message_id=source_message_id,
+                message=cleaned_message,
+                use_retrain_draft=use_retrain_draft,
+            )
+
         if current_step == "final_calibration":
             return self._handle_final_calibration_step(
                 trainer_context,
@@ -529,6 +553,48 @@ class TrainerOnboardingService:
             )
 
         step_preview = self._build_step_preview_payload(current_step, overlay_profile)
+        has_preview = bool(step_preview and step_preview.get("sample_response"))
+
+        if has_preview:
+            review_progress = {**progress, "sample_review_state": "pending"}
+            profile, state = self._persist_state_patch(
+                str(trainer_id),
+                profile,
+                state,
+                {
+                    "onboarding_status": ONBOARDING_STATUS_IN_PROGRESS,
+                    "onboarding_progress": review_progress,
+                    "last_completed_step": progress.get("last_completed_step"),
+                },
+                use_retrain_draft=use_retrain_draft,
+                force_retrain_started=use_retrain_draft,
+            )
+            self._create_event(
+                trainer_context,
+                conversation_id=conversation_id,
+                source_message_id=source_message_id,
+                step_key=current_step,
+                action_type="captured",
+                extracted_patch=patch,
+                confidence_score=confidence,
+            )
+            del profile
+            return TrainerOnboardingTurnResult(
+                assistant_message=(
+                    f"Here's how your coach would sound in that situation:\n\n"
+                    f"\"{step_preview['sample_response']}\"\n\n"
+                    f"Does that sound like you?"
+                ),
+                quick_replies=["Yeah, that's me", "I'd say it differently", "Skip"],
+                current_stage=current_step,
+                onboarding_complete=False,
+                onboarding_status=ONBOARDING_STATUS_IN_PROGRESS,
+                onboarding_progress=self._normalize_progress(state.get("onboarding_progress")),
+                calibration_pending=False,
+                profile_patch=self._build_onboarding_profile_patch(step_preview=step_preview),
+            )
+
+        # No preview available — advance immediately
         next_step = self._next_step(current_step)
         updated_progress = self._advance_progress(progress, completed_step=current_step, next_step=next_step)
 
@@ -557,7 +623,7 @@ class TrainerOnboardingService:
                 confidence_score=confidence,
             )
             del profile
-            return self._build_calibration_turn_result(state, step_preview=step_preview)
+            return self._build_calibration_turn_result(state)
 
         profile, state = self._persist_state_patch(
             str(trainer_id),
@@ -584,14 +650,180 @@ class TrainerOnboardingService:
         step_number = ONBOARDING_STEPS.index(next_step) + 1
         del profile
         return TrainerOnboardingTurnResult(
-            assistant_message=f"Locked.\n\nStep {step_number} of {TOTAL_STEPS}: {self._humanize_step(next_step)}\n{prompt}",
+            assistant_message=f"Step {step_number} of {TOTAL_STEPS}: {self._humanize_step(next_step)}\n{prompt}",
             quick_replies=quick_replies,
             current_stage=next_step,
             onboarding_complete=False,
             onboarding_status=ONBOARDING_STATUS_IN_PROGRESS,
             onboarding_progress=self._normalize_progress(state.get("onboarding_progress")),
             calibration_pending=False,
-            profile_patch=self._build_onboarding_profile_patch(step_preview=step_preview),
+        )
+
+    def _handle_sample_review_response(
+        self,
+        trainer_context: TrainerContext,
+        profile: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        conversation_id: str,
+        source_message_id: str | None,
+        message: str,
+        use_retrain_draft: bool,
+    ) -> "TrainerOnboardingTurnResult":
+        progress = self._normalize_progress(state.get("onboarding_progress"))
+        review_state = progress.get("sample_review_state")
+        current_step = progress.get("current_step") or "welcome"
+        trainer_id = str(trainer_context.trainer_id)
+        msg = message.lower().strip()
+
+        if review_state == "awaiting_edit":
+            if msg in SAMPLE_SKIP_SIGNALS:
+                self._create_event(
+                    trainer_context,
+                    conversation_id=conversation_id,
+                    source_message_id=source_message_id,
+                    step_key=current_step,
+                    action_type="skipped",
+                    extracted_patch={"sample_skipped": True, "step_key": current_step},
+                    confidence_score=1.0,
+                )
+            else:
+                self._create_event(
+                    trainer_context,
+                    conversation_id=conversation_id,
+                    source_message_id=source_message_id,
+                    step_key=current_step,
+                    action_type="edited",
+                    extracted_patch={"edited_response": message, "trainer_note": message, "step_key": current_step},
+                    confidence_score=0.95,
+                )
+            return self._advance_from_sample_review(
+                trainer_id, profile, state,
+                current_step=current_step,
+                use_retrain_draft=use_retrain_draft,
+            )
+
+        # review_state == "pending"
+        if msg in SAMPLE_APPROVE_SIGNALS:
+            self._create_event(
+                trainer_context,
+                conversation_id=conversation_id,
+                source_message_id=source_message_id,
+                step_key=current_step,
+                action_type="captured",
+                extracted_patch={"sample_approved": True, "step_key": current_step},
+                confidence_score=1.0,
+            )
+            return self._advance_from_sample_review(
+                trainer_id, profile, state,
+                current_step=current_step,
+                use_retrain_draft=use_retrain_draft,
+            )
+
+        if msg in SAMPLE_EDIT_SIGNALS:
+            updated = {**progress, "sample_review_state": "awaiting_edit"}
+            _, state_ = self._persist_state_patch(
+                trainer_id,
+                profile,
+                state,
+                {"onboarding_progress": updated},
+                use_retrain_draft=use_retrain_draft,
+            )
+            return TrainerOnboardingTurnResult(
+                assistant_message="Tell me how you'd put it — type your version and I'll save it.",
+                quick_replies=["Never mind, skip"],
+                current_stage=current_step,
+                onboarding_complete=False,
+                onboarding_status=ONBOARDING_STATUS_IN_PROGRESS,
+                onboarding_progress=self._normalize_progress(state_.get("onboarding_progress")),
+                calibration_pending=False,
+                profile_patch=self._build_onboarding_profile_patch(sample_review_state="awaiting_edit"),
+            )
+
+        if msg in SAMPLE_SKIP_SIGNALS:
+            self._create_event(
+                trainer_context,
+                conversation_id=conversation_id,
+                source_message_id=source_message_id,
+                step_key=current_step,
+                action_type="skipped",
+                extracted_patch={"sample_skipped": True, "step_key": current_step},
+                confidence_score=1.0,
+            )
+            return self._advance_from_sample_review(
+                trainer_id, profile, state,
+                current_step=current_step,
+                use_retrain_draft=use_retrain_draft,
+            )
+
+        return TrainerOnboardingTurnResult(
+            assistant_message="Does that sound like you?",
+            quick_replies=["Yeah, that's me", "I'd say it differently", "Skip"],
+            current_stage=current_step,
+            onboarding_complete=False,
+            onboarding_status=ONBOARDING_STATUS_IN_PROGRESS,
+            onboarding_progress=self._normalize_progress(state.get("onboarding_progress")),
+            calibration_pending=False,
+        )
+
+    def _advance_from_sample_review(
+        self,
+        trainer_id: str,
+        profile: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        current_step: str,
+        use_retrain_draft: bool,
+    ) -> "TrainerOnboardingTurnResult":
+        progress = self._normalize_progress(state.get("onboarding_progress"))
+        next_step = self._next_step(current_step)
+
+        if next_step == "final_calibration":
+            overlay_profile = self._state_overlay_profile(profile, state)
+            calibration_examples = self._generate_calibration_examples(overlay_profile)
+            updated_progress = self._advance_progress(
+                progress, completed_step=current_step, next_step="final_calibration",
+            )
+            updated_progress.pop("sample_review_state", None)
+            profile, state = self._persist_state_patch(
+                trainer_id, profile, state,
+                {
+                    "onboarding_status": ONBOARDING_STATUS_CALIBRATION_PENDING,
+                    "onboarding_progress": updated_progress,
+                    "last_completed_step": current_step,
+                    "calibration_examples": calibration_examples,
+                },
+                use_retrain_draft=use_retrain_draft,
+                force_retrain_started=use_retrain_draft,
+            )
+            del profile
+            return self._build_calibration_turn_result(state)
+
+        updated_progress = self._advance_progress(
+            progress, completed_step=current_step, next_step=next_step,
+        )
+        updated_progress.pop("sample_review_state", None)
+        profile, state = self._persist_state_patch(
+            trainer_id, profile, state,
+            {
+                "onboarding_status": ONBOARDING_STATUS_IN_PROGRESS,
+                "onboarding_progress": updated_progress,
+                "last_completed_step": current_step,
+            },
+            use_retrain_draft=use_retrain_draft,
+            force_retrain_started=use_retrain_draft,
+        )
+        prompt, quick_replies = STEP_PROMPTS[next_step]
+        step_number = ONBOARDING_STEPS.index(next_step) + 1
+        del profile
+        return TrainerOnboardingTurnResult(
+            assistant_message=f"Step {step_number} of {TOTAL_STEPS}: {self._humanize_step(next_step)}\n{prompt}",
+            quick_replies=quick_replies,
+            current_stage=next_step,
+            onboarding_complete=False,
+            onboarding_status=ONBOARDING_STATUS_IN_PROGRESS,
+            onboarding_progress=self._normalize_progress(state.get("onboarding_progress")),
+            calibration_pending=False,
         )
 
     def _handle_final_calibration_step(
@@ -936,12 +1168,15 @@ class TrainerOnboardingService:
         *,
         step_preview: dict[str, Any] | None = None,
         calibration_checklist: dict[str, Any] | None = None,
+        sample_review_state: str | None = None,
     ) -> dict[str, Any]:
         trainer_payload: dict[str, Any] = {}
         if step_preview:
             trainer_payload["step_preview"] = step_preview
         if calibration_checklist:
             trainer_payload["calibration_checklist"] = calibration_checklist
+        if sample_review_state:
+            trainer_payload["sample_review_state"] = sample_review_state
         if not trainer_payload:
             return {}
         return {"trainer_onboarding": trainer_payload}
@@ -1160,6 +1395,13 @@ class TrainerOnboardingService:
             return 0.05
         if any(marker in lowered for marker in VAGUE_MARKERS):
             return 0.3
+
+        # Exact quick_reply selection — treat as authoritative regardless of length.
+        step_entry = STEP_PROMPTS.get(step)
+        if step_entry:
+            quick_replies = step_entry[1]
+            if any(lowered == qr.lower().strip() for qr in quick_replies):
+                return 0.90
 
         if step == "welcome":
             identity = self._as_dict(patch.get("identity"))
@@ -1571,13 +1813,17 @@ class TrainerOnboardingService:
         last_completed_step = progress.get("last_completed_step")
         if last_completed_step and str(last_completed_step) not in ONBOARDING_STEPS:
             last_completed_step = None
-        return {
+        result: dict[str, Any] = {
             "completed_steps": completed_steps_value,
             "total_steps": TOTAL_STEPS,
             "current_step": current_step,
             "last_completed_step": last_completed_step,
             "completed_step_keys": completed_step_keys,
         }
+        sample_review_state = progress.get("sample_review_state")
+        if sample_review_state:
+            result["sample_review_state"] = sample_review_state
+        return result
 
     def _normalize_status(self, value: Any) -> str:
         status = str(value or ONBOARDING_STATUS_NOT_STARTED).strip().lower()

@@ -13,6 +13,8 @@ const mockAssignTrainer = jest.fn();
 const mockGetOnboardingBootstrap = jest.fn();
 const mockIngestMobileEvents = jest.fn();
 const mockSetOnboardingRole = jest.fn();
+const mockCompleteOnboarding = jest.fn();
+const mockPatchOnboardingState = jest.fn();
 const mockGetLocalDateString = jest.fn();
 const mockGetTodayCheckin = jest.fn();
 const mockSetStringAsync = jest.fn();
@@ -48,6 +50,8 @@ jest.mock('../../features/onboarding/services/onboardingApi', () => ({
   getOnboardingBootstrap: (...args) => mockGetOnboardingBootstrap(...args),
   ingestMobileEvents: (...args) => mockIngestMobileEvents(...args),
   setOnboardingRole: (...args) => mockSetOnboardingRole(...args),
+  completeOnboarding: (...args) => mockCompleteOnboarding(...args),
+  patchOnboardingState: (...args) => mockPatchOnboardingState(...args),
 }));
 
 jest.mock('../../features/dailyCheckin/services/checkinApi', () => ({
@@ -335,6 +339,14 @@ describe('App assignment status retry behavior', () => {
     });
     mockIngestMobileEvents.mockResolvedValue({});
     mockSetOnboardingRole.mockResolvedValue({});
+    mockCompleteOnboarding.mockResolvedValue({
+      role: 'client',
+      onboarding_complete: true,
+      onboarding_status: 'completed',
+      is_legacy_trainer: false,
+      assigned_trainer_id: null,
+    });
+    mockPatchOnboardingState.mockResolvedValue({});
     mockGetLocalDateString.mockReturnValue('2026-05-05');
     mockGetTodayCheckin.mockResolvedValue({
       completed: true,
@@ -447,10 +459,17 @@ describe('App assignment status retry behavior', () => {
     });
   });
 
-  it('saves client role selection and opens client onboarding', async () => {
+  it('saves client role selection, calls completeOnboarding, then opens Coach chat', async () => {
     mockGetOnboardingBootstrap.mockResolvedValue(createRoleUnknownBootstrap());
     mockGetTrainerAssignmentStatus.mockResolvedValue(createUnassignedStatus());
     mockSetOnboardingRole.mockResolvedValueOnce(createClientOnboardingBootstrap());
+    mockCompleteOnboarding.mockResolvedValueOnce({
+      role: 'client',
+      onboarding_complete: true,
+      onboarding_status: 'completed',
+      is_legacy_trainer: false,
+      assigned_trainer_id: null,
+    });
 
     let tree;
     await act(async () => {
@@ -468,9 +487,43 @@ describe('App assignment status retry behavior', () => {
       accessToken: 'session-token',
       role: 'client',
     });
-    const onboarding = tree.root.findByType('MockClientOnboardingFlowScreen');
-    expect(onboarding.props.bootstrap.role).toBe('client');
+    expect(mockCompleteOnboarding).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: 'session-token',
+      currentStep: 'coach_chat_intro',
+      payload: expect.objectContaining({
+        onboarding_chat_intro_pending: true,
+      }),
+    }));
+    expect(tree.root.findAllByType('MockClientOnboardingFlowScreen')).toHaveLength(0);
+    expect(tree.root.findAllByType('MockChatShell').length).toBeGreaterThanOrEqual(1);
     expect(tree.root.findAllByProps({ testID: 'role-selection-error' })).toHaveLength(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('fails open into Coach chat if completeOnboarding rejects', async () => {
+    mockGetOnboardingBootstrap.mockResolvedValue(createRoleUnknownBootstrap());
+    mockGetTrainerAssignmentStatus.mockResolvedValue(createUnassignedStatus());
+    mockSetOnboardingRole.mockResolvedValueOnce(createClientOnboardingBootstrap());
+    mockCompleteOnboarding.mockRejectedValueOnce(new Error('network'));
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const clientButton = tree.root.findByProps({ testID: 'role-selection-client-button' });
+    await act(async () => {
+      await clientButton.props.onPress();
+    });
+    await flushEffects();
+
+    expect(mockCompleteOnboarding).toHaveBeenCalledTimes(1);
+    expect(tree.root.findAllByType('MockClientOnboardingFlowScreen')).toHaveLength(0);
+    expect(tree.root.findAllByType('MockChatShell').length).toBeGreaterThanOrEqual(1);
 
     await act(async () => {
       tree.unmount();

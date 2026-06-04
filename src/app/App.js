@@ -28,10 +28,12 @@ import LiquidBottomNav, {
 import ClientOnboardingFlowScreen from '../features/onboarding/screens/ClientOnboardingFlowScreen';
 import ProductPreviewScreen from '../features/onboarding/screens/ProductPreviewScreen';
 import RoleSelectionScreen from '../features/onboarding/screens/RoleSelectionScreen';
-import TrainerStubScreen from '../features/onboarding/screens/TrainerStubScreen';
+import TrainerOnboardingScreen from '../features/trainerOnboarding/screens/TrainerOnboardingScreen';
 import {
+  completeOnboarding,
   getOnboardingBootstrap,
   ingestMobileEvents,
+  patchOnboardingState,
   setOnboardingRole,
 } from '../features/onboarding/services/onboardingApi';
 import { deleteMyAccount } from '../features/profile/services/profileApi';
@@ -425,6 +427,35 @@ function buildTodayCheckinContext(source) {
     assigned_mode: assignedMode,
     checkin_score: checkinScore,
   };
+}
+
+function _ClientOnboardingBridge({ accessToken, onComplete }) {
+  const hasCalledRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (hasCalledRef.current || !accessToken) return;
+    hasCalledRef.current = true;
+
+    completeOnboarding({
+      accessToken,
+      currentStep: 'coach_chat_intro',
+      payload: {
+        onboarding_entrypoint: 'coach_chat_intro',
+        onboarding_chat_intro_pending: true,
+      },
+    })
+      .then((updated) => onComplete(updated))
+      .catch(() => {
+        onComplete({ onboarding_complete: true, role: 'client' });
+      });
+  }, [accessToken, onComplete]);
+
+  return (
+    <ShellLoadingState
+      title="Setting up your Coach"
+      subtitle="Just a moment while we get things ready."
+    />
+  );
 }
 
 function AppShell() {
@@ -1462,6 +1493,27 @@ function AppShell() {
     });
   }, [shellLoadingConfig]);
 
+  const handleCaptureOnboardingIntro = useCallback(async (rawText) => {
+    if (!session?.access_token) return;
+    await patchOnboardingState({
+      accessToken: session.access_token,
+      status: 'completed',
+      currentStep: 'coach_chat_intro',
+      payload: {
+        quick_win_feeling_text: rawText,
+        onboarding_chat_intro_pending: false,
+        onboarding_chat_intro_answered_at: new Date().toISOString(),
+      },
+    });
+    setBootstrap((current) => ({
+      ...current,
+      onboarding_payload: {
+        ...(current?.onboarding_payload || {}),
+        onboarding_chat_intro_pending: false,
+      },
+    }));
+  }, [session?.access_token]);
+
   if (BREATHING_TRANSITIONS_ENABLED && shellLoadingState) {
     return (
       <ShellLoadingState
@@ -1568,25 +1620,40 @@ function AppShell() {
 
   if (appState === APP_STATE.CLIENT_ONBOARDING || appState === APP_STATE.ONBOARDING_PARTIAL) {
     return (
-      <ClientOnboardingFlowScreen
+      <_ClientOnboardingBridge
         accessToken={session.access_token}
-        bootstrap={bootstrap}
-        onBootstrapUpdate={setBootstrap}
-        onFinished={() => {
+        onComplete={(updatedBootstrap) => {
+          setBootstrap(updatedBootstrap);
           setActiveTab('coach');
         }}
-        onTrackEvent={trackEvent}
       />
     );
   }
 
   if (appState === APP_STATE.TRAINER_STUB) {
+    const onboardingDone =
+      assignmentStatus?.trainer_onboarding_completed ||
+      assignmentStatus?.trainer_onboarding_status === 'completed';
+
+    if (!onboardingDone) {
+      return (
+        <TrainerOnboardingScreen
+          accessToken={session.access_token}
+          assignmentStatus={assignmentStatus}
+          onOnboardingComplete={async () => {
+            await loadAssignmentStatus({ accessTokenOverride: session.access_token });
+          }}
+        />
+      );
+    }
+
+    // Onboarding complete but appState hasn't re-resolved yet —
+    // reload bootstrap so the trainer shell renders on the next cycle.
+    loadBootstrap({ accessToken: session.access_token });
     return (
-      <TrainerStubScreen
-        accessToken={session.access_token}
-        bootstrap={bootstrap}
-        onBootstrapUpdate={setBootstrap}
-        onSignOut={handleSignOut}
+      <ShellLoadingState
+        title="Setting up your workspace"
+        subtitle="Your coach is live. Opening your dashboard."
       />
     );
   }
@@ -1620,6 +1687,10 @@ function AppShell() {
   const shouldHideBottomNavForCoachCheckin = Boolean(
     activeTab === 'coach'
     && shouldBlockCoachForCheckin
+  );
+
+  const onboardingChatIntroPending = Boolean(
+    bootstrap?.onboarding_payload?.onboarding_chat_intro_pending
   );
 
   if (!BREATHING_TRANSITIONS_ENABLED && isBlockingAssignmentLoad) {
@@ -1723,6 +1794,8 @@ function AppShell() {
                   bottomInset={coachChatBottomInset}
                   onOpenGeneratedPlanChat={handleOpenChat}
                   onMemorySaved={handleClientMemorySaved}
+                  onboardingIntroPending={onboardingChatIntroPending}
+                  onCaptureOnboardingIntro={handleCaptureOnboardingIntro}
                 />
               )
             ) : null}
@@ -1737,6 +1810,8 @@ function AppShell() {
                 bottomInset={coachChatBottomInset}
                 onOpenGeneratedPlanChat={handleOpenChat}
                 onMemorySaved={handleClientMemorySaved}
+                onboardingIntroPending={onboardingChatIntroPending}
+                onCaptureOnboardingIntro={handleCaptureOnboardingIntro}
               />
             ) : null}
 

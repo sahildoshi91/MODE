@@ -66,6 +66,14 @@ class OnboardingService:
                 self.repository.set_user_role(user_account_id=account["id"], role=inferred_role)
                 role = inferred_role
 
+        # Auto-provision a trainers row for trainer-role users who don't have one yet.
+        # is_legacy=False so they still route to the new AI onboarding path.
+        if role == "trainer" and not legacy_trainer:
+            legacy_trainer = self.repository.ensure_trainer_row(
+                user_id=user.id,
+                display_name=user.email,
+            )
+
         if role == "client":
             primary_client, clients = self._ensure_client_bootstrap(user_id=user.id, clients=clients)
 
@@ -123,7 +131,7 @@ class OnboardingService:
             trainer_attached=bool(assigned_trainer_id),
             assigned_trainer_id=assigned_trainer_id,
             assigned_trainer_display_name=assigned_trainer_display_name,
-            is_legacy_trainer=bool(legacy_trainer),
+            is_legacy_trainer=bool(legacy_trainer and legacy_trainer.get("is_legacy")),
             is_self_guided=tenant_slug == SELF_GUIDED_TENANT_SLUG,
         )
 
@@ -179,6 +187,7 @@ class OnboardingService:
                 payload=existing_payload,
                 completed_at=existing_state.get("completed_at") if existing_state else None,
             )
+            self.repository.ensure_trainer_row(user_id=user.id, display_name=user.email)
 
         return self.get_bootstrap(user)
 
@@ -485,6 +494,24 @@ class OnboardingService:
                 continue
             cleaned = self._coerce_optional_text(value)
             patch[column] = cleaned
+
+        if "equipment_access" not in patch:
+            location = patch.get("training_location") or self._coerce_optional_text(
+                source.get("training_location")
+            )
+            if location:
+                location_lower = location.lower()
+                if "gym" in location_lower:
+                    patch["equipment_access"] = "Full gym equipment"
+                elif "home" in location_lower and any(
+                    w in location_lower for w in ["full", "kit", "equipment"]
+                ):
+                    patch["equipment_access"] = "Home gym - full equipment"
+                elif "home" in location_lower or "minimal" in location_lower:
+                    patch["equipment_access"] = "Home - minimal equipment"
+                elif "outdoor" in location_lower or "outside" in location_lower:
+                    patch["equipment_access"] = "Outdoors"
+
         return patch
 
     def _coerce_int(self, value: Any) -> int | None:

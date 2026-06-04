@@ -116,6 +116,13 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
             source_message_id=source_message_id,
         )
 
+    def _step_and_advance(self, message, source_message_id="msg-1"):
+        """Send a step answer and skip the sample review if one is triggered."""
+        result = self._turn(message, source_message_id=source_message_id)
+        if result.onboarding_progress.get("sample_review_state") == "pending":
+            return self._turn("yeah, that's me")
+        return result
+
     def test_welcome_turn_captures_agent_name_and_advances_to_coaching_identity(self):
         result = self._turn("Coach Nova")
         profile = self.repository.get_profile("trainer-123")
@@ -204,16 +211,17 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
         self.assertEqual(step2.assistant_message.count("?"), 1)
         self.assertIn("Case study", step2.assistant_message)
 
-        step3 = self._turn("Supportive and direct when anxiety spikes", source_message_id="msg-3")
+        # Answer coaching_identity — triggers sample review, advance past it
+        step3 = self._step_and_advance("Supportive and direct when anxiety spikes", source_message_id="msg-3")
         self.assertEqual(step3.current_stage, "voice_calibration")
         self.assertEqual(step3.assistant_message.count("?"), 1)
         self.assertIn("Case study", step3.assistant_message)
 
     def test_scenario_answers_append_step_specific_scenario_rules(self):
         self._turn("Coach Nova")
-        self._turn("Supportive and direct when anxiety spikes", source_message_id="msg-2")
-        self._turn("Warm, clear, and no shame language", source_message_id="msg-3")
-        self._turn(
+        self._step_and_advance("Supportive and direct when anxiety spikes", source_message_id="msg-2")
+        self._step_and_advance("Warm, clear, and no shame language", source_message_id="msg-3")
+        self._step_and_advance(
             "Pain first, then sleep, then stress, then schedule.",
             source_message_id="msg-4",
         )
@@ -228,9 +236,9 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
 
     def test_decision_engine_preserves_declared_factor_order(self):
         self._turn("Coach Nova")
-        self._turn("Supportive and direct when anxiety spikes", source_message_id="msg-2")
-        self._turn("Warm, clear, and no shame language", source_message_id="msg-3")
-        self._turn(
+        self._step_and_advance("Supportive and direct when anxiety spikes", source_message_id="msg-2")
+        self._step_and_advance("Warm, clear, and no shame language", source_message_id="msg-3")
+        self._step_and_advance(
             "I prioritize pain first, then sleep, then stress, then time constraints.",
             source_message_id="msg-4",
         )
@@ -245,11 +253,11 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
 
     def test_skip_optional_personal_touch_enters_calibration_pending(self):
         self._turn("Coach Nova")
-        self._turn("Supportive but direct with high accountability", source_message_id="msg-2")
-        self._turn("Warm and concise. Avoid passive language.", source_message_id="msg-3")
-        self._turn("Prioritize sleep, stress, then schedule with pain always first.", source_message_id="msg-4")
-        self._turn("Consistency first. Technique before load. Never skip form.", source_message_id="msg-5")
-        self._turn("Hard: no pain chasing; Soft: reduce volume on high stress.", source_message_id="msg-6")
+        self._step_and_advance("Supportive but direct with high accountability", source_message_id="msg-2")
+        self._step_and_advance("Warm and concise. Avoid passive language.", source_message_id="msg-3")
+        self._step_and_advance("Prioritize sleep, stress, then schedule with pain always first.", source_message_id="msg-4")
+        self._step_and_advance("Consistency first. Technique before load. Never skip form.", source_message_id="msg-5")
+        self._step_and_advance("Hard: no pain chasing; Soft: reduce volume on high stress.", source_message_id="msg-6")
         result = self._turn("skip this", source_message_id="msg-7")
         profile = self.repository.get_profile("trainer-123")
 
@@ -264,11 +272,11 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
 
     def test_final_calibration_approve_all_completes_and_mirrors_persona(self):
         self._turn("Coach Nova")
-        self._turn("Supportive but direct with high accountability", source_message_id="msg-2")
-        self._turn("Warm and concise. Avoid passive language.", source_message_id="msg-3")
-        self._turn("Prioritize pain, then sleep, stress, and schedule.", source_message_id="msg-4")
-        self._turn("Consistency first. Technique before load. Never skip form.", source_message_id="msg-5")
-        self._turn("Hard: no pain chasing; Soft: reduce volume on high stress.", source_message_id="msg-6")
+        self._step_and_advance("Supportive but direct with high accountability", source_message_id="msg-2")
+        self._step_and_advance("Warm and concise. Avoid passive language.", source_message_id="msg-3")
+        self._step_and_advance("Prioritize pain, then sleep, stress, and schedule.", source_message_id="msg-4")
+        self._step_and_advance("Consistency first. Technique before load. Never skip form.", source_message_id="msg-5")
+        self._step_and_advance("Hard: no pain chasing; Soft: reduce volume on high stress.", source_message_id="msg-6")
         self._turn("skip", source_message_id="msg-7")
 
         result = self._turn("approve all", source_message_id="msg-8")
@@ -287,7 +295,7 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
 
     def test_voice_step_prompt_uses_plain_language_examples(self):
         self._turn("Coach Nova")
-        result = self._turn("Supportive and direct when anxiety spikes", source_message_id="msg-2")
+        result = self._step_and_advance("Supportive and direct when anxiety spikes", source_message_id="msg-2")
 
         self.assertEqual(result.current_stage, "voice_calibration")
         self.assertIn("how should the coach sound", result.assistant_message.lower())
@@ -297,7 +305,7 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
 
     def test_voice_clarifier_uses_plain_language_examples(self):
         self._turn("Coach Nova")
-        self._turn("Supportive and direct when anxiety spikes", source_message_id="msg-2")
+        self._step_and_advance("Supportive and direct when anxiety spikes", source_message_id="msg-2")
         result = self._turn("idk", source_message_id="msg-3")
 
         self.assertEqual(result.current_stage, "voice_calibration")
@@ -308,11 +316,11 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
 
     def test_boundaries_capture_hard_guardrail_and_soft(self):
         self._turn("Coach Nova")
-        self._turn("Supportive but direct with high accountability", source_message_id="msg-2")
-        self._turn("Warm and concise. Avoid passive language.", source_message_id="msg-3")
-        self._turn("Prioritize pain, then sleep, stress, and schedule.", source_message_id="msg-4")
-        self._turn("Consistency first. Technique before load. Never skip form.", source_message_id="msg-5")
-        result = self._turn(
+        self._step_and_advance("Supportive but direct with high accountability", source_message_id="msg-2")
+        self._step_and_advance("Warm and concise. Avoid passive language.", source_message_id="msg-3")
+        self._step_and_advance("Prioritize pain, then sleep, stress, and schedule.", source_message_id="msg-4")
+        self._step_and_advance("Consistency first. Technique before load. Never skip form.", source_message_id="msg-5")
+        result = self._step_and_advance(
             "Hard: stop on sharp pain; Guardrail: swap to pain-free options if discomfort rises; Soft: shorten session if stress is high.",
             source_message_id="msg-6",
         )
@@ -329,17 +337,18 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
         result = self._turn("Supportive but direct with high accountability", source_message_id="msg-2")
 
         step_preview = result.profile_patch.get("trainer_onboarding", {}).get("step_preview", {})
-        self.assertEqual(result.current_stage, "voice_calibration")
+        # Step stays on coaching_identity during sample review — advance has not happened yet
+        self.assertEqual(result.current_stage, "coaching_identity")
         self.assertEqual(step_preview.get("step_key"), "coaching_identity")
         self.assertTrue(step_preview.get("sample_response"))
 
     def test_calibration_checklist_payload_tracks_approval_progress(self):
         self._turn("Coach Nova")
-        self._turn("Supportive but direct with high accountability", source_message_id="msg-2")
-        self._turn("Warm and concise. Avoid passive language.", source_message_id="msg-3")
-        self._turn("Prioritize pain, then sleep, stress, and schedule.", source_message_id="msg-4")
-        self._turn("Consistency first. Technique before load. Never skip form.", source_message_id="msg-5")
-        self._turn("Hard: no pain chasing; Guardrail: regress if pain rises; Soft: reduce volume on high stress.", source_message_id="msg-6")
+        self._step_and_advance("Supportive but direct with high accountability", source_message_id="msg-2")
+        self._step_and_advance("Warm and concise. Avoid passive language.", source_message_id="msg-3")
+        self._step_and_advance("Prioritize pain, then sleep, stress, and schedule.", source_message_id="msg-4")
+        self._step_and_advance("Consistency first. Technique before load. Never skip form.", source_message_id="msg-5")
+        self._step_and_advance("Hard: no pain chasing; Guardrail: regress if pain rises; Soft: reduce volume on high stress.", source_message_id="msg-6")
         step8 = self._turn("skip", source_message_id="msg-7")
         post_approve = self._turn("approve 1", source_message_id="msg-8")
 
