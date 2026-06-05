@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import subprocess
@@ -8,6 +9,16 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "release_security_runner.py"
+ARTIFACTS_ROOT = REPO_ROOT / "security_artifacts" / "release"
+
+
+def _import_runner():
+    spec = importlib.util.spec_from_file_location("release_security_runner", SCRIPT_PATH)
+    module = importlib.util.module_from_spec(spec)
+    # Must register before exec_module so @dataclass can resolve the module namespace
+    sys.modules["release_security_runner"] = module
+    spec.loader.exec_module(module)
+    return module
 WRAPPER_PATH = REPO_ROOT / "scripts" / "release_security.sh"
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
 PRODUCTION_ENV_SCHEMA = REPO_ROOT / "backend" / "security" / "production_env_schema.json"
@@ -229,3 +240,54 @@ def test_release_mode_rejects_staging_app_env() -> None:
     )
     assert completed.returncode == 1
     assert "APP_ENV must be production" in completed.stdout
+
+
+def test_redact_db_url_strips_password() -> None:
+    runner = _import_runner()
+    redact = runner._redact_db_url
+    assert redact("postgresql://user:supersecret@host:5432/db") == "postgresql://user:***@host:5432/db"
+    assert redact("postgres://user:p%40ss@host:5432/db") == "postgres://user:***@host:5432/db"
+    assert redact("cmd --flag postgresql://user:secret@host:5432/db end") == "cmd --flag postgresql://user:***@host:5432/db end"
+    assert redact("POSTGRESQL://User:S3cr3t@HOST:6543/postgres") == "POSTGRESQL://User:***@HOST:6543/postgres"
+    assert redact("no url here") == "no url here"
+    assert redact("") == ""
+    # Multiple URLs in one string
+    assert redact(
+        "postgresql://a:pass1@host1:5432/db and postgres://b:pass2@host2:5432/db"
+    ) == "postgresql://a:***@host1:5432/db and postgres://b:***@host2:5432/db"
+
+
+def test_db_credentials_absent_from_runner_artifacts() -> None:
+    """Raw DB passwords must not appear in any runner output or artifact."""
+    raw_password = "xXxTEST_SECRET_PASS_xXx"
+    fake_db_url = f"postgresql://postgres.testref:{raw_password}@aws-east.pooler.supabase.com:6543/postgres"
+
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "APP_ENV": "staging",
+        "MODE_SECURITY_DATABASE_URL": fake_db_url,
+    }
+
+    before: set[Path] = set(ARTIFACTS_ROOT.glob("*")) if ARTIFACTS_ROOT.exists() else set()
+
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT_PATH), "--local", "--only", "gdpr"],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+    )
+
+    after: set[Path] = set(ARTIFACTS_ROOT.glob("*")) if ARTIFACTS_ROOT.exists() else set()
+    new_dirs = after - before
+
+    assert raw_password not in completed.stdout, "Raw password found in runner stdout"
+    assert raw_password not in completed.stderr, "Raw password found in runner stderr"
+
+    for artifact_dir in new_dirs:
+        for filename in ("summary.json", "matrix.md", "console_output.txt", "gate_gdpr.log"):
+            path = artifact_dir / filename
+            if path.exists():
+                content = path.read_text(encoding="utf-8")
+                assert raw_password not in content, f"Raw password found in {path.name}"

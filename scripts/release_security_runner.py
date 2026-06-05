@@ -26,6 +26,10 @@ BACKEND = ROOT / "backend"
 SCHEMA_PATH = BACKEND / "security" / "production_env_schema.json"
 ARTIFACTS_ROOT = ROOT / "security_artifacts" / "release"
 ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_DB_URL_REDACT_RE = re.compile(
+    r'(postgres(?:ql)?://[^:/@\s]+:)([^@\s]+)(@)',
+    re.IGNORECASE,
+)
 
 ENV_CATEGORY_GROUPS: list[tuple[str, set[str]]] = [
     (
@@ -126,8 +130,9 @@ class RunnerContext:
         return shutil.which(name) or name
 
     def print_line(self, message: str) -> None:
-        print(message)
-        self.lines.append(message)
+        redacted = _redact_db_url(message)
+        print(redacted)
+        self.lines.append(redacted)
 
     def ensure_artifacts_dir(self) -> None:
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -144,7 +149,8 @@ class RunnerContext:
         env_overrides: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
         command_display = " ".join(shlex.quote(part) for part in cmd)
-        result.commands.append(f"cd {cwd} && {command_display}")
+        command_display_safe = _redact_db_url(command_display)
+        result.commands.append(f"cd {cwd} && {command_display_safe}")
 
         env = os.environ.copy()
         if env_overrides:
@@ -161,18 +167,22 @@ class RunnerContext:
 
         if result.log_path is not None:
             with result.log_path.open("a", encoding="utf-8") as handle:
-                handle.write(f"$ {command_display}\n")
+                handle.write(f"$ {command_display_safe}\n")
                 if env_overrides:
                     safe_overrides = {
-                        key: ("***" if any(tok in key.upper() for tok in ("KEY", "TOKEN", "SECRET", "PASSWORD")) else value)
+                        key: (
+                            "***"
+                            if any(tok in key.upper() for tok in ("KEY", "TOKEN", "SECRET", "PASSWORD"))
+                            else _redact_db_url(value)
+                        )
                         for key, value in env_overrides.items()
                     }
                     handle.write(f"env_overrides={json.dumps(safe_overrides, sort_keys=True)}\n")
                 handle.write(f"exit_code={completed.returncode}\n")
                 handle.write("--- stdout ---\n")
-                handle.write(completed.stdout or "")
+                handle.write(_redact_db_url(completed.stdout or ""))
                 handle.write("\n--- stderr ---\n")
-                handle.write(completed.stderr or "")
+                handle.write(_redact_db_url(completed.stderr or ""))
                 handle.write("\n\n")
 
         return completed
@@ -187,6 +197,12 @@ def _env_int(name: str, default: int) -> int:
     if not raw:
         return int(default)
     return int(raw)
+
+
+def _redact_db_url(text: str) -> str:
+    if not text:
+        return str(text or "")
+    return _DB_URL_REDACT_RE.sub(r'\1***\3', text)
 
 
 def _has_host_token(value: str, tokens: list[str]) -> bool:
@@ -650,9 +666,9 @@ def gate_storage_security(ctx: RunnerContext, result: GateResult) -> None:
             handle.write("$ psql [scheduled cleanup heartbeat query]\n")
             handle.write(f"exit_code={rc}\n")
             handle.write("--- stdout ---\n")
-            handle.write(stdout or "")
+            handle.write(_redact_db_url(stdout or ""))
             handle.write("\n--- stderr ---\n")
-            handle.write(stderr or "")
+            handle.write(_redact_db_url(stderr or ""))
             handle.write("\n\n")
 
     if rc != 0:
@@ -805,7 +821,7 @@ def _write_artifacts(ctx: RunnerContext, results: list[GateResult], final_result
         "|---|---|---|",
     ]
     for row in results:
-        notes = " ; ".join(note.replace("\n", " ").strip() for note in row.notes) or "-"
+        notes = " ; ".join(_redact_db_url(note.replace("\n", " ").strip()) for note in row.notes) or "-"
         matrix_lines.append(f"| {row.gate_name} | {row.status} | {notes} |")
 
     matrix_lines.extend(["", f"Final result: {final_result}"])
@@ -820,8 +836,8 @@ def _write_artifacts(ctx: RunnerContext, results: list[GateResult], final_result
                 "gate_id": row.gate_id,
                 "gate_name": row.gate_name,
                 "status": row.status,
-                "notes": row.notes,
-                "commands": row.commands,
+                "notes": [_redact_db_url(note) for note in row.notes],
+                "commands": [_redact_db_url(cmd) for cmd in row.commands],
                 "missing_envs": sorted(set(row.missing_envs)),
                 "log_path": str(row.log_path) if row.log_path else None,
             }
@@ -878,10 +894,11 @@ def main() -> int:
         try:
             fn(ctx, gate_result)
         except Exception as exc:  # pragma: no cover - fail-closed runtime guard
-            gate_result.fail(f"Unexpected runner exception: {exc}")
+            exc_str = _redact_db_url(str(exc))
+            gate_result.fail(f"Unexpected runner exception: {exc_str}")
             if gate_result.log_path is not None:
                 with gate_result.log_path.open("a", encoding="utf-8") as handle:
-                    handle.write(f"Unexpected exception: {exc}\n")
+                    handle.write(f"Unexpected exception: {exc_str}\n")
         results.append(gate_result)
 
     all_pass = bool(results) and all(row.status == "PASS" for row in results)
