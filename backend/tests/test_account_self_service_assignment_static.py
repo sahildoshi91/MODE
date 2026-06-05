@@ -44,6 +44,15 @@ def test_account_self_service_assignment_rpcs_are_service_role_only() -> None:
     assert "GRANT EXECUTE ON FUNCTION public.account_reassign_trainer_by_invite(UUID, UUID, UUID, UUID) TO service_role" in source
 
 
+def test_trainer_assignment_events_metadata_keys_are_bounded() -> None:
+    # Documents and locks the set of metadata keys written by this migration.
+    # All keys must appear in the personal_data_inventory.json description.
+    source = _source()
+    allowed_keys = {"source", "history_gap", "target_client_id", "target_trainer_id", "invite_id", "closed_assignment_count"}
+    for key in allowed_keys:
+        assert f"'{key}'" in source or f'"{key}"' in source, f"Expected metadata key '{key}' not found in migration"
+
+
 def test_no_authenticated_direct_clients_update_grants_exist() -> None:
     sql_sources = "\n".join(
         path.read_text(encoding="utf-8")

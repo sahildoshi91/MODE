@@ -181,6 +181,32 @@ class AccountDeletionServiceTests(unittest.TestCase):
         self.assertEqual(result.deleted_record_counts["sink:analytics_events:events_deleted"], 3)
         self.assertEqual(self.repo.rehome_calls, [("trainer-1", "tenant-self-guided")])
 
+        # trainer_assignment_events must be deleted by client_id for the deleting user's client_ids
+        assignment_events_calls = [
+            call for call in self.repo.deleted_many_calls
+            if call[0] == "trainer_assignment_events" and call[1] == "client_id"
+        ]
+        self.assertEqual(len(assignment_events_calls), 1)
+        self.assertEqual(set(assignment_events_calls[0][2]), {"client-1"})
+
+    def test_delete_account_does_not_delete_trainer_assignment_events_by_trainer_id(self):
+        # Trainer-only deletion must not purge assignment history by trainer_id.
+        self.repo.clients = []
+        self.repo.storage_ownership_paths = []
+        self.repo.deletion_counts[("mobile_analytics_events", "user_id", "user-123")] = 0
+
+        result = self.service.delete_account(user=self.user, confirmation="DELETE")
+
+        self.assertEqual(result.outcome, "succeeded")
+        self.assertEqual(result.actor_role, "trainer")
+
+        # No delete call targeting trainer_assignment_events by trainer_id
+        forbidden_calls = [
+            call for call in self.repo.deleted_many_calls
+            if call[0] == "trainer_assignment_events" and call[1] == "trainer_id"
+        ]
+        self.assertEqual(forbidden_calls, [])
+
     def test_delete_account_fails_when_live_schema_has_unknown_table(self):
         self.repo.live_tables.add("future_personal_data_table")
 
