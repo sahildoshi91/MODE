@@ -84,3 +84,31 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+  - type: cron
+    runtime: python
+    name: mode-storage-cleanup-staging
+    repo: https://github.com/sahildoshi91/MODE
+    branch: pr6-ai-chat-memory-scaling
+    rootDir: backend
+    region: oregon
+    plan: starter
+    schedule: "*/15 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python scripts/storage_orphan_cleanup.py --run-source scheduled --expected-interval-minutes 15
+    envVars:
+      - key: APP_ENV
+        value: staging
+      - key: REDIS_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false

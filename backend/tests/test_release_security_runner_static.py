@@ -140,18 +140,18 @@ def test_release_security_runner_prints_grouped_missing_env_sections_on_no_go() 
 
 def test_release_security_runner_preflight_only_command_supports_env_file() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
-        env_path = Path(tmpdir) / ".env.release"
+        env_path = Path(tmpdir) / ".env.staging"
         env_path.write_text(
             "\n".join(
                 [
                     "# comment",
-                    'APP_ENV="production"',
+                    'APP_ENV="staging"',
                     "SUPABASE_URL='https://example.supabase.co'",
                     "SUPABASE_ANON_KEY=test-anon",
                     "SUPABASE_SERVICE_ROLE_KEY=test-service",
                     "MODE_SECURITY_DATABASE_URL=postgresql://example-user:example-pass@example-host:5432/postgres",
                     "EXPO_PUBLIC_SUPABASE_URL=https://example.supabase.co",
-                    "EXPO_PUBLIC_API_BASE_URL=https://api.example.com",
+                    "EXPO_PUBLIC_API_BASE_URL=https://mode-backend-staging.onrender.com",
                 ]
             )
             + "\n",
@@ -177,3 +177,55 @@ def test_release_security_runner_preflight_only_command_supports_env_file() -> N
     assert completed.returncode == 0
     assert "Loaded env file:" in completed.stdout
     assert "| Environment validation | PASS |" in completed.stdout
+
+
+def test_local_mode_accepts_staging_app_env() -> None:
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "APP_ENV": "staging",
+        "EXPO_PUBLIC_API_BASE_URL": "https://mode-backend-staging.onrender.com",
+    }
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT_PATH), "--local", "--only", "environment"],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert "| Environment validation | PASS |" in completed.stdout, completed.stdout
+
+
+def test_local_mode_rejects_fabricated_staging_api_url() -> None:
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "APP_ENV": "staging",
+        "EXPO_PUBLIC_API_BASE_URL": "https://my-staging-clone.example.com",
+    }
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT_PATH), "--local", "--only", "environment"],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 1
+    assert "EXPO_PUBLIC_API_BASE_URL in local mode must be https://mode-backend-staging.onrender.com" in completed.stdout
+
+
+def test_release_mode_rejects_staging_app_env() -> None:
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "APP_ENV": "staging",
+    }
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT_PATH), "--only", "environment"],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 1
+    assert "APP_ENV must be production" in completed.stdout

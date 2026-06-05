@@ -24,8 +24,8 @@ jobs:
     permissions:
       contents: read
     env:
-      APP_ENV: development
-      OPENAI_API_KEY: test-openai-key
+      APP_ENV: staging
+      EXPO_PUBLIC_API_BASE_URL: https://mode-backend-staging.onrender.com
       EXPO_PUBLIC_SUPABASE_REDIRECT_URL: mode://auth/callback
       MODE_STORAGE_ORPHAN_THRESHOLD: "0"
       MODE_STORAGE_CLEANUP_MAX_HEARTBEAT_AGE_MINUTES: "30"
@@ -56,7 +56,6 @@ jobs:
       - name: Run local release security runner
         env:
           APP_ENV: staging
-          EXPO_PUBLIC_API_BASE_URL: ${{ secrets.EXPO_PUBLIC_API_BASE_URL }}
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           MODE_SECURITY_DATABASE_URL: ${{ secrets.MODE_SECURITY_DATABASE_URL }}
           RATE_LIMIT_BACKEND: ${{ secrets.RATE_LIMIT_BACKEND }}

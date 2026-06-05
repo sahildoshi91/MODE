@@ -372,6 +372,15 @@ def gate_environment_validation(ctx: RunnerContext, result: GateResult) -> None:
     app_env = _env("APP_ENV").lower()
     if not ctx.local_mode and app_env not in {"prod", "production"}:
         result.fail("APP_ENV must be production (or prod) in release mode")
+    elif ctx.local_mode and app_env and app_env != "staging":
+        result.fail(f"APP_ENV must be staging in local mode (got: {app_env})")
+
+    if ctx.local_mode:
+        api_base_url = _env("EXPO_PUBLIC_API_BASE_URL")
+        if api_base_url and api_base_url.lower().strip() != "https://mode-backend-staging.onrender.com":
+            result.fail(
+                "EXPO_PUBLIC_API_BASE_URL in local mode must be https://mode-backend-staging.onrender.com"
+            )
 
     for row in required_specs:
         if not isinstance(row, dict):
@@ -386,17 +395,18 @@ def gate_environment_validation(ctx: RunnerContext, result: GateResult) -> None:
         if bool(row.get("must_be_https")) and not value.lower().startswith("https://"):
             result.fail(f"{name} must use https")
 
-        tokens = row.get("disallow_host_tokens")
-        if isinstance(tokens, list):
-            normalized_tokens = [str(token).strip().lower() for token in tokens if str(token).strip()]
-            if _has_host_token(value, normalized_tokens):
-                result.fail(f"{name} points to staging/local/LAN host token")
+        if not ctx.local_mode:
+            tokens = row.get("disallow_host_tokens")
+            if isinstance(tokens, list):
+                normalized_tokens = [str(token).strip().lower() for token in tokens if str(token).strip()]
+                if _has_host_token(value, normalized_tokens):
+                    result.fail(f"{name} points to staging/local/LAN host token")
 
-        allowed_values = row.get("allowed_values")
-        if isinstance(allowed_values, list) and allowed_values:
-            normalized_allowed = {str(item).strip().lower() for item in allowed_values if str(item).strip()}
-            if normalized_allowed and str(value).strip().lower() not in normalized_allowed:
-                result.fail(f"{name} has disallowed value")
+            allowed_values = row.get("allowed_values")
+            if isinstance(allowed_values, list) and allowed_values:
+                normalized_allowed = {str(item).strip().lower() for item in allowed_values if str(item).strip()}
+                if normalized_allowed and str(value).strip().lower() not in normalized_allowed:
+                    result.fail(f"{name} has disallowed value")
 
     forbidden_client_envs = schema_payload.get("forbidden_client_env_vars") if isinstance(schema_payload, dict) else []
     if isinstance(forbidden_client_envs, list):
