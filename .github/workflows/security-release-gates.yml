@@ -50,6 +50,8 @@ jobs:
           python -m pip install -r backend/requirements.txt pytest
 
       - name: Run static and unit security regression gates
+        env:
+          AUTH_PASSWORD_PROXY_ENABLED: "true"
         run: |
           cd backend
           PYTHON_BIN=python PYTEST_BIN=pytest ./scripts/security_regression_suite.sh

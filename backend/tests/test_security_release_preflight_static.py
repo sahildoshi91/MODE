@@ -6,6 +6,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "security_release_preflight.py"
+WORKFLOW_PATH = REPO_ROOT.parent / ".github" / "workflows" / "security-release-gates.yml"
 
 
 def test_security_release_preflight_script_exists() -> None:
@@ -22,6 +23,15 @@ def test_security_release_preflight_contains_required_guards() -> None:
     assert "APP_ENV is required and must be set to production" in source
     assert "account_deletion_contract_enforced must be true in production" in source
     assert "personal_data_inventory_path must be configured in production" in source
+
+
+def test_ci_workflow_sets_auth_password_proxy_enabled_for_regression_step() -> None:
+    assert WORKFLOW_PATH.exists(), "Expected security-release-gates.yml to exist"
+    source = WORKFLOW_PATH.read_text(encoding="utf-8")
+    assert 'AUTH_PASSWORD_PROXY_ENABLED: "true"' in source, (
+        "security-release-gates.yml must set AUTH_PASSWORD_PROXY_ENABLED: \"true\" "
+        "on the regression gate step so the production preflight passes in CI"
+    )
 
 
 def test_security_release_preflight_development_mode_runs() -> None:
