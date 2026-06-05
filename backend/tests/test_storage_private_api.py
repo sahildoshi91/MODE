@@ -286,7 +286,9 @@ class StoragePrivateApiTests(unittest.TestCase):
             "max_size": settings.storage_max_file_size_bytes,
             "allowed_ext": settings.storage_allowed_extensions,
             "allowed_mime": settings.storage_allowed_mime_types,
+            "rate_limit_backend": settings.rate_limit_backend,
         }
+        settings.rate_limit_backend = "memory"
         _rate_limiter._windows.clear()
 
         settings.storage_private_bucket = "private-user-files"
@@ -330,6 +332,7 @@ class StoragePrivateApiTests(unittest.TestCase):
         settings.storage_max_file_size_bytes = self.original["max_size"]
         settings.storage_allowed_extensions = self.original["allowed_ext"]
         settings.storage_allowed_mime_types = self.original["allowed_mime"]
+        settings.rate_limit_backend = self.original["rate_limit_backend"]
         app.dependency_overrides.clear()
         _rate_limiter._windows.clear()
 
