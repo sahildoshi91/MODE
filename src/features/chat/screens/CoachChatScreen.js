@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
@@ -7,6 +8,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
@@ -612,6 +614,7 @@ export default function CoachChatScreen({
   bottomInset = 0,
   onBack = null,
   topToolbar = null,
+  onTrainerOnboardingCompletePress = null,
 }) {
   const [draft, setDraft] = useState('');
   const [dockHeight, setDockHeight] = useState(0);
@@ -643,10 +646,14 @@ export default function CoachChatScreen({
   const [memoryClientError, setMemoryClientError] = useState(null);
   const [selectedMemoryClientId, setSelectedMemoryClientId] = useState(null);
   const [pendingMemorySave, setPendingMemorySave] = useState(null);
+  const [editingIndex, setEditingIndex] = useState(null);
+  const [editDraft, setEditDraft] = useState('');
+  const [isErrorBannerDismissed, setIsErrorBannerDismissed] = useState(false);
   const listRef = useRef(null);
   const pendingScrollRef = useRef(false);
   const pendingHistoryPrependRef = useRef(null);
   const copyFeedbackTimerRef = useRef(null);
+  const errorBannerTimerRef = useRef(null);
   const scrollTimeoutsRef = useRef([]);
   const seenMemorySuggestionHashesRef = useRef(new Set());
   const scrollMetricsRef = useRef({
@@ -667,16 +674,6 @@ export default function CoachChatScreen({
     [launchContext],
   );
   const resolvedMemoryClientId = activeLaunchClientId || selectedMemoryClientId;
-  const resolvedTrainerName = useMemo(() => {
-    const fromContext = launchContext?.trainer_name
-      || launchContext?.trainerName
-      || launchContext?.persona_name
-      || launchContext?.personaName;
-    if (typeof fromContext === 'string' && fromContext.trim().length > 0) {
-      return fromContext.trim();
-    }
-    return 'Your coach';
-  }, [launchContext]);
 
   const {
     messages,
@@ -695,6 +692,25 @@ export default function CoachChatScreen({
     retryFailedRequest,
   } = useChatConversation(accessToken, launchContext);
 
+  const resolvedTrainerName = useMemo(() => {
+    if (launchContext?.entrypoint === 'trainer_agent_training' && Array.isArray(messages)) {
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const agentName = messages[i]?.profilePatch?.trainer_onboarding?.identity?.agent_name;
+        if (typeof agentName === 'string' && agentName.trim().length > 0) {
+          return agentName.trim();
+        }
+      }
+    }
+    const fromContext = launchContext?.trainer_name
+      || launchContext?.trainerName
+      || launchContext?.persona_name
+      || launchContext?.personaName;
+    if (typeof fromContext === 'string' && fromContext.trim().length > 0) {
+      return fromContext.trim();
+    }
+    return 'Your coach';
+  }, [launchContext, messages]);
+
   const isAwaitingTrainerEdit = useMemo(() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       const m = messages[i];
@@ -704,8 +720,65 @@ export default function CoachChatScreen({
     }
     return false;
   }, [messages]);
+
+  const isTrainerOnboardingComplete = useMemo(() => {
+    if (launchContext?.entrypoint !== 'trainer_agent_training') return false;
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (m?.role === 'assistant') {
+        return m?.profilePatch?.trainer_onboarding?.onboarding_status === 'completed';
+      }
+    }
+    return false;
+  }, [launchContext, messages]);
+
+  const latestCalibrationMessageId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (
+        m?.role === 'assistant'
+        && m?.profilePatch?.trainer_onboarding?.calibration_checklist
+        && typeof m.profilePatch.trainer_onboarding.calibration_checklist === 'object'
+      ) {
+        return m.id;
+      }
+    }
+    return null;
+  }, [messages]);
+
+  const effectiveQuickReplies = (latestCalibrationMessageId || isTrainerOnboardingComplete) ? [] : quickReplies;
+
   const breathingTransitionsEnabled = Boolean(BREATHING_TRANSITIONS_ENABLED);
   const shouldDisableComposer = isSending || isConversationInitializing;
+
+  const [isActivating, setIsActivating] = useState(false);
+  const glowOpacity = useRef(new Animated.Value(0.3)).current;
+  const glowAnimationRef = useRef(null);
+
+  useEffect(() => {
+    if (isTrainerOnboardingComplete) {
+      glowAnimationRef.current = Animated.loop(
+        Animated.sequence([
+          Animated.timing(glowOpacity, { toValue: 1, duration: 1400, useNativeDriver: true }),
+          Animated.timing(glowOpacity, { toValue: 0.3, duration: 1400, useNativeDriver: true }),
+        ]),
+      );
+      glowAnimationRef.current.start();
+    }
+    return () => {
+      glowAnimationRef.current?.stop();
+    };
+  }, [isTrainerOnboardingComplete, glowOpacity]);
+
+  const handleActivationPress = useCallback(async () => {
+    if (!onTrainerOnboardingCompletePress || isActivating) return;
+    setIsActivating(true);
+    try {
+      await onTrainerOnboardingCompletePress();
+    } finally {
+      setIsActivating(false);
+    }
+  }, [onTrainerOnboardingCompletePress, isActivating]);
 
   const updateScrollMetrics = useCallback((partial = {}) => {
     const current = scrollMetricsRef.current;
@@ -1211,6 +1284,8 @@ export default function CoachChatScreen({
   };
 
   const handleChecklistCommand = async (command) => {
+    setEditingIndex(null);
+    setEditDraft('');
     dismissMemoryCaptureOnNextMessage();
     queueAutoScroll();
     const sent = await sendMessage(command);
@@ -1235,6 +1310,9 @@ export default function CoachChatScreen({
   };
 
   const handleMessageLongPress = useCallback((item) => {
+    if (launchContext?.entrypoint === 'trainer_agent_training') {
+      return;
+    }
     if (!item?.id || typeof item?.text !== 'string') {
       return;
     }
@@ -1249,7 +1327,7 @@ export default function CoachChatScreen({
       confidence: null,
       defaultVisibility: 'ai_usable',
     });
-  }, [suggestMemoryForMessage]);
+  }, [suggestMemoryForMessage, launchContext]);
 
   const handleSelectMemoryClient = useCallback(async (clientId) => {
     const normalizedClientId = typeof clientId === 'string' ? clientId.trim() : '';
@@ -1316,6 +1394,9 @@ export default function CoachChatScreen({
     ) {
       return;
     }
+    if (launchContext?.entrypoint === 'trainer_agent_training') {
+      return;
+    }
     const knownMessageIds = new Set(messages.map((message) => message?.id).filter(Boolean));
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const candidateMessage = messages[index];
@@ -1332,9 +1413,6 @@ export default function CoachChatScreen({
           continue;
         }
         seenMemorySuggestionHashesRef.current.add(suggestionHash);
-        if (launchContext?.entrypoint === 'trainer_agent_training') {
-          continue;
-        }
         const resolvedAnchorId = (
           normalizedSuggestion.sourceMessageId
           && knownMessageIds.has(normalizedSuggestion.sourceMessageId)
@@ -1388,10 +1466,33 @@ export default function CoachChatScreen({
     };
   }, [keepCurrentViewportAboveComposer, restoreViewportAfterKeyboardHide]);
 
+  useEffect(() => {
+    if (hasRetryableFailure) {
+      setIsErrorBannerDismissed(false);
+      if (errorBannerTimerRef.current) {
+        clearTimeout(errorBannerTimerRef.current);
+      }
+      errorBannerTimerRef.current = setTimeout(() => {
+        setIsErrorBannerDismissed(true);
+        errorBannerTimerRef.current = null;
+      }, 5000);
+    } else {
+      setIsErrorBannerDismissed(false);
+      if (errorBannerTimerRef.current) {
+        clearTimeout(errorBannerTimerRef.current);
+        errorBannerTimerRef.current = null;
+      }
+    }
+  }, [hasRetryableFailure]);
+
   useEffect(() => () => {
     if (copyFeedbackTimerRef.current) {
       clearTimeout(copyFeedbackTimerRef.current);
       copyFeedbackTimerRef.current = null;
+    }
+    if (errorBannerTimerRef.current) {
+      clearTimeout(errorBannerTimerRef.current);
+      errorBannerTimerRef.current = null;
     }
     scrollTimeoutsRef.current.forEach((timeoutId) => clearTimeout(timeoutId));
     scrollTimeoutsRef.current = [];
@@ -1418,7 +1519,7 @@ export default function CoachChatScreen({
         isError={hasRetryableFailure}
         onBack={onBack}
       />
-      {hasRetryableFailure ? (
+      {hasRetryableFailure && !isErrorBannerDismissed ? (
         <View style={styles.notConnectedBar}>
           <ModeText variant="body3" style={styles.notConnectedText}>
             {error || 'Coach is unavailable right now'}
@@ -1453,6 +1554,18 @@ export default function CoachChatScreen({
             ]}
           >
             <ModeText variant="label" style={styles.notConnectedRetryText}>Copy error</ModeText>
+          </Pressable>
+          <Pressable
+            onPress={() => setIsErrorBannerDismissed(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss error"
+            testID="coach-chat-error-dismiss-button"
+            style={({ pressed }) => [
+              styles.notConnectedRetry,
+              pressed && styles.notConnectedRetryPressed,
+            ]}
+          >
+            <ModeText variant="label" style={styles.notConnectedRetryText}>✕</ModeText>
           </Pressable>
         </View>
       ) : null}
@@ -1497,10 +1610,6 @@ export default function CoachChatScreen({
                 && typeof item.profilePatch.trainer_onboarding === 'object'
                 ? item.profilePatch.trainer_onboarding
                 : null;
-              const stepPreview = trainerOnboardingPatch?.step_preview
-                && typeof trainerOnboardingPatch.step_preview === 'object'
-                ? trainerOnboardingPatch.step_preview
-                : null;
               const checklist = trainerOnboardingPatch?.calibration_checklist
                 && typeof trainerOnboardingPatch.calibration_checklist === 'object'
                 ? trainerOnboardingPatch.calibration_checklist
@@ -1525,6 +1634,7 @@ export default function CoachChatScreen({
                 && memoryCapture.phase === MEMORY_CAPTURE_PHASE.SAVED
               );
               const isOpening = isOpeningAssistantMessage(item);
+              const isLatestCalibration = Boolean(checklist) && item.id === latestCalibrationMessageId;
               return (
                 <View style={[styles.messageItem, { marginBottom: messageSpacing }]}>
                   <Pressable
@@ -1535,7 +1645,7 @@ export default function CoachChatScreen({
                     accessibilityLabel="Open message actions"
                     testID={`coach-chat-message-longpress-${item?.id || index}`}
                   >
-                    {isOpening ? (
+                    {isLatestCalibration ? null : isOpening ? (
                       <OpeningMessageSequence item={item} launchContext={launchContext} />
                     ) : item.role === 'user' ? (
                       <InlineBubbleUser
@@ -1557,12 +1667,12 @@ export default function CoachChatScreen({
                       </View>
                     ) : null}
                   </Pressable>
-                  {checklist ? (
+                  {isLatestCalibration ? (
                     <View style={styles.checklistCard}>
                       <View style={styles.checklistHeader}>
-                        <ModeText variant="label">Final calibration checklist</ModeText>
+                        <ModeText variant="label">Final calibration</ModeText>
                         <ModeText variant="caption" tone="tertiary">
-                          {`${approvedCount}/${totalCount} approved`}
+                          {`${approvedCount} of ${totalCount} approved`}
                         </ModeText>
                       </View>
                       {samples.map((sample, idx) => {
@@ -1570,61 +1680,125 @@ export default function CoachChatScreen({
                           ? Number(sample.index)
                           : (idx + 1);
                         const isApproved = String(sample?.status || '').toLowerCase() === 'approved';
+                        const isActive = Boolean(sample?.is_active);
+                        const isEditing = editingIndex === sampleIndex;
+                        const cleanedScenario = String(sample?.scenario || '').replace(/^Client says:\s*/i, '').trim();
                         return (
-                          <View key={`${item.id}-sample-${sampleIndex}`} style={styles.checklistItem}>
+                          <View
+                            key={`${item.id}-sample-${sampleIndex}`}
+                            style={[styles.checklistItem, isActive && styles.checklistItemActive]}
+                          >
+                            <ModeText variant="caption" tone="tertiary" style={styles.checklistSectionLabel}>
+                              Scenario
+                            </ModeText>
                             <ModeText variant="caption" tone="secondary" style={styles.checklistScenario}>
-                              {`${sampleIndex}. ${sample?.scenario || 'Scenario'}`}
+                              {cleanedScenario || 'Scenario'}
                             </ModeText>
-                            <ModeText variant="bodySm" style={styles.checklistResponse}>
-                              {sample?.response || ''}
+                            <View style={styles.checklistDivider} />
+                            <ModeText variant="caption" tone="tertiary" style={styles.checklistSectionLabel}>
+                              How your coach responds
                             </ModeText>
-                            <View style={styles.checklistActions}>
-                              <Pressable
-                                accessibilityRole="button"
-                                testID={`coach-chat-checklist-approve-${sampleIndex}`}
-                                onPress={() => handleChecklistCommand(`approve ${sampleIndex}`)}
-                                disabled={isSending || isApproved}
-                                style={({ pressed }) => [
-                                  styles.checklistActionButton,
-                                  styles.checklistApproveButton,
-                                  pressed && !isSending && !isApproved && styles.checklistActionButtonPressed,
-                                  (isSending || isApproved) && styles.checklistActionButtonMuted,
-                                ]}
-                              >
-                                <ModeText variant="caption" tone="accent">
-                                  {isApproved ? 'Approved' : 'Approve'}
+                            {isEditing ? (
+                              <View style={styles.checklistEditContainer}>
+                                <TextInput
+                                  testID={`coach-chat-checklist-edit-input-${sampleIndex}`}
+                                  style={styles.checklistEditInput}
+                                  value={editDraft}
+                                  onChangeText={setEditDraft}
+                                  placeholder={`Type your version for scenario ${sampleIndex}...`}
+                                  placeholderTextColor="rgba(155,175,210,0.45)"
+                                  multiline
+                                  autoFocus
+                                />
+                                <Pressable
+                                  accessibilityRole="button"
+                                  testID={`coach-chat-checklist-edit-send-${sampleIndex}`}
+                                  onPress={() => {
+                                    const text = editDraft.trim();
+                                    if (text) {
+                                      handleChecklistCommand(`edit ${sampleIndex}: ${text}`);
+                                    }
+                                  }}
+                                  disabled={isSending}
+                                  style={({ pressed }) => [
+                                    styles.checklistActionButton,
+                                    styles.checklistApproveButton,
+                                    pressed && !isSending && styles.checklistActionButtonPressed,
+                                    isSending && styles.checklistActionButtonMuted,
+                                  ]}
+                                >
+                                  <ModeText variant="caption" tone="accent">Send</ModeText>
+                                </Pressable>
+                              </View>
+                            ) : (
+                              <ModeText variant="bodySm" style={styles.checklistResponse}>
+                                {sample?.response || ''}
+                              </ModeText>
+                            )}
+                            {isApproved ? (
+                              <View style={styles.checklistApprovedBadge}>
+                                <ModeText variant="caption" tone="accent">Approved</ModeText>
+                              </View>
+                            ) : isActive && !isEditing ? (
+                              <>
+                                <ModeText variant="caption" tone="tertiary">
+                                  {`${approvedCount} of ${totalCount} — reviewing ${sampleIndex}`}
                                 </ModeText>
-                              </Pressable>
-                              <Pressable
-                                accessibilityRole="button"
-                                testID={`coach-chat-checklist-regenerate-${sampleIndex}`}
-                                onPress={() => handleChecklistCommand(`reject ${sampleIndex}`)}
-                                disabled={isSending}
-                                style={({ pressed }) => [
-                                  styles.checklistActionButton,
-                                  pressed && !isSending && styles.checklistActionButtonPressed,
-                                  isSending && styles.checklistActionButtonMuted,
-                                ]}
-                              >
-                                <ModeText variant="caption" tone="secondary">Regenerate</ModeText>
-                              </Pressable>
-                            </View>
+                                {sampleIndex === 1 && approvedCount === 0 ? (
+                                  <ModeText variant="caption" tone="tertiary">
+                                    Approve each response, edit it, or try again.
+                                  </ModeText>
+                                ) : null}
+                                <View style={styles.checklistActions}>
+                                  <Pressable
+                                    accessibilityRole="button"
+                                    testID={`coach-chat-checklist-approve-${sampleIndex}`}
+                                    onPress={() => handleChecklistCommand(`approve ${sampleIndex}`)}
+                                    disabled={isSending}
+                                    style={({ pressed }) => [
+                                      styles.checklistActionButton,
+                                      styles.checklistApproveButton,
+                                      pressed && !isSending && styles.checklistActionButtonPressed,
+                                      isSending && styles.checklistActionButtonMuted,
+                                    ]}
+                                  >
+                                    <ModeText variant="caption" tone="accent">Looks right</ModeText>
+                                  </Pressable>
+                                  <Pressable
+                                    accessibilityRole="button"
+                                    testID={`coach-chat-checklist-edit-${sampleIndex}`}
+                                    onPress={() => {
+                                      setEditingIndex(sampleIndex);
+                                      setEditDraft(String(sample?.response || ''));
+                                    }}
+                                    disabled={isSending}
+                                    style={({ pressed }) => [
+                                      styles.checklistActionButton,
+                                      pressed && !isSending && styles.checklistActionButtonPressed,
+                                      isSending && styles.checklistActionButtonMuted,
+                                    ]}
+                                  >
+                                    <ModeText variant="caption" tone="secondary">Edit</ModeText>
+                                  </Pressable>
+                                  <Pressable
+                                    accessibilityRole="button"
+                                    testID={`coach-chat-checklist-regenerate-${sampleIndex}`}
+                                    onPress={() => handleChecklistCommand(`reject ${sampleIndex}`)}
+                                    disabled={isSending}
+                                    style={({ pressed }) => [
+                                      styles.checklistActionButton,
+                                      pressed && !isSending && styles.checklistActionButtonPressed,
+                                      isSending && styles.checklistActionButtonMuted,
+                                    ]}
+                                  >
+                                    <ModeText variant="caption" tone="secondary">Try again</ModeText>
+                                  </Pressable>
+                                </View>
+                              </>
+                            ) : null}
                           </View>
                         );
                       })}
-                      <Pressable
-                        accessibilityRole="button"
-                        testID="coach-chat-checklist-approve-all"
-                        onPress={() => handleChecklistCommand('approve all')}
-                        disabled={isSending}
-                        style={({ pressed }) => [
-                          styles.checklistApproveAllButton,
-                          pressed && !isSending && styles.checklistActionButtonPressed,
-                          isSending && styles.checklistActionButtonMuted,
-                        ]}
-                      >
-                        <ModeText variant="caption" tone="accent">Approve all</ModeText>
-                      </Pressable>
                     </View>
                   ) : null}
                   {showMemorySuggestion ? (
@@ -1727,31 +1901,58 @@ export default function CoachChatScreen({
               style={styles.dockStack}
             >
               <QuickReplies
-                replies={quickReplies}
+                replies={effectiveQuickReplies}
                 disabled={shouldDisableComposer}
                 onSelect={handleQuickReply}
                 style={styles.quickReplies}
                 contentContainerStyle={styles.quickRepliesContent}
               />
-              <View style={styles.composerWrap}>
-                <CoachComposer
-                  value={draft}
-                  onChangeText={setDraft}
-                  onSend={handleSend}
-                  onCancel={cancelActiveResponse}
-                  isSending={isSending}
-                  onFocus={handleComposerFocus}
-                  disabled={shouldDisableComposer}
-                  placeholder={isAwaitingTrainerEdit ? "Type how you'd say it…" : `Ask ${resolvedTrainerName} anything...`}
-                />
-                <ModeText
-                  testID="coach-chat-ai-fitness-disclaimer"
-                  variant="body3"
-                  style={styles.composerDisclaimer}
-                >
-                  AI coaching · not medical advice
-                </ModeText>
-              </View>
+              {isTrainerOnboardingComplete ? (
+                <View style={styles.activationCard} testID="trainer-activation-card">
+                  <Animated.View style={[styles.activationGlow, { opacity: glowOpacity }]} />
+                  <ModeText variant="label" style={styles.activationHeading}>
+                    Your AI coach is ready.
+                  </ModeText>
+                  <ModeText variant="body3" style={styles.activationSub}>
+                    Everything you shared has been saved. Let&apos;s go.
+                  </ModeText>
+                  <Pressable
+                    testID="trainer-activation-cta"
+                    style={({ pressed }) => [
+                      styles.activationCTA,
+                      (shouldDisableComposer || isActivating) && styles.activationCTADisabled,
+                      pressed && styles.activationCTAPressed,
+                    ]}
+                    onPress={handleActivationPress}
+                    disabled={shouldDisableComposer || isActivating}
+                    accessibilityLabel="Launch Coach"
+                  >
+                    <ModeText variant="label" style={styles.activationCTALabel}>
+                      {isActivating ? 'Activating...' : 'Launch Coach'}
+                    </ModeText>
+                  </Pressable>
+                </View>
+              ) : (
+                <View style={styles.composerWrap}>
+                  <CoachComposer
+                    value={draft}
+                    onChangeText={setDraft}
+                    onSend={handleSend}
+                    onCancel={cancelActiveResponse}
+                    isSending={isSending}
+                    onFocus={handleComposerFocus}
+                    disabled={shouldDisableComposer}
+                    placeholder={isAwaitingTrainerEdit ? "Type how you'd say it…" : `Ask ${resolvedTrainerName} anything...`}
+                  />
+                  <ModeText
+                    testID="coach-chat-ai-fitness-disclaimer"
+                    variant="body3"
+                    style={styles.composerDisclaimer}
+                  >
+                    AI coaching · not medical advice
+                  </ModeText>
+                </View>
+              )}
             </View>
           </View>
         </View>
@@ -2419,22 +2620,46 @@ const styles = StyleSheet.create({
   },
   checklistItem: {
     borderRadius: theme.radii.s,
-    backgroundColor: 'rgba(223, 236, 255, 0.09)',
+    backgroundColor: 'rgba(223, 236, 255, 0.07)',
     paddingHorizontal: theme.spacing[2],
-    paddingVertical: theme.spacing[1],
-    gap: 6,
+    paddingVertical: theme.spacing[2],
+    gap: 8,
     overflow: 'hidden',
   },
+  checklistItemActive: {
+    backgroundColor: 'rgba(223, 236, 255, 0.11)',
+    borderWidth: 1,
+    borderColor: 'rgba(120, 170, 255, 0.2)',
+  },
+  checklistSectionLabel: {
+    letterSpacing: 0.5,
+    fontSize: 10,
+  },
+  checklistDivider: {
+    height: 1,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    marginVertical: 2,
+  },
   checklistScenario: {
-    fontWeight: '600',
+    lineHeight: 18,
   },
   checklistResponse: {
     lineHeight: 20,
+  },
+  checklistApprovedBadge: {
+    alignSelf: 'flex-start',
+    borderRadius: theme.radii.pill,
+    backgroundColor: theme.colors.accent.soft,
+    paddingHorizontal: theme.spacing[2],
+    paddingVertical: 3,
+    overflow: 'hidden',
   },
   checklistActions: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    marginTop: 2,
+    flexWrap: 'wrap',
   },
   checklistActionButton: {
     borderRadius: theme.radii.pill,
@@ -2453,14 +2678,21 @@ const styles = StyleSheet.create({
     opacity: theme.interaction.pressedOpacity,
     transform: [{ scale: theme.interaction.pressedScale }],
   },
-  checklistApproveAllButton: {
-    alignSelf: 'flex-start',
-    borderRadius: theme.radii.pill,
-    backgroundColor: theme.colors.accent.soft,
+  checklistEditContainer: {
+    gap: 6,
+  },
+  checklistEditInput: {
+    ...theme.typography.body2,
+    fontFamily: theme.typography.fontFamily,
+    color: theme.colors.text.primary,
+    borderRadius: theme.radii.s,
+    borderWidth: 1,
+    borderColor: 'rgba(120, 170, 255, 0.3)',
+    backgroundColor: 'rgba(10, 20, 38, 0.6)',
     paddingHorizontal: theme.spacing[2],
-    paddingVertical: 5,
-    marginTop: 2,
-    overflow: 'hidden',
+    paddingVertical: theme.spacing[1],
+    minHeight: 60,
+    textAlignVertical: 'top',
   },
   quickReplies: {
     marginBottom: theme.spacing[1],
@@ -2544,5 +2776,51 @@ const styles = StyleSheet.create({
     color: theme.colors.text.disabled,
     paddingBottom: 2,
     letterSpacing: 0.1,
+  },
+  activationCard: {
+    marginHorizontal: theme.spacing[2],
+    marginBottom: theme.spacing[2],
+    borderRadius: theme.radii.l,
+    backgroundColor: theme.colors.surface.overlay,
+    borderWidth: 1,
+    borderColor: theme.colors.border.subtle,
+    padding: theme.spacing[4],
+    alignItems: 'center',
+    gap: theme.spacing[2],
+    overflow: 'hidden',
+  },
+  activationGlow: {
+    position: 'absolute',
+    top: -36,
+    left: 0,
+    right: 0,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: theme.colors.accent.glow,
+  },
+  activationHeading: {
+    color: theme.colors.text.primary,
+    textAlign: 'center',
+  },
+  activationSub: {
+    color: theme.colors.text.secondary,
+    textAlign: 'center',
+  },
+  activationCTA: {
+    marginTop: theme.spacing[1],
+    paddingHorizontal: theme.spacing[5],
+    paddingVertical: theme.spacing[3],
+    borderRadius: theme.radii.pill,
+    backgroundColor: theme.colors.accent.primary,
+    alignItems: 'center',
+  },
+  activationCTADisabled: {
+    opacity: 0.45,
+  },
+  activationCTAPressed: {
+    opacity: theme.interaction.pressedOpacity,
+  },
+  activationCTALabel: {
+    color: theme.colors.text.inverse,
   },
 });

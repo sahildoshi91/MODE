@@ -25,7 +25,6 @@ import LiquidBottomNav, {
   NAV_BOTTOM_OFFSET,
   NAV_PILL_HEIGHT,
 } from '../features/navigation/components/LiquidBottomNav';
-import ClientOnboardingFlowScreen from '../features/onboarding/screens/ClientOnboardingFlowScreen';
 import ProductPreviewScreen from '../features/onboarding/screens/ProductPreviewScreen';
 import RoleSelectionScreen from '../features/onboarding/screens/RoleSelectionScreen';
 import TrainerOnboardingScreen from '../features/trainerOnboarding/screens/TrainerOnboardingScreen';
@@ -429,7 +428,7 @@ function buildTodayCheckinContext(source) {
   };
 }
 
-function _ClientOnboardingBridge({ accessToken, onComplete }) {
+function ClientOnboardingBridge({ accessToken, onComplete }) {
   const hasCalledRef = React.useRef(false);
 
   React.useEffect(() => {
@@ -1034,7 +1033,17 @@ function AppShell() {
       return APP_STATE.AUTHENTICATED_ROLE_UNKNOWN;
     }
     if (bootstrap.role === 'trainer' && !bootstrap.is_legacy_trainer) {
-      return APP_STATE.TRAINER_STUB;
+      const normalizedOnboardingStatus = typeof assignmentStatus?.trainer_onboarding_status === 'string'
+        ? assignmentStatus.trainer_onboarding_status.trim().toLowerCase()
+        : 'not_started';
+      const onboardingDone =
+        assignmentStatus?.trainer_onboarding_completed ||
+        normalizedOnboardingStatus === 'completed';
+      if (!onboardingDone) {
+        return APP_STATE.TRAINER_STUB;
+      }
+      // Completed non-legacy trainer: fall through to CLIENT_ACTIVE.
+      // isTrainerViewer=true (from assignmentStatus.viewer_role) → TrainerRouteHost renders.
     }
     if (bootstrap.role === 'client') {
       if (bootstrap.onboarding_complete) {
@@ -1046,7 +1055,7 @@ function AppShell() {
       return APP_STATE.CLIENT_ONBOARDING;
     }
     return APP_STATE.CLIENT_ACTIVE;
-  }, [session?.access_token, bootstrap]);
+  }, [session?.access_token, bootstrap, assignmentStatus]);
 
   const viewerRole = assignmentStatus?.viewer_role || (
     bootstrap?.role === 'trainer' && bootstrap?.is_legacy_trainer
@@ -1620,7 +1629,7 @@ function AppShell() {
 
   if (appState === APP_STATE.CLIENT_ONBOARDING || appState === APP_STATE.ONBOARDING_PARTIAL) {
     return (
-      <_ClientOnboardingBridge
+      <ClientOnboardingBridge
         accessToken={session.access_token}
         onComplete={(updatedBootstrap) => {
           setBootstrap(updatedBootstrap);
@@ -1631,29 +1640,13 @@ function AppShell() {
   }
 
   if (appState === APP_STATE.TRAINER_STUB) {
-    const onboardingDone =
-      assignmentStatus?.trainer_onboarding_completed ||
-      assignmentStatus?.trainer_onboarding_status === 'completed';
-
-    if (!onboardingDone) {
-      return (
-        <TrainerOnboardingScreen
-          accessToken={session.access_token}
-          assignmentStatus={assignmentStatus}
-          onOnboardingComplete={async () => {
-            await loadAssignmentStatus({ accessTokenOverride: session.access_token });
-          }}
-        />
-      );
-    }
-
-    // Onboarding complete but appState hasn't re-resolved yet —
-    // reload bootstrap so the trainer shell renders on the next cycle.
-    loadBootstrap({ accessToken: session.access_token });
     return (
-      <ShellLoadingState
-        title="Setting up your workspace"
-        subtitle="Your coach is live. Opening your dashboard."
+      <TrainerOnboardingScreen
+        accessToken={session.access_token}
+        assignmentStatus={assignmentStatus}
+        onOnboardingComplete={async () => {
+          await loadAssignmentStatus({ accessTokenOverride: session.access_token });
+        }}
       />
     );
   }

@@ -79,21 +79,9 @@ export default function TrainerOnboardingScreen({
     [assignmentStatus],
   );
 
-  // Called by CoachChatScreen when a profile_patch SSE event arrives.
-  // If CoachChatScreen does not yet expose onProfilePatchReceived, completion
-  // is caught via the parent's assignmentStatus refresh — this is a no-op.
-  const handleProfilePatch = useCallback(
-    (patch) => {
-      const onboardingPatch = patch?.trainer_onboarding;
-      if (!onboardingPatch) return;
-      if (onboardingPatch?.onboarding_status === 'completed') {
-        setTimeout(() => {
-          onOnboardingComplete?.();
-        }, 1800);
-      }
-    },
-    [onOnboardingComplete],
-  );
+  const handleActivation = useCallback(async () => {
+    await onOnboardingComplete?.();
+  }, [onOnboardingComplete]);
 
   const launchContext = useMemo(() => {
     const status = assignmentStatus?.trainer_onboarding_status || 'not_started';
@@ -111,7 +99,7 @@ export default function TrainerOnboardingScreen({
 
   return (
     <View style={styles.root}>
-      <View style={[styles.barWrap, { paddingTop: insets.top + 8 }]}>
+      <View style={[styles.barWrap, { paddingTop: Math.max(8, insets.top + 4) }]}>
         <OnboardingProgressBar progress={progress} />
       </View>
       <View style={styles.chatWrap}>
@@ -119,7 +107,7 @@ export default function TrainerOnboardingScreen({
           accessToken={accessToken}
           launchContext={launchContext}
           bottomInset={chatBottomInset}
-          onProfilePatchReceived={handleProfilePatch}
+          onTrainerOnboardingCompletePress={handleActivation}
         />
       </View>
     </View>
@@ -133,7 +121,8 @@ const styles = StyleSheet.create({
   },
   barWrap: {
     paddingHorizontal: 20,
-    paddingBottom: 10,
+    paddingBottom: 14,
+    flexShrink: 0,
   },
   track: {
     height: 2,

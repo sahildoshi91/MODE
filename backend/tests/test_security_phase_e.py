@@ -326,6 +326,18 @@ class SecurityPhaseETests(unittest.TestCase):
 
         self.assertEqual(exception_files, ["storage_private.py"])
 
+    def test_trainer_onboarding_reset_is_not_request_handler(self):
+        api_dir = Path(__file__).resolve().parents[1] / "app" / "api" / "v1"
+        violations = []
+        forbidden_markers = ("reset_trainer_onboarding", "trainer:onboarding:reset")
+        for path in sorted(api_dir.glob("*.py")):
+            source = path.read_text(encoding="utf-8")
+            for marker in forbidden_markers:
+                if marker in source:
+                    violations.append(f"{path.name}:{marker}")
+
+        self.assertEqual(violations, [])
+
     def test_storage_private_service_role_exception_is_documented(self):
         source = (Path(__file__).resolve().parents[1] / "app" / "api" / "v1" / "storage_private.py").read_text(
             encoding="utf-8"

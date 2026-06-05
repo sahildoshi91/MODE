@@ -402,6 +402,16 @@ class TrainerOnboardingService:
         overlay_profile = self._state_overlay_profile(profile, state)
 
         sample_review_state = progress.get("sample_review_state")
+        if sample_review_state == "pre_calibration_summary":
+            return self._handle_pre_calibration_summary_turn(
+                trainer_context,
+                profile,
+                state,
+                conversation_id=conversation_id,
+                source_message_id=source_message_id,
+                use_retrain_draft=use_retrain_draft,
+            )
+
         if sample_review_state in ("pending", "awaiting_edit"):
             return self._handle_sample_review_response(
                 trainer_context,
@@ -479,6 +489,7 @@ class TrainerOnboardingService:
                 completed_step="personal_touch_optional",
                 next_step="final_calibration",
             )
+            updated_progress["sample_review_state"] = "pre_calibration_summary"
             calibration_examples = self._generate_calibration_examples(overlay_profile)
             profile, state = self._persist_state_patch(
                 str(trainer_id),
@@ -503,7 +514,7 @@ class TrainerOnboardingService:
                 confidence_score=1.0,
             )
             del profile
-            return self._build_calibration_turn_result(state)
+            return self._build_pre_calibration_summary_result(state)
 
         patch, confidence = self._extract_patch(current_step, cleaned_message, overlay_profile)
         if patch:
@@ -599,6 +610,7 @@ class TrainerOnboardingService:
         updated_progress = self._advance_progress(progress, completed_step=current_step, next_step=next_step)
 
         if next_step == "final_calibration":
+            updated_progress["sample_review_state"] = "pre_calibration_summary"
             calibration_examples = self._generate_calibration_examples(overlay_profile)
             profile, state = self._persist_state_patch(
                 str(trainer_id),
@@ -623,7 +635,7 @@ class TrainerOnboardingService:
                 confidence_score=confidence,
             )
             del profile
-            return self._build_calibration_turn_result(state)
+            return self._build_pre_calibration_summary_result(state)
 
         profile, state = self._persist_state_patch(
             str(trainer_id),
@@ -784,7 +796,7 @@ class TrainerOnboardingService:
             updated_progress = self._advance_progress(
                 progress, completed_step=current_step, next_step="final_calibration",
             )
-            updated_progress.pop("sample_review_state", None)
+            updated_progress["sample_review_state"] = "pre_calibration_summary"
             profile, state = self._persist_state_patch(
                 trainer_id, profile, state,
                 {
@@ -797,7 +809,7 @@ class TrainerOnboardingService:
                 force_retrain_started=use_retrain_draft,
             )
             del profile
-            return self._build_calibration_turn_result(state)
+            return self._build_pre_calibration_summary_result(state)
 
         updated_progress = self._advance_progress(
             progress, completed_step=current_step, next_step=next_step,
@@ -949,11 +961,12 @@ class TrainerOnboardingService:
                 )
                 self._mirror_to_trainer_persona(trainer_context, completed_profile)
 
+            completed_identity = self._as_dict(completed_state.get("identity"))
+            agent_name = str(completed_identity.get("agent_name") or "Your coach").strip()
             return TrainerOnboardingTurnResult(
                 assistant_message=(
-                    f"Calibration confirmed: {len(calibration_examples)} of {len(calibration_examples)} samples approved.\n\n"
-                    "Your coaching profile is now live.\n"
-                    "Next: use Review coach settings to sanity-check output, or Retrain coach any time from Home."
+                    f"{agent_name} is live.\n\n"
+                    "Next: review coach settings or retrain from Home any time."
                 ),
                 quick_replies=["Review coach settings", "Retrain coach"],
                 current_stage="complete",
@@ -989,6 +1002,90 @@ class TrainerOnboardingService:
         )
         del profile
         return self._build_calibration_turn_result(state)
+
+    def _build_pre_calibration_summary_result(
+        self,
+        state: dict[str, Any],
+    ) -> TrainerOnboardingTurnResult:
+        progress = self._normalize_progress(state.get("onboarding_progress"))
+        identity = self._as_dict(state.get("identity"))
+        tone = self._as_dict(state.get("tone"))
+        decision_weights = self._as_dict(state.get("decision_weights"))
+        philosophy = self._as_dict(state.get("philosophy"))
+        boundaries = self._as_dict(state.get("boundaries"))
+
+        agent_name = str(identity.get("agent_name") or "Your coach").strip()
+        identity_summary = str(identity.get("summary") or "Not set yet").strip()
+        tone_summary = str(tone.get("style") or "Not set yet").strip()
+        philosophy_summary = str(philosophy.get("summary") or "Not set yet").strip()
+
+        ranked_factors = self._as_list(decision_weights.get("ranked_factors"))
+        decision_summary = ", ".join([str(f) for f in ranked_factors[:3]]) if ranked_factors else "not set yet"
+
+        hard_bounds = self._as_list(boundaries.get("hard"))
+        soft_bounds = self._as_list(boundaries.get("soft"))
+        hard_summary = str(hard_bounds[0]) if hard_bounds else "not set"
+        soft_summary = str(soft_bounds[0]) if soft_bounds else "not set"
+
+        lines = [
+            f"Steps 1-7 locked in. Here is {agent_name}'s profile:",
+            f"Identity: {identity_summary}",
+            f"Voice: {tone_summary}",
+            f"Priorities: {decision_summary}",
+            f"Philosophy: {philosophy_summary}",
+            f"Hard boundary: {hard_summary}",
+            f"Soft boundary: {soft_summary}",
+            "",
+            "One step left: approve 3 sample responses to confirm the voice is right.",
+        ]
+        return TrainerOnboardingTurnResult(
+            assistant_message="\n".join(lines),
+            quick_replies=["Let's do it"],
+            current_stage="final_calibration",
+            onboarding_complete=False,
+            onboarding_status=ONBOARDING_STATUS_CALIBRATION_PENDING,
+            onboarding_progress=progress,
+            calibration_pending=True,
+            profile_patch=self._build_onboarding_profile_patch(
+                identity=identity if identity.get("agent_name") else None,
+            ),
+        )
+
+    def _handle_pre_calibration_summary_turn(
+        self,
+        trainer_context: TrainerContext,
+        profile: dict[str, Any],
+        state: dict[str, Any],
+        *,
+        conversation_id: str,
+        source_message_id: str | None,
+        use_retrain_draft: bool,
+    ) -> TrainerOnboardingTurnResult:
+        trainer_id = str(trainer_context.trainer_id or "")
+        progress = self._normalize_progress(state.get("onboarding_progress"))
+        updated_progress = {k: v for k, v in progress.items() if k != "sample_review_state"}
+        _profile, updated_state = self._persist_state_patch(
+            trainer_id,
+            profile,
+            state,
+            {
+                "onboarding_status": ONBOARDING_STATUS_CALIBRATION_PENDING,
+                "onboarding_progress": updated_progress,
+            },
+            use_retrain_draft=use_retrain_draft,
+            force_retrain_started=use_retrain_draft,
+        )
+        self._create_event(
+            trainer_context,
+            conversation_id=conversation_id,
+            source_message_id=source_message_id,
+            step_key="final_calibration",
+            action_type="captured",
+            extracted_patch={"summary_acknowledged": True},
+            confidence_score=1.0,
+        )
+        del _profile
+        return self._build_calibration_turn_result(updated_state)
 
     def _build_review_turn_result(self, trainer_context: TrainerContext, profile: dict[str, Any]) -> TrainerOnboardingTurnResult:
         active_state = self._state_from_profile(profile, use_retrain_draft=False)
@@ -1136,22 +1233,11 @@ class TrainerOnboardingService:
         progress = self._normalize_progress(state.get("onboarding_progress"))
         calibration_examples = self._normalize_calibration_examples(state.get("calibration_examples"))
         calibration_checklist = self._build_calibration_checklist_payload(calibration_examples)
-        examples_copy = []
-        for index, sample in enumerate(calibration_examples, start=1):
-            response_text = str(sample.get("response") or "").strip()
-            status = str(sample.get("status") or "pending")
-            examples_copy.append(
-                f"{index}. {sample.get('scenario')}\nResponse: {response_text}\nStatus: {status}"
-            )
-        assistant_message = (
-            "Step 8 of 8: Final Calibration\n"
-            "Approve each sample so your coach goes live with the right voice. "
-            "Use the checklist actions below or reply with 'approve all', 'approve 1', 'reject 1', 'regenerate', or 'edit 1: <your version>'.\n\n"
-            + "\n\n".join(examples_copy)
-        )
+        identity = self._as_dict(state.get("identity"))
+        assistant_message = "Step 8 of 8: Final Calibration\nApprove each sample to set your coach's voice."
         return TrainerOnboardingTurnResult(
             assistant_message=assistant_message,
-            quick_replies=["Approve all", "Approve 1", "Reject 1", "Regenerate"],
+            quick_replies=[],
             current_stage="final_calibration",
             onboarding_complete=False,
             onboarding_status=ONBOARDING_STATUS_CALIBRATION_PENDING,
@@ -1160,6 +1246,7 @@ class TrainerOnboardingService:
             profile_patch=self._build_onboarding_profile_patch(
                 step_preview=step_preview,
                 calibration_checklist=calibration_checklist,
+                identity=identity if identity.get("agent_name") else None,
             ),
         )
 
@@ -1169,6 +1256,7 @@ class TrainerOnboardingService:
         step_preview: dict[str, Any] | None = None,
         calibration_checklist: dict[str, Any] | None = None,
         sample_review_state: str | None = None,
+        identity: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         trainer_payload: dict[str, Any] = {}
         if step_preview:
@@ -1177,26 +1265,41 @@ class TrainerOnboardingService:
             trainer_payload["calibration_checklist"] = calibration_checklist
         if sample_review_state:
             trainer_payload["sample_review_state"] = sample_review_state
+        if identity:
+            trainer_payload["identity"] = identity
         if not trainer_payload:
             return {}
         return {"trainer_onboarding": trainer_payload}
 
     def _build_calibration_checklist_payload(self, calibration_examples: list[dict[str, Any]]) -> dict[str, Any]:
         approved_count = sum(1 for item in calibration_examples if str(item.get("status") or "").lower() == "approved")
-        samples = [
-            {
-                "index": index,
-                "id": str(sample.get("id") or f"sample_{index}"),
-                "scenario": str(sample.get("scenario") or "Scenario not set"),
-                "response": str(sample.get("response") or ""),
-                "status": str(sample.get("status") or "pending").lower(),
-                "generation_source": str(sample.get("generation_source") or "template_fallback"),
-            }
-            for index, sample in enumerate(calibration_examples, start=1)
-        ]
+        first_pending_idx: int | None = None
+        for idx, sample in enumerate(calibration_examples):
+            if str(sample.get("status") or "pending").lower() != "approved":
+                first_pending_idx = idx
+                break
+        samples = []
+        for index, sample in enumerate(calibration_examples, start=1):
+            status = str(sample.get("status") or "pending").lower()
+            is_approved = status == "approved"
+            is_active = first_pending_idx is not None and (index - 1) == first_pending_idx
+            if not is_approved and not is_active:
+                continue
+            samples.append(
+                {
+                    "index": index,
+                    "id": str(sample.get("id") or f"sample_{index}"),
+                    "scenario": str(sample.get("scenario") or "Scenario not set"),
+                    "response": str(sample.get("response") or ""),
+                    "status": status,
+                    "generation_source": str(sample.get("generation_source") or "template_fallback"),
+                    "is_active": is_active,
+                }
+            )
         return {
             "approved_count": approved_count,
             "total": len(calibration_examples),
+            "visible_count": len(samples),
             "samples": samples,
             "commands": {
                 "approve": "approve <n>",

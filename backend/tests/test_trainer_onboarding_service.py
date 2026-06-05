@@ -251,7 +251,7 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
         )
         self.assertEqual(decision_weights["rank_extraction_method"], "ordered_text")
 
-    def test_skip_optional_personal_touch_enters_calibration_pending(self):
+    def test_skip_optional_personal_touch_enters_pre_calibration_summary(self):
         self._turn("Coach Nova")
         self._step_and_advance("Supportive but direct with high accountability", source_message_id="msg-2")
         self._step_and_advance("Warm and concise. Avoid passive language.", source_message_id="msg-3")
@@ -266,8 +266,11 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
         self.assertEqual(result.onboarding_status, ONBOARDING_STATUS_CALIBRATION_PENDING)
         self.assertEqual(profile["onboarding_status"], ONBOARDING_STATUS_CALIBRATION_PENDING)
         self.assertTrue(profile["calibration_examples"])
-        self.assertIn("Regenerate", result.quick_replies)
-        self.assertNotIn("Edit 1:", result.quick_replies)
+        self.assertEqual(result.quick_replies, ["Let's do it"])
+        self.assertEqual(
+            result.onboarding_progress.get("sample_review_state"), "pre_calibration_summary"
+        )
+        self.assertEqual(result.onboarding_progress.get("current_step"), "final_calibration")
         self.assertEqual(self.repository.events[-1]["action_type"], "skipped")
 
     def test_final_calibration_approve_all_completes_and_mirrors_persona(self):
@@ -277,9 +280,10 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
         self._step_and_advance("Prioritize pain, then sleep, stress, and schedule.", source_message_id="msg-4")
         self._step_and_advance("Consistency first. Technique before load. Never skip form.", source_message_id="msg-5")
         self._step_and_advance("Hard: no pain chasing; Soft: reduce volume on high stress.", source_message_id="msg-6")
-        self._turn("skip", source_message_id="msg-7")
+        self._turn("skip", source_message_id="msg-7")  # personal touch skip → summary
+        self._turn("let's do it", source_message_id="msg-8")  # summary acknowledgement → calibration
 
-        result = self._turn("approve all", source_message_id="msg-8")
+        result = self._turn("approve all", source_message_id="msg-9")
         profile = self.repository.get_profile("trainer-123")
         persona = self.persona_repository.default_persona
 
@@ -349,14 +353,21 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
         self._step_and_advance("Prioritize pain, then sleep, stress, and schedule.", source_message_id="msg-4")
         self._step_and_advance("Consistency first. Technique before load. Never skip form.", source_message_id="msg-5")
         self._step_and_advance("Hard: no pain chasing; Guardrail: regress if pain rises; Soft: reduce volume on high stress.", source_message_id="msg-6")
-        step8 = self._turn("skip", source_message_id="msg-7")
-        post_approve = self._turn("approve 1", source_message_id="msg-8")
+        self._turn("skip", source_message_id="msg-7")  # personal touch skip → summary (no checklist)
+        step8 = self._turn("let's do it", source_message_id="msg-8")  # summary acknowledgement → calibration
+        post_approve = self._turn("approve 1", source_message_id="msg-9")
 
         initial_checklist = step8.profile_patch.get("trainer_onboarding", {}).get("calibration_checklist", {})
         followup_checklist = post_approve.profile_patch.get("trainer_onboarding", {}).get("calibration_checklist", {})
         self.assertEqual(initial_checklist.get("total"), 3)
-        self.assertEqual(len(initial_checklist.get("samples", [])), 3)
+        self.assertEqual(initial_checklist.get("visible_count"), 1)
+        self.assertEqual(len(initial_checklist.get("samples", [])), 1)
+        self.assertTrue(initial_checklist["samples"][0]["is_active"])
+        self.assertEqual(initial_checklist["samples"][0]["index"], 1)
         self.assertEqual(followup_checklist.get("approved_count"), 1)
+        self.assertEqual(len(followup_checklist.get("samples", [])), 2)
+        self.assertFalse(followup_checklist["samples"][0]["is_active"])
+        self.assertTrue(followup_checklist["samples"][1]["is_active"])
 
     def test_calibration_examples_use_llm_responses_when_available(self):
         fake_llm = FakeOpenAIClient(
@@ -399,6 +410,105 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
         self.assertEqual(result.current_stage, "voice_calibration")
         self.assertIn("Reopened Voice Calibration", result.assistant_message)
         self.assertEqual(self.repository.events[-1]["action_type"], "edited")
+
+    def _reach_personal_touch(self):
+        """Advance through steps 1-6 and return at personal_touch_optional."""
+        self._turn("Coach Nova")
+        self._step_and_advance("Supportive but direct with high accountability", source_message_id="msg-2")
+        self._step_and_advance("Warm and concise. Avoid passive language.", source_message_id="msg-3")
+        self._step_and_advance("Prioritize pain, then sleep, stress, and schedule.", source_message_id="msg-4")
+        self._step_and_advance("Consistency first. Technique before load. Never skip form.", source_message_id="msg-5")
+        self._step_and_advance("Hard: no pain chasing; Guardrail: reduce if pain rises; Soft: shorten on stress.", source_message_id="msg-6")
+
+    def test_step7_sample_approval_returns_summary_before_calibration(self):
+        self._reach_personal_touch()
+        # Answer personal_touch_optional → sample review → approve → pre_calibration_summary
+        result = self._turn("I use the phrase: small wins compound daily.", source_message_id="msg-7")
+        self.assertEqual(result.onboarding_progress.get("sample_review_state"), "pending")
+        summary = self._turn("yeah, that's me")
+
+        self.assertEqual(summary.current_stage, "final_calibration")
+        self.assertEqual(summary.onboarding_progress.get("sample_review_state"), "pre_calibration_summary")
+        self.assertEqual(summary.onboarding_progress.get("current_step"), "final_calibration")
+        self.assertTrue(summary.calibration_pending)
+        self.assertEqual(summary.quick_replies, ["Let's do it"])
+
+    def test_pre_calibration_summary_acknowledgement_returns_calibration(self):
+        self._reach_personal_touch()
+        self._turn("skip this", source_message_id="msg-7")  # → summary
+
+        calibration = self._turn("Let's do it", source_message_id="msg-8")
+
+        self.assertEqual(calibration.current_stage, "final_calibration")
+        self.assertIsNone(calibration.onboarding_progress.get("sample_review_state"))
+        self.assertTrue(calibration.calibration_pending)
+        self.assertEqual(calibration.quick_replies, [])
+        self.assertIn("Step 8", calibration.assistant_message)
+
+    def test_calibration_assistant_text_is_short_framing_only(self):
+        self._reach_personal_touch()
+        self._turn("skip", source_message_id="msg-7")
+        result = self._turn("Let's do it", source_message_id="msg-8")
+
+        self.assertIn("Step 8 of 8: Final Calibration", result.assistant_message)
+        self.assertNotRegex(result.assistant_message, r"1\.\s+Client says")
+        self.assertNotIn("Status:", result.assistant_message)
+
+    def test_calibration_quick_replies_empty(self):
+        self._reach_personal_touch()
+        self._turn("skip", source_message_id="msg-7")
+        result = self._turn("Let's do it", source_message_id="msg-8")
+
+        self.assertEqual(result.quick_replies, [])
+
+    def test_completion_message_includes_agent_name(self):
+        self._reach_personal_touch()
+        self._turn("skip", source_message_id="msg-7")
+        self._turn("let's do it", source_message_id="msg-8")
+
+        result = self._turn("approve all", source_message_id="msg-9")
+
+        self.assertEqual(result.current_stage, "complete")
+        self.assertIn("Coach Nova is live", result.assistant_message)
+
+    def test_calibration_initial_checklist_shows_first_pending_only(self):
+        self._reach_personal_touch()
+        self._turn("skip", source_message_id="msg-7")
+        step8 = self._turn("let's do it", source_message_id="msg-8")
+
+        checklist = step8.profile_patch.get("trainer_onboarding", {}).get("calibration_checklist", {})
+        self.assertEqual(checklist.get("total"), 3)
+        self.assertEqual(checklist.get("visible_count"), 1)
+        samples = checklist.get("samples", [])
+        self.assertEqual(len(samples), 1)
+        self.assertEqual(samples[0]["index"], 1)
+        self.assertTrue(samples[0]["is_active"])
+
+    def test_calibration_approve_first_sample_reveals_second(self):
+        self._reach_personal_touch()
+        self._turn("skip", source_message_id="msg-7")
+        self._turn("let's do it", source_message_id="msg-8")
+        result = self._turn("approve 1", source_message_id="msg-9")
+
+        checklist = result.profile_patch.get("trainer_onboarding", {}).get("calibration_checklist", {})
+        samples = checklist.get("samples", [])
+        self.assertEqual(len(samples), 2)
+        self.assertEqual(samples[0]["index"], 1)
+        self.assertFalse(samples[0]["is_active"])
+        self.assertEqual(samples[1]["index"], 2)
+        self.assertTrue(samples[1]["is_active"])
+
+    def test_sample_review_pending_and_awaiting_edit_still_work(self):
+        # Verify existing pending/awaiting_edit routing is unaffected by pre_calibration_summary
+        self._turn("Coach Nova")
+        result = self._turn("Supportive but direct with high accountability", source_message_id="msg-2")
+        self.assertEqual(result.onboarding_progress.get("sample_review_state"), "pending")
+
+        edit_result = self._turn("I'd say it differently")
+        self.assertEqual(edit_result.onboarding_progress.get("sample_review_state"), "awaiting_edit")
+
+        advanced = self._turn("I'd say: build trust with warmth and hold the line with facts.")
+        self.assertEqual(advanced.current_stage, "voice_calibration")
 
     def test_review_launch_does_not_fail_when_event_persistence_breaks(self):
         noisy_repository = EventFailureTrainerOnboardingRepository()

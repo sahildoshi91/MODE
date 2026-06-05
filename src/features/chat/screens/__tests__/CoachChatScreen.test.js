@@ -363,7 +363,7 @@ describe('CoachChatScreen', () => {
     });
   });
 
-  it('sends checklist command messages from calibration controls', async () => {
+  it('sends approve and reject commands from active calibration card; no approve-all button', async () => {
     mockUseChatConversation.mockReturnValue({
       messages: [
         {
@@ -373,8 +373,9 @@ describe('CoachChatScreen', () => {
           profilePatch: {
             trainer_onboarding: {
               calibration_checklist: {
-                approved_count: 1,
-                total: 2,
+                approved_count: 0,
+                total: 3,
+                visible_count: 1,
                 samples: [
                   {
                     index: 1,
@@ -382,6 +383,7 @@ describe('CoachChatScreen', () => {
                     scenario: 'Client says: I am exhausted.',
                     response: 'We can still stack a small win today.',
                     status: 'pending',
+                    is_active: true,
                   },
                 ],
               },
@@ -403,17 +405,17 @@ describe('CoachChatScreen', () => {
 
     const approveOne = tree.root.findByProps({ testID: 'coach-chat-checklist-approve-1' });
     const regenerateOne = tree.root.findByProps({ testID: 'coach-chat-checklist-regenerate-1' });
-    const approveAll = tree.root.findByProps({ testID: 'coach-chat-checklist-approve-all' });
+    expect(tree.root.findAllByProps({ testID: 'coach-chat-checklist-approve-all' })).toHaveLength(0);
 
     await act(async () => {
       await approveOne.props.onPress();
+    });
+    await act(async () => {
       await regenerateOne.props.onPress();
-      await approveAll.props.onPress();
     });
 
     expect(mockSendMessage).toHaveBeenNthCalledWith(1, 'approve 1');
     expect(mockSendMessage).toHaveBeenNthCalledWith(2, 'reject 1');
-    expect(mockSendMessage).toHaveBeenNthCalledWith(3, 'approve all');
     expect(global.requestAnimationFrame).toHaveBeenCalled();
     await act(async () => {
       tree.unmount();
@@ -733,6 +735,431 @@ describe('CoachChatScreen', () => {
     });
   });
 
+  function makeCalibrationMessage({ samples } = {}) {
+    return {
+      id: 'assistant-calibration-1',
+      role: 'assistant',
+      text: 'Step 8 of 8: Final Calibration',
+      profilePatch: {
+        trainer_onboarding: {
+          calibration_checklist: {
+            approved_count: 0,
+            total: 3,
+            visible_count: 1,
+            samples: samples || [
+              {
+                index: 1,
+                id: 'sample_1',
+                scenario: 'Client says: I am exhausted.',
+                response: 'We can still stack a small win today.',
+                status: 'pending',
+                is_active: true,
+              },
+            ],
+          },
+        },
+      },
+    };
+  }
+
+  it('edit button enters edit mode with correct placeholder and send commits edit command', async () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [makeCalibrationMessage()],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+
+    const editButton = tree.root.findByProps({ testID: 'coach-chat-checklist-edit-1' });
+    act(() => {
+      editButton.props.onPress();
+    });
+
+    const editInput = tree.root.findByProps({ testID: 'coach-chat-checklist-edit-input-1' });
+    expect(editInput.props.placeholder).toBe('Type your version for scenario 1...');
+
+    act(() => {
+      editInput.props.onChangeText('Here is my version of the response.');
+    });
+
+    const sendButton = tree.root.findByProps({ testID: 'coach-chat-checklist-edit-send-1' });
+    await act(async () => {
+      await sendButton.props.onPress();
+    });
+
+    expect(mockSendMessage).toHaveBeenCalledWith('edit 1: Here is my version of the response.');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('sending an edit clears edit mode; approve and try-again also clear via handleChecklistCommand', async () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [makeCalibrationMessage()],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+
+    // Enter edit mode via the Edit button
+    const editButton = tree.root.findByProps({ testID: 'coach-chat-checklist-edit-1' });
+    act(() => {
+      editButton.props.onPress();
+    });
+
+    // Edit input is now visible
+    const editInput = tree.root.findByProps({ testID: 'coach-chat-checklist-edit-input-1' });
+    expect(editInput).toBeTruthy();
+
+    // Fill in text and send — this calls handleChecklistCommand which clears editingIndex
+    act(() => {
+      editInput.props.onChangeText('My version of the response.');
+    });
+    const sendButton = tree.root.findByProps({ testID: 'coach-chat-checklist-edit-send-1' });
+    await act(async () => {
+      await sendButton.props.onPress();
+    });
+
+    // Edit input is gone after send
+    expect(tree.root.findAllByProps({ testID: 'coach-chat-checklist-edit-input-1' })).toHaveLength(0);
+    // Action buttons (Looks right, Try again) are visible again
+    expect(tree.root.findByProps({ testID: 'coach-chat-checklist-approve-1' })).toBeTruthy();
+
+    // "Looks right" sends approve command; handleChecklistCommand also clears editingIndex
+    await act(async () => {
+      tree.root.findByProps({ testID: 'coach-chat-checklist-approve-1' }).props.onPress();
+    });
+    expect(mockSendMessage).toHaveBeenCalledWith(expect.stringContaining('approve 1'));
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('header shows agent name from profilePatch during trainer onboarding', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        {
+          id: 'assistant-welcome-1',
+          role: 'assistant',
+          text: 'Welcome',
+          profilePatch: {
+            trainer_onboarding: {
+              identity: { agent_name: 'Coach Nova' },
+            },
+          },
+        },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen({
+      launchContext: { entrypoint: 'trainer_agent_training' },
+    });
+
+    // The composer placeholder uses resolvedTrainerName — a reliable way to
+    // verify the agent name from profilePatch reached the rendered output.
+    const composer = tree.root.findByType('MockCoachComposer');
+    expect(composer.props.placeholder).toContain('Coach Nova');
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('latest calibration message renders only the checklist card, not the AI bubble text', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [makeCalibrationMessage()],
+      quickReplies: ['Quick option'],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+
+    // The checklist card is present
+    expect(tree.root.findAllByProps({ testID: 'coach-chat-checklist-approve-1' }).length).toBeGreaterThan(0);
+
+    // The normal AI bubble text is NOT rendered inside the message pressable
+    const messagePressable = tree.root.findByProps({
+      testID: 'coach-chat-message-longpress-assistant-calibration-1',
+    });
+    const bubbleTexts = messagePressable.findAllByProps({ children: 'Step 8 of 8: Final Calibration' });
+    expect(bubbleTexts).toHaveLength(0);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('older calibration message renders a text bubble only; only the latest checklist renders cards', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        {
+          id: 'assistant-calibration-old',
+          role: 'assistant',
+          text: 'Earlier calibration pass',
+          profilePatch: {
+            trainer_onboarding: {
+              calibration_checklist: {
+                approved_count: 0,
+                total: 3,
+                visible_count: 1,
+                samples: [
+                  {
+                    index: 1,
+                    id: 'old_sample_1',
+                    scenario: 'Old scenario',
+                    response: 'Old response',
+                    status: 'pending',
+                    is_active: true,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        makeCalibrationMessage(),
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+
+    // Only the latest calibration message shows checklist action buttons
+    expect(tree.root.findAllByProps({ testID: 'coach-chat-checklist-approve-1' }).length).toBeGreaterThan(0);
+
+    // The older calibration message does NOT render checklist cards (no approve button anchored there)
+    // Verify: no approve button with testID anchored to old sample (old message has no card)
+    // The old message pressable should contain the text bubble, not an approve button
+    const oldPressable = tree.root.findByProps({
+      testID: 'coach-chat-message-longpress-assistant-calibration-old',
+    });
+    expect(oldPressable.findAllByProps({ testID: 'coach-chat-checklist-approve-1' })).toHaveLength(0);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('strips "Client says:" prefix from scenario text', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        {
+          id: 'assistant-calibration-1',
+          role: 'assistant',
+          text: 'Step 8 of 8: Final Calibration',
+          profilePatch: {
+            trainer_onboarding: {
+              calibration_checklist: {
+                approved_count: 0,
+                total: 1,
+                visible_count: 1,
+                samples: [
+                  {
+                    index: 1,
+                    scenario: 'Client says: I am exhausted.',
+                    response: 'We can still stack a small win today.',
+                    status: 'pending',
+                    is_active: true,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+
+    // Stripped text is rendered
+    const stripped = tree.root.findAllByProps({ children: 'I am exhausted.' });
+    expect(stripped.length).toBeGreaterThan(0);
+
+    // The raw prefixed version is not rendered
+    const raw = tree.root.findAllByProps({ children: 'Client says: I am exhausted.' });
+    expect(raw).toHaveLength(0);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('suppresses quick replies when a calibration checklist is present', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [makeCalibrationMessage()],
+      quickReplies: ['Option A', 'Option B'],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+
+    const quickRepliesComponent = tree.root.findByType('MockQuickReplies');
+    expect(quickRepliesComponent.props.replies).toEqual([]);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('active calibration card shows counter line and first-card hint for sample 1 with 0 approved', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [makeCalibrationMessage()],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+
+    // Counter line
+    const counterLines = tree.root.findAllByProps({ children: '0 of 3 — reviewing 1' });
+    expect(counterLines.length).toBeGreaterThan(0);
+
+    // First-card hint
+    const hints = tree.root.findAllByProps({ children: 'Approve each response, edit it, or try again.' });
+    expect(hints.length).toBeGreaterThan(0);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('suppresses memory suggestions for calibration messages during trainer onboarding', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        {
+          id: 'assistant-calibration-mem-1',
+          role: 'assistant',
+          text: 'Step 8 of 8: Final Calibration',
+          profilePatch: {
+            trainer_onboarding: {
+              calibration_checklist: {
+                approved_count: 0,
+                total: 3,
+                visible_count: 1,
+                samples: [{ index: 1, scenario: 'S', response: 'R', status: 'pending', is_active: true }],
+              },
+            },
+          },
+          memorySuggestions: [
+            {
+              suggested_text: 'Client is exhausted',
+              confidence: 0.92,
+              source_message_id: 'assistant-calibration-mem-1',
+              detected_category: 'constraint',
+              default_visibility: 'ai_usable',
+            },
+          ],
+        },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen({
+      launchContext: { entrypoint: 'trainer_agent_training' },
+    });
+
+    expect(tree.root.findAllByProps({ testID: 'coach-chat-memory-suggestion-save' })).toHaveLength(0);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('error banner shows dismiss button and hides on press', async () => {
+    const tree = renderScreen();
+
+    const dismissButton = tree.root.findByProps({ testID: 'coach-chat-error-dismiss-button' });
+    expect(dismissButton).toBeTruthy();
+
+    // Banner is visible before dismiss
+    expect(tree.root.findAllByProps({ testID: 'coach-chat-retry-button' }).length).toBeGreaterThan(0);
+
+    act(() => {
+      dismissButton.props.onPress();
+    });
+
+    // Banner is gone after dismiss
+    expect(tree.root.findAllByProps({ testID: 'coach-chat-retry-button' })).toHaveLength(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('error banner auto-dismisses after 5 seconds', async () => {
+    jest.useFakeTimers();
+    const tree = renderScreen();
+
+    // Banner is visible initially
+    expect(tree.root.findAllByProps({ testID: 'coach-chat-retry-button' }).length).toBeGreaterThan(0);
+
+    act(() => {
+      jest.advanceTimersByTime(5000);
+    });
+
+    // Banner hidden after timeout
+    expect(tree.root.findAllByProps({ testID: 'coach-chat-retry-button' })).toHaveLength(0);
+
+    await act(async () => {
+      tree.unmount();
+    });
+    jest.useRealTimers();
+  });
+
   it('still scrolls to latest when sending from the composer', async () => {
     mockUseChatConversation.mockReturnValue({
       messages: [
@@ -769,6 +1196,159 @@ describe('CoachChatScreen', () => {
     expect(global.requestAnimationFrame).toHaveBeenCalled();
 
     await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('shows activation card when last assistant message signals onboarding_status completed', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        {
+          id: 'assistant-done-1',
+          role: 'assistant',
+          text: "Your AI coach is set up.",
+          profilePatch: {
+            trainer_onboarding: {
+              onboarding_status: 'completed',
+            },
+          },
+        },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen({
+      launchContext: { entrypoint: 'trainer_agent_training' },
+    });
+
+    expect(tree.root.findAllByProps({ testID: 'trainer-activation-card' }).length).toBeGreaterThanOrEqual(1);
+    expect(tree.root.findAllByType('MockCoachComposer').length).toBe(0);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('pressing the activation CTA calls onTrainerOnboardingCompletePress', async () => {
+    const mockOnComplete = jest.fn().mockResolvedValue(undefined);
+
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        {
+          id: 'assistant-done-2',
+          role: 'assistant',
+          text: "Your AI coach is set up.",
+          profilePatch: {
+            trainer_onboarding: {
+              onboarding_status: 'completed',
+            },
+          },
+        },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    let tree;
+    act(() => {
+      tree = renderer.create(
+        <CoachChatScreen
+          accessToken="trainer-token"
+          launchContext={{ entrypoint: 'trainer_agent_training' }}
+          onTrainerOnboardingCompletePress={mockOnComplete}
+        />,
+      );
+    });
+
+    const cta = tree.root.findByProps({ testID: 'trainer-activation-cta' });
+    await act(async () => {
+      await cta.props.onPress?.();
+    });
+
+    expect(mockOnComplete).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('does not show activation card when onboarding_status is not completed', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        {
+          id: 'assistant-progress-1',
+          role: 'assistant',
+          text: "Let's keep going.",
+          profilePatch: {
+            trainer_onboarding: {
+              onboarding_status: 'in_progress',
+            },
+          },
+        },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen({
+      launchContext: { entrypoint: 'trainer_agent_training' },
+    });
+
+    expect(tree.root.findAllByProps({ testID: 'trainer-activation-card' }).length).toBe(0);
+    expect(tree.root.findAllByType('MockCoachComposer').length).toBe(1);
+
+    act(() => {
+      tree.unmount();
+    });
+  });
+
+  it('does not show activation card when entrypoint is not trainer_agent_training', () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        {
+          id: 'assistant-done-client-1',
+          role: 'assistant',
+          text: "Great session.",
+          profilePatch: {
+            trainer_onboarding: {
+              onboarding_status: 'completed',
+            },
+          },
+        },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen({
+      launchContext: { entrypoint: 'post_checkin' },
+    });
+
+    expect(tree.root.findAllByProps({ testID: 'trainer-activation-card' }).length).toBe(0);
+    expect(tree.root.findAllByType('MockCoachComposer').length).toBe(1);
+
+    act(() => {
       tree.unmount();
     });
   });

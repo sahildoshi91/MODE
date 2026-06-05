@@ -83,7 +83,7 @@ def invalidate_trainer_context_cache(user_id: str) -> None:
     try:
         from app.modules.conversation.cache import get_chat_cache
 
-        get_chat_cache().delete(_trainer_context_shared_cache_key(normalized_user_id))
+        get_chat_cache().delete(trainer_context_shared_cache_key(normalized_user_id))
     except Exception:
         return
 
@@ -110,8 +110,12 @@ def _set_cached_trainer_context(user_id: str, context: TrainerContext) -> None:
     )
 
 
-def _trainer_context_shared_cache_key(user_id: str) -> str:
+def trainer_context_shared_cache_key(user_id: str) -> str:
     return f"mode:tenant_context:{user_id}"
+
+
+def _trainer_context_shared_cache_key(user_id: str) -> str:
+    return trainer_context_shared_cache_key(user_id)
 
 
 def _get_trainer_context_lock(user_id: str) -> threading.Lock:
