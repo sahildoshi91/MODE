@@ -21,3 +21,4 @@ __pycache__/
 
 # macOS / editor noise
 .DS_Store
+dist-web-share/
