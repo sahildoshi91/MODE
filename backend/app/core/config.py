@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -119,6 +119,11 @@ class Settings(BaseSettings):
         "clients,trainers,conversations,conversation_messages,coach_memory,trainer_invite_codes"
     )
     production_block_staging_supabase_hosts: str = "staging,localhost,127.0.0.1"
+
+    @field_validator("openai_api_key", "anthropic_api_key", "gemini_api_key", mode="before")
+    @classmethod
+    def _strip_api_key(cls, v: str | None) -> str | None:
+        return v.strip() if isinstance(v, str) else v
 
     model_config = SettingsConfigDict(
         env_file=(".env", "../.env", "backend/.env"),

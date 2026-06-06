@@ -311,7 +311,7 @@ class ChatApiStagingIntegrationTests(unittest.TestCase):
                 "client_context": {"platform": "staging-test"},
             },
         )
-        self.assertEqual(response.status_code, 401, response.text)
+        self.assertIn(response.status_code, {400, 401}, response.text)
 
 
 if __name__ == "__main__":

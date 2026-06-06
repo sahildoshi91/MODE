@@ -456,6 +456,13 @@ def get_ai_feedback_logger_service(
     return AIFeedbackService(repository, atlas_observer_service=atlas_observer_service)
 
 
+def get_internal_ai_feedback_logger_service() -> AIFeedbackService:
+    # Internal-only: uses the service-role client to write AI output logs.
+    # Must not be injected into user-facing route handlers — only used inside
+    # internal service factories (e.g. _build_conversation_service_for_request).
+    return AIFeedbackService(AIFeedbackRepository(get_supabase_admin_client()))
+
+
 def get_trainer_intelligence_repository(
     supabase: Client = Depends(get_request_scoped_supabase_client),
 ) -> TrainerIntelligenceRepository:
@@ -590,7 +597,7 @@ def get_conversation_service(
     trainer_review_service: TrainerReviewService = Depends(get_trainer_review_service),
     trainer_persona_repository: TrainerPersonaRepository = Depends(get_trainer_persona_repository),
     trainer_onboarding_service: TrainerOnboardingService = Depends(get_trainer_onboarding_service),
-    ai_feedback_logger_service: AIFeedbackService = Depends(get_ai_feedback_logger_service),
+    ai_feedback_logger_service: AIFeedbackService = Depends(get_internal_ai_feedback_logger_service),
     trainer_intelligence_service: TrainerIntelligenceService = Depends(get_trainer_intelligence_service),
 ) -> ConversationService:
     return ConversationService(
@@ -630,7 +637,7 @@ def _build_conversation_service_for_request(request: Request, user: Authenticate
         ),
         trainer_persona_repository,
         trainer_onboarding_service=trainer_onboarding_service,
-        ai_feedback_logger_service=ai_feedback_service,
+        ai_feedback_logger_service=get_internal_ai_feedback_logger_service(),
         trainer_intelligence_service=TrainerIntelligenceService(TrainerIntelligenceRepository(supabase)),
     )
 
