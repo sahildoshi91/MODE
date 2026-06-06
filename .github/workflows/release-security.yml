@@ -73,6 +73,7 @@ jobs:
           APP_ENV: staging
           EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
           MODE_SECURITY_DATABASE_URL: ${{ secrets.MODE_SECURITY_DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           RATE_LIMIT_BACKEND: redis
           REDIS_URL: redis://localhost:6379/0
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
