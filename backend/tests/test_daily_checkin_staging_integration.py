@@ -1,3 +1,4 @@
+import json as _json
 import os
 import sys
 import unittest
@@ -12,8 +13,61 @@ from supabase import create_client
 from supabase.lib.client_options import SyncClientOptions
 
 from app.core.config import settings
+from app.core.dependencies import get_daily_checkin_service
 from app.db.client import get_supabase_admin_client, get_supabase_user_client
 from app.main import app
+from app.modules.daily_checkins.repository import DailyCheckinRepository
+from app.modules.daily_checkins.service import DailyCheckinService
+from app.modules.profile.repository import ProfileRepository
+from app.modules.profile.service import ProfileService
+
+
+class FakeDailyCheckinLlm:
+    """Returns deterministic plan JSON without hitting OpenAI, so CI never needs a real API key."""
+
+    def create_chat_completion(self, model, messages):
+        system = next(
+            (m.get("content", "") for m in messages if m.get("role") == "system"),
+            "",
+        )
+        if "nutrition" in system:
+            return _json.dumps({
+                "title": "Build Day Nutrition",
+                "totalCalories": 2000,
+                "totalProtein": 150,
+                "meals": [
+                    {
+                        "name": "Breakfast",
+                        "timing": "Morning",
+                        "emoji": "🍳",
+                        "foods": [{"name": "Eggs", "amount": "3 eggs", "calories": 210, "protein": 18}],
+                        "totalCalories": 210,
+                        "totalProtein": 18,
+                    }
+                ],
+                "coachNote": "Start the day with protein to fuel recovery.",
+            })
+        return _json.dumps({
+            "title": "Build Day Workout",
+            "type": "strength",
+            "difficulty": "intermediate",
+            "durationMinutes": 30,
+            "description": "A solid build-day strength session.",
+            "warmup": [{"name": "Light Jog", "duration": "5 min", "description": "Warm up your legs."}],
+            "exercises": [
+                {
+                    "name": "Goblet Squat",
+                    "sets": 3,
+                    "reps": "10",
+                    "rest": "60s",
+                    "muscleGroup": "legs",
+                    "description": "Hold a weight at chest and squat.",
+                    "coachTip": "Keep your chest up.",
+                }
+            ],
+            "cooldown": [{"name": "Hamstring Stretch", "duration": "2 min", "description": "Stretch the hamstrings."}],
+            "coachNote": "Stay steady today. Build mode means controlled effort.",
+        })
 
 
 def _staging_env_ready() -> bool:
@@ -107,8 +161,19 @@ class DailyCheckinStagingIntegrationTests(unittest.TestCase):
 
         cls.client_access_token = cls._sign_in_and_get_access_token(cls.client_user["email"])
 
+        def _fake_checkin_service():
+            user_supabase = get_supabase_user_client(cls.client_access_token)
+            repo = DailyCheckinRepository(user_supabase)
+            profile_repo = ProfileRepository(user_supabase)
+            profile_svc = ProfileService(profile_repo, delete_repository=profile_repo)
+            return DailyCheckinService(repo, profile_service=profile_svc, llm_client=FakeDailyCheckinLlm())
+
+        app.dependency_overrides[get_daily_checkin_service] = _fake_checkin_service
+
     @classmethod
     def tearDownClass(cls):
+        app.dependency_overrides.pop(get_daily_checkin_service, None)
+
         if cls.tenant_id:
             cls.admin.table("tenants").delete().eq("id", cls.tenant_id).execute()
 
