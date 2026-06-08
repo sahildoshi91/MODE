@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from supabase import create_client
 from supabase.lib.client_options import SyncClientOptions
 
-from app.ai.client import GeminiCompletion, TokenUsage
+from app.ai.client import GeminiCompletion, TextCompletion, TokenUsage
 from app.core.config import settings
 from app.db.client import get_supabase_admin_client, get_supabase_user_client
 from app.main import app
@@ -45,6 +45,20 @@ class FakeGeminiClient:
         yield "Staging "
         yield "integration "
         yield "response"
+
+
+class FakeOpenAIClient:
+    def create_chat_completion_with_usage(self, model, messages, **kwargs):
+        del model, messages, kwargs
+        return TextCompletion(
+            text="Staging integration response",
+            token_usage=TokenUsage(
+                prompt_tokens=31,
+                completion_tokens=11,
+                total_tokens=42,
+                thoughts_tokens=0,
+            ),
+        )
 
 
 @unittest.skipUnless(
@@ -177,11 +191,12 @@ class ChatApiStagingIntegrationTests(unittest.TestCase):
 
     def _chat(self, access_token, payload):
         with patch("app.modules.conversation.service.get_cached_gemini_client", return_value=FakeGeminiClient()):
-            return self.client.post(
-                "/api/v1/chat",
-                json=payload,
-                headers={"Authorization": f"Bearer {access_token}"},
-            )
+            with patch("app.modules.conversation.service.get_cached_openai_client", return_value=FakeOpenAIClient()):
+                return self.client.post(
+                    "/api/v1/chat",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
 
     def _create_or_continue_conversation(self):
         response = self._chat(
