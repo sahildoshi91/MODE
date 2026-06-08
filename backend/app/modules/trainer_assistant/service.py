@@ -720,6 +720,7 @@ class TrainerAssistantService:
                 raise RuntimeError("openai_client_unavailable")
             completion = self.openai_client.create_chat_completion_with_usage(
                 model=model,
+                response_format="json",
                 messages=[
                     {"role": "system", "content": prompt.system_prompt},
                     {"role": "user", "content": prompt.user_prompt},

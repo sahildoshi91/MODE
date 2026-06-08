@@ -38,7 +38,7 @@ class OpenAIClientTests(unittest.TestCase):
         self.assertIs(second, fake_client)
         openai_client_cls.assert_called_once()
 
-    def test_create_chat_completion_uses_supported_sdk_client(self):
+    def test_create_chat_completion_explicit_json_mode_sends_json_object_format(self):
         fake_response = FakeOpenAIResponse('{"title":"Builder"}')
         create_mock = unittest.mock.Mock(return_value=fake_response)
         fake_sdk_client = SimpleNamespace(
@@ -52,6 +52,7 @@ class OpenAIClientTests(unittest.TestCase):
             completion = client.create_chat_completion_with_usage(
                 model="gpt-5.4-mini",
                 messages=[{"role": "user", "content": "Return JSON"}],
+                response_format="json",
             )
 
         openai_cls.assert_called_once()
@@ -63,7 +64,7 @@ class OpenAIClientTests(unittest.TestCase):
         self.assertEqual(completion.text, '{"title":"Builder"}')
         self.assertEqual(completion.token_usage.total_tokens, 18)
 
-    def test_create_chat_completion_plain_text_is_opt_in(self):
+    def test_create_chat_completion_defaults_to_plain_text(self):
         fake_response = FakeOpenAIResponse("Build day - 18/25.")
         create_mock = unittest.mock.Mock(return_value=fake_response)
         fake_sdk_client = SimpleNamespace(
@@ -77,7 +78,6 @@ class OpenAIClientTests(unittest.TestCase):
             completion = client.create_chat_completion_with_usage(
                 model="gpt-5.4-mini",
                 messages=[{"role": "user", "content": "Return plain text"}],
-                response_format="text",
                 max_output_tokens=200,
                 temperature=0.7,
             )

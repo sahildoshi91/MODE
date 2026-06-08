@@ -1845,6 +1845,7 @@ class ChatSessionService:
         try:
             completion = openai_client.create_chat_completion_with_usage(
                 model=TRAINER_FLAG_REVIEW_LLM_MODEL,
+                response_format="json",
                 messages=[
                     {
                         "role": "system",

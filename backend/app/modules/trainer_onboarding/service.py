@@ -1754,6 +1754,7 @@ class TrainerOnboardingService:
         try:
             completion = self.openai_client.create_chat_completion_with_usage(
                 model=GPT_5_4_MINI_MODEL,
+                response_format="json",
                 messages=[
                     {
                         "role": "system",

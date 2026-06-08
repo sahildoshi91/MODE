@@ -157,7 +157,7 @@ class OpenAIClient:
         messages: list[dict[str, str]],
         *,
         max_output_tokens: int | None = None,
-        response_format: str = "json",
+        response_format: str = "text",
         temperature: float | None = None,
     ) -> TextCompletion:
         _ensure_llm_provider_enabled()
