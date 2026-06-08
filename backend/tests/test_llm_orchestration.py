@@ -134,6 +134,16 @@ class LLMOrchestrationTests(unittest.TestCase):
         self.assertEqual(completion.text, "ok")
         self.assertEqual(client.calls[0]["max_output_tokens"], 321)
 
+    def test_chat_completion_uses_text_response_format(self):
+        service = ConversationService.__new__(ConversationService)
+        client = RecordingOpenAIClient()
+        service.openai_client = client
+        prompt = PromptPackage(system_prompt="system", user_prompt="user")
+
+        service._execute_provider_model("openai", "gpt-5.4", prompt)
+
+        self.assertEqual(client.calls[0].get("response_format"), "text")
+
     def test_fallback_fires_on_primary_timeout(self):
         service = ConversationService.__new__(ConversationService)
         prompt = PromptPackage(

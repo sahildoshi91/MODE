@@ -1716,6 +1716,7 @@ class ConversationService:
                     model=api_model,
                     messages=messages,
                     max_output_tokens=max_output_tokens,
+                    response_format="text",
                 )
             except TypeError:
                 return openai_client.create_chat_completion_with_usage(
