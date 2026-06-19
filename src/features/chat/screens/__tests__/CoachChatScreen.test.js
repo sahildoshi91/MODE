@@ -1283,6 +1283,49 @@ describe('CoachChatScreen', () => {
     });
   });
 
+  it('auto-calls onTrainerOnboardingCompletePress when onboarding_status completed without button press', async () => {
+    const mockOnComplete = jest.fn().mockResolvedValue(undefined);
+
+    mockUseChatConversation.mockReturnValue({
+      messages: [
+        {
+          id: 'assistant-done-auto',
+          role: 'assistant',
+          text: "Coach Nova is live.",
+          profilePatch: {
+            trainer_onboarding: {
+              onboarding_status: 'completed',
+            },
+          },
+        },
+      ],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(
+        <CoachChatScreen
+          accessToken="trainer-token"
+          launchContext={{ entrypoint: 'trainer_agent_training' }}
+          onTrainerOnboardingCompletePress={mockOnComplete}
+        />,
+      );
+    });
+
+    expect(mockOnComplete).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('does not show activation card when onboarding_status is not completed', () => {
     mockUseChatConversation.mockReturnValue({
       messages: [

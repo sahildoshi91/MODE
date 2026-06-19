@@ -121,7 +121,11 @@ def provider_fallback_chain(route: RoutingDecision) -> list[ProviderAttempt]:
     is_safety_escalation = route_name == "SAFETY_ESCALATION" or route.flow == "safety_escalation"
 
     attempts = [primary]
-    if is_deep_path or is_safety_escalation:
+    # Safety escalation fails closed — no fallback to other providers or models.
+    if is_safety_escalation:
+        return [primary]
+
+    if is_deep_path:
         attempts.insert(0, ProviderAttempt("openai", GPT_5_5_MODEL))
         attempts.append(ProviderAttempt("openai", GPT_5_4_MODEL))
         attempts.append(ProviderAttempt("anthropic", CLAUDE_SONNET_4_6_MODEL))

@@ -24,6 +24,7 @@ export default function TrainerRouteHost({
   assignmentStatus,
   session,
   onOpenTrainerCoach,
+  onTrainerOnboardingActivated = null,
   onSignOut,
 }) {
   const resolvedTab = resolveTrainerTab(activeTab);
@@ -44,6 +45,7 @@ export default function TrainerRouteHost({
           trainerOnboardingStatus={assignmentStatus?.trainer_onboarding_status || 'not_started'}
           trainerOnboardingCompletedSteps={assignmentStatus?.trainer_onboarding_completed_steps ?? 0}
           onOpenTrainerCoach={onOpenTrainerCoach}
+          onTrainerOnboardingActivated={onTrainerOnboardingActivated}
         />
       );
     }

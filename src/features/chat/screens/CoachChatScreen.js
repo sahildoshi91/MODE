@@ -754,6 +754,7 @@ export default function CoachChatScreen({
   const [isActivating, setIsActivating] = useState(false);
   const glowOpacity = useRef(new Animated.Value(0.3)).current;
   const glowAnimationRef = useRef(null);
+  const hasAutoTransitionedRef = useRef(false);
 
   useEffect(() => {
     if (isTrainerOnboardingComplete) {
@@ -769,6 +770,13 @@ export default function CoachChatScreen({
       glowAnimationRef.current?.stop();
     };
   }, [isTrainerOnboardingComplete, glowOpacity]);
+
+  useEffect(() => {
+    if (isTrainerOnboardingComplete && onTrainerOnboardingCompletePress && !hasAutoTransitionedRef.current) {
+      hasAutoTransitionedRef.current = true;
+      onTrainerOnboardingCompletePress();
+    }
+  }, [isTrainerOnboardingComplete, onTrainerOnboardingCompletePress]);
 
   const handleActivationPress = useCallback(async () => {
     if (!onTrainerOnboardingCompletePress || isActivating) return;

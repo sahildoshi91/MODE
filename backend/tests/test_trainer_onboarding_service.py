@@ -296,13 +296,17 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
         self.assertEqual(persona["persona_name"], "Coach Nova")
         self.assertTrue(persona["onboarding_preferences"]["trainer_onboarding_completed"])
         self.assertEqual(self.repository.events[-1]["action_type"], "approved")
+        self.assertEqual(
+            result.profile_patch.get("trainer_onboarding", {}).get("onboarding_status"),
+            ONBOARDING_STATUS_COMPLETED,
+        )
 
     def test_voice_step_prompt_uses_plain_language_examples(self):
         self._turn("Coach Nova")
         result = self._step_and_advance("Supportive and direct when anxiety spikes", source_message_id="msg-2")
 
         self.assertEqual(result.current_stage, "voice_calibration")
-        self.assertIn("how should the coach sound", result.assistant_message.lower())
+        self.assertIn("how should you sound", result.assistant_message.lower())
         self.assertIn("examples: calm, direct, encouraging", result.assistant_message.lower())
         self.assertIn("examples: harsh, shaming", result.assistant_message.lower())
         self.assertNotIn("tone words", result.assistant_message.lower())
@@ -313,10 +317,18 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
         result = self._turn("idk", source_message_id="msg-3")
 
         self.assertEqual(result.current_stage, "voice_calibration")
-        self.assertIn("how should the coach sound", result.assistant_message.lower())
+        self.assertIn("how should you sound", result.assistant_message.lower())
         self.assertIn("example:", result.assistant_message.lower())
         self.assertIn("to avoid", result.assistant_message.lower())
         self.assertNotIn("tone words", result.assistant_message.lower())
+
+    def test_voice_preview_uses_first_person(self):
+        self._turn("Coach Nova")
+        self._step_and_advance("Supportive and direct when anxiety spikes", source_message_id="msg-2")
+        result = self._turn("calm, direct, encouraging", source_message_id="msg-3")
+        self.assertEqual(result.onboarding_progress.get("sample_review_state"), "pending")
+        self.assertIn("here's how you would sound", result.assistant_message.lower())
+        self.assertNotIn("your coach would sound", result.assistant_message.lower())
 
     def test_boundaries_capture_hard_guardrail_and_soft(self):
         self._turn("Coach Nova")
@@ -470,6 +482,10 @@ class TrainerOnboardingServiceTests(unittest.TestCase):
 
         self.assertEqual(result.current_stage, "complete")
         self.assertIn("Coach Nova is live", result.assistant_message)
+        self.assertEqual(
+            result.profile_patch.get("trainer_onboarding", {}).get("onboarding_status"),
+            ONBOARDING_STATUS_COMPLETED,
+        )
 
     def test_calibration_initial_checklist_shows_first_pending_only(self):
         self._reach_personal_touch()

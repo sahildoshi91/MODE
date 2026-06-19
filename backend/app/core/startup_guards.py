@@ -52,9 +52,27 @@ def _assert_personal_data_inventory_contract() -> None:
         raise StartupGuardError(f"Production startup blocked: personal data inventory contract is invalid ({exc})") from exc
 
 
+def _assert_rate_limit_backend_for_shared_env() -> None:
+    # Runs for staging AND production (not just prod): the in-memory limiter keeps
+    # per-process counters that do not hold across uvicorn workers, so any multi-worker
+    # deploy must use the redis backend. Fails closed if the env var is ever dropped.
+    app_env = str(settings.app_env or "").strip().lower()
+    if app_env not in {"staging", "prod", "production"}:
+        return
+    if str(settings.rate_limit_backend).strip().lower() != "redis":
+        raise StartupGuardError(
+            "Startup blocked: rate_limit_backend must be 'redis' in staging/production "
+            "(in-memory counters are per-process and do not hold across workers)"
+        )
+    if not str(settings.redis_url or "").strip():
+        raise StartupGuardError("Startup blocked: REDIS_URL is required for the redis rate-limit backend")
+
+
 def run_startup_guards() -> None:
     if not settings.startup_guard_enabled:
         return
+
+    _assert_rate_limit_backend_for_shared_env()
 
     if not settings.is_production:
         return

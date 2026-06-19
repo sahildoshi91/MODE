@@ -95,6 +95,20 @@ describe('TrainerRouteHost', () => {
     expect(props.trainerOnboardingCompletedSteps).toBe(3);
   });
 
+  it('forwards onTrainerOnboardingActivated to TrainerCoachWorkspace', async () => {
+    const onActivated = jest.fn();
+    await renderHost({
+      chatLaunchContext: {
+        entrypoint: 'trainer_agent_training',
+        onboarding_action: 'review',
+      },
+      onTrainerOnboardingActivated: onActivated,
+    });
+
+    const props = mockTrainerCoachWorkspace.mock.calls.at(-1)?.[0];
+    expect(props.onTrainerOnboardingActivated).toBe(onActivated);
+  });
+
   it('routes standard coach tab to shared trainer ChatShell when onboarding launch context is absent', async () => {
     await renderHost({ chatLaunchContext: null });
 

@@ -110,6 +110,51 @@ class ConversationRouterTests(unittest.TestCase):
         self.assertEqual(decision.task_type, "workout_adjustment")
         self.assertTrue(decision.retrieval_required)
 
+    def test_safety_beats_persona_on_overlap(self):
+        # Safety gate runs before persona routing — risk_score >= 5 preempts persona_score >= 4.
+        # "chest pain"/"dizziness" hit the severe bucket (+8); "coach"/"tough-love" hit persona.
+        decision = self.router.route(
+            RoutingContext(
+                message_text="Coach, tough-love me through this — I had chest pain and dizziness during my last set.",
+                client_context={"trainer_persona_requested": True},
+                trainer_persona_name="Coach Mike",
+                user_profile=self.profile,
+            )
+        )
+
+        self.assertEqual(decision.flow, "safety_constrained")
+        self.assertNotEqual(decision.flow, "persona_coach")
+        self.assertEqual(decision.provider, "openai")
+
+    def test_safety_beats_multimodal_on_overlap(self):
+        # Safety gate runs before multimodal routing — risk_score >= 5 preempts multimodal_score >= 3.
+        # "injury" (+4) + "medication" (+5) = 9; has_image alone would normally trigger multimodal_fast.
+        decision = self.router.route(
+            RoutingContext(
+                message_text="Check my squat form — I have a knee injury and I'm on medication for it.",
+                client_context={"has_image": True},
+                user_profile=self.profile,
+            )
+        )
+
+        self.assertEqual(decision.flow, "safety_constrained")
+        self.assertNotEqual(decision.flow, "multimodal_fast")
+        self.assertEqual(decision.provider, "openai")
+
+    def test_safety_beats_structured_on_overlap(self):
+        # Safety gate must preempt reasoning_structured routing — do not route to reasoning_structured.
+        decision = self.router.route(
+            RoutingContext(
+                message_text="Build me a JSON periodization plan — my doctor prescribed medication for my injury.",
+                client_context={"output_format": "json"},
+                user_profile=self.profile,
+            )
+        )
+
+        self.assertEqual(decision.flow, "safety_constrained")
+        self.assertNotEqual(decision.flow, "reasoning_structured")
+        self.assertEqual(decision.provider, "openai")
+
 
 if __name__ == "__main__":
     unittest.main()

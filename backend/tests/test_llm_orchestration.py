@@ -14,6 +14,7 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
 from app.ai.client import TextCompletion, TokenUsage as AIClientTokenUsage
 from app.modules.conversation.context import ChatContext, build_user_digest, render_context_prompt
+from app.modules.conversation.orchestration import provider_fallback_chain
 from app.modules.conversation.routing import ConversationRouter, RoutingContext, RoutingDecision
 from app.modules.conversation.service import ConversationProcessingError, ConversationService, PromptPackage
 from app.modules.intelligence_jobs.handlers import _validated_memory_extract
@@ -219,6 +220,34 @@ class LLMOrchestrationTests(unittest.TestCase):
         self.assertIsNone(extract)
         self.assertIn("memory_extract_validation_failed", joined)
         self.assertNotIn("short", joined)
+
+    def test_safety_escalation_fallback_chain_is_single_attempt(self):
+        # Safety routes fail closed — only the primary attempt is made, never another provider.
+        route = _route(
+            provider="openai",
+            model="gpt-5.4",
+            flow="safety_escalation",
+            intent_route={"route": "SAFETY_ESCALATION", "notify_trainer": True},
+        )
+        chain = provider_fallback_chain(route)
+        self.assertEqual(len(chain), 1)
+        self.assertEqual(chain[0].provider, "openai")
+        self.assertEqual(chain[0].model, "gpt-5.4")
+
+    def test_deep_path_fallback_chain_includes_three_providers(self):
+        # Deep path retains its full GPT-5.5 → GPT-5.4 → Claude fallback chain.
+        route = _route(
+            provider="openai",
+            model="gpt-5.4",
+            flow="deep_path",
+            intent_route={"route": "DEEP_PATH", "notify_trainer": False},
+        )
+        chain = provider_fallback_chain(route)
+        labels = [a.label for a in chain]
+        self.assertIn("openai:gpt-5.5", labels)
+        self.assertIn("openai:gpt-5.4", labels)
+        self.assertIn("anthropic:claude-sonnet-4.6", labels)
+        self.assertEqual(len(chain), 3)
 
     def test_prompt_version_logged_in_trace(self):
         service = ConversationService.__new__(ConversationService)

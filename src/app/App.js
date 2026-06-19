@@ -1021,6 +1021,17 @@ function AppShell() {
     setActiveTab('coach');
   };
 
+  const handleTrainerOnboardingActivated = useCallback(async () => {
+    setChatLaunchContext(null);
+    setCoachOverlayContext(null);
+    if (session?.access_token) {
+      await Promise.all([
+        loadAssignmentStatus({ accessTokenOverride: session.access_token }),
+        loadBootstrap({ accessToken: session.access_token }),
+      ]);
+    }
+  }, [loadAssignmentStatus, loadBootstrap, session?.access_token]);
+
   const handleClientMemorySaved = useCallback(() => {
     setAlgorithmMemoryRefreshToken((current) => current + 1);
   }, []);
@@ -1168,7 +1179,8 @@ function AppShell() {
       setActiveTab('clients');
       return;
     }
-    if (!isTrainerViewer && (activeTab === 'clients' || activeTab === 'system')) {
+    const clientVisibleTabs = ['coach', 'progress', 'home', 'profile'];
+    if (!isTrainerViewer && !clientVisibleTabs.includes(activeTab)) {
       setActiveTab('coach');
     }
   }, [activeTab, isTrainerViewer, useCoachOsTrainerNav]);
@@ -1655,6 +1667,10 @@ function AppShell() {
   const contentBottomInset = navBottomInset + 108;
   const coachChatBottomInset = navBottomInset + COACH_CHAT_DOCK_CLEARANCE;
   const shouldUseTrainerRouteFoundation = useCoachOsTrainerNav;
+  const clientVisibleTabsForRender = ['coach', 'progress', 'home', 'profile'];
+  const effectiveActiveTab = (!isTrainerViewer && !clientVisibleTabsForRender.includes(activeTab))
+    ? 'coach'
+    : activeTab;
   const assignedTrainerId = assignmentStatus?.assigned_trainer_id || bootstrap?.assigned_trainer_id || null;
   const hasAssignedTrainer = Boolean(assignedTrainerId);
   const legacyCoachLaunchEntrypoint = resolvedTrainerCoachLaunchContext?.entrypoint;
@@ -1716,11 +1732,12 @@ function AppShell() {
             assignmentStatus={assignmentStatus}
             session={session}
             onOpenTrainerCoach={handleOpenTrainerCoach}
+            onTrainerOnboardingActivated={handleTrainerOnboardingActivated}
             onSignOut={handleSignOut}
           />
         ) : (
           <>
-            {!isTrainerViewer && activeTab === 'home' ? (
+            {!isTrainerViewer && effectiveActiveTab === 'home' ? (
               <AlgorithmHomeScreen
                 accessToken={session.access_token}
                 bottomInset={contentBottomInset}
@@ -1731,7 +1748,7 @@ function AppShell() {
               />
             ) : null}
 
-            {isTrainerViewer && activeTab === 'home' ? (
+            {isTrainerViewer && effectiveActiveTab === 'home' ? (
               <TrainerHomeScreen
                 accessToken={session.access_token}
                 bottomInset={contentBottomInset}
@@ -1745,7 +1762,7 @@ function AppShell() {
               />
             ) : null}
 
-            {activeTab === 'coach' && shouldBlockCoachForCheckin ? (
+            {effectiveActiveTab === 'coach' && shouldBlockCoachForCheckin ? (
               coachCheckinGate.status === 'required' ? (
                 <DailyCheckinScreen
                   accessToken={session.access_token}
@@ -1770,7 +1787,7 @@ function AppShell() {
               )
             ) : null}
 
-            {activeTab === 'coach' && !shouldBlockCoachForCheckin && hasAssignedTrainer ? (
+            {effectiveActiveTab === 'coach' && !shouldBlockCoachForCheckin && hasAssignedTrainer ? (
               shouldUseLegacyCoachChat ? (
                 <CoachChatScreen
                   accessToken={session.access_token}
@@ -1793,7 +1810,7 @@ function AppShell() {
               )
             ) : null}
 
-            {activeTab === 'coach' && !shouldBlockCoachForCheckin && !hasAssignedTrainer && !isTrainerViewer ? (
+            {effectiveActiveTab === 'coach' && !shouldBlockCoachForCheckin && !hasAssignedTrainer && !isTrainerViewer ? (
               <ChatShell
                 role="client"
                 sessionType="atlas_client_chat"
@@ -1808,7 +1825,14 @@ function AppShell() {
               />
             ) : null}
 
-            {!isTrainerViewer && activeTab === 'progress' && progressRoute === 'progress' ? (
+            {effectiveActiveTab === 'coach' && !shouldBlockCoachForCheckin && !hasAssignedTrainer && isTrainerViewer ? (
+              <ShellLoadingState
+                title="Loading Your Coach"
+                subtitle="Setting up your coaching workspace."
+              />
+            ) : null}
+
+            {!isTrainerViewer && effectiveActiveTab === 'progress' && progressRoute === 'progress' ? (
               <ProgressScreen
                 accessToken={session.access_token}
                 bottomInset={contentBottomInset}
@@ -1818,7 +1842,7 @@ function AppShell() {
               />
             ) : null}
 
-            {!isTrainerViewer && activeTab === 'progress' && progressRoute === 'metric-detail' ? (
+            {!isTrainerViewer && effectiveActiveTab === 'progress' && progressRoute === 'metric-detail' ? (
               <MetricDrillDownScreen
                 accessToken={session.access_token}
                 dimensionKey={progressMetricDetail?.dimensionKey}
@@ -1828,7 +1852,7 @@ function AppShell() {
               />
             ) : null}
 
-            {!isTrainerViewer && activeTab === 'progress' && progressRoute === 'insights' ? (
+            {!isTrainerViewer && effectiveActiveTab === 'progress' && progressRoute === 'insights' ? (
               <CoachInsightsScreen
                 accessToken={session.access_token}
                 onBack={handleBackFromInsights}
@@ -1836,7 +1860,7 @@ function AppShell() {
               />
             ) : null}
 
-            {isTrainerViewer && activeTab === 'clients' ? (
+            {isTrainerViewer && effectiveActiveTab === 'clients' ? (
               <TrainerClientsScreen
                 accessToken={session.access_token}
                 bottomInset={contentBottomInset}
@@ -1844,7 +1868,7 @@ function AppShell() {
               />
             ) : null}
 
-            {(activeTab === 'profile' || activeTab === 'system') ? (
+            {(effectiveActiveTab === 'profile' || effectiveActiveTab === 'system') ? (
               <ProfileScreen
                 session={session}
                 assignmentStatus={assignmentStatus}

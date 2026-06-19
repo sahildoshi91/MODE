@@ -51,6 +51,7 @@ export default function TrainerCoachWorkspace({
   trainerOnboardingStatus = 'not_started',
   trainerOnboardingCompletedSteps = 0,
   onOpenTrainerCoach = null,
+  onTrainerOnboardingActivated = null,
 }) {
   const normalizedOnboardingStatus = typeof trainerOnboardingStatus === 'string'
     ? trainerOnboardingStatus.trim().toLowerCase()
@@ -151,6 +152,7 @@ export default function TrainerCoachWorkspace({
       launchContext={resolvedChatLaunchContext}
       bottomInset={coachChatBottomInset}
       topToolbar={toolbar}
+      onTrainerOnboardingCompletePress={onTrainerOnboardingActivated}
     />
   );
 }

@@ -110,6 +110,20 @@ class StartupGuardsTests(unittest.TestCase):
         with self.assertRaises(StartupGuardError):
             run_startup_guards()
 
+    def test_startup_guards_fail_when_staging_uses_memory_backend(self):
+        # Staging is not is_production, but the shared-env rate-limit guard must still
+        # refuse the in-memory backend (per-process counters do not hold across workers).
+        settings.app_env = "staging"
+        settings.rate_limit_backend = "memory"
+        with self.assertRaises(StartupGuardError):
+            run_startup_guards()
+
+    def test_startup_guards_pass_in_staging_with_redis_backend(self):
+        settings.app_env = "staging"
+        settings.rate_limit_backend = "redis"
+        # Staging returns before the production-only guards (RLS assertion etc.).
+        run_startup_guards()
+
     def test_startup_guards_fail_when_rls_assertion_fails(self):
         with patch(
             "app.core.startup_guards.get_supabase_admin_client",

@@ -138,6 +138,7 @@ class ConversationRouter:
         low_retrieval_confidence = retrieval_required and (retrieval_confidence is None or retrieval_confidence < 0.6)
         requires_async = task_type in {"plan_generation", "progress_analysis"} and complexity_score >= 6
 
+        # Safety gate runs before persona, multimodal, structured, and default routing — do not reorder.
         if risk_score >= 5:
             return RoutingDecision(
                 task_type=task_type,

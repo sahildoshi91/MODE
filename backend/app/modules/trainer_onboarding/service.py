@@ -84,7 +84,7 @@ STEP_PROMPTS: dict[str, tuple[str, list[str]]] = {
         ],
     ),
     "voice_calibration": (
-        "Case study: A client missed three sessions and feels behind. How should the coach sound in that reply? Share 2-3 words to describe the style to use (examples: calm, direct, encouraging) and 1-2 words to avoid (examples: harsh, shaming).",
+        "Case study: A client missed three sessions and feels behind. How should you sound in that reply? Share 2-3 words to describe the style to use (examples: calm, direct, encouraging) and 1-2 words to avoid (examples: harsh, shaming).",
         [
             "Short and punchy",
             "Warm and conversational",
@@ -128,7 +128,7 @@ STEP_PROMPTS: dict[str, tuple[str, list[str]]] = {
 CLARIFIER_PROMPTS: dict[str, str] = {
     "welcome": "Give me a clear agent name (2-4 words), for example: Coach Nova.",
     "coaching_identity": "In one sentence, what coaching identity should the agent project in that anxious week-1 scenario?",
-    "voice_calibration": "In plain language, how should the coach sound here? Share 2-3 style words to use (example: calm, direct, encouraging) and 1-2 to avoid (example: harsh, shaming).",
+    "voice_calibration": "In plain language, how should you sound here? Share 2-3 style words to use (example: calm, direct, encouraging) and 1-2 to avoid (example: harsh, shaming).",
     "decision_engine": "List your top 3 factors in strict order for that mixed-readiness scenario.",
     "training_philosophy": "State 1-3 non-negotiables your agent should enforce in that shortcut scenario.",
     "boundaries": "State one Hard boundary, one Guardrail boundary, and one Soft boundary for that pain-push scenario.",
@@ -592,7 +592,7 @@ class TrainerOnboardingService:
             del profile
             return TrainerOnboardingTurnResult(
                 assistant_message=(
-                    f"Here's how your coach would sound in that situation:\n\n"
+                    f"Here's how you would sound in that situation:\n\n"
                     f"\"{step_preview['sample_response']}\"\n\n"
                     f"Does that sound like you?"
                 ),
@@ -974,6 +974,9 @@ class TrainerOnboardingService:
                 onboarding_status=ONBOARDING_STATUS_COMPLETED,
                 onboarding_progress=self._normalize_progress(completed_state.get("onboarding_progress")),
                 calibration_pending=False,
+                profile_patch=self._build_onboarding_profile_patch(
+                    onboarding_status=ONBOARDING_STATUS_COMPLETED,
+                ),
             )
 
         profile, state = self._persist_state_patch(
@@ -1222,6 +1225,9 @@ class TrainerOnboardingService:
             onboarding_status=ONBOARDING_STATUS_COMPLETED,
             onboarding_progress=self._normalize_progress(state.get("onboarding_progress")),
             calibration_pending=False,
+            profile_patch=self._build_onboarding_profile_patch(
+                onboarding_status=ONBOARDING_STATUS_COMPLETED,
+            ),
         )
 
     def _build_calibration_turn_result(
@@ -1257,6 +1263,7 @@ class TrainerOnboardingService:
         calibration_checklist: dict[str, Any] | None = None,
         sample_review_state: str | None = None,
         identity: dict[str, Any] | None = None,
+        onboarding_status: str | None = None,
     ) -> dict[str, Any]:
         trainer_payload: dict[str, Any] = {}
         if step_preview:
@@ -1267,6 +1274,8 @@ class TrainerOnboardingService:
             trainer_payload["sample_review_state"] = sample_review_state
         if identity:
             trainer_payload["identity"] = identity
+        if onboarding_status:
+            trainer_payload["onboarding_status"] = onboarding_status
         if not trainer_payload:
             return {}
         return {"trainer_onboarding": trainer_payload}

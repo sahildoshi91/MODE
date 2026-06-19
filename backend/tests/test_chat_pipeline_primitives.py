@@ -169,6 +169,14 @@ class ChatPipelinePrimitiveTests(unittest.TestCase):
         self.assertTrue(eating.notify_trainer)
         self.assertIn("eating_disorder", eating.risk_flags)
 
+    def test_safety_escalation_beats_motivational_language(self):
+        # Safety patterns must preempt fast/deep/persona routing on mixed signals.
+        route = IntentRouter().classify_with_fallback(
+            "Motivate me coach, I've been starving myself to hit macros"
+        )
+        self.assertEqual(route.route, Route.ESCALATE)
+        self.assertTrue(route.notify_trainer)
+
     def test_router_latency_under_200ms_fast_path(self):
         started_at = time.perf_counter()
 

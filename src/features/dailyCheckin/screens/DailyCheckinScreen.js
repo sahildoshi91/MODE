@@ -3323,7 +3323,7 @@ export default function DailyCheckinScreen({
       />
       <BackgroundGrid />
 
-      {!breathingTransitionsEnabled && (isLoading || step === 'loading') ? (
+      {(isLoading || step === 'loading') ? (
         <View style={styles.loadingScreen}>
           <ActivityIndicator size="large" color={theme.colors.accent.primary} />
           <Text style={styles.loadingTitle}>Loading your check-in</Text>
@@ -3346,7 +3346,7 @@ export default function DailyCheckinScreen({
         </View>
       ) : null}
 
-      {!breathingTransitionsEnabled && step === 'reviewing' ? (
+      {step === 'reviewing' ? (
         <View style={styles.loadingScreen}>
           <View style={styles.reviewCard}>
             <ActivityIndicator size="large" color={currentQuestion.color} />

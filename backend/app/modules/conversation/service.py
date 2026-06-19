@@ -997,6 +997,9 @@ class ConversationService:
         if timing is not None:
             timing.record_elapsed("intent_classify_ms", intent_started_at)
         route_decision_started_at = time.perf_counter()
+        # Intent classifier is the preemptive safety gate — _apply_intent_route always overrides
+        # to safety_escalation when intent_route.route == Route.ESCALATE. This call ordering
+        # must never be reversed or parallelized.
         route = self.router.route(
             RoutingContext(
                 message_text=request.message,

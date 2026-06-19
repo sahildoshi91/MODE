@@ -141,4 +141,50 @@ describe('TrainerCoachWorkspace', () => {
     const props = mockCoachChatScreen.mock.calls.at(-1)?.[0];
     expect(props.launchContext).toEqual(launchContext);
   });
+
+  it('passes onTrainerOnboardingActivated to CoachChatScreen as onTrainerOnboardingCompletePress when onboarding in progress', () => {
+    const onActivated = jest.fn();
+
+    act(() => {
+      renderer.create(
+        <TrainerCoachWorkspace
+          accessToken="trainer-access-token"
+          chatLaunchContext={null}
+          coachChatBottomInset={24}
+          trainerOnboardingCompleted={false}
+          trainerOnboardingStatus="in_progress"
+          trainerOnboardingCompletedSteps={3}
+          onTrainerOnboardingActivated={onActivated}
+        />,
+      );
+    });
+
+    const props = mockCoachChatScreen.mock.calls.at(-1)?.[0];
+    expect(props.onTrainerOnboardingCompletePress).toBe(onActivated);
+  });
+
+  it('passes onTrainerOnboardingActivated to CoachChatScreen when forced to chat via explicit review action after completion', () => {
+    const onActivated = jest.fn();
+    const launchContext = {
+      entrypoint: 'trainer_agent_training',
+      onboarding_action: 'review',
+    };
+
+    act(() => {
+      renderer.create(
+        <TrainerCoachWorkspace
+          accessToken="trainer-access-token"
+          chatLaunchContext={launchContext}
+          coachChatBottomInset={24}
+          trainerOnboardingCompleted
+          trainerOnboardingStatus="completed"
+          trainerOnboardingCompletedSteps={8}
+          onTrainerOnboardingActivated={onActivated}
+        />,
+      );
+    });
+
+    const props = mockCoachChatScreen.mock.calls.at(-1)?.[0];
+    expect(props.onTrainerOnboardingCompletePress).toBe(onActivated);
+  });
 });
