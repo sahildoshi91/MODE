@@ -29,6 +29,34 @@ describe('onboardingApi', () => {
     jest.clearAllMocks();
   });
 
+  it('sends the bootstrap request with the bearer access token', async () => {
+    mockFetchWithApiFallback.mockResolvedValueOnce({
+      baseUrl: 'http://127.0.0.1:8000',
+      response: {
+        ok: true,
+        json: jest.fn().mockResolvedValue({
+          role: 'client',
+          onboarding_complete: true,
+        }),
+      },
+    });
+
+    await expect(getOnboardingBootstrap({ accessToken: 'token' })).resolves.toMatchObject({
+      role: 'client',
+      onboarding_complete: true,
+    });
+
+    expect(mockFetchWithApiFallback).toHaveBeenCalledWith(
+      '/api/v1/onboarding/bootstrap',
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer token',
+        }),
+      }),
+    );
+  });
+
   it('attaches connectivity diagnostics to bootstrap network failures', async () => {
     const fetchError = new Error('fetch failed');
     const networkError = new Error('Unable to reach backend');

@@ -13,6 +13,8 @@ if (!supabaseUrl || !supabaseAnonKey) {
   )
 }
 
+export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey)
+
 const resolvedSupabaseUrl = supabaseUrl || 'https://invalid.supabase.local'
 const resolvedSupabaseAnonKey = supabaseAnonKey || 'invalid-anon-key'
 

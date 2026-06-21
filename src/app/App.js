@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { validateStartupConfig } from './startupConfig';
 import { ActivityIndicator, Animated, AppState, Easing, Linking, StyleSheet, View } from 'react-native';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Clipboard from 'expo-clipboard';
@@ -244,6 +245,32 @@ function ShellErrorState({
             {copyFeedback}
           </ModeText>
         ) : null}
+      </ModeCard>
+    </SafeScreen>
+  );
+}
+
+function StartupConfigErrorScreen({ result }) {
+  const lines = [
+    ...result.missing.map((name) => `${name}: missing`),
+    ...result.invalid.map((name) => `${name}: invalid`),
+  ];
+  return (
+    <SafeScreen style={styles.loadingScreen} testID="app-startup-config-error">
+      <ModeCard variant="tinted" noShadow style={styles.loadingCard}>
+        <ModeText variant="h3" tone="primary" style={styles.loadingTitle}>
+          MODE configuration error
+        </ModeText>
+        <ModeText variant="bodySm" tone="secondary" style={styles.loadingSubtitle}>
+          This TestFlight build is missing required startup configuration. Contact the MODE team.
+        </ModeText>
+        <View style={styles.diagnosticsBlock}>
+          {lines.map((line) => (
+            <ModeText key={line} variant="caption" tone="tertiary">
+              {line}
+            </ModeText>
+          ))}
+        </View>
       </ModeCard>
     </SafeScreen>
   );
@@ -595,34 +622,31 @@ function AppShell() {
       setRoleSelectionError(null);
       return response;
     } catch (error) {
-      if (
-        allowSessionRefresh
-        && isUnauthorizedSessionError(error)
-        && typeof supabase.auth.refreshSession === 'function'
-      ) {
-        try {
-          const { data, error: refreshError } = await supabase.auth.refreshSession();
-          if (refreshError) {
-            throw refreshError;
-          }
-          const refreshedSession = data.session || null;
-          if (!refreshedSession?.access_token) {
-            await clearSupabaseAuthSessionStorage();
-            resetSignedOutState({ infoMessage: SESSION_EXPIRED_MESSAGE });
-            return null;
-          }
-          setSession(refreshedSession);
-          return loadBootstrap({
-            accessToken: refreshedSession.access_token,
-            allowSessionRefresh: false,
-          });
-        } catch (refreshError) {
-          if (isInvalidRefreshTokenError(refreshError)) {
-            await clearSupabaseAuthSessionStorage();
-            resetSignedOutState({ infoMessage: SESSION_EXPIRED_MESSAGE });
-            return null;
+      if (isUnauthorizedSessionError(error)) {
+        if (
+          allowSessionRefresh
+          && typeof supabase.auth.refreshSession === 'function'
+        ) {
+          try {
+            const { data, error: refreshError } = await supabase.auth.refreshSession();
+            if (refreshError) {
+              throw refreshError;
+            }
+            const refreshedSession = data.session || null;
+            if (refreshedSession?.access_token) {
+              setSession(refreshedSession);
+              return loadBootstrap({
+                accessToken: refreshedSession.access_token,
+                allowSessionRefresh: false,
+              });
+            }
+          } catch (_refreshError) {
+            // A bootstrap 401 means this app session cannot authenticate startup.
           }
         }
+        await clearSupabaseAuthSessionStorage();
+        resetSignedOutState({ infoMessage: SESSION_EXPIRED_MESSAGE });
+        return null;
       }
       setBootstrapError(formatBootstrapError(error, 'Unable to load onboarding bootstrap.'));
       return null;
@@ -1909,6 +1933,16 @@ function AppShell() {
 }
 
 export default function App() {
+  const startupConfig = validateStartupConfig();
+  if (!startupConfig.ok) {
+    return (
+      <ErrorBoundary>
+        <SafeAreaProvider>
+          <StartupConfigErrorScreen result={startupConfig} />
+        </SafeAreaProvider>
+      </ErrorBoundary>
+    );
+  }
   return (
     <ErrorBoundary>
       <SafeAreaProvider>

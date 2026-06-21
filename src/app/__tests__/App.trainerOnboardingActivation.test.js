@@ -20,6 +20,10 @@ const mockGetTodayCheckin = jest.fn();
 const mockSetStringAsync = jest.fn();
 const mockTrainerRouteHost = jest.fn();
 
+jest.mock('../startupConfig', () => ({
+  validateStartupConfig: () => ({ ok: true, missing: [], invalid: [] }),
+}));
+
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react');
   return {

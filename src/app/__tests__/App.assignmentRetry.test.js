@@ -19,6 +19,10 @@ const mockGetLocalDateString = jest.fn();
 const mockGetTodayCheckin = jest.fn();
 const mockSetStringAsync = jest.fn();
 
+jest.mock('../startupConfig', () => ({
+  validateStartupConfig: () => ({ ok: true, missing: [], invalid: [] }),
+}));
+
 jest.mock('react-native-safe-area-context', () => {
   const React = require('react');
   return {
@@ -764,6 +768,31 @@ describe('App assignment status retry behavior', () => {
     });
   });
 
+  it('routes to welcome when bootstrap 401 refresh returns no usable session', async () => {
+    mockGetOnboardingBootstrap.mockRejectedValueOnce(createUnauthorizedBootstrapError());
+    mockRefreshSession.mockResolvedValueOnce({
+      data: {
+        session: null,
+      },
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const welcome = tree.root.findByType('MockOnboardingLandingScreen');
+    expect(mockRefreshSession).toHaveBeenCalledTimes(1);
+    expect(mockClearSupabaseAuthSessionStorage).toHaveBeenCalledTimes(1);
+    expect(welcome.props.authProps.infoMessage).toBe('Your previous sign-in expired. Please sign in again.');
+    expect(JSON.stringify(tree.toJSON())).not.toContain("We couldn't load your setup");
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
   it('renders bootstrap network diagnostics in dev/debug mode', async () => {
     mockGetOnboardingBootstrap.mockRejectedValueOnce(createBootstrapNetworkError());
 
@@ -859,7 +888,9 @@ describe('App assignment status retry behavior', () => {
     expect(welcome.props.authProps.layoutMode).toBe('inline');
     expect(typeof welcome.props.authProps.onContinueWithEmail).toBe('function');
     expect(typeof welcome.props.onOpenPreview).toBe('function');
+    expect(mockGetOnboardingBootstrap).not.toHaveBeenCalled();
     expect(mockGetTrainerAssignmentStatus).not.toHaveBeenCalled();
+    expect(JSON.stringify(tree.toJSON())).not.toContain("We couldn't load your setup");
 
     await act(async () => {
       tree.unmount();

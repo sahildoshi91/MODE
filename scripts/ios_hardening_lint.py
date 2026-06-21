@@ -156,6 +156,7 @@ def _assert_logging_redaction(failures: list[str]) -> None:
         ".venv",
         "build",
         "dist",
+        "dist-web-share",
     }
     source_paths = [
         path

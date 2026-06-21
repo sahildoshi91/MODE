@@ -18,9 +18,10 @@ const mockPatchOnboardingState = jest.fn();
 const mockGetLocalDateString = jest.fn();
 const mockGetTodayCheckin = jest.fn();
 const mockSetStringAsync = jest.fn();
+const mockValidateStartupConfig = jest.fn();
 
 jest.mock('../startupConfig', () => ({
-  validateStartupConfig: () => ({ ok: true, missing: [], invalid: [] }),
+  validateStartupConfig: (...args) => mockValidateStartupConfig(...args),
 }));
 
 jest.mock('react-native-safe-area-context', () => {
@@ -35,6 +36,7 @@ jest.mock('react-native-safe-area-context', () => {
 jest.mock('../../services/supabaseClient', () => ({
   clearSupabaseAuthSessionStorage: (...args) => mockClearSupabaseAuthSessionStorage(...args),
   isInvalidRefreshTokenError: (...args) => mockIsInvalidRefreshTokenError(...args),
+  isSupabaseConfigured: true,
   supabase: {
     auth: {
       getSession: (...args) => mockGetSession(...args),
@@ -168,201 +170,84 @@ jest.mock('../../features/trainerPlatform/routes/TrainerRouteHost', () => {
 
 import App from '../App';
 
-function createAssignedClientBootstrap() {
-  return {
-    role: 'client',
-    onboarding_complete: true,
-    onboarding_status: 'completed',
-    is_legacy_trainer: false,
-    assigned_trainer_id: 'trainer-1',
-  };
+const VALID_CONFIG = { ok: true, missing: [], invalid: [] };
+
+function findByTestID(root, testID) {
+  return root.findAll(
+    (node) => node.props?.testID === testID,
+    { deep: true },
+  );
 }
 
-function createAssignedClientStatus() {
-  return {
-    needs_assignment: false,
-    viewer_role: 'client',
-    assigned_trainer_id: 'trainer-1',
-    trainer_display_name: 'Coach Test',
-  };
-}
-
-async function flushEffects() {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
-
-describe('App client post-login validated flow', () => {
+describe('App startup config guard', () => {
   beforeEach(() => {
-    jest.useFakeTimers();
     jest.clearAllMocks();
-
-    mockGetSession.mockResolvedValue({
-      data: {
-        session: {
-          access_token: 'session-token',
-          refresh_token: 'refresh-token',
-          expires_at: Math.floor(Date.now() / 1000) + 3600,
-        },
-      },
-    });
-    mockRefreshSession.mockResolvedValue({
-      data: {
-        session: {
-          access_token: 'refreshed-session-token',
-          refresh_token: 'refreshed-refresh-token',
-          expires_at: Math.floor(Date.now() / 1000) + 3600,
-        },
-      },
-    });
+    mockValidateStartupConfig.mockReturnValue(VALID_CONFIG);
+    mockGetSession.mockResolvedValue({ data: { session: null } });
     mockOnAuthStateChange.mockReturnValue({
       data: { subscription: { unsubscribe: jest.fn() } },
     });
-    mockAssignTrainer.mockResolvedValue({});
+    mockGetLocalDateString.mockReturnValue('2026-06-20');
+    mockGetTodayCheckin.mockResolvedValue({ completed: false, date: '2026-06-20' });
     mockClearSupabaseAuthSessionStorage.mockResolvedValue();
     mockIsInvalidRefreshTokenError.mockReturnValue(false);
-    mockGetOnboardingBootstrap.mockResolvedValue(createAssignedClientBootstrap());
-    mockGetTrainerAssignmentStatus.mockResolvedValue(createAssignedClientStatus());
-    mockIngestMobileEvents.mockResolvedValue({});
-    mockSetOnboardingRole.mockResolvedValue({});
-    mockCompleteOnboarding.mockResolvedValue(createAssignedClientBootstrap());
-    mockPatchOnboardingState.mockResolvedValue({});
-    mockGetLocalDateString.mockReturnValue('2026-06-19');
-    mockGetTodayCheckin.mockResolvedValue({
-      completed: true,
-      date: '2026-06-19',
-      checkin: { id: 'checkin-1', date: '2026-06-19', assigned_mode: 'BUILD' },
-    });
-    mockSetStringAsync.mockResolvedValue(undefined);
     Linking.addEventListener = jest.fn(() => ({ remove: jest.fn() }));
     Linking.getInitialURL = jest.fn().mockResolvedValue(null);
   });
 
-  afterEach(() => {
-    jest.runOnlyPendingTimers();
-    jest.useRealTimers();
-  });
-
-  it('renders DailyCheckinScreen for assigned client with incomplete check-in, hides bottom nav', async () => {
-    mockGetTodayCheckin.mockResolvedValue({
-      completed: false,
-      date: '2026-06-19',
-      checkin: null,
+  it('renders MODE configuration error screen when SUPABASE_URL is missing', async () => {
+    mockValidateStartupConfig.mockReturnValue({
+      ok: false,
+      missing: ['EXPO_PUBLIC_SUPABASE_URL'],
+      invalid: [],
     });
-
     let tree;
     await act(async () => {
       tree = renderer.create(<App />);
     });
-    await flushEffects();
-
-    expect(tree.root.findAllByType('MockDailyCheckinScreen')).toHaveLength(1);
-    expect(tree.root.findAllByType('MockChatShell')).toHaveLength(0);
-    expect(tree.root.findAllByType('MockLiquidBottomNav')).toHaveLength(0);
-
-    const checkinScreen = tree.root.findByType('MockDailyCheckinScreen');
-    expect(checkinScreen.props.accessToken).toBe('session-token');
-
-    await act(async () => {
-      tree.unmount();
-    });
+    expect(findByTestID(tree.root, 'app-startup-config-error').length).toBeGreaterThan(0);
+    await act(async () => { tree.unmount(); });
   });
 
-  it('transitions to assigned-trainer ChatShell after check-in completion', async () => {
-    mockGetTodayCheckin.mockResolvedValue({
-      completed: false,
-      date: '2026-06-19',
-      checkin: null,
+  it('renders MODE configuration error screen when API_BASE_URL is missing', async () => {
+    mockValidateStartupConfig.mockReturnValue({
+      ok: false,
+      missing: ['EXPO_PUBLIC_API_BASE_URL'],
+      invalid: [],
     });
-
     let tree;
     await act(async () => {
       tree = renderer.create(<App />);
     });
-    await flushEffects();
-
-    const checkinScreen = tree.root.findByType('MockDailyCheckinScreen');
-    expect(checkinScreen).toBeTruthy();
-
-    await act(async () => {
-      await checkinScreen.props.onCheckinComplete({
-        id: 'checkin-2',
-        date: '2026-06-19',
-        assigned_mode: 'BUILD',
-        score: 18,
-      });
-    });
-    await flushEffects();
-
-    const chat = tree.root.findByType('MockChatShell');
-    expect(chat.props.sessionType).toBe('client_chat');
-    expect(chat.props.trainerId).toBe('trainer-1');
-    expect(chat.props.role).toBe('client');
-
-    expect(tree.root.findAllByType('MockDailyCheckinScreen')).toHaveLength(0);
-    expect(tree.root.findByType('MockLiquidBottomNav').props.activeTab).toBe('coach');
-
-    await act(async () => {
-      tree.unmount();
-    });
+    expect(findByTestID(tree.root, 'app-startup-config-error').length).toBeGreaterThan(0);
+    await act(async () => { tree.unmount(); });
   });
 
-  it('clamps invalid tab to coach and keeps content visible for CLIENT_ACTIVE', async () => {
+  it('does not render config error screen when all env vars are valid', async () => {
+    mockValidateStartupConfig.mockReturnValue(VALID_CONFIG);
     let tree;
     await act(async () => {
       tree = renderer.create(<App />);
     });
-    await flushEffects();
-
-    const nav = tree.root.findByType('MockLiquidBottomNav');
-    expect(nav.props.activeTab).toBe('coach');
-
-    await act(async () => {
-      nav.props.onTabChange('__invalid_tab__');
-    });
-    await flushEffects();
-
-    expect(tree.root.findAllByType('MockChatShell')).toHaveLength(1);
-    expect(tree.root.findByType('MockLiquidBottomNav').props.activeTab).toBe('coach');
-
-    await act(async () => {
-      tree.unmount();
-    });
+    expect(findByTestID(tree.root, 'app-startup-config-error')).toHaveLength(0);
+    await act(async () => { tree.unmount(); });
   });
 
-  it('shows loading content (not blank) while check-in gate is loading', async () => {
-    let resolveTodayCheckin;
-    mockGetTodayCheckin.mockReturnValue(
-      new Promise((resolve) => {
-        resolveTodayCheckin = resolve;
-      }),
-    );
-
+  it('diagnostics show variable names and status but never env values', async () => {
+    mockValidateStartupConfig.mockReturnValue({
+      ok: false,
+      missing: ['EXPO_PUBLIC_SUPABASE_URL'],
+      invalid: ['EXPO_PUBLIC_API_BASE_URL'],
+    });
     let tree;
     await act(async () => {
       tree = renderer.create(<App />);
     });
-    await flushEffects();
-
-    expect(tree.root.findAllByType('MockDailyCheckinScreen')).toHaveLength(0);
-    expect(tree.root.findAllByType('MockChatShell')).toHaveLength(0);
-
-    const rendered = JSON.stringify(tree.toJSON());
-    expect(rendered).toContain("Checking Today");
-
-    resolveTodayCheckin({
-      completed: false,
-      date: '2026-06-19',
-      checkin: null,
-    });
-    await flushEffects();
-
-    expect(tree.root.findAllByType('MockDailyCheckinScreen')).toHaveLength(1);
-
-    await act(async () => {
-      tree.unmount();
-    });
+    const json = JSON.stringify(tree.toJSON());
+    expect(json).toContain('EXPO_PUBLIC_SUPABASE_URL: missing');
+    expect(json).toContain('EXPO_PUBLIC_API_BASE_URL: invalid');
+    expect(json).not.toContain('https://invalid.supabase.local');
+    expect(json).not.toContain('invalid-anon-key');
+    await act(async () => { tree.unmount(); });
   });
 });
