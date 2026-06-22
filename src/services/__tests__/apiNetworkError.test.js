@@ -58,6 +58,18 @@ describe('apiNetworkError', () => {
     expect(error.message).toContain('Tried: http://192.168.0.10:8000');
   });
 
+  it('renders diagnostics safely when resolved base URL is null and no candidates exist', () => {
+    resolveApiBaseUrl.mockReturnValue(null);
+    getApiBaseUrls.mockReturnValue([]);
+
+    const error = buildApiNetworkError(new Error('config error'), '/api/v1/ping');
+
+    expect(error.resolved_api_base_url).toBeNull();
+    expect(error.attempted_base_urls).toEqual([]);
+    expect(error.message).not.toMatch(/null/);
+    expect(error.stage).toBe('network');
+  });
+
   it('treats timeout attempts as timeout errors even when final cause is not timeout', () => {
     const wrappedError = {
       cause: new Error('connect ECONNREFUSED'),

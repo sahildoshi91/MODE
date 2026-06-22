@@ -77,6 +77,20 @@ describe('fetchWithApiFallback', () => {
     }));
   });
 
+  it('throws a controlled config error without calling fetch when no API candidates are configured', async () => {
+    getApiBaseUrls.mockReturnValue([]);
+    resolveApiBaseUrl.mockReturnValue(null);
+
+    await expect(
+      fetchWithApiFallback('/api/v1/ping', { method: 'GET' }),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('No API base URL configured'),
+      attemptedBaseUrls: [],
+      failoverAttempted: false,
+    });
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
   it('prefers timeout as representative cause when later fallback hosts fail fast', async () => {
     getApiBaseUrls.mockReturnValue(['http://api-a:8000', 'http://api-b:8000']);
     global.fetch

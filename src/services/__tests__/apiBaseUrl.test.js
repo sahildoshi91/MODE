@@ -103,7 +103,7 @@ describe('apiBaseUrl', () => {
     ]);
   });
 
-  it('requires https API base URL in production builds', () => {
+  it('does not throw on import in production when EXPO_PUBLIC_API_BASE_URL is not https', () => {
     jest.spyOn(console, 'error').mockImplementation(() => {});
     expect(() => loadApiBaseUrlModule({
       apiBaseUrl: 'http://192.168.1.50:8000',
@@ -111,8 +111,35 @@ describe('apiBaseUrl', () => {
       platformOs: 'ios',
       hostUri: null,
       nodeEnv: 'production',
-    })).toThrow(
-      'EXPO_PUBLIC_API_BASE_URL must be configured to an https URL for production builds.',
+    })).not.toThrow();
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('https'),
     );
+  });
+
+  it('returns null and empty candidates in production when EXPO_PUBLIC_API_BASE_URL is not https', () => {
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    const apiBaseUrl = loadApiBaseUrlModule({
+      apiBaseUrl: 'http://192.168.1.50:8000',
+      isDevice: true,
+      platformOs: 'ios',
+      hostUri: null,
+      nodeEnv: 'production',
+    });
+    expect(apiBaseUrl.getConfiguredApiBaseUrl()).toBeNull();
+    expect(apiBaseUrl.getApiBaseUrls()).toEqual([]);
+    expect(apiBaseUrl.resolveApiBaseUrl()).toBeNull();
+  });
+
+  it('returns null and empty candidates in production when EXPO_PUBLIC_API_BASE_URL is missing', () => {
+    const apiBaseUrl = loadApiBaseUrlModule({
+      apiBaseUrl: undefined,
+      isDevice: true,
+      platformOs: 'ios',
+      hostUri: null,
+      nodeEnv: 'production',
+    });
+    expect(apiBaseUrl.getApiBaseUrls()).toEqual([]);
+    expect(apiBaseUrl.resolveApiBaseUrl()).toBeNull();
   });
 });

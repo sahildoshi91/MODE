@@ -84,6 +84,19 @@ export async function fetchWithApiFallback(path, options) {
   apiRequestDebugState.lastPath = path;
   apiRequestDebugState.lastResolvedApiBaseUrl = resolveApiBaseUrl();
 
+  if (candidateBaseUrls.length === 0) {
+    const configError = new Error(
+      'No API base URL configured. EXPO_PUBLIC_API_BASE_URL must be set to a valid https URL for production builds.',
+    );
+    configError.attemptedBaseUrls = [];
+    configError.attemptedErrors = [];
+    configError.hasTimeoutAttempt = false;
+    configError.failoverAttempted = false;
+    configError.failoverApplied = false;
+    apiRequestDebugState.lastErrorMessage = configError.message;
+    throw configError;
+  }
+
   for (const [attemptIndex, baseUrl] of candidateBaseUrls.entries()) {
     attemptedBaseUrls.push(baseUrl);
     const { controller, timeoutId, cleanup } = createTimeoutController(timeoutMs, options?.signal);
@@ -141,7 +154,8 @@ export async function fetchWithApiFallback(path, options) {
   }
 
   const representativeCause = selectRepresentativeCause(attemptErrors, lastError);
-  const error = new Error(`Unable to reach ${resolveApiBaseUrl()}${path}`);
+  const resolvedBase = resolveApiBaseUrl();
+  const error = new Error(`Unable to reach ${resolvedBase != null ? `${resolvedBase}${path}` : path}`);
   error.cause = representativeCause;
   error.attemptedBaseUrls = attemptedBaseUrls;
   error.attemptedErrors = attemptErrors.map((attempt) => ({

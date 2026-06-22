@@ -153,7 +153,7 @@ export function resolveApiBaseUrl() {
   }
 
   if (!isDevBuild) {
-    throw new Error('EXPO_PUBLIC_API_BASE_URL must be configured to an https URL for production builds.');
+    return null;
   }
 
   return `http://localhost:${DEFAULT_LOCAL_API_PORT}`;
