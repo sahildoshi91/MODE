@@ -6,7 +6,7 @@ Example:
   cd backend
   ./venv/bin/python scripts/generate_test_auth_link.py \
     --email cyhfanzbckdqbtwgkv@jbsze.ne \
-    --redirect-to mode://auth/callback \
+    --redirect-to ai.modefit.app://auth/callback \
     --check-auth-settings \
     --output pretty
 """
@@ -105,7 +105,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--email", required=True, help="Email address to target.")
     parser.add_argument(
         "--redirect-to",
-        default="mode://auth/callback",
+        default="ai.modefit.app://auth/callback",
         help="Desired post-verification redirect URL.",
     )
     parser.add_argument(

@@ -849,9 +849,12 @@ function AppShell() {
       setIsAuthUiSubmitting(true);
       setAuthUiError(null);
       try {
-        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        const { data, error } = await supabase.auth.exchangeCodeForSession(code);
         if (error) {
           throw error;
+        }
+        if (data?.session) {
+          setSession(data.session);
         }
       } catch (error) {
         setAuthUiError(error?.message || 'Unable to complete sign-in.');

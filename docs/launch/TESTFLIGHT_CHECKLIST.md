@@ -7,7 +7,7 @@ Planning date: 2026-05-25
 - [ ] App display name, icon, splash, version, and build number are final for the candidate.
 - [ ] IPA is signed/exported through an approved release path, not an unsigned local artifact.
 - [ ] Artifact scan passes with no LAN/local/staging API URL, stale Expo metadata, debug flag, fixture token, or obvious secret.
-- [ ] `mode://auth/callback` and associated domains are verified on a clean install.
+- [ ] `ai.modefit.app://auth/callback` and associated domains are verified on a clean install.
 
 ## Demo Account Readiness
 - [ ] Reviewer demo credentials or deterministic invite/onboarding instructions are prepared.

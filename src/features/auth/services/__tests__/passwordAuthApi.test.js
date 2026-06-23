@@ -89,7 +89,7 @@ describe('passwordAuthApi', () => {
 
     await requestPasswordResetProxy({
       email: 'user@example.com',
-      redirectTo: 'mode://auth/callback',
+      redirectTo: 'ai.modefit.app://auth/callback',
     })
 
     const [, options] = fetchWithApiFallback.mock.calls[0]
@@ -99,6 +99,6 @@ describe('passwordAuthApi', () => {
         method: 'POST',
       }),
     )
-    expect(options.body).toContain('"redirect_to":"mode://auth/callback"')
+    expect(options.body).toContain('"redirect_to":"ai.modefit.app://auth/callback"')
   })
 })

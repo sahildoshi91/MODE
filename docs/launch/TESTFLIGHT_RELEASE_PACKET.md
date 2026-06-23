@@ -93,7 +93,7 @@ Before external TestFlight review, confirm these URLs are live and match App Sto
 - [ ] App display name, icon, splash, version, and build number are acceptable for the first beta.
 - [ ] TestFlight build points to staging or production HTTPS, never LAN or localhost.
 - [ ] EAS credentials/signing are configured for the Apple Developer team that owns `ai.modefit.app`.
-- [ ] `mode://auth/callback` works on a clean install.
+- [ ] `ai.modefit.app://auth/callback` works on a clean install.
 - [ ] Privacy, terms, and support links are live or intentionally documented as placeholders.
 - [ ] Reviewer/demo account exists and can reach coach chat without manual database edits.
 - [ ] Chat streaming returns a response or a controlled retry-safe error.

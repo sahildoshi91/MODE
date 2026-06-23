@@ -34,7 +34,7 @@ This runbook documents enforceable release blockers for:
 ### iOS artifact checks
 - `MODE_IOS_IPA_PATH`
 - `MODE_IOS_INFO_PLIST_PATH` (required when running lint in prebuild-required mode)
-- `EXPO_PUBLIC_SUPABASE_REDIRECT_URL=mode://auth/callback`
+- `EXPO_PUBLIC_SUPABASE_REDIRECT_URL=ai.modefit.app://auth/callback`
 
 ## Commands
 

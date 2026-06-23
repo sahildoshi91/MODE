@@ -6,7 +6,7 @@
 - no insecure HTTP exceptions in `NSExceptionDomains`
 - custom scheme defined and non-generic (`expo.scheme`)
 - associated domains configured (`expo.ios.associatedDomains`)
-- auth callback is pinned to `mode://auth/callback`
+- auth callback is pinned to `ai.modefit.app://auth/callback`
 
 ## Logging Redaction
 - no token logging

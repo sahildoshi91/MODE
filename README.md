@@ -223,7 +223,7 @@ If execute fails with `23514` and `ai_generated_outputs_source_type_check`, appl
 EXPO_PUBLIC_SUPABASE_URL=...
 EXPO_PUBLIC_SUPABASE_ANON_KEY=...
 EXPO_PUBLIC_API_BASE_URL=http://192.168.1.10:8000
-EXPO_PUBLIC_SUPABASE_REDIRECT_URL=mode://auth/callback
+EXPO_PUBLIC_SUPABASE_REDIRECT_URL=ai.modefit.app://auth/callback
 EXPO_PUBLIC_AUTH_SOCIAL_ENABLED=false
 EXPO_PUBLIC_AUTH_PASSWORD_ENABLED=false
 EXPO_PUBLIC_SHOW_ACCOUNT_DIAGNOSTICS=false
@@ -232,7 +232,7 @@ EXPO_PUBLIC_ALLOW_PLAINTEXT_COACH_CACHE=false
 
 When testing in Expo Go on a physical device, `localhost` points to the phone, not your computer. If auto-detection does not work in your setup, set `EXPO_PUBLIC_API_BASE_URL` to your computer's LAN IP so the phone can reach the FastAPI server.
 
-For email callback support, add `mode://auth/callback` to Supabase allowed Redirect URLs and keep Email OTP enabled. While social providers are intentionally paused, keep `EXPO_PUBLIC_AUTH_SOCIAL_ENABLED=false`.
+For email callback support, add `ai.modefit.app://auth/callback` to Supabase allowed Redirect URLs and keep Email OTP enabled. While social providers are intentionally paused, keep `EXPO_PUBLIC_AUTH_SOCIAL_ENABLED=false`.
 
 Set `EXPO_PUBLIC_AUTH_PASSWORD_ENABLED=true` to enable temporary QA password auth in the mobile login screen (password + OTP fallback).
 TODO before production release: set `EXPO_PUBLIC_AUTH_PASSWORD_ENABLED=false`.
@@ -272,7 +272,7 @@ To test "Continue with Email" without a real inbox, generate a Supabase admin li
 cd backend
 ./venv/bin/python scripts/generate_test_auth_link.py \
   --email cyhfanzbckdqbtwgkv@jbsze.ne \
-  --redirect-to mode://auth/callback \
+  --redirect-to ai.modefit.app://auth/callback \
   --check-auth-settings \
   --output pretty
 ```
@@ -289,9 +289,9 @@ Exit codes:
 - `2`: redirect mismatch (`requested_redirect_to` != `actual_redirect_to`) when `--fail-on-redirect-mismatch=true`
 
 If `actual_redirect_to` falls back to `http://localhost:3000`:
-1. Add `mode://auth/callback` to Supabase Auth allowed Redirect URLs.
+1. Add `ai.modefit.app://auth/callback` to Supabase Auth allowed Redirect URLs.
 2. Verify your Auth Site URL / redirect config is not forcing `http://localhost:3000`.
-3. Re-run the script and confirm `actual_redirect_to` matches `mode://auth/callback`.
+3. Re-run the script and confirm `actual_redirect_to` matches `ai.modefit.app://auth/callback`.
 
 Email auth smoke:
 1. Trigger normal in-app "Continue with Email" and confirm rate-limit/error state is visible when applicable.

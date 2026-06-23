@@ -26,16 +26,16 @@ Deploy backend with these routes enabled:
 ## 3) Mobile App Deploy
 Ensure app deep-link scheme and auth config:
 
-- `app.json` includes `"scheme": "mode"`
-- Root env includes `EXPO_PUBLIC_SUPABASE_REDIRECT_URL=mode://auth/callback`
+- `app.json` includes `"scheme": "ai.modefit.app"`
+- Root env includes `EXPO_PUBLIC_SUPABASE_REDIRECT_URL=ai.modefit.app://auth/callback`
 
 ## 4) Supabase Auth Dashboard
 In Supabase Auth settings:
 
-- Add `mode://auth/callback` to allowed Redirect URLs.
+- Add `ai.modefit.app://auth/callback` to allowed Redirect URLs.
 - Enable Apple provider with valid credentials.
 - Enable Google provider with valid credentials.
-- Keep Email OTP enabled and redirecting to `mode://auth/callback`.
+- Keep Email OTP enabled and redirecting to `ai.modefit.app://auth/callback`.
 
 ## 5) Smoke Validation
 Run minimum checks after deploy:

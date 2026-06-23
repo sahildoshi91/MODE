@@ -313,9 +313,13 @@ describe('App magic-link auth callback', () => {
     await act(async () => { tree.unmount(); });
   });
 
-  it('calls exchangeCodeForSession for PKCE code param (no tokens)', async () => {
+  it('calls exchangeCodeForSession for PKCE code param and sets session state', async () => {
     const url = `${MAGIC_LINK_BASE}?code=pkce-code-abc`;
     Linking.getInitialURL = jest.fn().mockResolvedValue(url);
+    mockExchangeCodeForSession.mockResolvedValue({
+      data: { session: { access_token: 'test-token', user: { id: 'user-123' } } },
+      error: null,
+    });
 
     let tree;
     await act(async () => {
@@ -324,7 +328,45 @@ describe('App magic-link auth callback', () => {
     await flushEffects();
 
     expect(mockExchangeCodeForSession).toHaveBeenCalledWith('pkce-code-abc');
+    // supabase.auth.setSession is not called in the PKCE branch — only the React state setter
     expect(mockSetSession).not.toHaveBeenCalled();
+    expect(mockGetOnboardingBootstrap).toHaveBeenCalledWith(
+      expect.objectContaining({ accessToken: 'test-token' }),
+    );
+
+    await act(async () => { tree.unmount(); });
+  });
+
+  it('loads bootstrap after PKCE code exchange even without onAuthStateChange firing', async () => {
+    const url = `${MAGIC_LINK_BASE}?code=pkce-code-xyz`;
+    Linking.getInitialURL = jest.fn().mockResolvedValue(url);
+    mockExchangeCodeForSession.mockResolvedValue({
+      data: { session: { access_token: 'pkce-access', user: { id: 'user-456' } } },
+      error: null,
+    });
+
+    let authStateChangeListenerCalled = false;
+    mockOnAuthStateChange.mockImplementation((listener) => {
+      const wrapped = (...args) => {
+        authStateChangeListenerCalled = true;
+        return listener(...args);
+      };
+      void wrapped; // registered but never called
+      return { data: { subscription: { unsubscribe: jest.fn() } } };
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    expect(authStateChangeListenerCalled).toBe(false);
+    expect(mockExchangeCodeForSession).toHaveBeenCalledWith('pkce-code-xyz');
+    expect(mockGetOnboardingBootstrap).toHaveBeenCalledWith(
+      expect.objectContaining({ accessToken: 'pkce-access' }),
+    );
+    expect(tree.root.findAllByType('MockOnboardingLandingScreen')).toHaveLength(0);
 
     await act(async () => { tree.unmount(); });
   });
