@@ -22,7 +22,10 @@ function redactDiagnosticText(value) {
       /\b(?:access_token|refresh_token|token|password|secret|api_key|apikey)\s*[:=]\s*['"]?[^'",\s}]+/gi,
       (match) => match.replace(/[:=]\s*['"]?[^'",\s}]+/, `: ${REDACTED}`),
     )
-    .replace(/\bmode:\/\/auth\/callback\?[^\s)]+/gi, `mode://auth/callback?${REDACTED}`)
+    .replace(
+      /\b(?:mode|ai\.modefit\.app):\/\/auth\/callback[?#][^\s)]*/gi,
+      (match) => match.replace(/[?#].*$/, `?${REDACTED}`),
+    )
     .replace(/\bhttps?:\/\/[^\s)]+(?:reset|recovery|callback)[^\s)]*/gi, REDACTED);
 }
 

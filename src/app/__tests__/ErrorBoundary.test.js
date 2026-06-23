@@ -86,7 +86,7 @@ describe('ErrorBoundary', () => {
         stack: 'Authorization: Bearer eyJabc.def.ghi api_key=public-key',
       },
       {
-        componentStack: 'at ResetLink (mode://auth/callback?code=abc123)',
+        componentStack: 'at ResetLink (ai.modefit.app://auth/callback?code=abc123)',
       },
       { isAuthenticated: true },
     );
@@ -98,6 +98,21 @@ describe('ErrorBoundary', () => {
     expect(diagnostics.isAuthenticated).toBe(true);
     expect(diagnostics.platform).toBeTruthy();
     expect(diagnostics.appVersion).toBe('1.2.3');
+  });
+
+  it('redacts magic-link fragment tokens from auth callback URLs in error text', () => {
+    const diagnostics = buildRedactedErrorDiagnostics(
+      {
+        name: 'DeepLinkError',
+        message: 'Failed to handle ai.modefit.app://auth/callback#access_token=tok123&refresh_token=ref456&token_type=bearer',
+      },
+      {
+        componentStack: 'at AuthCallback (ai.modefit.app://auth/callback#access_token=tok123&refresh_token=ref456)',
+      },
+    );
+
+    expect(JSON.stringify(diagnostics)).not.toContain('tok123');
+    expect(JSON.stringify(diagnostics)).not.toContain('ref456');
   });
 
   it('renders children normally before an error occurs', () => {

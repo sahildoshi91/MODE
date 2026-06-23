@@ -91,7 +91,7 @@ const APP_STATE = {
 };
 
 function resolveOAuthRedirectUrl() {
-  return process.env.EXPO_PUBLIC_SUPABASE_REDIRECT_URL || 'mode://auth/callback';
+  return process.env.EXPO_PUBLIC_SUPABASE_REDIRECT_URL || 'ai.modefit.app://auth/callback';
 }
 
 function parseUrl(url) {
@@ -805,6 +805,43 @@ function AppShell() {
       if (!parsed) {
         return;
       }
+
+      // Fragment tokens take precedence; never merge fragment and query sources.
+      let accessToken = null;
+      let refreshToken = null;
+      if (parsed.hash) {
+        const fragmentParams = new URLSearchParams(parsed.hash.slice(1));
+        accessToken = fragmentParams.get('access_token');
+        refreshToken = fragmentParams.get('refresh_token');
+      }
+      if (!accessToken || !refreshToken) {
+        accessToken = parsed.searchParams.get('access_token');
+        refreshToken = parsed.searchParams.get('refresh_token');
+      }
+
+      if (accessToken && refreshToken) {
+        setIsAuthUiSubmitting(true);
+        setAuthUiError(null);
+        try {
+          const { data, error } = await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+          if (error) {
+            throw error;
+          }
+          // Update local state directly so bootstrap runs even if onAuthStateChange doesn't fire.
+          if (data?.session) {
+            setSession(data.session);
+          }
+        } catch (error) {
+          setAuthUiError(error?.message || 'Unable to complete sign-in.');
+        } finally {
+          setIsAuthUiSubmitting(false);
+        }
+        return;
+      }
+
       const code = parsed.searchParams.get('code');
       if (!code) {
         return;

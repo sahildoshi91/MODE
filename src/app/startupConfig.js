@@ -19,7 +19,7 @@ export function validateStartupConfig() {
   if (!supabaseAnonKey) missing.push('EXPO_PUBLIC_SUPABASE_ANON_KEY');
 
   if (!redirectUrl) missing.push('EXPO_PUBLIC_SUPABASE_REDIRECT_URL');
-  else if (redirectUrl !== 'mode://auth/callback') invalid.push('EXPO_PUBLIC_SUPABASE_REDIRECT_URL');
+  else if (redirectUrl !== 'ai.modefit.app://auth/callback') invalid.push('EXPO_PUBLIC_SUPABASE_REDIRECT_URL');
 
   if (!passwordEnabled) missing.push('EXPO_PUBLIC_AUTH_PASSWORD_ENABLED');
   else if (!BOOLEAN_LIKE.has(passwordEnabled.trim().toLowerCase())) invalid.push('EXPO_PUBLIC_AUTH_PASSWORD_ENABLED');
