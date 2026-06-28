@@ -36,7 +36,7 @@ jobs:
     env:
       APP_ENV: staging
       EXPO_PUBLIC_API_BASE_URL: https://mode-backend-staging.onrender.com
-      EXPO_PUBLIC_SUPABASE_REDIRECT_URL: mode://auth/callback
+      EXPO_PUBLIC_SUPABASE_REDIRECT_URL: ai.modefit.app://auth/callback
       MODE_STORAGE_ORPHAN_THRESHOLD: "0"
       MODE_STORAGE_CLEANUP_MAX_HEARTBEAT_AGE_MINUTES: "45"
       MODE_STORAGE_CLEANUP_EXPECTED_INTERVAL_MINUTES: "15"
