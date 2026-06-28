@@ -346,7 +346,7 @@ function formatBootstrapError(error, fallbackMessage) {
   return {
     message,
     displayMessage: isNetworkError
-      ? `Unable to reach the backend for ${requestPath}. Check that the FastAPI server is running and reachable from your device.`
+      ? `Unable to reach MODE services for ${requestPath}. Check your connection and tap Retry.`
       : nonNetworkDisplayMessage,
     isNetworkError,
     showDetails: SHOW_ACCOUNT_DIAGNOSTICS,

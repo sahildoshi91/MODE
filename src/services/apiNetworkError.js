@@ -32,10 +32,10 @@ export function buildApiNetworkError(error, path, options = {}) {
   };
   const timeoutMessage = options.timeoutMessage
     ? appendAttemptedHosts(options.timeoutMessage)
-    : `Request to ${path} timed out.${attemptedHosts} If you are testing on a phone, make sure the backend is running on your computer and that EXPO_PUBLIC_API_BASE_URL points to your computer's LAN IP, for example http://192.168.6.137:8000.`;
+    : appendAttemptedHosts(`MODE services took too long to respond for ${path}. Check your connection and tap Retry.`);
   const unreachableMessage = options.unreachableMessage
     ? appendAttemptedHosts(options.unreachableMessage)
-    : `Unable to reach the backend for ${path}.${attemptedHosts} Check that the FastAPI server is running and reachable from your device.`;
+    : appendAttemptedHosts(`Unable to reach MODE services for ${path}. Check your connection and tap Retry.`);
 
   const networkError = new Error(isTimeout ? timeoutMessage : unreachableMessage);
   networkError.stage = 'network';

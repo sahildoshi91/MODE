@@ -670,7 +670,7 @@ describe('App assignment status retry behavior', () => {
 
     const renderedBeforeRetry = JSON.stringify(tree.toJSON());
     expect(renderedBeforeRetry).toContain("We couldn't load your setup");
-    expect(renderedBeforeRetry).toContain('Unable to reach the backend for /api/v1/onboarding/bootstrap');
+    expect(renderedBeforeRetry).toContain('Unable to reach MODE services for /api/v1/onboarding/bootstrap');
     expect(mockGetOnboardingBootstrap).toHaveBeenCalledTimes(1);
 
     const retryButton = tree.root.findByProps({ testID: 'app-shell-error-retry-button' });

@@ -54,7 +54,7 @@ describe('apiNetworkError', () => {
 
     const error = buildApiNetworkError(wrappedError, '/api/v1/trainer-assignment/status');
 
-    expect(error.message).toContain('timed out');
+    expect(error.message).toContain('took too long to respond');
     expect(error.message).toContain('Tried: http://192.168.0.10:8000');
   });
 
@@ -90,7 +90,7 @@ describe('apiNetworkError', () => {
 
     const error = buildApiNetworkError(wrappedError, '/api/v1/trainer-assignment/status');
 
-    expect(error.message).toContain('timed out');
+    expect(error.message).toContain('took too long to respond');
     expect(error.attempt_errors).toEqual(wrappedError.attemptedErrors);
   });
 });
