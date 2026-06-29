@@ -3,7 +3,7 @@ from collections.abc import Callable
 from dataclasses import asdict
 import threading
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 from supabase import Client
 
 from app.core.auth import AuthenticatedUser, require_user
@@ -485,7 +485,11 @@ def get_trainer_home_service(
 def get_trainer_client_repository(
     supabase: Client = Depends(get_request_scoped_supabase_client),
 ) -> TrainerClientRepository:
-    return TrainerClientRepository(supabase)
+    try:
+        admin_supabase = get_supabase_admin_client()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail="Invite code service unavailable") from exc
+    return TrainerClientRepository(supabase, admin_supabase=admin_supabase)
 
 
 def get_trainer_client_service(

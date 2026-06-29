@@ -13,8 +13,9 @@ UUID_PATTERN = re.compile(
 
 
 class TrainerClientRepository:
-    def __init__(self, supabase: Client):
+    def __init__(self, supabase: Client, *, admin_supabase: Client):
         self.supabase = supabase
+        self._admin = admin_supabase
 
     def list_clients_for_trainer(self, trainer_id: str) -> list[dict[str, Any]]:
         response = (
@@ -225,7 +226,7 @@ class TrainerClientRepository:
         tenant_id: str,
     ) -> list[dict[str, Any]]:
         response = (
-            self.supabase
+            self._admin
             .table("trainer_invite_codes")
             .select("id, trainer_id, tenant_id, is_active, expires_at, used_at, revoked_at, created_at")
             .eq("trainer_id", trainer_id)
@@ -244,7 +245,7 @@ class TrainerClientRepository:
         invite_id: str,
     ) -> dict[str, Any] | None:
         response = (
-            self.supabase
+            self._admin
             .table("trainer_invite_codes")
             .select("id, trainer_id, tenant_id, is_active, expires_at, used_at, revoked_at, created_at")
             .eq("trainer_id", trainer_id)
@@ -265,7 +266,7 @@ class TrainerClientRepository:
         if not code_hash:
             return None
         rows = (
-            self.supabase
+            self._admin
             .table("trainer_invite_codes")
             .select("id")
             .eq("code_hash", code_hash)
@@ -275,7 +276,7 @@ class TrainerClientRepository:
         return rows[0] if rows else None
 
     def create_invite_code(self, payload: dict[str, Any]) -> dict[str, Any] | None:
-        response = self.supabase.table("trainer_invite_codes").insert(payload).execute()
+        response = self._admin.table("trainer_invite_codes").insert(payload).execute()
         return (response.data or [None])[0]
 
     def revoke_invite_code_for_trainer(
@@ -286,7 +287,7 @@ class TrainerClientRepository:
     ) -> dict[str, Any] | None:
         now = datetime.now(timezone.utc).isoformat()
         response = (
-            self.supabase
+            self._admin
             .table("trainer_invite_codes")
             .update({"is_active": False, "revoked_at": now, "updated_at": now})
             .eq("trainer_id", trainer_id)
