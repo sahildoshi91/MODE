@@ -1086,13 +1086,26 @@ function AppShell() {
   };
 
   const handleTrainerOnboardingActivated = useCallback(async () => {
+    const markOnboardingActivated = () => {
+      setAssignmentStatus((current) => ({
+        ...(current || {}),
+        trainer_onboarding_completed: true,
+        trainer_onboarding_status: 'completed',
+        trainer_onboarding_completed_steps: Math.max(
+          Number(current?.trainer_onboarding_completed_steps ?? 0),
+          Number(current?.trainer_onboarding_total_steps ?? 8),
+        ),
+      }));
+    };
     setChatLaunchContext(null);
     setCoachOverlayContext(null);
+    markOnboardingActivated();
     if (session?.access_token) {
       await Promise.all([
         loadAssignmentStatus({ accessTokenOverride: session.access_token }),
         loadBootstrap({ accessToken: session.access_token }),
       ]);
+      markOnboardingActivated();
     }
   }, [loadAssignmentStatus, loadBootstrap, session?.access_token]);
 

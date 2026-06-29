@@ -525,6 +525,7 @@ describe('CoachChatScreen', () => {
       layoutHeight: 500,
     });
     FlatList.prototype.scrollToOffset.mockClear();
+    FlatList.prototype.scrollToEnd.mockClear();
 
     const loadMoreButton = tree.root.findByProps({ testID: 'coach-chat-load-more-button' });
     await act(async () => {
@@ -538,6 +539,7 @@ describe('CoachChatScreen', () => {
       offset: 440,
       animated: false,
     });
+    expect(FlatList.prototype.scrollToEnd).not.toHaveBeenCalled();
 
     await act(async () => {
       tree.unmount();
@@ -1394,5 +1396,123 @@ describe('CoachChatScreen', () => {
     act(() => {
       tree.unmount();
     });
+  });
+
+  it('quick reply scrolls to bottom even when user is scrolled up', async () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [{ id: 'assistant-1', role: 'assistant', text: 'Hello' }],
+      quickReplies: ['High accountability'],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+    // Scrolled up: distanceFromBottom = 2000 - (0 + 500) = 1500 > 120 → nearBottom=false
+    setListMetrics(tree, { offset: 0, contentHeight: 2000, layoutHeight: 500 });
+    FlatList.prototype.scrollToEnd.mockClear();
+
+    await act(async () => {
+      tree.root.findByType('MockQuickReplies').props.onSelect('High accountability');
+    });
+
+    expect(mockSendMessage).toHaveBeenCalledWith('High accountability');
+    expect(FlatList.prototype.scrollToEnd).toHaveBeenCalled();
+
+    await act(async () => { tree.unmount(); });
+  });
+
+  it('pending scroll is consumed by next content growth and not re-fired', async () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [{ id: 'assistant-1', role: 'assistant', text: 'Hello' }],
+      quickReplies: ['High accountability'],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+    const flatList = tree.root.findByType(FlatList);
+    // Scrolled up (nearBottom=false): 2000 - (0 + 500) = 1500 > 120
+    setListMetrics(tree, { offset: 0, contentHeight: 2000, layoutHeight: 500 });
+    FlatList.prototype.scrollToEnd.mockClear();
+
+    // (a) No pending → content growth → no forced scroll
+    act(() => { flatList.props.onContentSizeChange?.(0, 2000); });
+    expect(FlatList.prototype.scrollToEnd).not.toHaveBeenCalled();
+
+    // Tap quick reply → sets pendingScrollRef=true; queueAutoScroll also fires scrollToLatest
+    // immediately (RAF mocked sync), which updates metrics offset → nearBottom=true in the ref.
+    await act(async () => {
+      tree.root.findByType('MockQuickReplies').props.onSelect('High accountability');
+    });
+
+    // Re-establish nearBottom=false via onScroll without consuming pendingScrollRef.
+    // pendingScrollRef is only consumed inside onContentSizeChange, not onScroll.
+    act(() => {
+      flatList.props.onScroll?.({
+        nativeEvent: {
+          contentOffset: { y: 0 },
+          contentSize: { height: 2000 },
+          layoutMeasurement: { height: 500 },
+        },
+      });
+    });
+    FlatList.prototype.scrollToEnd.mockClear();
+
+    // (b) Pending set → content growth → forced scroll (pending consumed here)
+    act(() => { flatList.props.onContentSizeChange?.(0, 2200); });
+    expect(FlatList.prototype.scrollToEnd).toHaveBeenCalledTimes(1);
+
+    // scrollToLatest ran and set nearBottom=true again; re-establish scrolled-up via onScroll
+    act(() => {
+      flatList.props.onScroll?.({
+        nativeEvent: {
+          contentOffset: { y: 0 },
+          contentSize: { height: 2200 },
+          layoutMeasurement: { height: 500 },
+        },
+      });
+    });
+    FlatList.prototype.scrollToEnd.mockClear();
+
+    // (c) Pending consumed + scrolled-up → further content growth → no forced scroll
+    act(() => { flatList.props.onContentSizeChange?.(0, 2400); });
+    expect(FlatList.prototype.scrollToEnd).not.toHaveBeenCalled();
+
+    await act(async () => { tree.unmount(); });
+  });
+
+  it('calibration chip approve scrolls to bottom even when user is scrolled up', async () => {
+    mockUseChatConversation.mockReturnValue({
+      messages: [makeCalibrationMessage()],
+      quickReplies: [],
+      isSending: false,
+      error: null,
+      errorDetails: null,
+      hasRetryableFailure: false,
+      sendMessage: mockSendMessage,
+      retryFailedRequest: mockRetryFailedRequest,
+    });
+
+    const tree = renderScreen();
+    setListMetrics(tree, { offset: 0, contentHeight: 2000, layoutHeight: 500 });
+    FlatList.prototype.scrollToEnd.mockClear();
+
+    const approveButton = tree.root.findByProps({ testID: 'coach-chat-checklist-approve-1' });
+    await act(async () => {
+      await approveButton.props.onPress();
+    });
+
+    expect(mockSendMessage).toHaveBeenCalledWith('approve 1');
+    expect(FlatList.prototype.scrollToEnd).toHaveBeenCalled();
+
+    await act(async () => { tree.unmount(); });
   });
 });

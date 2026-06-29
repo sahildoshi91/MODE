@@ -198,6 +198,17 @@ function createCompletedTrainerAssignmentStatus() {
   };
 }
 
+function createInProgressTrainerAssignmentStatus() {
+  return {
+    viewer_role: 'trainer',
+    trainer_id: 'trainer-1',
+    trainer_onboarding_completed: false,
+    trainer_onboarding_status: 'in_progress',
+    trainer_onboarding_completed_steps: 7,
+    trainer_onboarding_total_steps: 8,
+  };
+}
+
 async function flushEffects() {
   await act(async () => {
     await Promise.resolve();
@@ -301,6 +312,40 @@ describe('App trainer onboarding activation callback', () => {
     const propsAfterActivation = mockTrainerRouteHost.mock.calls.at(-1)?.[0];
     expect(propsAfterActivation.chatLaunchContext).toBeNull();
     expect(propsAfterActivation.activeTab).toBe('coach');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('keeps trainer onboarding marked complete when the activation refresh returns stale status', async () => {
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const initialProps = mockTrainerRouteHost.mock.calls.at(-1)?.[0];
+    const { onOpenTrainerCoach, onTrainerOnboardingActivated } = initialProps;
+
+    act(() => {
+      onOpenTrainerCoach({ entrypoint: 'trainer_agent_training', onboarding_action: 'review' });
+    });
+
+    mockGetTrainerAssignmentStatus.mockResolvedValue(createInProgressTrainerAssignmentStatus());
+
+    await act(async () => {
+      await onTrainerOnboardingActivated();
+    });
+    await flushEffects();
+
+    const propsAfterActivation = mockTrainerRouteHost.mock.calls.at(-1)?.[0];
+    expect(propsAfterActivation.chatLaunchContext).toBeNull();
+    expect(propsAfterActivation.assignmentStatus).toMatchObject({
+      trainer_onboarding_completed: true,
+      trainer_onboarding_status: 'completed',
+      trainer_onboarding_completed_steps: 8,
+    });
 
     await act(async () => {
       tree.unmount();
