@@ -442,7 +442,7 @@ describe('ProfileScreen trainer schedule', () => {
     expect(JSON.stringify(tree.toJSON())).toContain('Coach Alex');
 
     act(() => {
-      tree.root.findByProps({ testID: 'account-coach-invite-input' }).props.onChangeText('mode2026');
+      tree.root.findByProps({ testID: 'account-coach-invite-input' }).props.onChangeText(' PO-_vG2K-DECqfsLl5iFVA ');
     });
     await act(async () => {
       await tree.root.findByProps({ testID: 'account-change-coach-button' }).props.onPress();
@@ -450,7 +450,7 @@ describe('ProfileScreen trainer schedule', () => {
 
     expect(assignTrainerByInvite).toHaveBeenCalledWith({
       accessToken: 'client-token',
-      inviteCode: 'MODE2026',
+      inviteCode: 'PO-_vG2K-DECqfsLl5iFVA',
     });
     expect(onAccountSelfServiceChanged).toHaveBeenCalled();
 

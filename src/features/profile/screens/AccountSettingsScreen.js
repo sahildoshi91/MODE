@@ -280,7 +280,6 @@ function CoachProfileSubView({
           value={accountInviteCodeDraft}
           onChangeText={onAccountInviteCodeDraftChange}
           placeholder="Invite code"
-          autoCapitalize="characters"
           style={styles.input}
           testID="account-coach-invite-input"
         />

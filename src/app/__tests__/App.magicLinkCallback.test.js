@@ -8,6 +8,7 @@ const mockOnAuthStateChange = jest.fn();
 const mockSignOut = jest.fn();
 const mockSetSession = jest.fn();
 const mockExchangeCodeForSession = jest.fn();
+const mockSignInWithOtp = jest.fn();
 const mockClearSupabaseAuthSessionStorage = jest.fn();
 const mockIsInvalidRefreshTokenError = jest.fn();
 const mockGetTrainerAssignmentStatus = jest.fn();
@@ -44,6 +45,7 @@ jest.mock('../../services/supabaseClient', () => ({
       signOut: (...args) => mockSignOut(...args),
       setSession: (...args) => mockSetSession(...args),
       exchangeCodeForSession: (...args) => mockExchangeCodeForSession(...args),
+      signInWithOtp: (...args) => mockSignInWithOtp(...args),
     },
   },
 }));
@@ -215,6 +217,7 @@ describe('App magic-link auth callback', () => {
       error: null,
     });
     mockExchangeCodeForSession.mockResolvedValue({ data: {}, error: null });
+    mockSignInWithOtp.mockResolvedValue({ data: {}, error: null });
     mockGetOnboardingBootstrap.mockResolvedValue(COMPLETED_CLIENT_BOOTSTRAP);
     mockGetTrainerAssignmentStatus.mockResolvedValue(CLIENT_ASSIGNMENT_STATUS);
     mockGetTodayCheckin.mockResolvedValue({ completed: true, date: '2026-06-22' });
@@ -488,6 +491,42 @@ describe('App magic-link auth callback', () => {
 
     // User-visible outcome: app has left the login screen.
     expect(tree.root.findAllByType('MockOnboardingLandingScreen')).toHaveLength(0);
+
+    await act(async () => { tree.unmount(); });
+  });
+
+  it('clears stale magic-link success copy when sending a later link fails', async () => {
+    mockSignInWithOtp
+      .mockResolvedValueOnce({ data: {}, error: null })
+      .mockResolvedValueOnce({ data: {}, error: new Error('Network request failed') });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    let authScreen = tree.root.findByType('MockOnboardingLandingScreen');
+    await act(async () => {
+      authScreen.props.authProps.onEmailChange('sahildoshi91+trainer@gmail.com');
+    });
+
+    authScreen = tree.root.findByType('MockOnboardingLandingScreen');
+    await act(async () => {
+      await authScreen.props.authProps.onContinueWithEmail();
+    });
+
+    authScreen = tree.root.findByType('MockOnboardingLandingScreen');
+    expect(authScreen.props.authProps.infoMessage).toBe('Check your email for the secure sign-in link.');
+    expect(authScreen.props.authProps.errorMessage).toBeNull();
+
+    await act(async () => {
+      await authScreen.props.authProps.onContinueWithEmail();
+    });
+
+    authScreen = tree.root.findByType('MockOnboardingLandingScreen');
+    expect(authScreen.props.authProps.infoMessage).toBeNull();
+    expect(authScreen.props.authProps.errorMessage).toBe('Network request failed');
 
     await act(async () => { tree.unmount(); });
   });

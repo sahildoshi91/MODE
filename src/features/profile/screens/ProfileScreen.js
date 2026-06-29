@@ -389,7 +389,7 @@ export default function ProfileScreen({
     if (!accessToken || isChangingCoach) {
       return;
     }
-    const inviteCode = String(accountInviteCodeDraft || '').trim().toUpperCase();
+    const inviteCode = String(accountInviteCodeDraft || '').trim();
     if (!inviteCode) {
       setAccountError('Enter your coach invite code.');
       return;

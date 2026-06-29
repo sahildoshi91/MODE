@@ -1394,6 +1394,7 @@ function AppShell() {
       }
       setAuthUiInfo('Check your email for the secure sign-in link.');
     } catch (error) {
+      setAuthUiInfo(null);
       const cooldown = buildAuthCooldownState(error);
       if (cooldown) {
         setAuthCooldownState(cooldown);

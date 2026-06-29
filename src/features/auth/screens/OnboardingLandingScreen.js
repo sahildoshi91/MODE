@@ -331,7 +331,7 @@ export default function OnboardingLandingScreen({
               </View>
             ) : null}
 
-            {infoMessage ? (
+            {!errorMessage && infoMessage ? (
               <View style={styles.infoFeedback}>
                 <Text style={styles.feedbackText}>{infoMessage}</Text>
               </View>
