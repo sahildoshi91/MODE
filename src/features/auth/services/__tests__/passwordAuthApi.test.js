@@ -14,12 +14,12 @@ import {
   signUpWithPasswordProxy,
 } from '../passwordAuthApi'
 
-function fakeResponse({ ok = true, status = 200, json = {} } = {}) {
+function fakeResponse({ ok = true, status = 200, json = {}, headers = {} } = {}) {
   return {
     ok,
     status,
     headers: {
-      get: jest.fn(() => null),
+      get: jest.fn((name) => headers[name] ?? null),
     },
     json: jest.fn(async () => json),
   }
@@ -100,5 +100,57 @@ describe('passwordAuthApi', () => {
       }),
     )
     expect(options.body).toContain('"redirect_to":"ai.modefit.app://auth/callback"')
+  })
+
+  it('sets retryAfterSeconds from Retry-After header on rate-limit response', async () => {
+    fetchWithApiFallback.mockResolvedValueOnce({
+      response: fakeResponse({
+        ok: false,
+        status: 429,
+        json: { detail: 'Too many requests.' },
+        headers: { 'Retry-After': '38' },
+      }),
+      baseUrl: 'https://api.example',
+    })
+
+    await expect(
+      signInWithPasswordProxy({ email: 'a@b.com', password: 'pw' }),
+    ).rejects.toMatchObject({
+      message: 'Too many requests.',
+      retryAfterSeconds: 38,
+    })
+  })
+
+  it('falls back to JSON detail.retry_after_seconds when no Retry-After header', async () => {
+    fetchWithApiFallback.mockResolvedValueOnce({
+      response: fakeResponse({
+        ok: false,
+        status: 429,
+        json: { detail: { message: 'Rate limited.', retry_after_seconds: 60 } },
+      }),
+      baseUrl: 'https://api.example',
+    })
+
+    await expect(
+      signInWithPasswordProxy({ email: 'a@b.com', password: 'pw' }),
+    ).rejects.toMatchObject({
+      message: 'Rate limited.',
+      retryAfterSeconds: 60,
+    })
+  })
+
+  it('preserves existing message extraction for plain string detail', async () => {
+    fetchWithApiFallback.mockResolvedValueOnce({
+      response: fakeResponse({
+        ok: false,
+        status: 401,
+        json: { detail: 'Invalid credentials.' },
+      }),
+      baseUrl: 'https://api.example',
+    })
+
+    const err = await signInWithPasswordProxy({ email: 'a@b.com', password: 'pw' }).catch((e) => e)
+    expect(err.message).toBe('Invalid credentials.')
+    expect(err.retryAfterSeconds).toBeUndefined()
   })
 })

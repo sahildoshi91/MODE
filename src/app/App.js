@@ -63,6 +63,7 @@ import {
   isInvalidRefreshTokenError,
   supabase,
 } from '../services/supabaseClient';
+import { useCooldownTimer } from '../features/auth/hooks/useCooldownTimer';
 
 const FLOATING_NAV_BOTTOM_OFFSET = NAV_BOTTOM_OFFSET;
 const FLOATING_NAV_PILL_HEIGHT = NAV_PILL_HEIGHT;
@@ -433,6 +434,17 @@ function isUnauthorizedSessionError(error) {
   return error?.status === 401;
 }
 
+function buildAuthCooldownState(error) {
+  if (typeof error?.retryAfterSeconds === 'number') {
+    return { message: error.message, retryAfterSeconds: error.retryAfterSeconds };
+  }
+  const match = /after (\d+) second/.exec(error?.message || '');
+  if (match) {
+    return { message: error.message, retryAfterSeconds: parseInt(match[1], 10) };
+  }
+  return null;
+}
+
 function buildTodayCheckinContext(source) {
   const container = source?.checkin && typeof source.checkin === 'object'
     ? source.checkin
@@ -492,8 +504,11 @@ function AppShell() {
   const [authPassword, setAuthPassword] = useState('');
   const [authUiError, setAuthUiError] = useState(null);
   const [authUiInfo, setAuthUiInfo] = useState(null);
+  const [authCooldownState, setAuthCooldownState] = useState(null);
   const [isAuthUiSubmitting, setIsAuthUiSubmitting] = useState(false);
   const [isSignInMode, setIsSignInMode] = useState(true);
+
+  const cooldownTimerMessage = useCooldownTimer(authCooldownState);
 
   const [isSessionLoading, setIsSessionLoading] = useState(true);
   const [isBootstrapLoading, setIsBootstrapLoading] = useState(false);
@@ -548,6 +563,7 @@ function AppShell() {
     setAuthPassword('');
     setAuthUiError(errorMessage);
     setAuthUiInfo(infoMessage);
+    setAuthCooldownState(null);
     setIsAuthUiSubmitting(false);
     setIsSignInMode(true);
     setActiveTab('coach');
@@ -1323,6 +1339,7 @@ function AppShell() {
       return;
     }
     setIsAuthUiSubmitting(true);
+    setAuthCooldownState(null);
     setAuthUiError(null);
     setAuthUiInfo(null);
     trackEvent('auth_started', { provider });
@@ -1359,6 +1376,7 @@ function AppShell() {
       return;
     }
     setIsAuthUiSubmitting(true);
+    setAuthCooldownState(null);
     setAuthUiError(null);
     setAuthUiInfo(null);
     trackEvent('auth_started', { provider: 'email_otp' });
@@ -1376,7 +1394,12 @@ function AppShell() {
       }
       setAuthUiInfo('Check your email for the secure sign-in link.');
     } catch (error) {
-      setAuthUiError(error?.message || 'Unable to send sign-in link.');
+      const cooldown = buildAuthCooldownState(error);
+      if (cooldown) {
+        setAuthCooldownState(cooldown);
+      } else {
+        setAuthUiError(error?.message || 'Unable to send sign-in link.');
+      }
     } finally {
       setIsAuthUiSubmitting(false);
     }
@@ -1397,6 +1420,7 @@ function AppShell() {
     }
 
     setIsAuthUiSubmitting(true);
+    setAuthCooldownState(null);
     setAuthUiError(null);
     setAuthUiInfo(null);
     trackEvent('auth_started', {
@@ -1440,7 +1464,12 @@ function AppShell() {
         }
       }
     } catch (error) {
-      setAuthUiError(error?.message || 'Unable to continue with password.');
+      const cooldown = buildAuthCooldownState(error);
+      if (cooldown) {
+        setAuthCooldownState(cooldown);
+      } else {
+        setAuthUiError(error?.message || 'Unable to continue with password.');
+      }
     } finally {
       setIsAuthUiSubmitting(false);
     }
@@ -1457,6 +1486,7 @@ function AppShell() {
     }
 
     setIsAuthUiSubmitting(true);
+    setAuthCooldownState(null);
     setAuthUiError(null);
     setAuthUiInfo(null);
     trackEvent('auth_password_reset_requested', {
@@ -1471,7 +1501,12 @@ function AppShell() {
       });
       setAuthUiInfo('Password reset link sent. Check your email to continue.');
     } catch (error) {
-      setAuthUiError(error?.message || 'Unable to send password reset instructions.');
+      const cooldown = buildAuthCooldownState(error);
+      if (cooldown) {
+        setAuthCooldownState(cooldown);
+      } else {
+        setAuthUiError(error?.message || 'Unable to send password reset instructions.');
+      }
     } finally {
       setIsAuthUiSubmitting(false);
     }
@@ -1673,9 +1708,12 @@ function AppShell() {
           onForgotPassword: handleForgotPassword,
           isSubmitting: isAuthUiSubmitting,
           isSignInMode,
-          onToggleSignInMode: () => setIsSignInMode((current) => !current),
+          onToggleSignInMode: () => {
+            setIsSignInMode((current) => !current);
+            setAuthCooldownState(null);
+          },
           infoMessage: authUiInfo,
-          errorMessage: authUiError,
+          errorMessage: cooldownTimerMessage ?? authUiError,
           layoutMode: 'inline',
         }}
       />

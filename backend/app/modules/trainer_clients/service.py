@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 from collections import Counter
+import hashlib
+import hmac
+import logging
 import secrets
-import string
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
+logger = logging.getLogger(__name__)
+
+from app.core.config import settings
 from app.core.tenancy import TrainerContext
 from app.modules.checkin_signals import build_checkin_question_summaries
 from app.modules.motivation import resolve_motivation_baseline
@@ -22,6 +27,7 @@ from app.modules.trainer_clients.schemas import (
     TrainerClientDetailResponse,
     TrainerClientIdentity,
     TrainerClientInviteCodeCreateRequest,
+    TrainerClientInviteCodeCreateResponse,
     TrainerClientInviteCodeListResponse,
     TrainerClientInviteCodeRecord,
     TrainerClientListResponse,
@@ -48,9 +54,6 @@ LEGACY_TO_CANONICAL_MODE = {
 
 
 class TrainerClientService:
-    INVITE_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    INVITE_CODE_LENGTH = 8
-
     def __init__(self, repository: TrainerClientRepository):
         self.repository = repository
 
@@ -254,6 +257,10 @@ class TrainerClientService:
         detached["created_at"] = updated.get("created_at", client_row.get("created_at"))
         return self._to_client_identity(detached)
 
+    HMAC_PEPPER_ID = "v1"
+    INVITE_CODE_EXPIRY_HOURS = 12
+    _MAX_CODE_COLLISION_RETRIES = 5
+
     def list_invite_codes(
         self,
         trainer_context: TrainerContext,
@@ -265,7 +272,7 @@ class TrainerClientService:
         rows = self.repository.list_invite_codes_for_trainer(trainer_id, tenant_id)
         paginated_rows = rows[offset:offset + limit]
         return TrainerClientInviteCodeListResponse(
-            items=[self._to_invite_code_record(row) for row in paginated_rows],
+            items=[self._to_invite_code_metadata_record(row) for row in paginated_rows],
             count=len(rows),
             limit=limit,
             offset=offset,
@@ -274,28 +281,49 @@ class TrainerClientService:
     def create_invite_code(
         self,
         trainer_context: TrainerContext,
-        request: TrainerClientInviteCodeCreateRequest,
-    ) -> TrainerClientInviteCodeRecord:
+        request: TrainerClientInviteCodeCreateRequest,  # noqa: ARG002
+    ) -> TrainerClientInviteCodeCreateResponse:
         trainer_id, tenant_id = self._require_trainer_context(trainer_context)
-        code = self._normalize_invite_code_for_write(request.code) or self._generate_invite_code()
-        if self.repository.get_invite_code_by_code(code=code):
-            raise ValueError("Invite code already exists")
+        pepper = settings.invite_code_hmac_pepper
+        if not pepper:
+            raise ValueError("Invite code service is not configured")
 
-        created = self.repository.create_invite_code(
-            {
-                "code": code,
-                "trainer_id": trainer_id,
-                "tenant_id": tenant_id,
-                "is_active": True,
-                "expires_at": request.expires_at.isoformat() if request.expires_at else None,
-                "metadata": request.metadata or {},
-            }
-        )
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=self.INVITE_CODE_EXPIRY_HOURS)
+
+        for _attempt in range(self._MAX_CODE_COLLISION_RETRIES):
+            plaintext = secrets.token_urlsafe(16)
+            code_hash = hmac.new(
+                pepper.encode("utf-8"),
+                plaintext.encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            if not self.repository.get_invite_code_by_hash(code_hash=code_hash):
+                break
+        else:
+            logger.error("invite_code_create_collision_limit_reached trainer=%s", trainer_id)
+            raise ValueError("Invite code create failed")
+
+        created = self.repository.create_invite_code({
+            "trainer_id": trainer_id,
+            "tenant_id": tenant_id,
+            "code_hash": code_hash,
+            "hmac_pepper_id": self.HMAC_PEPPER_ID,
+            "is_active": True,
+            "expires_at": expires_at.isoformat(),
+        })
         if not created:
             raise ValueError("Invite code create failed")
-        return self._to_invite_code_record(created)
 
-    def deactivate_invite_code(
+        return TrainerClientInviteCodeCreateResponse(
+            id=str(created.get("id") or ""),
+            code=plaintext,
+            trainer_id=str(created.get("trainer_id") or ""),
+            tenant_id=str(created.get("tenant_id") or ""),
+            expires_at=self._coerce_datetime(created.get("expires_at")),
+            created_at=self._coerce_datetime(created.get("created_at")),
+        )
+
+    def revoke_invite_code(
         self,
         trainer_context: TrainerContext,
         invite_id: str,
@@ -304,15 +332,10 @@ class TrainerClientService:
         existing = self.repository.get_invite_code_for_trainer(trainer_id, tenant_id, invite_id)
         if not existing:
             raise ValueError("Invite code not found")
-        updated = self.repository.update_invite_code_for_trainer(
-            trainer_id,
-            tenant_id,
-            invite_id,
-            {"is_active": False},
-        )
+        updated = self.repository.revoke_invite_code_for_trainer(trainer_id, tenant_id, invite_id)
         if not updated:
-            raise ValueError("Invite code deactivate failed")
-        return self._to_invite_code_record(updated)
+            raise ValueError("Invite code not found")
+        return self._to_invite_code_metadata_record(updated)
 
     def get_client_detail(
         self,
@@ -1057,18 +1080,32 @@ class TrainerClientService:
             resolved_at=self._coerce_datetime(row.get("resolved_at")),
         )
 
-    def _to_invite_code_record(self, row: dict[str, Any]) -> TrainerClientInviteCodeRecord:
-        metadata = row.get("metadata")
+    def _to_invite_code_metadata_record(self, row: dict[str, Any]) -> TrainerClientInviteCodeRecord:
+        is_active = bool(row.get("is_active", False))
+        used_at = self._coerce_datetime(row.get("used_at"))
+        revoked_at = self._coerce_datetime(row.get("revoked_at"))
+        expires_at = self._coerce_datetime(row.get("expires_at"))
+        now = datetime.now(timezone.utc)
+        if used_at:
+            status = "used"
+        elif revoked_at:
+            status = "revoked"
+        elif expires_at and expires_at <= now:
+            status = "expired"
+        elif is_active:
+            status = "active"
+        else:
+            status = "revoked"
         return TrainerClientInviteCodeRecord(
             id=str(row.get("id") or ""),
-            code=str(row.get("code") or ""),
             trainer_id=str(row.get("trainer_id") or ""),
             tenant_id=str(row.get("tenant_id") or ""),
-            is_active=bool(row.get("is_active", True)),
-            expires_at=self._coerce_datetime(row.get("expires_at")),
-            metadata=metadata if isinstance(metadata, dict) else {},
+            status=status,
+            is_active=is_active,
+            expires_at=expires_at,
+            used_at=used_at,
+            revoked_at=revoked_at,
             created_at=self._coerce_datetime(row.get("created_at")),
-            updated_at=self._coerce_datetime(row.get("updated_at")),
         )
 
     def _to_memory_record(self, row: dict[str, Any]) -> TrainerMemoryRecord:
@@ -1209,28 +1246,6 @@ class TrainerClientService:
         normalized_status = str(onboarding_status or "").strip().lower()
         return normalized_status != "completed"
 
-    def _normalize_invite_code_for_write(self, value: Any) -> str | None:
-        if value is None:
-            return None
-        normalized = str(value).strip().upper()
-        if not normalized:
-            return None
-        allowed = set(string.ascii_uppercase + string.digits + "-_")
-        if any(ch not in allowed for ch in normalized):
-            raise ValueError("Invite code must use only letters, numbers, '-' or '_'")
-        if len(normalized) > 32:
-            raise ValueError("Invite code must be 32 characters or fewer")
-        return normalized
-
-    def _generate_invite_code(self) -> str:
-        for _attempt in range(10):
-            candidate = "".join(
-                secrets.choice(self.INVITE_CODE_ALPHABET)
-                for _ in range(self.INVITE_CODE_LENGTH)
-            )
-            if not self.repository.get_invite_code_by_code(code=candidate):
-                return candidate
-        raise ValueError("Unable to generate unique invite code")
 
     def _normalize_mode(self, mode: Any) -> str | None:
         if not mode:

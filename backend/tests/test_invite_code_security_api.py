@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -12,9 +13,18 @@ os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 from fastapi.testclient import TestClient
 
 from app.core.auth import AuthenticatedUser, require_user
-from app.core.dependencies import get_trainer_context
+from app.core.dependencies import get_trainer_client_service, get_trainer_context
 from app.core.tenancy import TrainerContext
 from app.main import app
+from app.modules.trainer_clients.schemas import TrainerClientInviteCodeListResponse
+
+
+def _make_trainer_service_stub():
+    svc = MagicMock()
+    svc.list_invite_codes.return_value = TrainerClientInviteCodeListResponse(
+        items=[], count=0, limit=50, offset=0
+    )
+    return svc
 
 
 class InviteCodeSecurityApiTests(unittest.TestCase):
@@ -50,7 +60,8 @@ class InviteCodeSecurityApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json()["detail"], "Trainer-only endpoint")
 
-    def test_trainer_invite_code_enumeration_is_service_only(self):
+    def test_trainer_can_list_own_invite_codes(self):
+        """Trainer owner sees an empty list via the real (stubbed) service."""
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(
             id="trainer-owner-1",
             email="trainer@example.com",
@@ -64,13 +75,16 @@ class InviteCodeSecurityApiTests(unittest.TestCase):
             client_id=None,
             client_user_id=None,
         )
+        app.dependency_overrides[get_trainer_client_service] = _make_trainer_service_stub
 
         response = self.client.get(
             "/api/v1/trainer-clients/invite-codes",
             headers={"Authorization": "Bearer ignored"},
         )
-        self.assertEqual(response.status_code, 403)
-        self.assertIn("service-controlled", response.json()["detail"])
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("items", body)
+        self.assertEqual(body["items"], [])
 
     def test_trainer_cannot_list_another_trainers_invites(self):
         app.dependency_overrides[require_user] = lambda: AuthenticatedUser(

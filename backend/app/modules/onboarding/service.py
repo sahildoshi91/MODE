@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
+import hmac
 import re
 from typing import Any
 
 from app.core.auth import AuthenticatedUser
+from app.core.config import settings
 from app.modules.onboarding.repository import OnboardingRepository, SELF_GUIDED_TENANT_SLUG
 from app.modules.onboarding.schemas import (
     OnboardingBootstrapResponse,
@@ -25,7 +27,8 @@ PROFILE_FIELD_MAP = {
 }
 ONBOARDING_STATUS_VALUES = {"not_started", "in_progress", "completed"}
 ROLE_VALUES = {"client", "trainer"}
-INVITE_CODE_PATTERN = re.compile(r"^[A-Z0-9_-]{6,64}$")
+# Accepts both old uppercase codes and new token_urlsafe(16) codes (22 base64url chars).
+INVITE_CODE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 
 
 @dataclass
@@ -307,23 +310,86 @@ class OnboardingService:
         invite_code: str,
     ) -> OnboardingBootstrapResponse:
         self._last_assignment_mutation_rows = []
-        normalized_code = invite_code.strip().upper()
+        normalized_code = invite_code.strip()
         if not normalized_code:
             raise OnboardingServiceError("Invite code is required", status_code=422)
         if not INVITE_CODE_PATTERN.match(normalized_code):
             raise OnboardingServiceError("Invite code is invalid", status_code=404)
 
+        account = self.repository.ensure_user_account(user_id=user.id, email=user.email)
+        role = self.repository.get_user_role(user_account_id=account["id"])
+        if role and role not in ROLE_VALUES:
+            role = None
+        if role and role != "client":
+            raise OnboardingServiceError("Trainer-role accounts cannot attach to a trainer", status_code=409)
+
+        pepper = settings.invite_code_hmac_pepper
+        if pepper:
+            # New HMAC path: compute hash and let the RPC do the atomic lookup + consume.
+            code_hmac = hmac.new(
+                pepper.encode("utf-8"),
+                normalized_code.encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+            redeem_fn = getattr(self.repository, "redeem_invite_code_hmac", None)
+            if callable(redeem_fn):
+                try:
+                    mutation_rows = self._normalize_mutation_rows(
+                        redeem_fn(
+                            user_id=user.id,
+                            code_hmac=code_hmac,
+                            hmac_pepper_id="v1",
+                        )
+                    )
+                except Exception as exc:
+                    msg = str(exc).lower()
+                    if "inactive" in msg or "not found" in msg:
+                        raise OnboardingServiceError("Invite code is invalid", status_code=404) from exc
+                    raise OnboardingServiceError("Invite code is invalid", status_code=404) from exc
+                self._last_assignment_mutation_rows = mutation_rows
+                if not mutation_rows:
+                    raise OnboardingServiceError("Invite code is invalid", status_code=404)
+                target_client_id = self._target_client_id_from_assignment_rows(mutation_rows)
+                if not target_client_id:
+                    raise OnboardingServiceError("Unable to attach trainer with invite code", status_code=500)
+                assigned_row = next(
+                    (r for r in mutation_rows if r.get("event_type") == "assigned_by_invite"), {}
+                )
+                trainer_id = str(assigned_row.get("trainer_id") or "")
+                trainer = self.repository.get_trainer_by_id(trainer_id=trainer_id) if trainer_id else None
+                existing_state = self.repository.get_onboarding_state(user_account_id=account["id"])
+                existing_payload = existing_state.get("payload") if isinstance(existing_state, dict) else {}
+                if not isinstance(existing_payload, dict):
+                    existing_payload = {}
+                self.repository.upsert_onboarding_state(
+                    user_account_id=account["id"],
+                    flow_key=self.CLIENT_FLOW_KEY,
+                    status=self._normalize_onboarding_status(existing_state),
+                    current_step=(existing_state or {}).get("current_step") or self.CLIENT_FIRST_STEP,
+                    payload={
+                        **existing_payload,
+                        "trainer_invite_attached": True,
+                        "assigned_trainer_id": trainer_id,
+                        "assigned_trainer_display_name": trainer.get("display_name") if trainer else None,
+                        "assigned_client_id": target_client_id,
+                    },
+                    completed_at=(existing_state or {}).get("completed_at"),
+                )
+                return self.get_bootstrap(user)
+
+        # Legacy SHA-256 path (no pepper configured or redeem_invite_code_hmac not available).
+        normalized_upper = normalized_code.upper()
         invite_hash = ""
         hash_resolver = getattr(self.repository, "hash_invite_code", None)
         if callable(hash_resolver):
-            invite_hash = str(hash_resolver(normalized_code) or "").strip().lower()
+            invite_hash = str(hash_resolver(normalized_upper) or "").strip().lower()
         if not invite_hash:
-            invite_hash = self._hash_invite_code(normalized_code)
+            invite_hash = self._hash_invite_code(normalized_upper)
 
         try:
             code_row = self.repository.get_invite_code(code_hash=invite_hash)
         except TypeError:
-            code_row = self.repository.get_invite_code(code=normalized_code)
+            code_row = self.repository.get_invite_code(code=normalized_upper)
         if not code_row:
             raise OnboardingServiceError("Invite code is invalid", status_code=404)
         if not code_row.get("is_active"):
@@ -343,13 +409,6 @@ class OnboardingService:
         trainer = self.repository.get_trainer_by_id(trainer_id=code_row["trainer_id"])
         if not trainer or not trainer.get("is_active"):
             raise OnboardingServiceError("Trainer is unavailable", status_code=409)
-
-        account = self.repository.ensure_user_account(user_id=user.id, email=user.email)
-        role = self.repository.get_user_role(user_account_id=account["id"])
-        if role and role not in ROLE_VALUES:
-            role = None
-        if role and role != "client":
-            raise OnboardingServiceError("Trainer-role accounts cannot attach to a trainer", status_code=409)
 
         mutation_rows = self._normalize_mutation_rows(
             self.repository.reassign_client_by_invite(

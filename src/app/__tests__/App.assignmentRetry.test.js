@@ -6,8 +6,13 @@ const mockGetSession = jest.fn();
 const mockRefreshSession = jest.fn();
 const mockOnAuthStateChange = jest.fn();
 const mockSignOut = jest.fn();
+const mockSignInWithOtp = jest.fn();
+const mockSetSession = jest.fn();
 const mockClearSupabaseAuthSessionStorage = jest.fn();
 const mockIsInvalidRefreshTokenError = jest.fn();
+const mockSignInWithPasswordProxy = jest.fn();
+const mockSignUpWithPasswordProxy = jest.fn();
+const mockRequestPasswordResetProxy = jest.fn();
 const mockGetTrainerAssignmentStatus = jest.fn();
 const mockAssignTrainer = jest.fn();
 const mockGetOnboardingBootstrap = jest.fn();
@@ -41,8 +46,16 @@ jest.mock('../../services/supabaseClient', () => ({
       refreshSession: (...args) => mockRefreshSession(...args),
       onAuthStateChange: (...args) => mockOnAuthStateChange(...args),
       signOut: (...args) => mockSignOut(...args),
+      signInWithOtp: (...args) => mockSignInWithOtp(...args),
+      setSession: (...args) => mockSetSession(...args),
     },
   },
+}));
+
+jest.mock('../../features/auth/services/passwordAuthApi', () => ({
+  signInWithPasswordProxy: (...args) => mockSignInWithPasswordProxy(...args),
+  signUpWithPasswordProxy: (...args) => mockSignUpWithPasswordProxy(...args),
+  requestPasswordResetProxy: (...args) => mockRequestPasswordResetProxy(...args),
 }));
 
 jest.mock('../../features/trainerAssignment/services/trainerAssignmentApi', () => ({
@@ -362,6 +375,11 @@ describe('App assignment status retry behavior', () => {
       },
     });
     mockSetStringAsync.mockResolvedValue(undefined);
+    mockSignInWithOtp.mockResolvedValue({ error: null });
+    mockSetSession.mockResolvedValue({ data: { session: null }, error: null });
+    mockSignInWithPasswordProxy.mockResolvedValue({ access_token: 'tok', refresh_token: 'ref' });
+    mockSignUpWithPasswordProxy.mockResolvedValue({ access_token: 'tok', refresh_token: 'ref' });
+    mockRequestPasswordResetProxy.mockResolvedValue({ success: true });
     Linking.addEventListener = jest.fn(() => ({ remove: jest.fn() }));
     Linking.getInitialURL = jest.fn().mockResolvedValue(null);
   });
@@ -1017,6 +1035,170 @@ describe('App assignment status retry behavior', () => {
 
     const welcomeAfterPreview = tree.root.findByType('MockOnboardingLandingScreen');
     expect(welcomeAfterPreview).toBeTruthy();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+});
+
+describe('App auth cooldown wiring', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.clearAllMocks();
+    mockGetSession.mockResolvedValue({ data: { session: null } });
+    mockOnAuthStateChange.mockReturnValue({
+      data: { subscription: { unsubscribe: jest.fn() } },
+    });
+    mockGetLocalDateString.mockReturnValue('2026-05-05');
+    mockSignInWithOtp.mockResolvedValue({ error: null });
+    mockSetSession.mockResolvedValue({ data: { session: null }, error: null });
+    mockSignInWithPasswordProxy.mockResolvedValue({ access_token: 'tok', refresh_token: 'ref' });
+    mockSignUpWithPasswordProxy.mockResolvedValue({ access_token: 'tok', refresh_token: 'ref' });
+    mockRequestPasswordResetProxy.mockResolvedValue({ success: true });
+    Linking.addEventListener = jest.fn(() => ({ remove: jest.fn() }));
+    Linking.getInitialURL = jest.fn().mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    jest.runOnlyPendingTimers();
+    jest.useRealTimers();
+  });
+
+  it('displays countdown when OTP request returns a Supabase rate-limit error', async () => {
+    mockSignInWithOtp.mockResolvedValueOnce({
+      error: new Error('For security purposes, you can only request this after 38 seconds.'),
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const welcome = tree.root.findByType('MockOnboardingLandingScreen');
+    await act(async () => {
+      welcome.props.authProps.onEmailChange('user@example.com');
+    });
+    const afterEmail = tree.root.findByType('MockOnboardingLandingScreen');
+    await act(async () => {
+      await afterEmail.props.authProps.onContinueWithEmail();
+    });
+    await flushEffects();
+
+    const afterError = tree.root.findByType('MockOnboardingLandingScreen');
+    expect(afterError.props.authProps.errorMessage).toContain('38 seconds');
+
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(tree.root.findByType('MockOnboardingLandingScreen').props.authProps.errorMessage)
+      .toContain('37 seconds');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('displays countdown when password proxy returns a rate-limit error with retryAfterSeconds', async () => {
+    const cooldownError = new Error(
+      'For security purposes, you can only request this after 10 seconds.',
+    );
+    cooldownError.retryAfterSeconds = 10;
+    mockSignInWithPasswordProxy.mockRejectedValueOnce(cooldownError);
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    const welcome = tree.root.findByType('MockOnboardingLandingScreen');
+    await act(async () => {
+      welcome.props.authProps.onEmailChange('user@example.com');
+    });
+    await act(async () => {
+      tree.root.findByType('MockOnboardingLandingScreen').props.authProps.onPasswordChange('pw');
+    });
+    await act(async () => {
+      await tree.root.findByType('MockOnboardingLandingScreen').props.authProps.onContinueWithPassword();
+    });
+    await flushEffects();
+
+    expect(tree.root.findByType('MockOnboardingLandingScreen').props.authProps.errorMessage)
+      .toContain('10 seconds');
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('clears countdown when auth mode is toggled', async () => {
+    mockSignInWithOtp.mockResolvedValueOnce({
+      error: new Error('For security purposes, you can only request this after 10 seconds.'),
+    });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByType('MockOnboardingLandingScreen').props.authProps.onEmailChange('u@e.com');
+    });
+    await act(async () => {
+      await tree.root.findByType('MockOnboardingLandingScreen').props.authProps.onContinueWithEmail();
+    });
+    await flushEffects();
+
+    expect(tree.root.findByType('MockOnboardingLandingScreen').props.authProps.errorMessage)
+      .toContain('10 seconds');
+
+    await act(async () => {
+      tree.root.findByType('MockOnboardingLandingScreen').props.authProps.onToggleSignInMode();
+    });
+
+    expect(tree.root.findByType('MockOnboardingLandingScreen').props.authProps.errorMessage)
+      .toBeNull();
+
+    await act(async () => {
+      tree.unmount();
+    });
+  });
+
+  it('clears countdown when a new auth attempt begins', async () => {
+    mockSignInWithOtp
+      .mockResolvedValueOnce({
+        error: new Error('For security purposes, you can only request this after 10 seconds.'),
+      })
+      .mockResolvedValueOnce({ error: null });
+
+    let tree;
+    await act(async () => {
+      tree = renderer.create(<App />);
+    });
+    await flushEffects();
+
+    await act(async () => {
+      tree.root.findByType('MockOnboardingLandingScreen').props.authProps.onEmailChange('u@e.com');
+    });
+    await act(async () => {
+      await tree.root.findByType('MockOnboardingLandingScreen').props.authProps.onContinueWithEmail();
+    });
+    await flushEffects();
+
+    expect(tree.root.findByType('MockOnboardingLandingScreen').props.authProps.errorMessage)
+      .toContain('10 seconds');
+
+    // Second attempt succeeds — cooldown must clear even before the response lands
+    await act(async () => {
+      await tree.root.findByType('MockOnboardingLandingScreen').props.authProps.onContinueWithEmail();
+    });
+    await flushEffects();
+
+    expect(tree.root.findByType('MockOnboardingLandingScreen').props.authProps.errorMessage)
+      .toBeNull();
 
     await act(async () => {
       tree.unmount();

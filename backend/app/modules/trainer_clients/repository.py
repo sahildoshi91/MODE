@@ -227,9 +227,10 @@ class TrainerClientRepository:
         response = (
             self.supabase
             .table("trainer_invite_codes")
-            .select("id, code, trainer_id, tenant_id, is_active, expires_at, metadata, created_at, updated_at")
+            .select("id, trainer_id, tenant_id, is_active, expires_at, used_at, revoked_at, created_at")
             .eq("trainer_id", trainer_id)
             .eq("tenant_id", tenant_id)
+            .not_.is_("hmac_pepper_id", "null")
             .order("is_active", desc=True)
             .order("created_at", desc=True)
             .execute()
@@ -245,67 +246,55 @@ class TrainerClientRepository:
         response = (
             self.supabase
             .table("trainer_invite_codes")
-            .select("id, code, trainer_id, tenant_id, is_active, expires_at, metadata, created_at, updated_at")
+            .select("id, trainer_id, tenant_id, is_active, expires_at, used_at, revoked_at, created_at")
             .eq("trainer_id", trainer_id)
             .eq("tenant_id", tenant_id)
             .eq("id", invite_id)
+            .not_.is_("hmac_pepper_id", "null")
             .limit(1)
             .execute()
         )
         return response.data[0] if response.data else None
 
-    def get_invite_code_by_code(
+    def get_invite_code_by_hash(
         self,
         *,
-        code: str,
+        code_hash: str,
     ) -> dict[str, Any] | None:
-        normalized = code.strip()
-        if not normalized:
+        """Look up an active invite by HMAC hash. Used only to check uniqueness at creation time."""
+        if not code_hash:
             return None
         rows = (
             self.supabase
             .table("trainer_invite_codes")
-            .select("id, code, trainer_id, tenant_id, is_active, expires_at, metadata, created_at, updated_at")
-            .eq("code", normalized)
+            .select("id")
+            .eq("code_hash", code_hash)
             .limit(1)
             .execute()
         ).data or []
-        if rows:
-            return rows[0]
-
-        fallback = normalized.upper()
-        if fallback == normalized:
-            return None
-        fallback_rows = (
-            self.supabase
-            .table("trainer_invite_codes")
-            .select("id, code, trainer_id, tenant_id, is_active, expires_at, metadata, created_at, updated_at")
-            .eq("code", fallback)
-            .limit(1)
-            .execute()
-        ).data or []
-        return fallback_rows[0] if fallback_rows else None
+        return rows[0] if rows else None
 
     def create_invite_code(self, payload: dict[str, Any]) -> dict[str, Any] | None:
         response = self.supabase.table("trainer_invite_codes").insert(payload).execute()
         return (response.data or [None])[0]
 
-    def update_invite_code_for_trainer(
+    def revoke_invite_code_for_trainer(
         self,
         trainer_id: str,
         tenant_id: str,
         invite_id: str,
-        fields: dict[str, Any],
     ) -> dict[str, Any] | None:
-        payload = dict(fields)
-        payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         response = (
             self.supabase
             .table("trainer_invite_codes")
-            .update(payload)
+            .update({"is_active": False, "revoked_at": now, "updated_at": now})
             .eq("trainer_id", trainer_id)
             .eq("tenant_id", tenant_id)
             .eq("id", invite_id)
+            .eq("is_active", True)
+            .is_("used_at", "null")
+            .is_("revoked_at", "null")
             .execute()
         )
         return response.data[0] if response.data else None

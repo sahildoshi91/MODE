@@ -510,6 +510,28 @@ class OnboardingRepository:
         ).data or []
         return rows
 
+    def redeem_invite_code_hmac(
+        self,
+        *,
+        user_id: str,
+        code_hmac: str,
+        hmac_pepper_id: str,
+    ) -> list[dict[str, Any]]:
+        """Atomically redeem an HMAC-keyed invite code via the redeem_invite_code RPC."""
+        rows = (
+            self.supabase_admin
+            .rpc(
+                "redeem_invite_code",
+                {
+                    "p_user_id": user_id,
+                    "p_code_hmac": code_hmac,
+                    "p_hmac_pepper_id": hmac_pepper_id,
+                },
+            )
+            .execute()
+        ).data or []
+        return rows
+
     def get_trainer_by_id(self, *, trainer_id: str) -> dict[str, Any] | None:
         rows = (
             self.supabase_admin

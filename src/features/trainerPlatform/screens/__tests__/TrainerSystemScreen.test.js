@@ -1051,7 +1051,7 @@ describe('TrainerSystemScreen', () => {
     expect(flattened.paddingBottom).toBe(theme.spacing[4] + 40);
   });
 
-  it('shows admin-managed invite notice in client management', async () => {
+  it('shows clients-tab invite redirect notice in client management', async () => {
     const tree = await renderScreen();
     await act(async () => {
       findPressableByTestID(tree.root, 'trainer-system-nav-clients-list').props.onPress();
@@ -1064,8 +1064,10 @@ describe('TrainerSystemScreen', () => {
 
     const rendered = JSON.stringify(tree.toJSON());
     expect(rendered).toContain('Client Invites');
-    expect(rendered).toContain('Invite code management is handled by MODE platform admin services for security.');
-    expect(rendered).not.toContain('Create invite code');
+    expect(rendered).toContain('Create invite codes from the Clients tab');
+    expect(rendered).toContain('Codes expire in 12 hours and are single-use');
+    // TrainerSystemScreen should not have a "Create" action button for codes
+    expect(rendered).not.toContain('trainer-system-create-invite-code');
   });
 
   it('shows Pending user only in Client Management assigned clients list', async () => {

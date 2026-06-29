@@ -41,14 +41,14 @@ class FakeTrainerClientService:
         self.invite_code_rows = [
             {
                 "id": "invite-1",
-                "code": "MODE1234",
                 "trainer_id": "trainer-123",
                 "tenant_id": "tenant-1",
+                "status": "active",
                 "is_active": True,
                 "expires_at": None,
-                "metadata": {"source": "system"},
+                "used_at": None,
+                "revoked_at": None,
                 "created_at": "2026-04-11T09:00:00+00:00",
-                "updated_at": "2026-04-11T09:00:00+00:00",
             }
         ]
         self.meeting_locations = {
@@ -172,40 +172,36 @@ class FakeTrainerClientService:
 
     def list_invite_codes(self, trainer_context, limit=50, offset=0):
         del trainer_context
-        return {
-            "items": self.invite_code_rows[offset:offset + limit],
-            "count": len(self.invite_code_rows),
-            "limit": limit,
-            "offset": offset,
-        }
+        from app.modules.trainer_clients.schemas import TrainerClientInviteCodeListResponse, TrainerClientInviteCodeRecord
+        items = [TrainerClientInviteCodeRecord(**r) for r in self.invite_code_rows[offset:offset + limit]]
+        return TrainerClientInviteCodeListResponse(
+            items=items,
+            count=len(self.invite_code_rows),
+            limit=limit,
+            offset=offset,
+        )
 
     def create_invite_code(self, trainer_context, request):
-        del trainer_context
-        code = request.code or "AUTO1234"
-        normalized_code = code.strip().upper()
-        if any(row["code"].upper() == normalized_code for row in self.invite_code_rows):
-            raise ValueError("Invite code already exists")
-        created = {
-            "id": f"invite-{len(self.invite_code_rows) + 1}",
-            "code": normalized_code,
-            "trainer_id": "trainer-123",
-            "tenant_id": "tenant-1",
-            "is_active": True,
-            "expires_at": request.expires_at.isoformat() if request.expires_at else None,
-            "metadata": request.metadata,
-            "created_at": "2026-04-12T09:00:00+00:00",
-            "updated_at": "2026-04-12T09:00:00+00:00",
-        }
-        self.invite_code_rows = [created, *self.invite_code_rows]
-        return created
+        del trainer_context, request
+        from app.modules.trainer_clients.schemas import TrainerClientInviteCodeCreateResponse
+        return TrainerClientInviteCodeCreateResponse(
+            id="invite-new",
+            code="StubbedCode123456789AB",
+            trainer_id="trainer-123",
+            tenant_id="tenant-1",
+            expires_at=None,
+            created_at=None,
+        )
 
-    def deactivate_invite_code(self, trainer_context, invite_id):
+    def revoke_invite_code(self, trainer_context, invite_id):
         del trainer_context
+        from app.modules.trainer_clients.schemas import TrainerClientInviteCodeRecord
         for row in self.invite_code_rows:
             if row["id"] == invite_id:
                 row["is_active"] = False
-                row["updated_at"] = "2026-04-12T10:00:00+00:00"
-                return row
+                row["status"] = "revoked"
+                row["revoked_at"] = "2026-04-12T10:00:00+00:00"
+                return TrainerClientInviteCodeRecord(**row)
         raise ValueError("Invite code not found")
 
     def get_client_detail(self, trainer_context, client_id, target_date=None):
@@ -672,23 +668,26 @@ class TrainerClientsApiTests(unittest.TestCase):
             "/api/v1/trainer-clients/invite-codes",
             headers={"Authorization": "Bearer ignored-by-override"},
         )
-        self.assertEqual(invite_list_response.status_code, 403)
-        self.assertIn("service-controlled", invite_list_response.json()["detail"])
+        self.assertEqual(invite_list_response.status_code, 200)
+        self.assertEqual(invite_list_response.json()["count"], 1)
+        self.assertNotIn("code", invite_list_response.json()["items"][0])
 
         invite_create_response = self.client.post(
             "/api/v1/trainer-clients/invite-codes",
-            json={"code": "newcode42", "metadata": {"source": "hub"}},
+            json={},
             headers={"Authorization": "Bearer ignored-by-override"},
         )
-        self.assertEqual(invite_create_response.status_code, 403)
-        self.assertIn("service-controlled", invite_create_response.json()["detail"])
+        self.assertEqual(invite_create_response.status_code, 200)
+        body = invite_create_response.json()
+        self.assertIn("code", body)
+        self.assertEqual(body["trainer_id"], "trainer-123")
 
         invite_delete_response = self.client.delete(
             "/api/v1/trainer-clients/invite-codes/invite-1",
             headers={"Authorization": "Bearer ignored-by-override"},
         )
-        self.assertEqual(invite_delete_response.status_code, 403)
-        self.assertIn("service-controlled", invite_delete_response.json()["detail"])
+        self.assertEqual(invite_delete_response.status_code, 200)
+        self.assertEqual(invite_delete_response.json()["status"], "revoked")
 
     def test_connection_request_routes_list_approve_and_reject(self):
         list_response = self.client.get(
@@ -753,13 +752,13 @@ class TrainerClientsApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response.json()["detail"], "Memory not found")
 
-    def test_invite_code_routes_are_service_only_for_trainers(self):
+    def test_invite_code_revoke_missing_id_returns_404(self):
         response = self.client.delete(
             "/api/v1/trainer-clients/invite-codes/missing-id",
             headers={"Authorization": "Bearer ignored-by-override"},
         )
-        self.assertEqual(response.status_code, 403)
-        self.assertIn("service-controlled", response.json()["detail"])
+        self.assertEqual(response.status_code, 404)
+        self.assertIn("not found", response.json()["detail"].lower())
 
     def test_meeting_location_requires_existing_scheduled_session(self):
         response = self.client.patch(

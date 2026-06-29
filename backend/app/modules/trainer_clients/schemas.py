@@ -60,15 +60,26 @@ class TrainerClientUpdateRequest(BaseModel):
 
 
 class TrainerClientInviteCodeRecord(BaseModel):
+    """Metadata-only view returned by GET and DELETE. Never includes plaintext code or hash."""
+    id: str
+    trainer_id: str
+    tenant_id: str
+    status: str = "active"
+    is_active: bool = True
+    expires_at: datetime | None = None
+    used_at: datetime | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class TrainerClientInviteCodeCreateResponse(BaseModel):
+    """Returned only by POST /invite-codes. Includes the plaintext code shown once."""
     id: str
     code: str
     trainer_id: str
     tenant_id: str
-    is_active: bool = True
     expires_at: datetime | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime | None = None
-    updated_at: datetime | None = None
 
 
 class TrainerClientInviteCodeListResponse(BaseModel):
@@ -79,9 +90,7 @@ class TrainerClientInviteCodeListResponse(BaseModel):
 
 
 class TrainerClientInviteCodeCreateRequest(BaseModel):
-    code: str | None = None
-    expires_at: datetime | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    pass
 
 
 class TrainerClientCheckinDailyResponse(BaseModel):

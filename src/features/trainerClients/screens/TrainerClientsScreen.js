@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   FlatList,
   Keyboard,
   Modal,
@@ -12,6 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
+import * as Clipboard from 'expo-clipboard';
 
 import {
   GlassSurface,
@@ -43,6 +45,7 @@ import {
   archiveTrainerClientMemory,
   createTrainerClientScheduleException,
   createTrainerClientMemory,
+  createTrainerInviteCode,
   deleteTrainerClientScheduleException,
   getTrainerClientSchedulePreferences,
   getTrainerClientAIContext,
@@ -1540,6 +1543,13 @@ export default function TrainerClientsScreen({
   const [editingTagsText, setEditingTagsText] = useState('');
   const [isEditingTagsVisible, setIsEditingTagsVisible] = useState(false);
 
+  const [isInviteModalVisible, setIsInviteModalVisible] = useState(false);
+  const [inviteCode, setInviteCode] = useState(null);
+  const [isCreatingInvite, setIsCreatingInvite] = useState(false);
+  const [inviteCreateError, setInviteCreateError] = useState(null);
+  const [inviteCopied, setInviteCopied] = useState(false);
+  const inviteCodeRef = useRef(null);
+
   const [draftQueueItems, setDraftQueueItems] = useState([]);
   const [isLoadingDraftQueue, setIsLoadingDraftQueue] = useState(true);
   const [draftQueueError, setDraftQueueError] = useState(null);
@@ -1931,6 +1941,62 @@ export default function TrainerClientsScreen({
   useEffect(() => {
     setScheduleFeedbackByClient({});
   }, [dayFilter, sessionFilter]);
+
+  const clearInviteCode = useCallback(() => {
+    setInviteCode(null);
+    setInviteCopied(false);
+    inviteCodeRef.current = null;
+  }, []);
+
+  const closeInviteModal = useCallback(() => {
+    setIsInviteModalVisible(false);
+    setInviteCreateError(null);
+    clearInviteCode();
+  }, [clearInviteCode]);
+
+  const handleCreateInvite = useCallback(async () => {
+    if (!accessToken) {
+      return;
+    }
+    setIsCreatingInvite(true);
+    setInviteCreateError(null);
+    clearInviteCode();
+    try {
+      const result = await createTrainerInviteCode({ accessToken });
+      const code = result?.code || null;
+      setInviteCode(code);
+      inviteCodeRef.current = code;
+      setIsInviteModalVisible(true);
+    } catch (err) {
+      setInviteCreateError(err?.message || 'Unable to create invite code. Try again.');
+      setIsInviteModalVisible(true);
+    } finally {
+      setIsCreatingInvite(false);
+    }
+  }, [accessToken, clearInviteCode]);
+
+  const handleCopyInviteCode = useCallback(async () => {
+    const code = inviteCodeRef.current;
+    if (!code) {
+      return;
+    }
+    try {
+      await Clipboard.setStringAsync(code);
+      setInviteCopied(true);
+    } catch {
+      // clipboard unavailable — silently ignore
+    }
+  }, []);
+
+  // Clear plaintext code when the app moves to background.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active') {
+        clearInviteCode();
+      }
+    });
+    return () => subscription.remove();
+  }, [clearInviteCode]);
 
   const closeFilterSheet = useCallback(() => {
     setActiveFilterSheet(null);
@@ -3455,6 +3521,32 @@ export default function TrainerClientsScreen({
           </ModeCard>
         </Pressable>
 
+        <ModeCard
+          variant="surface"
+          testID="trainer-clients-invite-code-card"
+          style={styles.actionsTierCard}
+        >
+          <View style={styles.inviteCodeCardRow}>
+            <View style={styles.inviteCodeCardCopy}>
+              <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Grow your roster</ModeText>
+              <ModeText variant="bodySm">Invite a new client</ModeText>
+            </View>
+            <ModeButton
+              testID="trainer-clients-create-invite-code-button"
+              title={isCreatingInvite ? 'Creating…' : 'Create invite code'}
+              size="sm"
+              variant="secondary"
+              disabled={isCreatingInvite}
+              onPress={handleCreateInvite}
+            />
+          </View>
+          {inviteCreateError && !isInviteModalVisible ? (
+            <ModeText variant="caption" tone="error" style={styles.inviteCreateErrorText}>
+              {inviteCreateError}
+            </ModeText>
+          ) : null}
+        </ModeCard>
+
         {shouldShowConnectionRequestsCard ? (
           <ModeCard
             variant="surface"
@@ -3772,6 +3864,76 @@ export default function TrainerClientsScreen({
         onReset={resetFilters}
         bottomInset={insets.bottom}
       />
+
+      <Modal
+        visible={isInviteModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={closeInviteModal}
+        testID="trainer-clients-invite-modal"
+      >
+        <Pressable
+          style={styles.inviteModalOverlay}
+          onPress={closeInviteModal}
+          accessibilityRole="button"
+          accessibilityLabel="Close invite code modal"
+        >
+          <Pressable style={styles.inviteModalSheet} onPress={() => {}}>
+            <View style={styles.inviteModalHeader}>
+              <ModeText variant="h3">Client invite code</ModeText>
+              <Pressable
+                onPress={closeInviteModal}
+                style={({ pressed }) => [styles.inviteModalCloseButton, pressed && styles.inviteModalCloseButtonPressed]}
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                hitSlop={8}
+              >
+                <Feather name="x" size={20} color={theme.colors.text.secondary} />
+              </Pressable>
+            </View>
+
+            {inviteCreateError ? (
+              <ModeText variant="bodySm" tone="error" style={styles.inviteModalError}>
+                {inviteCreateError}
+              </ModeText>
+            ) : null}
+
+            {inviteCode ? (
+              <>
+                <View style={styles.inviteCodeDisplay} testID="trainer-clients-invite-code-value">
+                  <ModeText variant="h2" style={styles.inviteCodeText}>{inviteCode}</ModeText>
+                </View>
+
+                <ModeButton
+                  testID="trainer-clients-invite-code-copy-button"
+                  title={inviteCopied ? 'Copied!' : 'Copy code'}
+                  variant={inviteCopied ? 'ghost' : 'primary'}
+                  size="md"
+                  onPress={handleCopyInviteCode}
+                  style={styles.inviteModalCopyButton}
+                />
+
+                <View style={styles.inviteModalMeta}>
+                  <ModeText variant="caption" tone="secondary">Expires in 12 hours · Single use</ModeText>
+                </View>
+
+                <ModeText variant="caption" tone="tertiary" style={styles.inviteModalHelper}>
+                  Share this code with your client. It expires in 12 hours, can only be used once, and will not be shown again.
+                </ModeText>
+              </>
+            ) : null}
+
+            <ModeButton
+              testID="trainer-clients-invite-modal-done"
+              title="Done"
+              variant="ghost"
+              size="sm"
+              onPress={closeInviteModal}
+              style={styles.inviteModalDoneButton}
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
     </SafeScreen>
   );
 }
@@ -4491,5 +4653,75 @@ const styles = StyleSheet.create({
   aiContextSection: {
     marginTop: theme.spacing[2],
     gap: theme.spacing[1] - 2,
+  },
+  inviteCodeCardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: theme.spacing[2],
+  },
+  inviteCodeCardCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  inviteCreateErrorText: {
+    marginTop: theme.spacing[1],
+  },
+  inviteModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'flex-end',
+  },
+  inviteModalSheet: {
+    backgroundColor: theme.colors.surface.card || theme.colors.background.app,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: theme.spacing[4],
+    paddingTop: theme.spacing[3],
+    paddingBottom: theme.spacing[5],
+    gap: theme.spacing[2],
+  },
+  inviteModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: theme.spacing[1],
+  },
+  inviteModalCloseButton: {
+    padding: theme.spacing[1],
+    borderRadius: 8,
+  },
+  inviteModalCloseButtonPressed: {
+    opacity: 0.5,
+  },
+  inviteModalError: {
+    marginTop: theme.spacing[1],
+  },
+  inviteCodeDisplay: {
+    alignItems: 'center',
+    paddingVertical: theme.spacing[3],
+    paddingHorizontal: theme.spacing[2],
+    backgroundColor: theme.colors.surface.base || theme.colors.background.app,
+    borderRadius: 12,
+    marginVertical: theme.spacing[1],
+  },
+  inviteCodeText: {
+    letterSpacing: 2,
+    textAlign: 'center',
+  },
+  inviteModalCopyButton: {
+    marginTop: theme.spacing[1],
+  },
+  inviteModalMeta: {
+    alignItems: 'center',
+    marginTop: theme.spacing[1],
+  },
+  inviteModalHelper: {
+    textAlign: 'center',
+    paddingHorizontal: theme.spacing[2],
+    marginTop: theme.spacing[1],
+  },
+  inviteModalDoneButton: {
+    marginTop: theme.spacing[2],
   },
 });

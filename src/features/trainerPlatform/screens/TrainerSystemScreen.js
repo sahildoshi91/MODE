@@ -1746,7 +1746,7 @@ function ClientsListScreen({
         {!isLoading && !error && payload.items.length === 0 ? (
           <EmptyListState
             title="No assigned clients"
-            detail="Client invitations are admin-managed. Check trainer assignments or contact support to invite clients."
+            detail="Use the Clients tab to create an invite code and share it with your client."
           />
         ) : null}
         {!isLoading && !error && payload.items.length > 0 ? payload.items.map((client) => (
@@ -1898,8 +1898,7 @@ function ClientManagementScreen({
       <ModeCard variant="hero">
         <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>Client Invites</ModeText>
         <ModeText variant="bodySm" tone="secondary">
-          Invite code management is handled by MODE platform admin services for security.
-          Contact support to issue, rotate, or revoke client invite codes.
+          Create invite codes from the Clients tab. Codes expire in 12 hours and are single-use.
         </ModeText>
       </ModeCard>
 
@@ -1924,7 +1923,7 @@ function ClientManagementScreen({
         {!isLoading && !error && clientsPayload.items.length === 0 ? (
           <EmptyListState
             title="No assigned clients"
-            detail="Client invitations are admin-managed. Adjust search filters or contact support to invite new clients."
+            detail="Use the Clients tab to create an invite code and share it with your client."
           />
         ) : null}
         {!isLoading && !error && clientsPayload.items.length > 0 ? clientsPayload.items.map((client) => (

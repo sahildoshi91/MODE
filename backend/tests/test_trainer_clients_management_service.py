@@ -3,6 +3,7 @@ import sys
 import unittest
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 os.environ.setdefault("OPENAI_API_KEY", "test-openai-key")
@@ -80,14 +81,15 @@ class FakeTrainerClientRepository:
         self.invite_codes = [
             {
                 "id": "invite-1",
-                "code": "MODE1234",
+                "code_hash": "seeded-hash-1",
+                "hmac_pepper_id": "v1",
                 "trainer_id": "trainer-123",
                 "tenant_id": "tenant-1",
                 "is_active": True,
                 "expires_at": None,
-                "metadata": {"source": "seed"},
+                "used_at": None,
+                "revoked_at": None,
                 "created_at": "2026-04-11T09:00:00+00:00",
-                "updated_at": "2026-04-11T09:00:00+00:00",
             }
         ]
         self.connection_requests = [
@@ -238,10 +240,9 @@ class FakeTrainerClientRepository:
                 return dict(row)
         return None
 
-    def get_invite_code_by_code(self, *, code: str):
-        normalized = code.strip().lower()
+    def get_invite_code_by_hash(self, *, code_hash: str):
         for row in self.invite_codes:
-            if str(row["code"]).strip().lower() == normalized:
+            if row.get("code_hash") == code_hash:
                 return dict(row)
         return None
 
@@ -249,17 +250,16 @@ class FakeTrainerClientRepository:
         created = {
             "id": f"invite-{len(self.invite_codes) + 1}",
             "created_at": "2026-04-12T09:00:00+00:00",
-            "updated_at": "2026-04-12T09:00:00+00:00",
             **payload,
         }
         self.invite_codes.insert(0, created)
         return dict(created)
 
-    def update_invite_code_for_trainer(self, trainer_id: str, tenant_id: str, invite_id: str, fields: dict):
+    def revoke_invite_code_for_trainer(self, trainer_id: str, tenant_id: str, invite_id: str):
         for row in self.invite_codes:
             if row["id"] == invite_id and row["trainer_id"] == trainer_id and row["tenant_id"] == tenant_id:
-                row.update(fields)
-                row["updated_at"] = "2026-04-12T10:00:00+00:00"
+                row["is_active"] = False
+                row["revoked_at"] = "2026-04-12T10:00:00+00:00"
                 return dict(row)
         return None
 
@@ -372,29 +372,40 @@ class TrainerClientManagementServiceTests(unittest.TestCase):
         self.assertIsNotNone(active_assignment["unassigned_at"])
 
     def test_invite_code_lifecycle(self):
-        created = self.service.create_invite_code(
-            self.trainer_context,
-            TrainerClientInviteCodeCreateRequest(
-                code="fresh42",
-                metadata={"source": "system-hub"},
-            ),
-        )
-        self.assertEqual(created.code, "FRESH42")
-        self.assertTrue(created.is_active)
+        with patch("app.modules.trainer_clients.service.settings") as mock_settings:
+            mock_settings.invite_code_hmac_pepper = "test-pepper-for-unit-tests"
+            created = self.service.create_invite_code(
+                self.trainer_context,
+                TrainerClientInviteCodeCreateRequest(),
+            )
+        # code is a 22-char token_urlsafe(16) string
+        self.assertIsNotNone(created.code)
+        self.assertGreater(len(created.code), 0)
+        self.assertEqual(created.trainer_id, "trainer-123")
+        self.assertEqual(created.tenant_id, "tenant-1")
 
         listing = self.service.list_invite_codes(self.trainer_context, limit=10, offset=0)
         self.assertEqual(listing.count, 2)
-        self.assertEqual(listing.items[0].code, "FRESH42")
+        # listing items must NOT expose plaintext code
+        self.assertFalse(hasattr(listing.items[0], "code") and listing.items[0].__dict__.get("code"))
 
-        deactivated = self.service.deactivate_invite_code(self.trainer_context, created.id)
-        self.assertFalse(deactivated.is_active)
+        revoked = self.service.revoke_invite_code(self.trainer_context, created.id)
+        self.assertFalse(revoked.is_active)
+        self.assertEqual(revoked.status, "revoked")
 
-    def test_duplicate_invite_code_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, "Invite code already exists"):
-            self.service.create_invite_code(
+    def test_create_invite_code_generates_unique_code(self):
+        with patch("app.modules.trainer_clients.service.settings") as mock_settings:
+            mock_settings.invite_code_hmac_pepper = "test-pepper-for-unit-tests"
+            result1 = self.service.create_invite_code(
                 self.trainer_context,
-                TrainerClientInviteCodeCreateRequest(code="mode1234"),
+                TrainerClientInviteCodeCreateRequest(),
             )
+            result2 = self.service.create_invite_code(
+                self.trainer_context,
+                TrainerClientInviteCodeCreateRequest(),
+            )
+        # Two codes generated in the same session must differ
+        self.assertNotEqual(result1.code, result2.code)
 
     def test_list_clients_marks_pending_users_from_onboarding_status(self):
         listing = self.service.list_clients(self.trainer_context, limit=10, offset=0)
