@@ -1518,7 +1518,7 @@ export default function TrainerClientsScreen({
   const [isSavingDetailSchedule, setIsSavingDetailSchedule] = useState(false);
   const [, setDetailScheduleError] = useState(null);
   const [, setDetailScheduleSuccess] = useState(null);
-  const [isDetailContextExpanded, setIsDetailContextExpanded] = useState(false);
+  const [isDetailContextExpanded, setIsDetailContextExpanded] = useState(true);
   const [setupClientId, setSetupClientId] = useState(null);
   const [setupReturnView, setSetupReturnView] = useState(VIEW_MODE.COMMAND_CENTER);
   const [setupFocusSection, setSetupFocusSection] = useState('schedule');
@@ -3150,65 +3150,159 @@ export default function TrainerClientsScreen({
 
           {!isLoadingDetail && !detailError ? (
             <>
+              <ModeCard variant="tinted" style={styles.detailStatusStrip}>
+                <View style={styles.detailStatusStripRow}>
+                  <ModeText variant="bodyStrong">{detailStatusLabel}</ModeText>
+                </View>
+                <ModeText variant="bodySm" tone="secondary" style={styles.detailStatusStripMeta}>
+                  {detailSummaryLine}
+                </ModeText>
+                <ModeText variant="caption" tone="secondary">
+                  {detailMetricLine}
+                </ModeText>
+              </ModeCard>
+
               <QuestionSignalDetailSection
                 questionSummaries={detailQuestionSummaries}
                 isMissingFromBackend={isDetailQuestionSummariesMissing}
                 windowLabel={detailSignalWindowLabel}
               />
 
+              <ModeCard variant="surface" style={styles.clientContextCard}>
+                <Pressable
+                  testID="trainer-client-context-toggle"
+                  onPress={() => setIsDetailContextExpanded((current) => !current)}
+                  style={({ pressed }) => [styles.clientContextToggle, pressed && styles.clientContextTogglePressed]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Toggle client context"
+                >
+                  <View style={styles.clientContextToggleCopy}>
+                    <ModeText variant="label" tone="tertiary" style={styles.memorySectionLabel}>Client Context</ModeText>
+                    <ModeText variant="caption" tone="secondary" numberOfLines={1}>
+                      {profile.primary_goal || 'Goal not set'} • {detailStatusLabel}
+                    </ModeText>
+                  </View>
+                  <Feather
+                    name={isDetailContextExpanded ? 'chevron-up' : 'chevron-down'}
+                    size={16}
+                    color={theme.colors.text.secondary}
+                  />
+                </Pressable>
+
+                {isDetailContextExpanded ? (
+                  <View style={styles.clientContextExpanded}>
+                    <View style={styles.clientContextGroup}>
+                      <ModeText variant="caption" tone="tertiary">Profile</ModeText>
+                      <ModeText variant="bodySm">Goal: {profile.primary_goal || 'Not set'}</ModeText>
+                      <ModeText variant="caption" tone="secondary">
+                        Onboarding: {profile.onboarding_status || 'unknown'} • Experience: {profile.experience_level || 'Not set'}
+                      </ModeText>
+                    </View>
+                    <View style={styles.clientContextGroup}>
+                      <ModeText variant="caption" tone="tertiary">Activity</ModeText>
+                      <ModeText variant="caption" tone="secondary">
+                        {activity.checkins_completed_7d || 0} check-ins • avg {formatAvgScore(activity.avg_score_7d)} • {activity.workouts_completed_7d || 0} workouts
+                      </ModeText>
+                      <ModeText variant="caption" tone="secondary">
+                        Latest check-in: {formatDateLabel(activity.latest_checkin_date)} • Location: {activity.meeting_location || 'Not set'}
+                      </ModeText>
+                    </View>
+                    <View style={styles.clientContextGroup}>
+                      <ModeText variant="caption" tone="tertiary">Session Setup</ModeText>
+                      <ModeText variant="caption" tone="secondary">{detailSummaryLine}</ModeText>
+                      <ModeText variant="caption" tone="secondary">{detailSummaryMeta}</ModeText>
+                      <ModeText variant="caption" tone="secondary">
+                        Template days: {formatIsoWeekdaySummary(schedulePreferences?.recurring_weekdays)}
+                      </ModeText>
+                      <ModeText variant="caption" tone="secondary">
+                        Client default location: {schedulePreferences?.preferred_meeting_location || 'Not set'}
+                      </ModeText>
+                      {upcomingExceptions.length > 0 ? (
+                        <View style={styles.scheduleExceptionListCompact}>
+                          {upcomingExceptions.map((exception) => (
+                            <ModeText
+                              key={`${exception.client_id || selectedClientId}-${exception.session_date}`}
+                              variant="caption"
+                              tone="secondary"
+                            >
+                              • {exception.session_date}: {exception.exception_type}
+                              {exception.meeting_location_override ? ` @ ${exception.meeting_location_override}` : ''}
+                            </ModeText>
+                          ))}
+                        </View>
+                      ) : (
+                        <ModeText variant="caption" tone="secondary">No upcoming date exceptions.</ModeText>
+                      )}
+                      <ModeButton
+                        title="Edit Client Setup"
+                        size="sm"
+                        variant="secondary"
+                        onPress={() => handleOpenClientSetup(selectedClientId, {
+                          focusSection: 'schedule',
+                          origin: VIEW_MODE.CLIENT_DETAIL,
+                        })}
+                        style={styles.clientContextActionButton}
+                      />
+                    </View>
+                  </View>
+                ) : null}
+              </ModeCard>
+
               <ModeCard variant="surface" style={styles.memoryHubCard}>
                 <View style={styles.memorySectionHeaderRow}>
                   <ModeText variant="label" tone="tertiary" style={styles.memorySectionLabel}>Client Memory</ModeText>
                   <ModeText variant="caption" tone="secondary">{memoryRecords.length} saved</ModeText>
                 </View>
-                <ModeInput
-                  testID="trainer-client-memory-composer-input"
-                  value={newMemoryText}
-                  onChangeText={setNewMemoryText}
-                  placeholder="Add memory note..."
-                />
-                <View style={styles.memoryToggleRow}>
-                  <ModeText variant="bodySm">AI can read this</ModeText>
-                  <GlassToggle
-                    testID="trainer-client-memory-composer-ai-toggle"
-                    value={newMemoryAiReadable}
-                    onValueChange={setNewMemoryAiReadable}
-                    disabled={isSavingMemory}
-                  />
-                </View>
-                {isNewMemoryTagsVisible ? (
+                <View style={styles.memoryComposerArea}>
                   <ModeInput
-                    testID="trainer-client-memory-composer-tags-input"
-                    value={newMemoryTagsText}
-                    onChangeText={setNewMemoryTagsText}
-                    placeholder="Tags (comma separated)"
+                    testID="trainer-client-memory-composer-input"
+                    value={newMemoryText}
+                    onChangeText={setNewMemoryText}
+                    placeholder="Add memory note..."
                   />
-                ) : (
-                  <Pressable
-                    testID="trainer-client-memory-composer-add-tags"
-                    onPress={() => setIsNewMemoryTagsVisible(true)}
-                    style={({ pressed }) => [styles.memoryTagsAction, pressed && styles.memoryTagsActionPressed]}
-                    accessibilityRole="button"
-                    accessibilityLabel="Add tags"
-                  >
-                    <ModeText variant="caption" tone="secondary" style={styles.memoryTagsActionText}>Add tags</ModeText>
-                  </Pressable>
-                )}
-                <ModeButton
-                  testID="trainer-client-memory-composer-save"
-                  title={isSavingMemory ? 'Saving...' : 'Save Memory'}
-                  size="sm"
-                  variant="primary"
-                  disabled={isSavingMemory}
-                  onPress={handleCreateMemory}
-                  style={styles.memorySaveButton}
-                />
-                {memoryMutationError ? (
-                  <ModeText variant="caption" tone="error" style={styles.memoryInlineFeedback}>{memoryMutationError}</ModeText>
-                ) : null}
-                {memoryMutationSuccess ? (
-                  <ModeText variant="caption" tone="secondary" style={styles.memoryInlineFeedback}>{memoryMutationSuccess}</ModeText>
-                ) : null}
+                  <View style={styles.memoryToggleRow}>
+                    <ModeText variant="bodySm">AI can read this</ModeText>
+                    <GlassToggle
+                      testID="trainer-client-memory-composer-ai-toggle"
+                      value={newMemoryAiReadable}
+                      onValueChange={setNewMemoryAiReadable}
+                      disabled={isSavingMemory}
+                    />
+                  </View>
+                  {isNewMemoryTagsVisible ? (
+                    <ModeInput
+                      testID="trainer-client-memory-composer-tags-input"
+                      value={newMemoryTagsText}
+                      onChangeText={setNewMemoryTagsText}
+                      placeholder="Tags (comma separated)"
+                    />
+                  ) : (
+                    <Pressable
+                      testID="trainer-client-memory-composer-add-tags"
+                      onPress={() => setIsNewMemoryTagsVisible(true)}
+                      style={({ pressed }) => [styles.memoryTagsAction, pressed && styles.memoryTagsActionPressed]}
+                      accessibilityRole="button"
+                      accessibilityLabel="Add tags"
+                    >
+                      <ModeText variant="caption" tone="secondary" style={styles.memoryTagsActionText}>Add tags</ModeText>
+                    </Pressable>
+                  )}
+                  <ModeButton
+                    testID="trainer-client-memory-composer-save"
+                    title={isSavingMemory ? 'Saving...' : 'Save Memory'}
+                    size="sm"
+                    variant="primary"
+                    disabled={isSavingMemory}
+                    onPress={handleCreateMemory}
+                    style={styles.memorySaveButton}
+                  />
+                  {memoryMutationError ? (
+                    <ModeText variant="caption" tone="error" style={styles.memoryInlineFeedback}>{memoryMutationError}</ModeText>
+                  ) : null}
+                  {memoryMutationSuccess ? (
+                    <ModeText variant="caption" tone="secondary" style={styles.memoryInlineFeedback}>{memoryMutationSuccess}</ModeText>
+                  ) : null}
+                </View>
 
                 <View style={styles.memoryDenseList}>
                   {memoryRecords.length === 0 ? (
@@ -3295,87 +3389,6 @@ export default function TrainerClientsScreen({
                 </View>
               </ModeCard>
 
-              <ModeCard variant="surface" style={styles.clientContextCard}>
-                <Pressable
-                  testID="trainer-client-context-toggle"
-                  onPress={() => setIsDetailContextExpanded((current) => !current)}
-                  style={({ pressed }) => [styles.clientContextToggle, pressed && styles.clientContextTogglePressed]}
-                  accessibilityRole="button"
-                  accessibilityLabel="Toggle client context"
-                >
-                  <View style={styles.clientContextToggleCopy}>
-                    <ModeText variant="label" tone="tertiary" style={styles.memorySectionLabel}>Client Context</ModeText>
-                    <ModeText variant="caption" tone="secondary" numberOfLines={1}>
-                      {profile.primary_goal || 'Goal not set'} • {detailStatusLabel}
-                    </ModeText>
-                  </View>
-                  <Feather
-                    name={isDetailContextExpanded ? 'chevron-up' : 'chevron-down'}
-                    size={16}
-                    color={theme.colors.text.secondary}
-                  />
-                </Pressable>
-
-                {isDetailContextExpanded ? (
-                  <View style={styles.clientContextExpanded}>
-                    <View style={styles.clientContextGroup}>
-                      <ModeText variant="caption" tone="tertiary">Profile</ModeText>
-                      <ModeText variant="bodySm">Goal: {profile.primary_goal || 'Not set'}</ModeText>
-                      <ModeText variant="caption" tone="secondary">
-                        Onboarding: {profile.onboarding_status || 'unknown'} • Experience: {profile.experience_level || 'Not set'}
-                      </ModeText>
-                    </View>
-                    <View style={styles.clientContextGroup}>
-                      <ModeText variant="caption" tone="tertiary">Activity</ModeText>
-                      <ModeText variant="caption" tone="secondary">
-                        {activity.checkins_completed_7d || 0} check-ins • avg {formatAvgScore(activity.avg_score_7d)} • {activity.workouts_completed_7d || 0} workouts
-                      </ModeText>
-                      <ModeText variant="caption" tone="secondary">
-                        Latest check-in: {formatDateLabel(activity.latest_checkin_date)} • Location: {activity.meeting_location || 'Not set'}
-                      </ModeText>
-                    </View>
-                    <View style={styles.clientContextGroup}>
-                      <ModeText variant="caption" tone="tertiary">Session Setup</ModeText>
-                      <ModeText variant="caption" tone="secondary">{detailSummaryLine}</ModeText>
-                      <ModeText variant="caption" tone="secondary">{detailSummaryMeta}</ModeText>
-                      <ModeText variant="caption" tone="secondary">{detailMetricLine}</ModeText>
-                      <ModeText variant="caption" tone="secondary">
-                        Template days: {formatIsoWeekdaySummary(schedulePreferences?.recurring_weekdays)}
-                      </ModeText>
-                      <ModeText variant="caption" tone="secondary">
-                        Client default location: {schedulePreferences?.preferred_meeting_location || 'Not set'}
-                      </ModeText>
-                      {upcomingExceptions.length > 0 ? (
-                        <View style={styles.scheduleExceptionListCompact}>
-                          {upcomingExceptions.map((exception) => (
-                            <ModeText
-                              key={`${exception.client_id || selectedClientId}-${exception.session_date}`}
-                              variant="caption"
-                              tone="secondary"
-                            >
-                              • {exception.session_date}: {exception.exception_type}
-                              {exception.meeting_location_override ? ` @ ${exception.meeting_location_override}` : ''}
-                            </ModeText>
-                          ))}
-                        </View>
-                      ) : (
-                        <ModeText variant="caption" tone="secondary">No upcoming date exceptions.</ModeText>
-                      )}
-                      <ModeButton
-                        title="Edit Client Setup"
-                        size="sm"
-                        variant="secondary"
-                        onPress={() => handleOpenClientSetup(selectedClientId, {
-                          focusSection: 'schedule',
-                          origin: VIEW_MODE.CLIENT_DETAIL,
-                        })}
-                        style={styles.clientContextActionButton}
-                      />
-                    </View>
-                  </View>
-                ) : null}
-              </ModeCard>
-
               <ModeCard variant="surface">
                 <ModeText variant="label" tone="tertiary" style={styles.sectionLabel}>How AI Sees This Client</ModeText>
                 <ModeText variant="bodySm">
@@ -3385,7 +3398,7 @@ export default function TrainerClientsScreen({
                   Internal-only memory excluded: {aiContextPayload?.internal_only_memory_count || 0}
                 </ModeText>
 
-                <View style={styles.aiContextSection}>
+                <View style={styles.aiContextDivider}>
                   <ModeText variant="caption" tone="tertiary">Applied AI-Usable Memory</ModeText>
                   {aiUsableMemory.length > 0 ? (
                     aiUsableMemory.map((entry) => (
@@ -3398,7 +3411,7 @@ export default function TrainerClientsScreen({
                   )}
                 </View>
 
-                <View style={styles.aiContextSection}>
+                <View style={styles.aiContextDivider}>
                   <ModeText variant="caption" tone="tertiary">Trainer Rule Summary</ModeText>
                   {ruleSummary.length > 0 ? (
                     ruleSummary.map((rule) => (
@@ -4590,7 +4603,7 @@ const styles = StyleSheet.create({
     paddingTop: theme.spacing[1],
   },
   clientContextGroup: {
-    gap: 2,
+    gap: theme.spacing[1],
   },
   clientContextActionButton: {
     marginTop: theme.spacing[1] - 4,
@@ -4653,6 +4666,32 @@ const styles = StyleSheet.create({
   aiContextSection: {
     marginTop: theme.spacing[2],
     gap: theme.spacing[1] - 2,
+  },
+  aiContextDivider: {
+    marginTop: theme.spacing[2],
+    paddingTop: theme.spacing[2],
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.glass.borderSoft,
+    gap: theme.spacing[1] - 2,
+  },
+  detailStatusStrip: {
+    gap: 2,
+  },
+  detailStatusStripRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: theme.spacing[1],
+  },
+  detailStatusStripMeta: {
+    marginTop: 2,
+  },
+  memoryComposerArea: {
+    backgroundColor: theme.colors.surface.elevated,
+    borderRadius: theme.radii.m,
+    padding: theme.spacing[2],
+    gap: theme.spacing[1] - 2,
+    marginTop: theme.spacing[1],
+    marginBottom: theme.spacing[1],
   },
   inviteCodeCardRow: {
     flexDirection: 'row',
