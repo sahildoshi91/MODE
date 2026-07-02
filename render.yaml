@@ -3,7 +3,7 @@ services:
     runtime: python
     name: mode-backend-staging
     repo: https://github.com/sahildoshi91/MODE
-    branch: pr6-ai-chat-memory-scaling
+    branch: main
     rootDir: backend
     region: oregon
     plan: starter
@@ -54,7 +54,7 @@ services:
     runtime: python
     name: mode-intelligence-worker-staging
     repo: https://github.com/sahildoshi91/MODE
-    branch: pr6-ai-chat-memory-scaling
+    branch: main
     rootDir: backend
     region: oregon
     plan: starter
@@ -88,7 +88,7 @@ services:
     runtime: python
     name: mode-storage-cleanup-staging
     repo: https://github.com/sahildoshi91/MODE
-    branch: pr6-ai-chat-memory-scaling
+    branch: main
     rootDir: backend
     region: oregon
     plan: starter
