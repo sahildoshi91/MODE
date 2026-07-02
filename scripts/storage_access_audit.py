@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ALLOWLIST = {
     "backend/app/api/v1/storage_private.py",
     "backend/app/modules/account_deletion/repository.py",
+    "backend/app/modules/feedback/service.py",
     "backend/app/modules/storage_lifecycle/repository.py",
     "backend/tests/test_storage_private_api.py",
     "scripts/storage_access_audit.py",
