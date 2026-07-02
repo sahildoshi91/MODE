@@ -426,6 +426,18 @@
     },
     {
       "schema": "public",
+      "table": "app_feedback_reports",
+      "classification": "personal",
+      "deletion_policy": {
+        "action": "delete_rows",
+        "subject": "user_id",
+        "column": "user_id",
+        "execution_order": 866,
+        "description": "Tester feedback can contain user-authored bug reports, reproduction steps, screen context, and screenshot references."
+      }
+    },
+    {
+      "schema": "public",
       "table": "workout_plans",
       "classification": "personal",
       "deletion_policy": {

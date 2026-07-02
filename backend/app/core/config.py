@@ -94,6 +94,8 @@ class Settings(BaseSettings):
     rate_limit_memory_create_per_window: int = 20
     rate_limit_file_upload_per_window: int = 20
     rate_limit_expensive_ai_per_window: int = 8
+    rate_limit_feedback_per_window: int = 10
+    rate_limit_feedback_window_seconds: int = 3600
     cors_allow_origins: str = (
         "http://localhost:19006,http://127.0.0.1:19006,"
         "http://localhost:8081,http://127.0.0.1:8081,"

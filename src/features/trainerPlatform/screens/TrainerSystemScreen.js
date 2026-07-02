@@ -86,6 +86,7 @@ import {
 } from '../../atlas/services/atlasApi';
 import { formatIsoWeekdaySummary } from '../../trainerClients/utils/scheduleResolver';
 import { generateKnowledgeNoteTitle } from '../utils/knowledgeNoteTitleSummary';
+import FeedbackInboxScreen from '../../feedback/FeedbackInboxScreen';
 
 const SYSTEM_VIEW = {
   HUB: 'hub',
@@ -99,6 +100,7 @@ const SYSTEM_VIEW = {
   REVIEW_HUB: 'review_hub',
   ATLAS_ADMIN_REVIEW: 'atlas_admin_review',
   SYSTEM_ACCOUNT: 'system_account',
+  FEEDBACK_INBOX: 'feedback_inbox',
 };
 
 const REVIEW_SEGMENT = {
@@ -540,6 +542,7 @@ function TrainerSystemHubScreen({
   onboardingState,
   onNavigate,
   showAtlasAdminReview = false,
+  showFeedbackInbox = false,
 }) {
   return (
     <SectionShell
@@ -641,6 +644,19 @@ function TrainerSystemHubScreen({
           testID="trainer-system-nav-system-account"
         />
       </SystemSectionCard>
+
+      {showFeedbackInbox ? (
+        <SystemSectionCard>
+          <SystemSectionHeader title="Support" />
+          <SystemNavRow
+            icon="message-circle"
+            title="Feedback Inbox"
+            subtitle="View tester feedback reports"
+            onPress={() => onNavigate(SYSTEM_VIEW.FEEDBACK_INBOX)}
+            testID="trainer-system-nav-feedback-inbox"
+          />
+        </SystemSectionCard>
+      ) : null}
     </SectionShell>
   );
 }
@@ -3542,6 +3558,7 @@ export default function TrainerSystemScreen({
   bottomInset = 0,
   assignmentStatus,
   session,
+  bootstrap = null,
   onSignOut,
   onOpenTrainerCoach,
 }) {
@@ -3812,6 +3829,15 @@ export default function TrainerSystemScreen({
     );
   }
 
+  if (currentView.key === SYSTEM_VIEW.FEEDBACK_INBOX && bootstrap?.is_feedback_admin) {
+    return (
+      <FeedbackInboxScreen
+        onBack={popView}
+        accessToken={accessToken}
+      />
+    );
+  }
+
   return (
     <TrainerSystemHubScreen
       bottomInset={bottomInset}
@@ -3821,6 +3847,7 @@ export default function TrainerSystemScreen({
       onboardingState={onboardingState}
       onNavigate={pushView}
       showAtlasAdminReview={showAtlasAdminReview}
+      showFeedbackInbox={Boolean(bootstrap?.is_feedback_admin)}
     />
   );
 }

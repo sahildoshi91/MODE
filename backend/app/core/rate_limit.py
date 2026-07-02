@@ -223,11 +223,13 @@ _LIMITS_BY_GROUP = {
     "memory_create": lambda: settings.rate_limit_memory_create_per_window,
     "file_upload": lambda: settings.rate_limit_file_upload_per_window,
     "expensive_ai": lambda: settings.rate_limit_expensive_ai_per_window,
+    "feedback": lambda: settings.rate_limit_feedback_per_window,
 }
 
 _WINDOWS_BY_GROUP = {
     "credential_password_change": lambda: settings.rate_limit_credential_password_change_window_seconds,
     "credential_email_change": lambda: settings.rate_limit_credential_email_change_window_seconds,
+    "feedback": lambda: settings.rate_limit_feedback_window_seconds,
 }
 
 _rate_limiter = _InMemoryRateLimiter()

@@ -54,8 +54,10 @@ import {
   AUTH_SOCIAL_ENABLED,
   BREATHING_TRANSITION_DEMO_ENABLED,
   BREATHING_TRANSITIONS_ENABLED,
+  RAGE_SHAKE_FEEDBACK_ENABLED,
   TRAINER_ROUTE_FOUNDATION_ENABLED,
 } from '../config/featureFlags';
+import FeedbackReporter from '../features/feedback/FeedbackReporter';
 import { BREATHING_CONTEXT, BreathingTransitionOverlay } from '../features/shared/loading';
 import BreathingTransitionDemoScreen from '../features/shared/loading/BreathingTransitionDemoScreen';
 import {
@@ -546,6 +548,7 @@ function AppShell() {
   const wasAuthenticatedRef = useRef(false);
   const analyticsQueueRef = useRef([]);
   const isFlushingAnalyticsRef = useRef(false);
+  const appContentRef = useRef(null);
 
   const resetSignedOutState = useCallback(({
     infoMessage = null,
@@ -1829,6 +1832,7 @@ function AppShell() {
 
   return (
     <View style={styles.shell}>
+      <View ref={appContentRef} style={styles.shell}>
       <Animated.View
         style={[
           styles.screenContainer,
@@ -1847,6 +1851,7 @@ function AppShell() {
             coachChatBottomInset={coachChatBottomInset}
             assignmentStatus={assignmentStatus}
             session={session}
+            bootstrap={bootstrap}
             onOpenTrainerCoach={handleOpenTrainerCoach}
             onTrainerOnboardingActivated={handleTrainerOnboardingActivated}
             onSignOut={handleSignOut}
@@ -2020,6 +2025,18 @@ function AppShell() {
           activeMode={homeCurrentMode}
         />
       ) : null}
+      </View>
+
+      {RAGE_SHAKE_FEEDBACK_ENABLED && session && bootstrap && (
+        <FeedbackReporter
+          accessToken={session.access_token}
+          activeTab={activeTab}
+          viewerRole={assignmentStatus?.viewer_role}
+          trainerId={bootstrap?.assigned_trainer_id}
+          clientId={assignmentStatus?.client_id || null}
+          appContentRef={appContentRef}
+        />
+      )}
     </View>
   );
 }

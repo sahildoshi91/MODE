@@ -136,6 +136,7 @@ class OnboardingService:
             assigned_trainer_display_name=assigned_trainer_display_name,
             is_legacy_trainer=bool(legacy_trainer and legacy_trainer.get("is_legacy")),
             is_self_guided=tenant_slug == SELF_GUIDED_TENANT_SLUG,
+            is_feedback_admin=(user.email or "").lower() in settings.atlas_admin_email_allowlist_list,
         )
 
     def set_role(

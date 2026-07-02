@@ -65,7 +65,7 @@ _FORBIDDEN_MIME_PREFIXES = (
 
 
 class PrivateUploadUrlRequest(BaseModel):
-    scope: Literal["client_self", "trainer_workspace", "trainer_client"]
+    scope: Literal["client_self", "trainer_workspace", "trainer_client", "feedback_screenshot"]
     filename: str = Field(min_length=1, max_length=180)
     mime_type: str = Field(min_length=3, max_length=180)
     size_bytes: int = Field(gt=0, le=1024 * 1024 * 512)
@@ -167,6 +167,11 @@ def _build_object_path(
         prefix = f"trainer/{trainer_id}/clients/{client_id}"
         owner_trainer_id = trainer_id
         owner_client_id = client_id
+    elif scope == "feedback_screenshot":
+        user_id = str(user.id)
+        prefix = f"feedback/{user_id}"
+        owner_trainer_id = None
+        owner_client_id = None
     else:
         raise HTTPException(status_code=422, detail="Invalid storage scope")
 

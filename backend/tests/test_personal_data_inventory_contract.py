@@ -78,6 +78,18 @@ def test_remaining_analytics_tables_are_non_reversible_or_deleted() -> None:
         assert row.deletion_policy.action in {"retention_ttl", "keep"}
 
 
+def test_app_feedback_reports_in_inventory() -> None:
+    inventory = load_personal_data_inventory(strict=True)
+    tables = {t.table for t in inventory.tables}
+    assert "app_feedback_reports" in tables, (
+        "app_feedback_reports must be listed in personal_data_inventory.json"
+    )
+    entry = next(t for t in inventory.tables if t.table == "app_feedback_reports")
+    assert entry.classification == "personal"
+    assert entry.deletion_policy.action == "delete_rows"
+    assert entry.deletion_policy.column == "user_id"
+
+
 def test_check_personal_data_inventory_script_runs_in_static_mode() -> None:
     completed = subprocess.run(
         [sys.executable, str(SCRIPT_PATH)],

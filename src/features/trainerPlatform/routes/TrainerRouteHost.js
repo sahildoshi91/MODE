@@ -23,6 +23,7 @@ export default function TrainerRouteHost({
   coachChatBottomInset,
   assignmentStatus,
   session,
+  bootstrap = null,
   onOpenTrainerCoach,
   onTrainerOnboardingActivated = null,
   onSignOut,
@@ -77,6 +78,7 @@ export default function TrainerRouteHost({
         bottomInset={contentBottomInset}
         assignmentStatus={assignmentStatus}
         session={session}
+        bootstrap={bootstrap}
         onSignOut={onSignOut}
         onOpenTrainerCoach={onOpenTrainerCoach}
       />

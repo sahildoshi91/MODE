@@ -53,3 +53,7 @@ export const BREATHING_TRANSITION_DEMO_ENABLED = parseBooleanFlag(
   process.env.EXPO_PUBLIC_BREATHING_TRANSITION_DEMO_ENABLED,
   false,
 );
+export const RAGE_SHAKE_FEEDBACK_ENABLED = parseBooleanFlag(
+  process.env.EXPO_PUBLIC_RAGE_SHAKE_FEEDBACK_ENABLED,
+  true,
+);

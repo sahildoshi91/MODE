@@ -24,6 +24,7 @@ class OnboardingBootstrapResponse(BaseModel):
 
     is_legacy_trainer: bool = False
     is_self_guided: bool = False
+    is_feedback_admin: bool = False
 
 
 class OnboardingRoleRequest(BaseModel):
