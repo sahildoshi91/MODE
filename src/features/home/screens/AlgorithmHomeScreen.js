@@ -21,7 +21,8 @@ import {
   ModeText,
   SafeScreen,
 } from '../../../../lib/components';
-import { theme } from '../../../../lib/theme';
+import { theme, resolveThemeV2, themeV2Tokens } from '../../../../lib/theme';
+import { THEME_V2_ENABLED } from '../../../config/featureFlags';
 import AlgorithmSummaryCard from '../components/AlgorithmSummaryCard';
 import {
   createMyMemory,
@@ -168,6 +169,8 @@ function InlineMemoryEditor({
   placeholder,
   error,
   modeTheme,
+  themeV2,
+  surface3,
   testID,
 }) {
   return (
@@ -178,8 +181,8 @@ function InlineMemoryEditor({
       padding={0}
       style={styles.memoryEditorChip}
       contentStyle={styles.memoryEditorContent}
-      fillColor={theme.memoryChip.fillEditing}
-      borderColor={modeTheme.cardBorder}
+      fillColor={themeV2 ? surface3.fill : theme.memoryChip.fillEditing}
+      borderColor={themeV2 ? surface3.border : modeTheme.cardBorder}
       highlight
     >
       <TextInput
@@ -188,7 +191,7 @@ function InlineMemoryEditor({
         onChangeText={onChangeText}
         placeholder={placeholder}
         placeholderTextColor={theme.colors.text.muted}
-        selectionColor={modeTheme.accent}
+        selectionColor={themeV2 ? themeV2.accent : modeTheme.accent}
         multiline
         autoFocus
         autoCapitalize="sentences"
@@ -214,15 +217,18 @@ function InlineMemoryEditor({
           onPress={onSave}
           style={({ pressed }) => [
             styles.memoryIconButton,
-            { borderColor: modeTheme.cardBorder, backgroundColor: modeTheme.accentSoft },
+            {
+              borderColor: themeV2 ? surface3.border : modeTheme.cardBorder,
+              backgroundColor: themeV2 ? themeV2.wash : modeTheme.accentSoft,
+            },
             pressed && styles.pressedControl,
             saving && styles.disabledControl,
           ]}
         >
           {saving ? (
-            <ActivityIndicator size="small" color={modeTheme.accentStrong} />
+            <ActivityIndicator size="small" color={themeV2 ? themeV2.accent : modeTheme.accentStrong} />
           ) : (
-            <Feather name="check" size={17} color={modeTheme.accentStrong} />
+            <Feather name="check" size={17} color={themeV2 ? themeV2.accent : modeTheme.accentStrong} />
           )}
         </Pressable>
         <Pressable
@@ -253,6 +259,7 @@ function InlineMemoryEditor({
 function MemoryFactChip({
   memory,
   modeTheme,
+  themeV2,
   onPress,
   onLongPress,
   onDelete,
@@ -324,8 +331,16 @@ function MemoryFactChip({
           padding={0}
           style={styles.memoryPill}
           contentStyle={styles.memoryPillContent}
-          borderColor={isDeleteCandidate ? theme.memoryChip.borderDelete : modeTheme.cardBorder}
-          fillColor={isDeleteCandidate ? theme.memoryChip.fillDelete : theme.memoryChip.fill}
+          borderColor={
+            isDeleteCandidate
+              ? theme.memoryChip.borderDelete
+              : themeV2 ? themeV2.surfaces.surface1.border : modeTheme.cardBorder
+          }
+          fillColor={
+            isDeleteCandidate
+              ? theme.memoryChip.fillDelete
+              : themeV2 ? themeV2.surfaces.surface1.fill : theme.memoryChip.fill
+          }
           highlight={memory?.ai_usable}
         >
           <ModeText variant="bodySm" style={styles.memoryPillText}>
@@ -358,25 +373,33 @@ function MemoryFactChip({
   );
 }
 
-function ModeAtmosphere({ modeTheme }) {
+function ModeAtmosphere({ modeTheme, themeV2 }) {
   const secondaryGlow = colorWithOpacity(modeTheme.accent, 0.07);
 
   return (
     <View pointerEvents="none" style={styles.modeAtmosphere}>
       <LinearGradient
-        colors={[modeTheme.backgroundAlt, modeTheme.background]}
+        colors={
+          themeV2
+            ? [themeV2.surfaces.page, themeV2.surfaces.page]
+            : [modeTheme.backgroundAlt, modeTheme.background]
+        }
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
         style={StyleSheet.absoluteFill}
       />
       <LinearGradient
-        colors={['rgba(40,80,255,0.22)', 'rgba(20,40,160,0.06)', 'transparent']}
+        colors={
+          themeV2
+            ? [themeV2.wash, theme.colors.utility.transparent]
+            : ['rgba(40,80,255,0.22)', 'rgba(20,40,160,0.06)', 'transparent']
+        }
         start={{ x: 0.65, y: 0 }}
         end={{ x: 0.35, y: 1 }}
         style={styles.primaryGlow}
       />
       <LinearGradient
-        colors={[secondaryGlow, theme.colors.utility.transparent]}
+        colors={[themeV2 ? themeV2.wash : secondaryGlow, theme.colors.utility.transparent]}
         start={{ x: 0.1, y: 0 }}
         end={{ x: 0.9, y: 1 }}
         style={styles.secondaryGlow}
@@ -440,10 +463,21 @@ export default function AlgorithmHomeScreen({
 
   const isMemoryMutating = Boolean(memorySavingId || memoryDeletingId);
   const modeTheme = useMemo(() => getModeTheme(currentMode), [currentMode]);
+  const themeV2 = useMemo(
+    () => (THEME_V2_ENABLED ? resolveThemeV2(currentMode) : null),
+    [currentMode],
+  );
+  // Dev-only. Never ships to a real build. Compares surface3 elevation models.
+  const [elevationModel, setElevationModel] = useState('opaque'); // 'opaque' | 'overlay'
+  const surface3 = __DEV__
+    ? (elevationModel === 'opaque'
+      ? themeV2Tokens.surfaces.surface3Opaque
+      : themeV2Tokens.surfaces.surface3Overlay)
+    : themeV2Tokens.surfaces.surface3Opaque; // production always uses canonical A
   const greetingName = useMemo(() => getGreetingName(viewerDisplayName), [viewerDisplayName]);
   const headerDate = useMemo(() => formatHeaderDate(), []);
   const readinessLabel = useMemo(() => formatReadinessScore(readinessScore), [readinessScore]);
-  const readinessTextColor = colorWithOpacity(modeTheme.accent, 0.55);
+  const readinessTextColor = themeV2 ? themeV2.text.secondary : colorWithOpacity(modeTheme.accent, 0.55);
 
   const showFeedback = useCallback((message) => {
     setFeedback(message);
@@ -696,7 +730,7 @@ export default function AlgorithmHomeScreen({
   }, [accessToken, isMemoryMutating, payload, showFeedback]);
 
   const whyHeaderAction = whySaving ? (
-    <ActivityIndicator size="small" color={modeTheme.accentStrong} />
+    <ActivityIndicator size="small" color={themeV2 ? themeV2.accent : modeTheme.accentStrong} />
   ) : whyEditing ? (
     <Pressable
       testID="algorithm-why-save"
@@ -706,20 +740,26 @@ export default function AlgorithmHomeScreen({
       onPress={handleSaveWhy}
       style={({ pressed }) => [
         styles.whyHeaderAction,
-        { borderColor: modeTheme.cardBorder, backgroundColor: modeTheme.accentSoft },
+        {
+          borderColor: themeV2 ? themeV2.surfaces.surface2.border : modeTheme.cardBorder,
+          backgroundColor: themeV2 ? themeV2.wash : modeTheme.accentSoft,
+        },
         pressed && styles.pressedControl,
       ]}
     >
-      <Feather name="save" size={18} color={modeTheme.accentStrong} />
+      <Feather name="save" size={18} color={themeV2 ? themeV2.accent : modeTheme.accentStrong} />
     </Pressable>
   ) : (
-    <Feather name="edit-2" size={18} color={modeTheme.accentStrong} />
+    <Feather name="edit-2" size={18} color={themeV2 ? themeV2.accent : modeTheme.accentStrong} />
   );
 
   if (loading) {
     return (
-      <SafeScreen includeTopInset={false} style={[styles.screen, { backgroundColor: modeTheme.background }]}>
-        <ModeAtmosphere modeTheme={modeTheme} />
+      <SafeScreen
+        includeTopInset={false}
+        style={[styles.screen, { backgroundColor: themeV2 ? themeV2.surfaces.page : modeTheme.background }]}
+      >
+        <ModeAtmosphere modeTheme={modeTheme} themeV2={themeV2} />
         <LoadingSkeleton bottomInset={bottomInset} modeTheme={modeTheme} />
       </SafeScreen>
     );
@@ -727,8 +767,11 @@ export default function AlgorithmHomeScreen({
 
   if (error) {
     return (
-      <SafeScreen includeTopInset={false} style={[styles.screen, { backgroundColor: modeTheme.background }]}>
-        <ModeAtmosphere modeTheme={modeTheme} />
+      <SafeScreen
+        includeTopInset={false}
+        style={[styles.screen, { backgroundColor: themeV2 ? themeV2.surfaces.page : modeTheme.background }]}
+      >
+        <ModeAtmosphere modeTheme={modeTheme} themeV2={themeV2} />
         <View style={[styles.errorWrap, { paddingTop: Math.max(insets.top, theme.spacing[3]) }]}>
           <GlassSurface
             state="elevated"
@@ -750,8 +793,11 @@ export default function AlgorithmHomeScreen({
   }
 
   return (
-    <SafeScreen includeTopInset={false} style={[styles.screen, { backgroundColor: modeTheme.background }]}>
-      <ModeAtmosphere modeTheme={modeTheme} />
+    <SafeScreen
+      includeTopInset={false}
+      style={[styles.screen, { backgroundColor: themeV2 ? themeV2.surfaces.page : modeTheme.background }]}
+    >
+      <ModeAtmosphere modeTheme={modeTheme} themeV2={themeV2} />
       <KeyboardAvoidingView behavior="padding" style={styles.keyboardAvoidingView}>
         <ScrollView
           keyboardShouldPersistTaps="handled"
@@ -780,14 +826,30 @@ export default function AlgorithmHomeScreen({
             <ModeText variant="caption" tone="tertiary" style={styles.dateText}>
               {headerDate}
             </ModeText>
-            <ModeText
-              testID="algorithm-home-mode-label"
-              variant="display"
-              style={[styles.modeTitle, { color: modeTheme.accentStrong }]}
-              numberOfLines={2}
-            >
-              {modeTheme.displayLabel}
-            </ModeText>
+            {__DEV__ && themeV2 ? (
+              <Pressable
+                testID="algorithm-elevation-model-toggle"
+                onLongPress={() => setElevationModel((model) => (model === 'opaque' ? 'overlay' : 'opaque'))}
+              >
+                <ModeText
+                  testID="algorithm-home-mode-label"
+                  variant="display"
+                  style={[styles.modeTitle, { color: themeV2.accent }]}
+                  numberOfLines={2}
+                >
+                  {modeTheme.displayLabel}
+                </ModeText>
+              </Pressable>
+            ) : (
+              <ModeText
+                testID="algorithm-home-mode-label"
+                variant="display"
+                style={[styles.modeTitle, { color: themeV2 ? themeV2.accent : modeTheme.accentStrong }]}
+                numberOfLines={2}
+              >
+                {modeTheme.displayLabel}
+              </ModeText>
+            )}
             <ModeText
               testID="algorithm-home-readiness-score"
               variant="caption"
@@ -803,9 +865,9 @@ export default function AlgorithmHomeScreen({
             label="Your Why"
             summaryText={summaryText}
             animate={!whyEditing}
-            accentColor={modeTheme.accentStrong}
-            fillColor={modeTheme.cardFill}
-            borderColor={modeTheme.cardBorder}
+            accentColor={themeV2 ? themeV2.accent : modeTheme.accentStrong}
+            fillColor={themeV2 ? themeV2.surfaces.surface2.fill : modeTheme.cardFill}
+            borderColor={themeV2 ? themeV2.surfaces.surface2.border : modeTheme.cardBorder}
             headerTrailing={whyHeaderAction}
             style={[styles.sectionCard, whyEditing && styles.whyCardEditing]}
             onPress={whyEditing ? undefined : openWhyEditor}
@@ -870,12 +932,15 @@ export default function AlgorithmHomeScreen({
                     placeholder="What should your coach remember?"
                     error={memoryError}
                     modeTheme={modeTheme}
+                    themeV2={themeV2}
+                    surface3={surface3}
                   />
                 ) : (
                   <MemoryFactChip
                     key={memory.id}
                     memory={memory}
                     modeTheme={modeTheme}
+                    themeV2={themeV2}
                     onPress={() => openEditMemory(memory)}
                     onLongPress={() => armDeleteMemory(memory)}
                     onDelete={() => handleDeleteMemory(memory)}
@@ -897,6 +962,8 @@ export default function AlgorithmHomeScreen({
                   placeholder="Add a fact for your coach"
                   error={memoryError}
                   modeTheme={modeTheme}
+                  themeV2={themeV2}
+                  surface3={surface3}
                 />
               ) : (
                 <GlassSurface
@@ -909,11 +976,14 @@ export default function AlgorithmHomeScreen({
                   accessibilityLabel="Add fact"
                   style={styles.addMemoryPill}
                   contentStyle={styles.addMemoryContent}
-                  borderColor={modeTheme.cardBorder}
-                  fillColor={theme.memoryChip.fillActive}
+                  borderColor={themeV2 ? themeV2.surfaces.surface1.border : modeTheme.cardBorder}
+                  fillColor={themeV2 ? themeV2.surfaces.surface1.fill : theme.memoryChip.fillActive}
                 >
-                  <Feather name="plus" size={15} color={modeTheme.accentStrong} />
-                  <ModeText variant="bodySm" style={[styles.addMemoryText, { color: modeTheme.accentStrong }]}>
+                  <Feather name="plus" size={15} color={themeV2 ? themeV2.accent : modeTheme.accentStrong} />
+                  <ModeText
+                    variant="bodySm"
+                    style={[styles.addMemoryText, { color: themeV2 ? themeV2.accent : modeTheme.accentStrong }]}
+                  >
                     Add fact
                   </ModeText>
                 </GlassSurface>

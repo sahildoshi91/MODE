@@ -57,3 +57,7 @@ export const RAGE_SHAKE_FEEDBACK_ENABLED = parseBooleanFlag(
   process.env.EXPO_PUBLIC_RAGE_SHAKE_FEEDBACK_ENABLED,
   true,
 );
+export const THEME_V2_ENABLED = parseBooleanFlag(
+  process.env.EXPO_PUBLIC_THEME_V2_ENABLED,
+  false,
+);
