@@ -45,3 +45,17 @@ Consult this file before changing the areas it covers.
 **Files:** `app.json`
 
 **Build required:** Yes — scheme registration is a native binary change. Expo Go and existing dev client builds will not pick it up.
+
+---
+
+## RLS + GRANT: `app_feedback_reports` Permission Denied [2026-07-03]
+
+**Decision:** Grant `SELECT, INSERT` to the `authenticated` role on `app_feedback_reports` via additive migration.
+
+**Root cause:** The table was created with RLS policies but no explicit GRANT. Supabase/Postgres requires both. Confirmed `42501` from live staging error text.
+
+**`trainer_assignment_events`:** Checked — intentionally service-role-only (no `authenticated` grant). Not related to this bug.
+
+**Cleanup:** Removed unused `get_trainer_context` dependency from `submit_report`. The endpoint only uses `user` + `supabase`; trainer context was never read from this route.
+
+**Files:** `backend/sql/20260703a_grant_app_feedback_reports_authenticated.sql`, `backend/app/api/v1/feedback.py`

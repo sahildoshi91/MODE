@@ -18,9 +18,8 @@ from fastapi.testclient import TestClient
 
 from app.core.auth import AuthenticatedUser, require_user
 from app.core.config import settings
-from app.core.dependencies import get_request_scoped_supabase_client, get_trainer_context
+from app.core.dependencies import get_request_scoped_supabase_client
 from app.core.rate_limit import _rate_limiter
-from app.core.tenancy import TrainerContext
 from app.main import app
 
 
@@ -145,16 +144,6 @@ CLIENT_USER = AuthenticatedUser(
     email=NON_ADMIN_EMAIL,
     access_token="client-token",
 )
-DEFAULT_TRAINER_CONTEXT = TrainerContext(
-    tenant_id="tenant-1",
-    trainer_id=None,
-    trainer_user_id=None,
-    trainer_display_name=None,
-    client_id=None,
-    client_user_id=None,
-)
-
-
 class FeedbackApiTests(unittest.TestCase):
     def setUp(self):
         self.original_allowlist = settings.atlas_admin_email_allowlist
@@ -171,7 +160,6 @@ class FeedbackApiTests(unittest.TestCase):
 
         self.fake_supabase = FakeSupabaseClient()
         app.dependency_overrides[require_user] = lambda: CLIENT_USER
-        app.dependency_overrides[get_trainer_context] = lambda: DEFAULT_TRAINER_CONTEXT
         app.dependency_overrides[get_request_scoped_supabase_client] = lambda: self.fake_supabase
         self.admin_patcher = patch(
             "app.api.v1.feedback.get_supabase_admin_client",
@@ -359,6 +347,24 @@ class FeedbackApiTests(unittest.TestCase):
         paths = resp.json().get("paths", {})
         self.assertIn("/api/v1/feedback/reports", paths)
         self.assertIn("/api/v1/feedback/admin/reports", paths)
+
+    # ── 42501 regression guards ─────────────────────────────────────────────────
+
+    def test_grant_migration_contains_authenticated_grant(self):
+        sql_path = Path(__file__).resolve().parents[1] / "sql" / "20260703a_grant_app_feedback_reports_authenticated.sql"
+        self.assertTrue(sql_path.exists(), "Grant migration file missing")
+        content = sql_path.read_text()
+        self.assertIn("42501", content)
+        self.assertIn("GRANT SELECT, INSERT ON public.app_feedback_reports TO authenticated", content)
+
+    def test_submit_report_does_not_depend_on_trainer_context(self):
+        import inspect
+        from app.api.v1.feedback import submit_report
+        from app.core.dependencies import get_trainer_context
+        sig = inspect.signature(submit_report)
+        for param in sig.parameters.values():
+            dep = getattr(param.default, "dependency", None)
+            self.assertIsNot(dep, get_trainer_context, "submit_report still depends on get_trainer_context")
 
 
 if __name__ == "__main__":

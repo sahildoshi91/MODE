@@ -6,12 +6,8 @@ from fastapi import APIRouter, Depends, Query, Request
 from supabase import Client
 
 from app.core.auth import AuthenticatedUser, require_user
-from app.core.dependencies import (
-    get_request_scoped_supabase_client,
-    get_trainer_context,
-)
+from app.core.dependencies import get_request_scoped_supabase_client
 from app.core.rate_limit import enforce_rate_limit
-from app.core.tenancy import TrainerContext
 from app.db.client import get_supabase_admin_client
 from app.modules.feedback.repository import FeedbackAdminRepository, FeedbackRepository
 from app.modules.feedback.schemas import (
@@ -32,7 +28,6 @@ async def submit_report(
     body: CreateFeedbackReportRequest,
     request: Request,
     user: AuthenticatedUser = Depends(require_user),
-    trainer_context: TrainerContext = Depends(get_trainer_context),
     supabase: Client = Depends(get_request_scoped_supabase_client),
 ) -> FeedbackReportResponse:
     enforce_rate_limit(group="feedback", user=user, request=request, context={})
