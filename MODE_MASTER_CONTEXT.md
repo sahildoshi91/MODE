@@ -40,6 +40,10 @@ multi-provider AI routing, and release/security preflights.
 
 ## Repository Map
 
+The authoritative, evidence-backed repo-wide architecture reference is
+`docs/architecture/` (current map, audit, dead-code candidates, target structure);
+consult it before re-deriving structure from scratch. The summary below is orientation only.
+
 ```text
 src/
   app/App.js                         Root auth, role, onboarding, navigation shell
