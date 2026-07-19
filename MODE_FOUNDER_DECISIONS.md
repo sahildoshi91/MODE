@@ -59,3 +59,23 @@ Consult this file before changing the areas it covers.
 **Cleanup:** Removed unused `get_trainer_context` dependency from `submit_report`. The endpoint only uses `user` + `supabase`; trainer context was never read from this route.
 
 **Files:** `backend/sql/20260703a_grant_app_feedback_reports_authenticated.sql`, `backend/app/api/v1/feedback.py`
+
+---
+
+## Routing: Trainer Nav "Legacy" Label Is Not Dead Code [2026-07-19]
+
+**Decision:** `TRAINER_TABS_LEGACY` / `trainerNavMode === 'legacy'`
+(`src/features/navigation/components/LiquidBottomNav.js:33-38,118`) is live, reachable code —
+the flag-off branch of `TRAINER_ROUTE_FOUNDATION_ENABLED` (default `true`). It must not be
+removed, deprioritized, or skipped in testing on the assumption that "legacy" means "unused."
+
+**Rationale:** Surfaced by the UI/UX architecture audit
+(`docs/design/MODE_UI_UX_ARCHITECTURE_AUDIT.md`); the naming was found to be misleading
+relative to actual code liveness.
+
+**Related:** Two adjacent, lower-stakes doc decisions from the same audit (legacy color/radius
+alias deprecation in `lib/theme.js`; a removal policy for confirmed-dead component exports) are
+recorded in full in `MODE_PRODUCT_PRINCIPLES.md` §8 — not duplicated here since they don't
+affect auth/security/routing/tenant behavior, matching this file's stated scope.
+
+**Files:** `src/features/navigation/components/LiquidBottomNav.js`, `src/app/App.js`

@@ -125,3 +125,49 @@ Note: `EXPO_PUBLIC_*` values are inlined at JS-bundle time, so "instantly"
 means a rebundle in dev or a new build/OTA update for TestFlight. Hard
 rollback is a plain revert — every v2 change is additive, and the pilot's v1
 expressions are preserved verbatim as ternary fallbacks.
+
+## 8. Legacy Theme, Navigation Labeling & Dead-Code Policy
+
+Findings and file:line citations below come from
+`docs/design/MODE_UI_UX_ARCHITECTURE_AUDIT.md`, a read-only architecture audit. This section
+records policy decisions in response to that audit; it does not change any code.
+
+### 8.1 Legacy Color & Radius Aliases (Deprecated)
+
+`lib/theme.js` contains four blocks of alias/bridge keys layered on top of the fully-qualified
+token paths:
+
+- `colors.surface` bridge keys `canvas`/`subtle`/`raised`/`muted` (`lib/theme.js:308`)
+- `colors.state` bridge keys `reset`/`base`/`build`/`overdrive` (`lib/theme.js:396-400`)
+- Top-level color aliases `bg`, `surfaceSoft`, `primary`, `secondary`, `accentPrimary`,
+  `onPrimary`, `onSurface`, `textHigh`, `textMedium`, `textDisabled`, `divider`, `success`,
+  `warning`, `error` (`lib/theme.js:456-474`)
+- `radii.md`/`radii.lg` aliases (`lib/theme.js:513-515`)
+
+**Status: deprecated.** New code should prefer the fully-qualified paths (e.g.
+`theme.colors.background.app` over `theme.colors.bg`). Existing call sites are not required to
+migrate — these aliases remain fully supported and byte-identical to today. No removal
+timeline is set by this document; removing them is a separate, dedicated migration project
+(touches ~80 importing files) and is out of scope here.
+
+### 8.2 "Legacy" Trainer Navigation Naming Clarification
+
+`TRAINER_TABS_LEGACY` and `trainerNavMode === 'legacy'`
+(`src/features/navigation/components/LiquidBottomNav.js:33-38,118`) are **live, reachable
+code** — the flag-off branch of `TRAINER_ROUTE_FOUNDATION_ENABLED` (default `true`). "Legacy"
+here means "pre-Coach-OS trainer navigation," not "unused" or "dead." Do not remove,
+deprioritize, or skip testing this path on the assumption that its name implies it is inactive.
+
+### 8.3 Dead-Export Removal Policy
+
+The audit confirmed (via repo-wide grep, zero consumers found) that the following exports are
+currently dead: `PremiumTabBar`, `ModeChipLegacy`/`LegacyStaticChip`, `ModeListItem`,
+`StreakRing`, `SystemCountBadge`, `AtmosphereBackground`, `GlassRow`, `GlassButtonPrimary`/
+`GlassButtonSecondary`, `MacroBar`, `EmptyStateGlassPanel`, `PremiumButton`,
+`PremiumGlassCard`.
+
+**Policy:** an export with zero repo-wide consumers, re-confirmed via grep at removal time,
+should be removed within a bounded window in its own standalone PR — never bundled into
+unrelated doc or feature work. This document does not delete the exports above; it establishes
+the policy so confirmed-dead code stops accumulating silently, which is how the audit's nine
+orphaned screen files likely built up over time.
