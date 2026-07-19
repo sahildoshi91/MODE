@@ -18,6 +18,24 @@ This includes:
 - schema/domain model
 - phased implementation plan
 
+## Architecture Documentation
+
+The authoritative repo-wide architecture reference (Phase 1 audit, evidence-backed) lives
+in `docs/architecture/`:
+
+- [Current Repository Map](docs/architecture/CURRENT_REPOSITORY_MAP.md) — entrypoints,
+  startup paths, chat/streaming, backend HTTP surface, workers/cron, Supabase, AI routing,
+  deployment.
+- [Repository Audit](docs/architecture/REPOSITORY_AUDIT.md) — dependency-boundary findings,
+  highest-risk files, stale-architecture categories, documentation trust hierarchy.
+- [Dead Code Candidates](docs/architecture/DEAD_CODE_CANDIDATES.md) — evidence-backed
+  candidates only; no removal is authorized without a separate reviewed Phase 2 PR.
+- [Target Repository Structure](docs/architecture/TARGET_REPOSITORY_STRUCTURE.md) —
+  where changes go, ownership, prioritized cleanup backlog.
+
+The UI/UX-scoped companion audit is `docs/design/MODE_UI_UX_ARCHITECTURE_AUDIT.md`.
+Where these docs and the code disagree, the code wins; update the docs in the same task.
+
 ## Active Structure
 
 ### Frontend
